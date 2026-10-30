@@ -52,29 +52,81 @@ export async function buildSample(options: { out: string; cycle?: string; cacheD
   const counts = { active: active.length, tiles: Array.from({ length: 6 }, (_, z) => { let n = 0; for (let y = 0; y < 2 ** z; y++) for (let x = 0; x < 2 ** z; x++) if (getBit(mask.tiles, (4 ** z - 1) / 3 + y * 2 ** z + x)) n++; return n; }) };
   const coverageHash = await verifyCoverage(mask);
   const methodSource = await readFile(SCIENCE_PATH);
+  let acquireMs = 0, deriveMs = 0, packMs = 0, renderMs = 0;
   for (let hour = 3; hour <= 24; hour += 3) {
     if (Date.now() - started > 6 * 3600000) throw new Error('Build exceeded six-hour publisher lifetime');
+    const tAcquire = Date.now();
     const frame = await acquireGfsFrame({ cycle, hour, activeIndices: active, cacheDir });
+    acquireMs += Date.now() - tAcquire;
     const start = new Date(Date.parse(cycle) + (hour - 3) * 3600000).toISOString(), end = new Date(Date.parse(cycle) + hour * 3600000).toISOString();
     const sameInstant = (actual: string, expected: string): boolean => Date.parse(actual) === Date.parse(expected);
     if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, end) || !sameInstant(frame.intervals.profileTime, end) || !sameInstant(frame.intervals.fluxWindow.start, start) || !sameInstant(frame.intervals.fluxWindow.end, end) || !sameInstant(frame.intervals.precipitationWindow.start, start) || !sameInstant(frame.intervals.precipitationWindow.end, end)) throw new Error(`Acquisition interval mismatch f${hour}`);
     const id = `f${String(hour).padStart(3, '0')}`;
     frames.push({ id, validTime: end, intervalStart: start, intervalEnd: end });
     receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
+    const tDerive = Date.now();
     const fields = deriveFrame(frame, mask);
     summaries[id] = summarizeFields(fields, mask);
+    deriveMs += Date.now() - tDerive;
     for (const layer of LAYER_IDS) {
       const samplesKey = `${prefix}/samples/${layer}/${id}.bin`, tilesKey = `${prefix}/${layer}/${id}.pmtiles`;
-      const samplesPath = localPath(root, samplesKey), tilesPath = localPath(root, tilesKey), samples = packCells(fields[layer]);
+      const samplesPath = localPath(root, samplesKey), tilesPath = localPath(root, tilesKey);
+      const tPack = Date.now();
+      const samples = packCells(fields[layer]);
       await mkdir(dirname(samplesPath), { recursive: true });
       await writeFile(samplesPath, samples, { flag: 'wx' });
+      packMs += Date.now() - tPack;
+      const tRender = Date.now();
       await renderArchive(tilesPath, fields[layer], mask, layer);
       const archive = await readFile(tilesPath);
+      renderMs += Date.now() - tRender;
       artifacts.push({ layer, frame: id, tilesKey, samplesKey, tilesSha256: sha256(archive), samplesSha256: sha256(samples) });
     }
   }
-  const manifest = manifestSchema.parse({ version: 1, model: 'gfs', buildId, cycle, createdAt: created.toISOString(), expiresAt: new Date(started + 7 * 86400000).toISOString(), method: { id: METHOD_ID, hash: sha256(methodSource) }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'coverage/soaring-land-v1/manifest.json', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: { provider: 'NOAA', frames: receipts, temporalApproximation: 'interval flux with endpoint profile and PBL' }, tool: { node: process.version, pmtiles: '1.31.2', pngjs: '7.0.0', liftRenderStyle: LIFT_RENDER_STYLE }, palettes: ['lift', 'rain'], metrics: { ...counts, frames: summaries, elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024 } });
-  await validateBuild(root, manifest, mask);
+  const provenanceKey = `${prefix}/provenance.json`;
+  const provenancePath = localPath(root, provenanceKey);
+  const provenanceBytes = Buffer.from(JSON.stringify({ version: 1, model: 'gfs', buildId, cycle, provider: 'NOAA', temporalApproximation: 'interval flux with endpoint profile and PBL', frames: receipts }));
+  await mkdir(dirname(provenancePath), { recursive: true });
+  await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });
+  const sourceSummary = {
+    provider: 'NOAA',
+    model: 'GFS',
+    nativeResolutionDeg: 0.25,
+    temporalApproximation: 'interval flux with endpoint profile and PBL',
+    frameCount: frames.length,
+    provenanceKey,
+    provenanceSha256: sha256(provenanceBytes)
+  };
+  const baseManifest = {
+    version: 1 as const,
+    model: 'gfs' as const,
+    buildId,
+    cycle,
+    createdAt: created.toISOString(),
+    expiresAt: new Date(started + 7 * 86400000).toISOString(),
+    method: { id: METHOD_ID, hash: sha256(methodSource) },
+    coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'coverage/soaring-land-v1/manifest.json', maxZoom: 5 },
+    grid: GFS_GRID,
+    frames,
+    layers: [...LAYER_IDS],
+    artifacts,
+    source: sourceSummary,
+    tool: { node: process.version, pmtiles: '1.31.2', pngjs: '7.0.0', liftRenderStyle: LIFT_RENDER_STYLE },
+    palettes: ['lift', 'rain']
+  };
+  const tValidate = Date.now();
+  await validateBuild(root, manifestSchema.parse({ ...baseManifest, metrics: {} }), mask);
+  const validateMs = Date.now() - tValidate;
+  const manifest = manifestSchema.parse({
+    ...baseManifest,
+    metrics: {
+      ...counts,
+      frames: summaries,
+      phasesMs: { acquireMs, deriveMs, packMs, renderMs, validateMs },
+      elapsedMs: Date.now() - started,
+      peakRssBytes: process.resourceUsage().maxRSS * 1024
+    }
+  });
   const path = localPath(root, `${prefix}/manifest.json`);
   await writeFile(path, JSON.stringify(manifest), { flag: 'wx' });
   return path;

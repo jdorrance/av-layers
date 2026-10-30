@@ -14,6 +14,10 @@ on:
         description: Optional upstream cycle (ISO 8601 UTC); empty discovers the latest admissible run
         type: string
         default: ''
+      retain-full-artifacts:
+        description: Upload full binary tile/sample build output to GitHub Actions artifacts even when R2 publication succeeds
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -56,14 +60,26 @@ jobs:
       - name: Validate sample
         run: pnpm exec tsx apps/batch/src/cli.ts validate --manifest "${MANIFEST}"
       - name: Publish immutable build and pointer
+        id: publish
         if: ${{ env.R2_ACCESS_KEY_ID != '' && env.R2_SECRET_ACCESS_KEY != '' && env.R2_ACCOUNT_ID != '' && env.R2_BUCKET != '' }}
         run: pnpm run publish --manifest "${MANIFEST}"
       - name: Record skipped publication
         if: ${{ env.R2_ACCESS_KEY_ID == '' || env.R2_SECRET_ACCESS_KEY == '' || env.R2_ACCOUNT_ID == '' || env.R2_BUCKET == '' }}
         run: |
           echo 'R2 credentials absent: sample built and validated locally, publication skipped.' >> "${GITHUB_STEP_SUMMARY}"
-      - uses: actions/upload-artifact@v4
+      - name: Upload build receipts
+        uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: forecast-receipts-${{ env.MODEL }}-${{ github.run_id }}
+          path: |
+            output/builds/*/*/manifest.json
+            output/builds/*/*/provenance.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload full build artifacts on failure, skipped publication, or explicit request
+        uses: actions/upload-artifact@v4
+        if: ${{ failure() || steps.publish.outcome != 'success' || inputs['retain-full-artifacts'] == true }}
         with:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
           path: output/builds/

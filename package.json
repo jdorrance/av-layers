@@ -4,7 +4,17 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.9",
-  "engines": { "node": "22.23.4", "pnpm": "10.34.9" },
+  "engines": {
+    "node": "22.23.4",
+    "pnpm": "10.34.9"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "22.23.4",
+      "onFail": "download"
+    }
+  },
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",

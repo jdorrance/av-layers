@@ -125,9 +125,12 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
   const source = manifest.source as Record<string, unknown>;
   const model = typeof source.model === 'string' ? source.model : build.model.toUpperCase();
   const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native columns` : 'native model columns';
-  return [
+  const validTimes = manifest.frames.map(f => Date.parse(f.validTime)).filter(Number.isFinite);
+  const horizonEnd = validTimes.length > 0 ? new Date(Math.max(...validTimes)).toISOString() : manifest.cycle;
+  const rows: Array<[string, string]> = [
     ['Build', manifest.buildId],
     ['Cycle', manifest.cycle],
+    ['Horizon', `${manifest.frames[0]?.validTime ?? manifest.cycle} → ${horizonEnd}`],
     ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
     ['Source', `${model} · ${native}`],
     ['Display', `z0–${build.maxNativeZoom} · 256 px raster · overzoomed above z${build.maxNativeZoom}`],
@@ -138,6 +141,10 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Coverage caveat', 'Coastal and exclusion borders can differ from the true coastline by about one cell diagonal'],
     ['Expires', manifest.expiresAt]
   ];
+  if (typeof source.provenanceKey === 'string') {
+    rows.push(['Provenance', `${source.provenanceKey}${typeof source.provenanceSha256 === 'string' ? ` (${source.provenanceSha256.slice(0, 12)}…)` : ''}`]);
+  }
+  return rows;
 }
 
 export function formatSampleStatus(sample: FrameSampleLayer): string {

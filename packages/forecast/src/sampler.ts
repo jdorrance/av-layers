@@ -1,4 +1,4 @@
-import { CELL_BYTES, isCovered, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
+import { CELL_BYTES, isCovered, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
 export interface Cell { value: number; flags: number }
@@ -38,10 +38,21 @@ export function cellsFromRange(plan: SamplePlan, bytes: Uint8Array): Cell[] {
 }
 export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId): Sample {
   if (!plan.contributors.length || cells.length !== plan.contributors.length) throw new RangeError('cell count does not match sample plan');
-  const lift = layer !== 'precip-rate';
-  if (!lift && cells.some(cell => (cell.flags & STATUS_MASK) === STATUS_NO_LIFT || (cell.flags & SUPPORT_MASK) !== 0)) throw new RangeError('rain cell has lift status or support');
-  const known = (cell: Cell) => (cell.flags & STATUS_MASK) === STATUS_VALID || (lift && (cell.flags & STATUS_MASK) === STATUS_NO_LIFT);
-  const result = (cell: Cell): Sample => { const status = cell.flags & STATUS_MASK; if (status === STATUS_VALID && !Number.isFinite(cell.value)) throw new RangeError('valid cell has non-finite value'); return { value: status === STATUS_VALID ? cell.value : status === STATUS_NO_LIFT && layer === 'usable-lift-agl' ? 0 : null, status, support: cell.flags & SUPPORT_MASK, interpolated: false }; };
+  const spec = LAYERS[layer];
+  if (cells.some(cell => (!spec.supportsNoLift && (cell.flags & STATUS_MASK) === STATUS_NO_LIFT) || (!spec.supportsLiftFlags && (cell.flags & SUPPORT_MASK) !== 0))) {
+    throw new RangeError('rain cell has lift status or support');
+  }
+  const known = (cell: Cell) => (cell.flags & STATUS_MASK) === STATUS_VALID || (spec.supportsNoLift && (cell.flags & STATUS_MASK) === STATUS_NO_LIFT);
+  const result = (cell: Cell): Sample => {
+    const status = cell.flags & STATUS_MASK;
+    if (status === STATUS_VALID && !Number.isFinite(cell.value)) throw new RangeError('valid cell has non-finite value');
+    return {
+      value: status === STATUS_VALID ? cell.value : status === STATUS_NO_LIFT ? spec.noLiftSampleValue : null,
+      status,
+      support: cell.flags & SUPPORT_MASK,
+      interpolated: false
+    };
+  };
   if (cells.some(cell => !known(cell))) {
     let nearest = 0;
     for (let i = 1; i < cells.length; i++) { const a = plan.contributors[i], b = plan.contributors[nearest]; if (a.weight > b.weight || (a.weight === b.weight && (a.row < b.row || (a.row === b.row && a.column < b.column)))) nearest = i; }
@@ -50,8 +61,15 @@ export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: Lay
   if (cells.some(cell => !Number.isFinite(cell.value))) throw new RangeError('known cell has non-finite value');
   if (cells.length === 1) return result(cells[0]);
   const support = cells.reduce((bits, cell) => bits | (cell.flags & SUPPORT_MASK), 0);
-  if (lift && cells.every(cell => (cell.flags & STATUS_MASK) === STATUS_NO_LIFT)) return { value: layer === 'usable-lift-agl' ? 0 : null, status: STATUS_NO_LIFT, support, interpolated: true };
-  return { value: cells.reduce((sum, cell, i) => sum + (layer === 'usable-lift-agl' && (cell.flags & STATUS_MASK) === STATUS_NO_LIFT ? 0 : cell.value) * plan.contributors[i].weight, 0), status: STATUS_VALID, support, interpolated: true };
+  if (spec.supportsNoLift && cells.every(cell => (cell.flags & STATUS_MASK) === STATUS_NO_LIFT)) {
+    return { value: spec.noLiftSampleValue, status: STATUS_NO_LIFT, support, interpolated: true };
+  }
+  return {
+    value: cells.reduce((sum, cell, i) => sum + (spec.zeroOnNoLiftInterpolation && (cell.flags & STATUS_MASK) === STATUS_NO_LIFT ? 0 : cell.value) * plan.contributors[i].weight, 0),
+    status: STATUS_VALID,
+    support,
+    interpolated: true
+  };
 }
 export function sampleGrid(grid: Grid, field: GridField, lat: number, lon: number, layer: LayerId, mask?: CoverageMask): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };

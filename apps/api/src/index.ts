@@ -10,6 +10,8 @@ import {
   PALETTES,
   SAMPLE_STATUSES,
   STATUS_OUTSIDE,
+  compactSource,
+  computeFreshness,
   isCovered,
   isPaletteId,
   isTileCovered,
@@ -395,6 +397,7 @@ registerJsonRoute(
           const ptr = await pointer(c.env.BUCKET, model);
           const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId);
           const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry);
+          const freshness = computeFreshness(m);
           return {
             model,
             available: true,
@@ -402,7 +405,8 @@ registerJsonRoute(
             cycle: m.cycle,
             expiresAt: m.expiresAt,
             coverage: m.coverage,
-            ageSeconds: Math.max(0, Math.floor((Date.now() - Date.parse(m.createdAt)) / 1000))
+            ageSeconds: freshness.ageSeconds,
+            freshness
           };
         } catch (e) {
           return { model, available: false, error: e instanceof Problem ? e.code : 'publication-unavailable' };
@@ -427,13 +431,11 @@ registerJsonRoute(
     const ptr = await pointer(c.env.BUCKET, model);
     const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId);
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry);
+    const compactManifest = { ...m, source: compactSource(m.source) };
     return json({
       pointer: ptr,
-      ...(url.searchParams.has('expand') ? view(m, url.origin) : {}),
-      freshness: {
-        ageSeconds: Math.max(0, Math.floor((Date.now() - Date.parse(m.createdAt)) / 1000)),
-        expiresAt: m.expiresAt
-      }
+      ...(url.searchParams.has('expand') ? view(compactManifest, url.origin) : {}),
+      freshness: computeFreshness(m)
     });
   }
 );
@@ -679,7 +681,7 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
       lat,
       lon,
       method: m.method,
-      source: m.source,
+      source: compactSource(m.source),
       coverage: m.coverage,
       expiresAt: m.expiresAt,
       frames: frames.map(frame => ({

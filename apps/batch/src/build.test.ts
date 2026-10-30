@@ -102,12 +102,21 @@ describe('build sample acquisition intervals', () => {
     expect(discoverGfsRun).toHaveBeenCalledWith({ cacheDir });
     expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ cacheDir }));
   });
-  it.each([CYCLE, noMs(0)])('accepts UTC cycle %s and equivalent acquisition timestamps', async cycle => {
+  it.each([CYCLE, noMs(0)])('accepts UTC cycle %s, writes external provenance.json, and records phase timings', async cycle => {
     const manifest = await run(frame, cycle);
     expect(manifest.cycle).toBe(CYCLE);
     expect(manifest.tool.liftRenderStyle).toBe('transparent-no-lift-v2');
     expect(manifest.frames.find(f => f.id === 'f003')).toEqual({ id: 'f003', validTime: ms(3), intervalStart: ms(0), intervalEnd: ms(3) });
     expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(3), intervalEnd: ms(6) });
+    expect(manifest.source).toMatchObject({
+      provider: 'NOAA',
+      model: 'GFS',
+      nativeResolutionDeg: 0.25,
+      frameCount: 8,
+      provenanceKey: `builds/gfs/${manifest.buildId}/provenance.json`
+    });
+    expect(manifest.source).not.toHaveProperty('frames');
+    expect(manifest.metrics).toHaveProperty('phasesMs');
   });
 
   it.each([

@@ -32,6 +32,25 @@ function bash(script: string, env: Record<string, string>) {
   return spawnSync('bash', ['-c', script], { env: { ...process.env, ...env }, encoding: 'utf8' });
 }
 
+describe('project runtime', () => {
+  const project = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    engines: { node: string };
+    devEngines: { runtime: { name: string; version: string; onFail: string } };
+  };
+
+  it('pins a downloaded project runtime to the declared Node version', () => {
+    expect(project.devEngines.runtime).toEqual({ name: 'node', version: project.engines.node, onFail: 'download' });
+  });
+
+  it('executes tests using the project Node runtime with real SQLite support', async () => {
+    expect(process.versions.node).toBe(project.devEngines.runtime.version);
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    try { expect(db.prepare('SELECT 1 AS value').get()?.value).toBe(1); }
+    finally { db.close(); }
+  });
+});
+
 describe('real contract-shaped fixtures', () => {
   it('parses a manifest with 8 frames, 3 layers, 24 records and 48 object paths', () => {
     const manifest = manifestFixture();

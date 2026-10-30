@@ -68,6 +68,18 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== cycle + i * 10800000 || Date.parse(frame.intervalEnd) !== cycle + (i + 1) * 10800000 || Date.parse(frame.validTime) !== cycle + (i + 1) * 10800000) throw new Error(`Invalid frame interval ${frame.id}`);
   }
   validateArtifactRecords(manifest);
+  const source = manifest.source as { provenanceKey?: unknown; provenanceSha256?: unknown };
+  if (source.provenanceKey !== undefined || source.provenanceSha256 !== undefined) {
+    const expectedProvenanceKey = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;
+    if (source.provenanceKey !== expectedProvenanceKey || typeof source.provenanceSha256 !== 'string') {
+      throw new Error(`Invalid provenance reference in manifest`);
+    }
+    const provenanceBytes = await readFile(localPath(root, expectedProvenanceKey));
+    if (sha256(provenanceBytes) !== source.provenanceSha256) {
+      throw new Error(`Invalid provenance hash ${expectedProvenanceKey}`);
+    }
+    JSON.parse(provenanceBytes.toString('utf8'));
+  }
   const expectedSamples = manifest.grid.width * manifest.grid.height * CELL_BYTES;
   for (const artifact of manifest.artifacts) {
     const samples = await readFile(localPath(root, artifact.samplesKey));

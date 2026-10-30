@@ -65,9 +65,60 @@ export const LIFT_RENDER_STYLE = 'transparent-no-lift-v2' as const;
 export const RAIN_EDGES = [0.1,0.5,1,2,5,10,20,50] as const;
 export const RAIN_COLORS = ['#b9e5ff','#66b3ff','#2d78d2','#36a657','#f0dc43','#f09b32','#dc493c','#963f9c'] as const;
 export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_COLORS, units: 'm', noLiftColor: '#00000000' }, rain: { id: 'rain', edges: RAIN_EDGES, colors: RAIN_COLORS, units: 'mm/h', transparentBelow: 0.1, provisional: true } } as const;
-export const LAYERS = { 'usable-lift-msl': { id: 'usable-lift-msl', units: 'm MSL', palette: 'lift' }, 'usable-lift-agl': { id: 'usable-lift-agl', units: 'm AGL', palette: 'lift' }, 'precip-rate': { id: 'precip-rate', units: 'mm/h', palette: 'rain' } } as const;
+
+export interface LayerSpec {
+  readonly id: LayerId;
+  readonly kind: 'scalar';
+  readonly units: string;
+  readonly palette: PaletteId;
+  readonly supportsNoLift: boolean;
+  readonly supportsLiftFlags: boolean;
+  readonly noLiftSampleValue: number | null;
+  readonly zeroOnNoLiftInterpolation: boolean;
+  readonly hideNonPositiveValues: boolean;
+}
+
+export const LAYERS = {
+  'usable-lift-msl': {
+    id: 'usable-lift-msl',
+    kind: 'scalar',
+    units: 'm MSL',
+    palette: 'lift',
+    supportsNoLift: true,
+    supportsLiftFlags: true,
+    noLiftSampleValue: null,
+    zeroOnNoLiftInterpolation: false,
+    hideNonPositiveValues: false
+  },
+  'usable-lift-agl': {
+    id: 'usable-lift-agl',
+    kind: 'scalar',
+    units: 'm AGL',
+    palette: 'lift',
+    supportsNoLift: true,
+    supportsLiftFlags: true,
+    noLiftSampleValue: 0,
+    zeroOnNoLiftInterpolation: true,
+    hideNonPositiveValues: true
+  },
+  'precip-rate': {
+    id: 'precip-rate',
+    kind: 'scalar',
+    units: 'mm/h',
+    palette: 'rain',
+    supportsNoLift: false,
+    supportsLiftFlags: false,
+    noLiftSampleValue: null,
+    zeroOnNoLiftInterpolation: false,
+    hideNonPositiveValues: false
+  }
+} as const satisfies Record<LayerId, LayerSpec>;
+
 export function isPaletteId(value: string): value is PaletteId {
   return Object.hasOwn(PALETTES, value);
+}
+export function isLayerId(value: string): value is LayerId {
+  return Object.hasOwn(LAYERS, value);
 }
 export function paletteBinLabel(edges: readonly number[], colorCount: number, index: number): string {
   const from = edges[index], to = edges[index + 1];
@@ -76,11 +127,15 @@ export function paletteBinLabel(edges: readonly number[], colorCount: number, in
 }
 export function paletteColor(layer: LayerId, value: number | null, status: number): string | null {
   if ((status & STATUS_MASK) >= STATUS_UNAVAILABLE) return null;
-  if (layer !== 'precip-rate' && (status & STATUS_MASK) === STATUS_NO_LIFT) return null;
+  const spec = LAYERS[layer];
+  if (spec.supportsNoLift && (status & STATUS_MASK) === STATUS_NO_LIFT) return null;
   if (value === null || !Number.isFinite(value)) return null;
-  if (layer === 'precip-rate') { if (value < 0.1) return null; let i = 0; while (i + 1 < RAIN_EDGES.length && value >= RAIN_EDGES[i + 1]) i++; return RAIN_COLORS[i]; }
-  if (layer === 'usable-lift-agl' && value <= 0) return null;
-  let i = 0; while (i + 1 < LIFT_COLORS.length && value >= LIFT_EDGES[i + 1]) i++; return LIFT_COLORS[i];
+  const palette = PALETTES[spec.palette];
+  if ('transparentBelow' in palette && value < palette.transparentBelow) return null;
+  if (spec.hideNonPositiveValues && value <= 0) return null;
+  let i = 0;
+  while (i + 1 < palette.colors.length && i + 1 < palette.edges.length && value >= palette.edges[i + 1]) i++;
+  return palette.colors[i];
 }
 
 const timestamp = z.iso.datetime();
@@ -94,16 +149,56 @@ export const modelPointerSchema = z.object({ version: z.literal(1), model: model
 export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean() });
 export const sampleResponseSchema = z.object({ model: z.string(), buildId: z.string(), lat: z.number().finite(), lon: z.number().finite(), method: manifestSchema.shape.method, source: manifestSchema.shape.source, coverage: manifestSchema.shape.coverage, expiresAt: z.string(), frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueSchema) })) });
 export const paletteSchema = z.object({ id: z.string(), edges: z.array(z.number()), colors: z.array(z.string()), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().optional(), provisional: z.boolean().optional() }).passthrough();
-export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: manifestSchema.optional(), templates: z.record(z.string(), z.string()).optional(), bounds: z.array(z.number()).optional(), maxNativeZoom: z.number().optional(), palettes: z.array(paletteSchema).optional(), coverage: manifestSchema.shape.coverage.extend({ tileBits: z.array(z.number()).optional() }).optional(), freshness: z.object({ ageSeconds: z.number(), expiresAt: z.string() }) });
+export const freshnessSchema = z.object({
+  ageSeconds: z.number(),
+  expiresAt: z.string(),
+  cycle: z.string().optional(),
+  cycleAgeSeconds: z.number().optional(),
+  earliestValidTime: z.string().optional(),
+  latestValidTime: z.string().optional(),
+  horizonRemainingSeconds: z.number().optional(),
+  horizonExhausted: z.boolean().optional()
+});
+export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: manifestSchema.optional(), templates: z.record(z.string(), z.string()).optional(), bounds: z.array(z.number()).optional(), maxNativeZoom: z.number().optional(), palettes: z.array(paletteSchema).optional(), coverage: manifestSchema.shape.coverage.extend({ tileBits: z.array(z.number()).optional() }).optional(), freshness: freshnessSchema });
 export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
+export type FreshnessSummary = z.infer<typeof freshnessSchema>;
+
+export function compactSource(source: Record<string, unknown>): Record<string, unknown> {
+  if (!('frames' in source) || !Array.isArray(source.frames)) return source;
+  const { frames, ...rest } = source;
+  return { ...rest, frameCount: typeof rest.frameCount === 'number' ? rest.frameCount : frames.length };
+}
+
+export function computeFreshness(
+  manifest: Pick<Manifest, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'>,
+  nowMs = Date.now()
+): Required<FreshnessSummary> {
+  const validTimes = manifest.frames.map(f => Date.parse(f.validTime)).filter(Number.isFinite);
+  const earliestMs = validTimes.length > 0 ? Math.min(...validTimes) : Date.parse(manifest.cycle);
+  const latestMs = validTimes.length > 0 ? Math.max(...validTimes) : Date.parse(manifest.cycle);
+  return {
+    ageSeconds: Math.max(0, Math.floor((nowMs - Date.parse(manifest.createdAt)) / 1000)),
+    expiresAt: manifest.expiresAt,
+    cycle: manifest.cycle,
+    cycleAgeSeconds: Math.max(0, Math.floor((nowMs - Date.parse(manifest.cycle)) / 1000)),
+    earliestValidTime: new Date(earliestMs).toISOString(),
+    latestValidTime: new Date(latestMs).toISOString(),
+    horizonRemainingSeconds: Math.max(0, Math.floor((latestMs - nowMs) / 1000)),
+    horizonExhausted: latestMs <= nowMs
+  };
+}
 
 export function validateArtifactRecords(manifest: Manifest): void {
-  if (manifest.frames.length !== 8) throw new Error(`expected 8 frames, found ${manifest.frames.length}`);
-  if (manifest.layers.length !== 3) throw new Error(`expected 3 layers, found ${manifest.layers.length}`);
-  if (manifest.artifacts.length !== 24) throw new Error(`expected 24 artifact records, found ${manifest.artifacts.length}`);
   const frames = new Set(manifest.frames.map(frame => frame.id));
   const layers = new Set(manifest.layers);
+  if (frames.size === 0 || frames.size !== manifest.frames.length) throw new Error(`expected distinct frames, found ${manifest.frames.length}`);
+  if (layers.size === 0 || layers.size !== manifest.layers.length) throw new Error(`expected distinct layers, found ${manifest.layers.length}`);
+  const expectedRecords = frames.size * layers.size;
+  const expectedPaths = expectedRecords * 2;
+  if (manifest.artifacts.length !== expectedRecords) {
+    throw new Error(`expected ${expectedRecords} artifact records, found ${manifest.artifacts.length}`);
+  }
   const combinations = new Set<string>();
   const paths = new Set<string>();
   const prefix = `builds/${manifest.model}/${manifest.buildId}`;
@@ -120,8 +215,8 @@ export function validateArtifactRecords(manifest: Manifest): void {
       paths.add(objectPath);
     }
   }
-  if (combinations.size !== 24) throw new Error(`expected 24 layer/frame records, found ${combinations.size}`);
-  if (paths.size !== 48) throw new Error(`expected 48 unique object paths, found ${paths.size}`);
+  if (combinations.size !== expectedRecords) throw new Error(`expected ${expectedRecords} layer/frame records, found ${combinations.size}`);
+  if (paths.size !== expectedPaths) throw new Error(`expected ${expectedPaths} unique object paths, found ${paths.size}`);
   for (const frame of manifest.frames) for (const layer of manifest.layers) {
     if (!combinations.has(`${layer}/${frame.id}`)) throw new Error(`missing artifact record ${layer}/${frame.id}`);
   }
@@ -130,11 +225,14 @@ export function validateArtifactRecords(manifest: Manifest): void {
 export function validateSampleFlags(bytes: Uint8Array, expectedLength: number, layer?: string, mask?: CoverageMask, key = 'samples'): void {
   if (bytes.length !== expectedLength) throw new Error(`samples length ${bytes.length}, expected ${expectedLength}`);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const spec = layer !== undefined && isLayerId(layer) ? LAYERS[layer] : null;
   for (let offset = 0; offset < bytes.length; offset += CELL_BYTES) {
     const flags = bytes[offset + 4]!, status = flags & STATUS_MASK;
     if (status > 3) throw new Error(`invalid status bits at offset ${offset} in ${key}`);
     if ((flags & ~(STATUS_MASK | SUPPORT_MASK)) !== 0) throw new Error(`invalid support bits at offset ${offset} in ${key}`);
-    if (layer === 'precip-rate' && (status === STATUS_NO_LIFT || (flags & SUPPORT_MASK) !== 0)) throw new Error(`invalid precip-rate lift flags at offset ${offset} in ${key}`);
+    if (spec && ((!spec.supportsNoLift && status === STATUS_NO_LIFT) || (!spec.supportsLiftFlags && (flags & SUPPORT_MASK) !== 0))) {
+      throw new Error(`invalid ${layer} lift flags at offset ${offset} in ${key}`);
+    }
     if (status === STATUS_OUTSIDE && flags !== STATUS_OUTSIDE) throw new Error(`invalid outside-domain support bits at offset ${offset} in ${key}`);
     if (status < STATUS_UNAVAILABLE && !Number.isFinite(view.getFloat32(offset, true))) throw new Error(`non-finite sample value at offset ${offset} in ${key}`);
     if (mask) {

@@ -28,6 +28,20 @@ establish production latency, cache performance, operating cost, or an SLA.
 Its test results describe that checkpoint; use the
 [development checks](../README.md#development-checks) for the current checkout.
 
+## Transparent no-lift tiles
+
+A fresh build, `20261030T093641Z-44e759df-18bf-4795-9678-87598bdd91e4`,
+validated all 24 archives and 24 numeric arrays with rendering style
+`transparent-no-lift-v2`. Local API PNG checks confirmed alpha zero in both lift
+layers at a no-usable-lift location in Armenia, while positive lift at Torrey
+Pines remained colored. Each PNG check was matched against the four actual
+quarter-pixel numeric samples. Point values remain MSL `null` and AGL `0` for
+physical no-lift.
+
+The local receipt is `output/evidence/no-lift-transparency-proof.json` (generated,
+not checked in). Earlier immutable archives and their historical receipts remain
+unchanged; their legends retain their original rendering style.
+
 ## Release boundaries
 
 Remote R2 uploads, publication integrity checks against Cloudflare, and a

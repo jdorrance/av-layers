@@ -78,6 +78,18 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   };
   await Promise.all(Array.from({ length: 4 }, () => worker()));
   if (failed) throw failure;
+  const source = manifest.source as { provenanceKey?: unknown; provenanceSha256?: unknown };
+  if (typeof source.provenanceKey === 'string' && typeof source.provenanceSha256 === 'string') {
+    if (source.provenanceKey !== `${prefix}provenance.json`) throw new Error('Invalid provenance key');
+    const provenanceBytes = await readFile(localPath(root, source.provenanceKey));
+    if (sha256(provenanceBytes) !== source.provenanceSha256) throw new Error(`Local hash mismatch: ${source.provenanceKey}`);
+    assertLifetime(manifest, now());
+    await store.put(source.provenanceKey, provenanceBytes, { ifNoneMatch: '*' }, 'application/json');
+    const uploadedProvenance = await store.get(source.provenanceKey);
+    if (!uploadedProvenance || !Buffer.from(uploadedProvenance.bytes).equals(Buffer.from(provenanceBytes))) {
+      throw new Error('Provenance readback mismatch');
+    }
+  }
   assertLifetime(manifest, now());
   const key = manifestKey(manifest.model, manifest.buildId), content = encode(manifest);
   await store.put(key, content, { ifNoneMatch: '*' }, 'application/json');

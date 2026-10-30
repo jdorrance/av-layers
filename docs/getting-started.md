@@ -7,13 +7,19 @@ validated build and remaining release work.
 
 ## Set up
 
-Use the Node and pnpm versions declared in [package.json](../package.json):
+Use the pnpm version declared in [package.json](../package.json):
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm tools:pmtiles
 .tools/pmtiles version
 ```
+
+`pnpm install` downloads the project-local Node runtime declared in
+`devEngines.runtime` and locked with its checksum in `pnpm-lock.yaml`. Project
+scripts use it automatically, so `pnpm test` works even when the terminal's
+`node` is an older version. The host Node installation is not changed. Node 22
+is required for the real `node:sqlite` rendering and integration tests.
 
 The [PMTiles installer](../scripts/setup-pmtiles.mjs) owns platform support,
 version pins and release checksums. It installs the verified binary in `.tools/`.
@@ -26,7 +32,8 @@ Coverage assets are included under `packages/contracts/coverage`.
 npx --yes --package=node@22.23.4 --package=pnpm@10.34.9 pnpm install --frozen-lockfile
 ```
 
-Use the same `npx` prefix before subsequent `pnpm` commands when needed.
+This also bootstraps the declared pnpm version if necessary. After installation,
+ordinary `pnpm` project commands select the pinned local runtime automatically.
 
 </details>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask } from './index.js';
+import { getBit, setBit, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, compactSource, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
@@ -50,6 +50,45 @@ describe('contracts', () => {
     expect(normalizeLon(-180)).toBe(-180);
     expect(normalizeLon(180)).toBe(180);
     expect(normalizeLon(0)).toBe(0);
+  });
+  it('compacts inline frame receipts and separates forecast horizon freshness from retention expiry', () => {
+    expect(compactSource({ provider: 'NOAA', frames: [{ hour: 3 }, { hour: 6 }] })).toEqual({ provider: 'NOAA', frameCount: 2 });
+    const freshness = computeFreshness(
+      {
+        createdAt: '2026-10-30T06:00:00.000Z',
+        cycle: '2026-10-30T00:00:00.000Z',
+        expiresAt: '2026-11-06T06:00:00.000Z',
+        frames: [
+          { id: 'f003', validTime: '2026-10-30T03:00:00.000Z', intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: '2026-10-30T03:00:00.000Z' },
+          { id: 'f024', validTime: '2026-10-31T00:00:00.000Z', intervalStart: '2026-10-30T21:00:00.000Z', intervalEnd: '2026-10-31T00:00:00.000Z' }
+        ]
+      },
+      Date.parse('2026-10-31T03:00:00.000Z')
+    );
+    expect(freshness.horizonExhausted).toBe(true);
+    expect(freshness.horizonRemainingSeconds).toBe(0);
+    expect(freshness.latestValidTime).toBe('2026-10-31T00:00:00.000Z');
+  });
+  it('validates artifact records dynamically against declared frames × layers', () => {
+    const hash = 'a'.repeat(64);
+    const twoFrameManifest = {
+      model: 'gfs',
+      buildId: 'b1',
+      frames: [
+        { id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z' },
+        { id: 'f006', validTime: '2026-10-30T06:00:00Z', intervalStart: '2026-10-30T03:00:00Z', intervalEnd: '2026-10-30T06:00:00Z' }
+      ],
+      layers: ['precip-rate'],
+      artifacts: ['f003', 'f006'].map(frame => ({
+        layer: 'precip-rate',
+        frame,
+        tilesKey: `builds/gfs/b1/precip-rate/${frame}.pmtiles`,
+        samplesKey: `builds/gfs/b1/samples/precip-rate/${frame}.bin`,
+        tilesSha256: hash,
+        samplesSha256: hash
+      }))
+    } as unknown as Manifest;
+    expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
   });
   it('requires latest membership and caps retained builds', () => {
     const item = { buildId: 'one', manifestKey: 'key', cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z' };
