@@ -6,10 +6,6 @@
 		{
 			"binding": "BUCKET",
 			"bucket_name": "windy-av-layer"
-		},
-		{
-			"bucket_name": "windy-av-layer",
-			"binding": "windy_av_layer"
 		}
 	],
 	"rules": [

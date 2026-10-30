@@ -65,7 +65,19 @@ export async function renderArchive(path: string, field: GridField, mask: Covera
       const metadata = db.prepare('INSERT INTO metadata VALUES (?, ?)');
       for (const [key, value] of Object.entries({ name: layer, format: 'webp', type: 'overlay', version: '1', minzoom: '0', maxzoom: String(mask.maxZoom), bounds: '-180,-85.051129,180,85.051129' })) metadata.run(key, value);
       const insert = db.prepare('INSERT INTO tiles VALUES (?, ?, ?, ?)');
-      for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) insert.run(z, tile.x, 2 ** z - 1 - tile.y, await renderTile(field, mask, layer, z, tile.x, tile.y));
+      const tiles = Array.from({ length: mask.maxZoom + 1 }, (_, z) => expectedTiles(mask, z)).flat();
+      const encoded = new Array<Buffer>(tiles.length);
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(8, tiles.length) }, async () => {
+        while (next < tiles.length) {
+          const i = next++, tile = tiles[i]!;
+          encoded[i] = await renderTile(field, mask, layer, tile.z, tile.x, tile.y);
+        }
+      }));
+      for (let i = 0; i < tiles.length; i++) {
+        const tile = tiles[i]!;
+        insert.run(tile.z, tile.x, 2 ** tile.z - 1 - tile.y, encoded[i]!);
+      }
       db.exec('COMMIT');
     } finally { db.close(); }
     await mkdir(dirname(path), { recursive: true });

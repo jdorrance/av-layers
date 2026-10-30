@@ -42,17 +42,22 @@ export async function validateArchive(path: string, mask: CoverageMask): Promise
     const archive = new PMTiles({ getKey: () => path, async getBytes(offset, length) { const data = Buffer.alloc(length); const { bytesRead } = await file.read(data, 0, length, offset); if (!bytesRead) throw new Error('Short archive read'); return { data: data.buffer.slice(data.byteOffset, data.byteOffset + bytesRead) }; } });
     const header = await archive.getHeader();
     if (header.tileType !== TileType.Webp || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression) || header.minZoom !== 0 || header.maxZoom !== mask.maxZoom) throw new Error(`Unsupported archive ${path}: ${JSON.stringify({ type: header.tileType, tileCompression: header.tileCompression, internalCompression: header.internalCompression, minZoom: header.minZoom, maxZoom: header.maxZoom })}`);
-    for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) {
-      const result = await archive.getZxy(tile.z, tile.x, tile.y);
-      if (!result || result.data.byteLength < 25) throw new Error(`Missing or invalid active tile ${path} ${z}/${tile.x}/${tile.y}`);
-      let dims: { width: number; height: number };
-      try {
-        dims = await decodeWebp(new Uint8Array(result.data));
-      } catch {
-        throw new Error(`Missing or invalid active tile ${path} ${z}/${tile.x}/${tile.y}`);
+    const tiles = Array.from({ length: mask.maxZoom + 1 }, (_, z) => expectedTiles(mask, z)).flat();
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(8, tiles.length) }, async () => {
+      while (next < tiles.length) {
+        const tile = tiles[next++]!;
+        const result = await archive.getZxy(tile.z, tile.x, tile.y);
+        if (!result || result.data.byteLength < 25) throw new Error(`Missing or invalid active tile ${path} ${tile.z}/${tile.x}/${tile.y}`);
+        let dims: { width: number; height: number };
+        try {
+          dims = await decodeWebp(new Uint8Array(result.data));
+        } catch {
+          throw new Error(`Missing or invalid active tile ${path} ${tile.z}/${tile.x}/${tile.y}`);
+        }
+        if (dims.width !== 256 || dims.height !== 256) throw new Error(`Invalid tile dimensions ${path} ${tile.z}/${tile.x}/${tile.y}`);
       }
-      if (dims.width !== 256 || dims.height !== 256) throw new Error(`Invalid tile dimensions ${path} ${z}/${tile.x}/${tile.y}`);
-    }
+    }));
   } finally { await file.close(); }
 }
 
