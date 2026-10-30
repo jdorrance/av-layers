@@ -6,9 +6,10 @@ in [status](status.md).
 1. **Verify remote operation.** Publish a real build to staging and exercise
    deployed R2 range reads, cache behavior, concurrent publication, rollback,
    cleanup and expiry. Record the observations before production deployment.
-2. **Verify the clients in use.** Exercise the standalone preview and actual
-   Windy host with published data, including point selection, tile failures,
-   deep zoom, timestamp changes, cancellation and page/plugin lifecycle.
+2. **Verify the clients in use.** Exercise the standalone preview and downstream
+   consumers (including the optional Windy plugin host) with published data,
+   covering point selection, tile failures, deep zoom, timestamp changes,
+   cancellation and page/plugin lifecycle.
 3. **Add regional products.** After verifying the GFS release path, integrate
    HRRR CONUS and the selected ICON-Armenia patch with regional coverage and
    the build/serving contracts.

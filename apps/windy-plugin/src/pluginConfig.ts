@@ -10,7 +10,7 @@ const config: ExternalPluginConfig = {
   icon: '🪂',
   title: 'AV usable lift',
   description: 'Derived usable lift (MSL/AGL) and precipitation-rate overlays from immutable GFS builds.',
-  author: 'Windy AV Layer',
+  author: 'AV Forecast Layers',
   repository: 'https://github.com/windycom/windy-plugin-template',
   desktopUI: 'rhpane',
   mobileUI: 'fullscreen',

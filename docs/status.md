@@ -3,7 +3,8 @@
 [Home](../README.md) · [Roadmap](roadmap.md)
 
 The GFS pipeline has been verified with a real forecast in a local runtime.
-Cloudflare publication and Windy-host integration remain release work.
+Cloudflare publication and live client host integrations (including the optional
+Windy consumer) remain release work.
 
 ## Local GFS validation
 
@@ -32,7 +33,8 @@ Its test results describe that checkpoint; use the
 Remote R2 uploads, publication integrity checks against Cloudflare, and a
 deployed Worker have not yet been demonstrated by this evidence. The preview
 server was opened, but the record does not include automated visual assertions.
-Windy loader tests use fixtures; actual host behavior still needs validation.
+Plugin loader tests use fixtures; actual host behavior for external consumers
+still needs validation.
 
 HRRR and ICON-Armenia products are deferred. The current build path supports GFS;
 the clients expose the reserved regional model IDs as unavailable.

@@ -1,7 +1,7 @@
 THIRD-PARTY NOTICES
 
 This file records provenance and third-party license obligations for material
-reused by windy-av-layer. It is not a grant of rights for private upstream
+reused by this repository. It is not a grant of rights for private upstream
 repositories. No LICENSE file was found in the windgrams or skyjuice source
 checkouts; their code is not distributed under an asserted MIT or other public
 license here. Revisions, adaptation scope, and attribution are recorded below.

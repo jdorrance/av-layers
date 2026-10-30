@@ -700,10 +700,10 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });
 app.openAPIRegistry.registerPath({ method: 'get', path: '/docs', responses: { 200: { description: 'Interactive API documentation' } } });
-app.doc('/openapi.json', { openapi: '3.1.0', info: { title: 'Windy AV read API', version: '1.0.0' } });
+app.doc('/openapi.json', { openapi: '3.1.0', info: { title: 'Aviation Forecast Layers API', version: '1.0.0' } });
 app.get('/docs', c =>
   c.html(
-    '<!doctype html><html><head><title>Windy AV API</title></head><body><h1>Windy AV API</h1><p><a href="/openapi.json">OpenAPI document</a></p><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><div id="swagger-ui"></div><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>'
+    '<!doctype html><html><head><title>Aviation Forecast Layers API</title></head><body><h1>Aviation Forecast Layers API</h1><p><a href="/openapi.json">OpenAPI document</a></p><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><div id="swagger-ui"></div><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>'
   )
 );
 app.notFound(() => {

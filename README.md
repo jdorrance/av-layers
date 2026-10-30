@@ -1,14 +1,15 @@
-# Windy AV Layer
+# Aviation Forecast Layers
 
-Thermal-lift and precipitation forecasts for Windy and standalone maps.
+Thermal-lift and precipitation forecast tiles and point-series API for any map or client.
 
-Windy AV Layer turns weather-model output into map tiles and numeric point
+This service turns weather-model output into map tiles and numeric point
 forecasts. It provides usable lift above sea level, usable lift above model
 terrain, and precipitation rate. A batch job prepares each forecast; a small
-read-only API serves the same immutable build to every client.
+read-only API serves the same immutable build to any consumer (standalone maps,
+web or mobile apps, flight-planning tools, or host plugins such as Windy).
 
 The GFS pipeline has completed a real local build and API validation. Remote
-publication and actual Windy-host integration still need verification; regional
+publication and live client host integrations still need verification; regional
 products are deferred. See [project status](docs/status.md) for the evidence and
 remaining release work.
 

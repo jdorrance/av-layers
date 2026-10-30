@@ -12,8 +12,9 @@ const manifest = manifestSchema.parse(JSON.parse(manifestText));
 
 Parsing checks structure; batch validation additionally checks artifact bytes
 and publication consistency. The [public exports and types](src/index.ts) own
-signatures and constants, while the [coverage manifest](coverage/manifest.json)
-owns generated lookup metadata.
+signatures and constants, [client helpers](src/client.ts) (`@av/contracts/client`)
+own shared API, time, tile and presentation logic for any consumer, and the
+[coverage manifest](coverage/manifest.json) owns generated lookup metadata.
 
 [Data semantics](../../docs/data.md) explains values, absence and freshness.
 [Architecture](../../docs/architecture.md) shows how the packages fit together.

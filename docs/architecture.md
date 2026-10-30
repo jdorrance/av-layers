@@ -1,8 +1,8 @@
 # Architecture
 
 The batch process turns admitted model inputs into immutable display and
-sampling artifacts. A read-only Worker serves those artifacts to clients that
-pin one build for the duration of a view.
+sampling artifacts. A read-only Worker serves those artifacts to any client that
+pins one build for the duration of a view.
 
 ```text
 Forecast providers → batch acquisition → science → tiles + numeric arrays
@@ -11,23 +11,24 @@ Forecast providers → batch acquisition → science → tiles + numeric arrays
                                                    ↓
                                             read-only API Worker
                                                    ↓
-                                           preview / Windy plugin
+                                   any map or API consumer (preview, apps, plugins)
 ```
 
 ## Workspace map
 
 - [Contracts](../packages/contracts/README.md) owns shared schemas, identifiers,
-  palettes and coverage assets.
+  palettes, coverage assets and client helpers (`@av/contracts/client`).
 - [Forecast](../packages/forecast/README.md) owns pure column calculations and
   scalar sampling. Its callers supply inputs and handle storage.
 - [Batch](../apps/batch/README.md) owns provider acquisition, derivation,
   rendering, validation and publication.
 - [API](../apps/api/README.md) owns HTTP validation, publication admission,
   bounded reads and caching.
-- [Preview](../apps/preview/README.md) owns the standalone map and point-series
-  interface. Its API, time and tile helpers are also used by the plugin.
-- [Windy plugin](../apps/windy-plugin/README.md) owns integration with the host
-  map, timestamp store and plugin lifecycle.
+- [Preview](../apps/preview/README.md) owns the standalone MapLibre map and
+  point-series interface.
+- [Windy plugin](../apps/windy-plugin/README.md) is one optional consumer that
+  adapts the shared client helpers to Windy's host map, timestamp store and
+  plugin lifecycle.
 
 ## Why these boundaries exist
 

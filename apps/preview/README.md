@@ -12,9 +12,9 @@ VITE_API_BASE=http://localhost:8787 pnpm --filter @av/preview dev
 `VITE_API_BASE` defaults to `http://localhost:8787`; set it when building for a
 different API. See [getting started](../../docs/getting-started.md) for setup.
 
-[main.ts](src/main.ts) owns map and UI state. [api.ts](src/api.ts) exposes
-`ApiClient` and the pinned-build types. The API, time and tile helpers also serve
-the Windy plugin; this app does not acquire or derive forecast data.
+[main.ts](src/main.ts) owns map and UI state. Shared API, time, tile and
+presentation helpers live in [`@av/contracts/client`](../../packages/contracts/README.md)
+for any consumer; this app does not acquire or derive forecast data.
 
 See [data](../../docs/data.md) for interpretation and
 [development](../../docs/development.md) for checks and test scope.

@@ -7,10 +7,10 @@ and entry points; read those boundaries before changing implementation details.
 ## Making a change
 
 Keep a change within the responsibility that owns it. Provider handling belongs
-in batch, scientific behavior in forecast, shared data definitions in contracts,
-and presentation in the clients. Extract a helper when it gives an existing
-caller less to understand. Preserve value, absence and freshness semantics
-during structural changes.
+in batch, scientific behavior in forecast, shared data definitions and client
+helpers in contracts, and UI specifics in each consumer client. Extract a helper
+when it gives an existing caller less to understand. Preserve value, absence and
+freshness semantics during structural changes.
 
 Add a focused regression test for a behavioral fix, then run the
 [development checks](../README.md#development-checks). Those commands define
@@ -28,8 +28,8 @@ loaded against a simulated host.
 
 Real-build validation and local API smoke tests exercise the assembled pipeline.
 They complement fixtures; neither a simulated host nor local storage establishes
-deployed Cloudflare or actual Windy behavior. Keep new evidence and its limits in
-[status](status.md).
+deployed Cloudflare or live consumer host behavior. Keep new evidence and its
+limits in [status](status.md).
 
 To investigate GFS acquisition without rendering a forecast, run
 `pnpm input:proof --cache-dir .cache/gfs`. It prints an input-admission receipt;
