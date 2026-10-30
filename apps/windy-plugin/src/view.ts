@@ -38,10 +38,11 @@ const CSS = `
 .av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
 .av-badge{margin:8px 0;padding:5px 7px;background:#1d2b31;border:1px solid #2f444d;border-radius:4px;font-size:11px}
 .av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
+.av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
 .av-diagnostics{margin-top:12px;border-top:1px solid #253036;padding-top:8px}
 .av-diagnostics summary{cursor:pointer;color:#8fa4ad;font-size:11px;font-weight:600;margin-bottom:6px}
 .av-meta{display:grid;grid-template-columns:76px 1fr;gap:3px 8px;margin:8px 0;font-size:10.5px}
-.av-meta dt{color:#8fa4ad}.av-meta dd{margin:0;word-break:break-word}
+.av-meta dt{color:#8fa4ad}.av-meta dd{margin:0;word-break:break-word}.av-meta a{color:#9bdcff}
 .av-panel h2{margin:10px 0 5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8fa4ad}
 .av-legend-row{display:flex;align-items:center;gap:6px;font-size:10.5px;min-height:16px}
 .av-swatch{width:22px;height:11px;border-radius:2px;border:1px solid #ffffff22;flex:none}
@@ -78,6 +79,7 @@ export class PluginPanel {
   private readonly meta = node('dl', 'av-meta');
   private readonly legend = node('div', 'av-legend');
   private readonly error = node('p', 'av-error');
+  private readonly horizonNotice = node('p', 'av-warning');
   private readonly seriesStatus = node('p', 'av-muted');
   private readonly series = node('div', 'av-series');
   private readonly seriesButton = node('button', 'av-button', 'Sample clicked point (8 × 3)');
@@ -111,6 +113,7 @@ export class PluginPanel {
     this.seriesButton.disabled = true;
     this.seriesButton.addEventListener('click', callbacks.onSeries);
     this.error.hidden = true;
+    this.horizonNotice.hidden = true;
     const controls = node('div', 'av-controls');
     controls.append(
       node('label', undefined, 'Model'),
@@ -126,7 +129,7 @@ export class PluginPanel {
     seriesPanel.append(node('h2', undefined, 'Point series'), this.seriesStatus, this.seriesButton, this.series);
     const diagnostics = node('details', 'av-diagnostics');
     diagnostics.append(node('summary', undefined, 'Build & method diagnostics'), this.meta);
-    this.root.append(header, this.status, controls, this.badge, this.error, this.coverage, this.legend, seriesPanel, diagnostics);
+    this.root.append(header, this.status, this.horizonNotice, controls, this.badge, this.error, this.coverage, this.legend, seriesPanel, diagnostics);
   }
 
   setVisible(visible: boolean): void {
@@ -183,7 +186,17 @@ export class PluginPanel {
           ['Method', build.manifest.method?.id ?? 'unknown'],
           ['Expires', build.manifest.expiresAt]
         ];
-    this.meta.replaceChildren(...rows.flatMap(([label, value]) => [node('dt', undefined, label), node('dd', undefined, value)]));
+    this.meta.replaceChildren(...rows.flatMap(([label, value]) => {
+      const detail = node('dd');
+      if (label === 'Provenance' && /^https?:\/\//i.test(value)) {
+        const link = node('a', undefined, value);
+        link.href = value;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        detail.append(link);
+      } else detail.textContent = value;
+      return [node('dt', undefined, label), detail];
+    }));
     this.renderLegend(build, this.layerSelect.value);
   }
 
@@ -215,6 +228,8 @@ export class PluginPanel {
   renderState(state: ControllerState): void {
     this.badge.textContent = state.badge;
     this.setError(state.message);
+    this.horizonNotice.hidden = state.horizonNotice === null;
+    this.horizonNotice.textContent = state.horizonNotice ?? '';
     if (state.frameId) this.frameSelect.value = state.frameId;
     if (state.layerId) {
       this.layerSelect.value = state.layerId;

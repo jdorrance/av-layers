@@ -2,6 +2,14 @@ name: Forecast maintenance
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: Target Cloudflare environment
+        type: choice
+        options:
+          - staging
+          - production
+        default: production
+        required: true
       action:
         description: Serialized publication maintenance action
         type: choice
@@ -14,8 +22,6 @@ on:
         type: choice
         options:
           - gfs
-          - hrrr
-          - icon-armenia
         default: gfs
         required: true
       build-id:
@@ -29,43 +35,57 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: forecast-${{ inputs.model }}
+  group: forecast-${{ inputs.environment || 'production' }}-gfs
   cancel-in-progress: false
 jobs:
   maintain:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    environment: ${{ inputs.environment || 'production' }}
     env:
+      TARGET_ENV: ${{ inputs.environment || 'production' }}
       ACTION: ${{ inputs.action }}
       MODEL: ${{ inputs.model }}
       BUILD_ID: ${{ inputs['build-id'] }}
       CONFIRM: ${{ inputs.confirm }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
         with:
-          version: 10.34.9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.23.4
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Refuse superseded main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "${current}" != "${GITHUB_SHA}" ]; then
+            echo 'This revision has been superseded on main; run the latest revision instead.' >&2
+            exit 1
+          fi
       - name: Validate maintenance inputs
         shell: bash
         run: |
           set -euo pipefail
+          case "${TARGET_ENV}" in
+            staging|production) ;;
+            *) echo 'unsupported maintenance environment' >&2; exit 1 ;;
+          esac
           case "${ACTION}" in
             rollback|cleanup) ;;
             *) echo 'unsupported maintenance action' >&2; exit 1 ;;
           esac
-          case "${MODEL}" in
-            gfs|hrrr|icon-armenia) ;;
-            *) echo 'unsupported model' >&2; exit 1 ;;
-          esac
+          if [ "${MODEL}" != 'gfs' ]; then
+            echo 'unsupported model' >&2
+            exit 1
+          fi
           if [ "${CONFIRM}" != 'publishers-paused' ]; then
             echo 'confirm must equal publishers-paused' >&2
             exit 1
@@ -78,6 +98,26 @@ jobs:
             echo 'cleanup does not accept a build id' >&2
             exit 1
           fi
+      - name: Validate maintenance secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_ACCOUNT_ID R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [ -z "${!name:-}" ]; then
+              echo "missing required maintenance value ${name}" >&2
+              exit 1
+            fi
+          done
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate publication environment mapping
+        run: pnpm exec tsx scripts/cloudflare-ci.ts publicationcheck --env "${TARGET_ENV}"
       - name: Rollback pointer
         if: ${{ inputs.action == 'rollback' }}
         run: pnpm run rollback --model "${MODEL}" --build-id "${BUILD_ID}" --publishers-paused

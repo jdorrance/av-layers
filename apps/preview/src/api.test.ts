@@ -56,7 +56,7 @@ function latestPayload(): LatestPayload {
   return {
     pointer: pointer(),
     manifest: manifest(),
-    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/20261030T000000Z-abc/${layer}/{frame}/{z}/{x}/{y}.png`])),
+    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/20261030T000000Z-abc/${layer}/{frame}/{z}/{x}/{y}.webp`])),
     bounds: [-180, -55, 180, 65],
     maxNativeZoom: 5,
     palettes: [{ id: 'lift', edges: [0, 300], colors: ['#000000', '#ffffff'], units: 'm' }],
@@ -77,9 +77,22 @@ describe('ApiClient.latest', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/v1/models/gfs/latest?expand=manifest');
     expect(build.manifest.buildId).toBe('20261030T000000Z-abc');
-    expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.png');
+    expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.webp');
     expect(build.maxNativeZoom).toBe(5);
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
+  });
+
+  it('preserves forecast-horizon metadata without rejecting retained historical forecasts', async () => {
+    const payload = latestPayload();
+    payload.manifest!.expiresAt = '2026-11-06T00:00:00.000Z';
+    payload.pointer.retained[0]!.expiresAt = payload.manifest!.expiresAt;
+    payload.freshness = { ageSeconds: 90000, expiresAt: payload.manifest!.expiresAt, cycle: created,
+      latestValidTime: frames.at(-1)!.validTime, horizonExhausted: true, horizonRemainingSeconds: 0 };
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => jsonResponse(payload),
+      now: () => Date.parse('2026-10-31T06:00:00Z') });
+    const build = await client.latest('gfs');
+    expect(build.freshness).toEqual(payload.freshness);
+    expect(build.manifest.frames).toEqual(frames);
   });
 
   it('rejects a manifest that does not match the pinned pointer build', async () => {

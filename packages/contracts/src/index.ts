@@ -144,6 +144,7 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const frameSchema = z.object({ id: key, validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp });
 export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, samplesKey: key, tilesSha256: sha256, samplesSha256: sha256 });
 export const manifestSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().nonnegative() }), grid: gridSchema, frames: z.array(frameSchema).min(1), layers: z.array(layerIdSchema).min(1), artifacts: z.array(artifactSchema).min(1), source: z.record(z.string(), z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
+export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, frames: z.array(z.unknown()) }).passthrough();
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(128) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
 export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean() });
@@ -163,6 +164,30 @@ export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: ma
 export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
 export type FreshnessSummary = z.infer<typeof freshnessSchema>;
+
+/** A sidecar belongs to one build; absent legacy references are allowed, incomplete ones are not. */
+export function getProvenanceReference(
+  manifest: Pick<Manifest, 'model' | 'buildId' | 'source'>
+): { key: string; sha256: string } | null {
+  const source = manifest.source;
+  if (!Object.hasOwn(source, 'provenanceKey') && !Object.hasOwn(source, 'provenanceSha256')) return null;
+  const digest = sha256.safeParse(source.provenanceSha256);
+  if (source.provenanceKey !== `builds/${manifest.model}/${manifest.buildId}/provenance.json` || !digest.success) {
+    throw new Error('Invalid provenance reference');
+  }
+  return { key: source.provenanceKey, sha256: digest.data };
+}
+
+export function parseProvenance(
+  raw: unknown,
+  manifest: Pick<Manifest, 'model' | 'buildId' | 'cycle'>
+): z.infer<typeof provenanceSchema> {
+  const provenance = provenanceSchema.parse(raw);
+  if (provenance.model !== manifest.model || provenance.buildId !== manifest.buildId || provenance.cycle !== manifest.cycle) {
+    throw new Error('Provenance does not match manifest');
+  }
+  return provenance;
+}
 
 export function compactSource(source: Record<string, unknown>): Record<string, unknown> {
   if (!('frames' in source) || !Array.isArray(source.frames)) return source;

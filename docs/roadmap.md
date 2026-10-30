@@ -24,10 +24,9 @@ model run: **spatial map fields** and **vertical/time point profiles**.
    column/time bundle rather than one object per variable × level × hour. Share
    build identity and UTC valid time with map layers, starting with nearest
    native cell selection and explicit method labels.
-4. **Adopt lossless WebP tiles after full-archive and client verification.**
-   Coordinate the tile encoder, PMTiles `TileType.Webp` metadata and validation,
-   `image/webp` MIME headers, URL templates, and blank fallback tiles together
-   while preserving legacy PNG builds.
+4. **Lossless WebP tiles (implemented across build, archive, and API).**
+   All map layers render through `renderTileRgba` + `encodeWebp` into PMTiles
+   archives (`TileType.Webp`) served as `image/webp` at `.../{z}/{x}/{y}.webp`.
 5. **Add native-grid convergence, then one regional model (HRRR CONUS or ICON patch).**
    Reuse geometry-aware kinematics with GFS spherical derivatives (`s⁻¹`,
    distinct from vertical climb rate in `m/s`) and below-ground pressure-level

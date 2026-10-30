@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { manifestSchema, modelPointerSchema, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
 
 export { validateArtifactRecords };
 
@@ -73,6 +73,12 @@ async function main(): Promise<void> {
   const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
   const pointerKey = `catalog/${manifest.model}/latest.json`;
   const manifestSha = sha256(manifestBytes);
+  const provenance = getProvenanceReference(manifest);
+  if (provenance) {
+    const bytes = readFileSync(join(outputRoot, provenance.key));
+    invariant(sha256(bytes) === provenance.sha256, `provenance hash mismatch: ${provenance.key}`);
+    parseProvenance(JSON.parse(bytes.toString('utf8')), manifest);
+  }
 
   const config = JSON.parse(readFileSync(join(apiDir, 'wrangler.jsonc'), 'utf8'));
   const bucket = config.r2_buckets?.[0]?.bucket_name;
@@ -90,6 +96,8 @@ async function main(): Promise<void> {
   const marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
   mkdirSync(markerDir, { recursive: true });
 
+  // Seed the receipt even when an older preview marker already covers the arrays.
+  if (provenance) putObject(node, bucket, provenance.key, join(outputRoot, provenance.key), 'application/json', persistTo);
   if (shouldSeedAssets(existsSync(marker), reseed)) {
     for (const artifact of manifest.artifacts) {
       putObject(node, bucket, artifact.tilesKey, join(outputRoot, artifact.tilesKey), 'application/vnd.pmtiles', persistTo);

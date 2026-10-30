@@ -12,6 +12,7 @@ import {
   STATUS_OUTSIDE,
   compactSource,
   computeFreshness,
+  getProvenanceReference,
   isCovered,
   isPaletteId,
   isTileCovered,
@@ -20,6 +21,8 @@ import {
   modelPointerSchema,
   paletteBinLabel,
   paletteSchema,
+  parseProvenance,
+  provenanceSchema,
   sampleResponseSchema,
   type CoverageMask,
   type LayerId,
@@ -54,12 +57,8 @@ const pointerCache = new WeakMap<R2Bucket, Map<ModelId, { pointer: ModelPointer;
 const manifestCache = new WeakMap<R2Bucket, Map<string, Manifest>>();
 const MAX_CACHED_MANIFESTS = 64;
 const IMMUTABLE_TTL = 86400;
-const blank = Uint8Array.from(
-  atob(
-    'iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAABFUlEQVR42u3BMQEAAADCoPVP7WsIoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAeAMBPAAB2ClDBAAAAABJRU5ErkJggg=='
-  ),
-  c => c.charCodeAt(0)
-);
+// Transparent 256 × 256 lossless tile, generated with the batch WebP encoder.
+const blank = Uint8Array.from(atob('UklGRiIAAABXRUJQVlA4TBUAAAAv/8A/EAcQEREAUKT//ymi/6n//QcA'), c => c.charCodeAt(0));
 
 class Problem extends Error {
   constructor(
@@ -209,6 +208,22 @@ async function manifest(
   return m;
 }
 
+function provenanceReference(m: Manifest) {
+  try {
+    return getProvenanceReference(m);
+  } catch {
+    return fail(503, 'publication-invalid', 'Invalid provenance reference');
+  }
+}
+
+function servedSource(m: Manifest, origin: string, compact = true): Record<string, unknown> {
+  const reference = provenanceReference(m);
+  const source = compact ? compactSource(m.source) : m.source;
+  return reference || Array.isArray(m.source.frames)
+    ? { ...source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` }
+    : source;
+}
+
 function artifact(m: Manifest, layer: LayerId, frame: string) {
   validateId(frame);
   if (!m.layers.includes(layer) || !m.frames.some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
@@ -263,10 +278,12 @@ function finish(request: Request, res: Response, expiresAt?: string): Response {
   return new Response(request.method === 'HEAD' ? null : res.body, { status: res.status, headers });
 }
 
-async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>): Promise<Response> {
+async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>, representation?: string): Promise<Response> {
   ensureLive(expiresAt);
   const cache = typeof caches !== 'undefined' ? (caches as CacheStorage & { default?: Cache }).default : undefined;
-  const key = new Request(request.url, { method: 'GET' });
+  const cacheUrl = new URL(request.url);
+  if (representation) cacheUrl.searchParams.set('__representation', representation);
+  const key = new Request(cacheUrl, { method: 'GET' });
   const hit = await cache?.match(key);
   if (hit) return finish(request, hit, expiresAt);
   const result = await build();
@@ -279,7 +296,7 @@ function view(m: Manifest, origin: string) {
   return {
     manifest: m,
     templates: Object.fromEntries(
-      m.layers.map(layer => [layer, `${origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.png`])
+      m.layers.map(layer => [layer, `${origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])
     ),
     bounds: [-180, -55, 180, 65],
     maxNativeZoom: m.coverage.maxZoom,
@@ -431,7 +448,7 @@ registerJsonRoute(
     const ptr = await pointer(c.env.BUCKET, model);
     const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId);
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry);
-    const compactManifest = { ...m, source: compactSource(m.source) };
+    const compactManifest = { ...m, source: servedSource(m, url.origin) };
     return json({
       pointer: ptr,
       ...(url.searchParams.has('expand') ? view(compactManifest, url.origin) : {}),
@@ -459,12 +476,53 @@ registerJsonRoute(
   { model: param, buildId: param },
   {},
   manifestSchema,
+  async (c, url) => {
+    const model = modelId(requiredParam(c, 'model'));
+    const buildId = requiredParam(c, 'buildId');
+    const entry = await admit(c.env.BUCKET, model, buildId);
+    const m = await manifest(c.env.BUCKET, model, buildId, entry);
+    const served = { ...m, source: servedSource(m, url.origin, false) };
+    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-v2`), 'source-v2');
+  }
+);
+
+registerJsonRoute(
+  '/v1/models/{model}/runs/{buildId}/provenance',
+  '/v1/models/:model/runs/:buildId/provenance',
+  { model: param, buildId: param },
+  {},
+  provenanceSchema,
   async c => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
     const entry = await admit(c.env.BUCKET, model, buildId);
     const m = await manifest(c.env.BUCKET, model, buildId, entry);
-    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(m, m.expiresAt, `manifest-${m.buildId}`));
+    const reference = provenanceReference(m);
+    if (!reference && !Array.isArray(m.source.frames)) fail(404, 'unknown-resource', 'Provenance is unavailable for this build');
+    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
+      let bytes: ArrayBuffer;
+      if (reference) {
+        const object = await c.env.BUCKET.get(reference.key);
+        if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
+        bytes = await object.arrayBuffer();
+      } else {
+        bytes = new TextEncoder().encode(JSON.stringify({ ...m.source, version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle })).buffer as ArrayBuffer;
+      }
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
+      if (reference && digest !== reference.sha256) fail(503, 'publication-invalid', 'Provenance hash mismatch');
+      let raw: unknown;
+      try {
+        raw = JSON.parse(new TextDecoder().decode(bytes));
+      } catch {
+        return fail(503, 'publication-invalid', 'Invalid provenance JSON');
+      }
+      try {
+        parseProvenance(raw, m);
+      } catch {
+        return fail(503, 'publication-invalid', 'Provenance does not match manifest');
+      }
+      return response(bytes, 'application/json; charset=utf-8', m.expiresAt, digest);
+    });
   }
 );
 
@@ -494,7 +552,7 @@ registerJsonRoute(
         {
           tilejson: '3.0.0',
           name: `${layer} ${frame}`,
-          tiles: [`${url.origin}/tiles/${model}/${m.buildId}/${layer}/${frame}/{z}/{x}/{y}.png`],
+          tiles: [`${url.origin}/tiles/${model}/${m.buildId}/${layer}/${frame}/{z}/{x}/{y}.webp`],
           minzoom: 0,
           maxzoom: m.coverage.maxZoom,
           bounds: [-180, -55, 180, 65]
@@ -569,10 +627,10 @@ const tileParamSchema = z.object({ model: param, buildId: param, layer: param, f
 app.openAPIRegistry.registerPath(
   createRoute({
     method: 'get',
-    path: '/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.png',
+    path: '/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp',
     request: { params: tileParamSchema, query: z.object({}) },
     responses: {
-      200: { description: 'Rendered PNG tile', content: { 'image/png': { schema: z.string().openapi({ type: 'string', format: 'binary' }) } } },
+      200: { description: 'Rendered lossless WebP tile', content: { 'image/webp': { schema: z.string().openapi({ type: 'string', format: 'binary' }) } } },
       ...problemResponses
     }
   })
@@ -580,7 +638,7 @@ app.openAPIRegistry.registerPath(
 app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
   const url = new URL(c.req.url);
   query(url, []);
-  const match = /^([0-9]+)\.png$/.exec(c.req.param('filename'));
+  const match = /^([0-9]+)\.webp$/.exec(c.req.param('filename'));
   if (!match) fail(400, 'invalid-tile', 'Invalid tile filename');
   const p = { ...c.req.param(), y: match[1] };
   if (!tileParamSchema.safeParse(p).success) fail(400, 'invalid-parameter', 'Invalid request parameters');
@@ -598,7 +656,7 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
   }
   return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
     const data = isTileCovered(mask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y) : blank;
-    return response(data, 'image/png', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
+    return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
   });
 });
 
@@ -681,7 +739,7 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
       lat,
       lon,
       method: m.method,
-      source: compactSource(m.source),
+      source: servedSource(m, url.origin),
       coverage: m.coverage,
       expiresAt: m.expiresAt,
       frames: frames.map(frame => ({
@@ -696,8 +754,8 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
     };
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString()));
     const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}`);
-  });
+    return json(result, m.expiresAt, `sample-${tag}-v2`);
+  }, 'source-v2');
 }
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });

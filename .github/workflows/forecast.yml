@@ -4,12 +4,21 @@ on:
     - cron: '17 5 * * *'
   workflow_dispatch:
     inputs:
+      environment:
+        description: Target Cloudflare environment
+        type: choice
+        options:
+          - staging
+          - production
+        default: production
+        required: true
       model:
         description: Forecast model
         type: choice
         options:
           - gfs
         default: gfs
+        required: true
       cycle:
         description: Optional upstream cycle (ISO 8601 UTC); empty discovers the latest admissible run
         type: string
@@ -21,21 +30,62 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: forecast-${{ inputs.model || 'gfs' }}
+  group: forecast-${{ inputs.environment || 'production' }}-gfs
   cancel-in-progress: false
 jobs:
   build-publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    environment: ${{ inputs.environment || 'production' }}
     env:
+      TARGET_ENV: ${{ inputs.environment || 'production' }}
       MODEL: ${{ inputs.model || 'gfs' }}
       CYCLE: ${{ inputs.cycle || '' }}
+      RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Refuse superseded main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "${current}" != "${GITHUB_SHA}" ]; then
+            echo 'This revision has been superseded on main; run the latest revision instead.' >&2
+            exit 1
+          fi
+      - name: Validate forecast environment and secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${TARGET_ENV}" in
+            staging|production) ;;
+            *) echo 'unsupported forecast environment' >&2; exit 1 ;;
+          esac
+          if [ "${GITHUB_REF}" != 'refs/heads/main' ]; then
+            echo 'forecast runs only from main' >&2
+            exit 1
+          fi
+          if [ "${MODEL}" != 'gfs' ]; then
+            echo 'unsupported model' >&2
+            exit 1
+          fi
+          for name in CLOUDFLARE_ACCOUNT_ID R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+            if [ -z "${!name:-}" ]; then
+              echo "missing required forecast value ${name}" >&2
+              exit 1
+            fi
+          done
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.9
@@ -44,6 +94,8 @@ jobs:
           node-version: 22.23.4
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Validate publication environment mapping
+        run: pnpm exec tsx scripts/cloudflare-ci.ts publicationcheck --env "${TARGET_ENV}"
       - run: pnpm tools:pmtiles
       - name: Build sample
         shell: bash
@@ -59,14 +111,20 @@ jobs:
           printf 'MANIFEST=%s\n' "${manifest}" >> "${GITHUB_ENV}"
       - name: Validate sample
         run: pnpm exec tsx apps/batch/src/cli.ts validate --manifest "${MANIFEST}"
+      - name: Refuse superseded main revision before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "${current}" != "${GITHUB_SHA}" ]; then
+            echo 'This revision was superseded during the build; rerun the latest revision before publishing.' >&2
+            exit 1
+          fi
       - name: Publish immutable build and pointer
         id: publish
-        if: ${{ env.R2_ACCESS_KEY_ID != '' && env.R2_SECRET_ACCESS_KEY != '' && env.R2_ACCOUNT_ID != '' && env.R2_BUCKET != '' }}
         run: pnpm run publish --manifest "${MANIFEST}"
-      - name: Record skipped publication
-        if: ${{ env.R2_ACCESS_KEY_ID == '' || env.R2_SECRET_ACCESS_KEY == '' || env.R2_ACCOUNT_ID == '' || env.R2_BUCKET == '' }}
-        run: |
-          echo 'R2 credentials absent: sample built and validated locally, publication skipped.' >> "${GITHUB_STEP_SUMMARY}"
       - name: Upload build receipts
         uses: actions/upload-artifact@v4
         if: always()
@@ -77,9 +135,9 @@ jobs:
             output/builds/*/*/provenance.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Upload full build artifacts on failure, skipped publication, or explicit request
+      - name: Upload full build artifacts on failure or explicit request
         uses: actions/upload-artifact@v4
-        if: ${{ failure() || steps.publish.outcome != 'success' || inputs['retain-full-artifacts'] == true }}
+        if: ${{ failure() || env.RETAIN_FULL_ARTIFACTS == 'true' }}
         with:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
           path: output/builds/

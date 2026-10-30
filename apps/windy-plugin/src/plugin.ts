@@ -134,7 +134,7 @@ async function startController(model: ModelId): Promise<void> {
       if (state.phase === 'ready' && state.buildId) {
         const build = controller?.currentBuild;
         const remaining = build ? Math.max(0, build.expiresAtMs - Date.now()) : 0;
-        ui.setStatus(`Pinned build ${state.buildId} · expires in ${Math.floor(remaining / 60000)} min`);
+        ui.setStatus(`Pinned build ${state.buildId} · artifacts expire in ${Math.floor(remaining / 60000)} min`);
       }
     }
   });

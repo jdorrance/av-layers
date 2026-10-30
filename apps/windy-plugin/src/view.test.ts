@@ -1,11 +1,16 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { PinnedBuild } from '@av/contracts/client';
 import { PluginPanel } from './view';
+import type { ControllerState } from './controller';
 
 class FakeElement {
   children: FakeElement[] = [];
   style: { background?: string } = {};
   textContent = '';
+  hidden = false;
+  href = '';
+  target = '';
+  rel = '';
   className = '';
   value = '';
   constructor(readonly tag: string) {}
@@ -68,4 +73,49 @@ it('normalizes wrapped longitudes and clears existing series when clicking a new
   expect(series.children).toHaveLength(1);
   panel.setClicked(40.1, 44.5);
   expect(series.children).toHaveLength(0);
+});
+
+it('keeps horizon warnings visible alongside errors and removes them on expiry', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  const state: ControllerState = {
+    phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'precip-rate', opacity: 0.5,
+    badge: 'Explicit frame f003', message: 'Overlay tile failed to load', horizonNotice: 'Forecast ended — update overdue.'
+  };
+  panel.renderState(state);
+  const children = (panel.root as unknown as FakeElement).children;
+  const warning = children.find(element => element.className === 'av-warning')!;
+  const error = children.find(element => element.className === 'av-error')!;
+  expect(warning.hidden).toBe(false);
+  expect(warning.textContent).toBe(state.horizonNotice);
+  expect(error.hidden).toBe(false);
+  expect(error.textContent).toBe(state.message);
+  panel.renderState({ ...state, message: null });
+  expect(warning.hidden).toBe(false);
+  expect(error.hidden).toBe(true);
+  panel.renderState({ ...state, phase: 'expired', message: 'Build expired', horizonNotice: null });
+  expect(warning.hidden).toBe(true);
+  expect(error.textContent).toBe('Build expired');
+});
+
+it.each(['https://api.test/provenance.json', 'http://localhost:8787/provenance.json', 'javascript:alert(1)'])('links HTTP(S) provenance in build diagnostics: %s', provenanceUrl => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  panel.renderBuild({
+    model: 'gfs', bounds: [-180, -55, 180, 65], maxNativeZoom: 5, coverage: { id: 'mask' }, palettes: [],
+    manifest: {
+      buildId: 'build-1', layers: ['precip-rate'], frames: [], cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z',
+      grid: { width: 1440, height: 721, dx: 0.25, dy: -0.25 }, source: { provenanceUrl }, method: { id: 'method', hash: 'a'.repeat(64) }
+    }
+  } as unknown as PinnedBuild);
+  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+  const diagnostics = (panel.root as unknown as FakeElement).children.find(element => element.tag === 'details')!;
+  const link = visit(diagnostics).find(element => element.tag === 'a');
+  if (provenanceUrl.startsWith('http')) {
+    expect(link?.href).toBe(provenanceUrl);
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toContain('noopener');
+  } else expect(link).toBeUndefined();
 });

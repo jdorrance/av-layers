@@ -46,40 +46,78 @@ backend metadata.
 
 </details>
 
+## First deployment
+
+Everything after setup runs in GitHub Actions; no local release commands are
+needed. Complete these one-time steps before the first release:
+
+1. Enable Cloudflare billing. Create a separate **bootstrap** API token with R2
+   Admin and Pages Edit, and store it as `CLOUDFLARE_BOOTSTRAP_TOKEN` in both
+   GitHub environments. The deploy token (`CLOUDFLARE_API_TOKEN`) needs Workers
+   Scripts Edit and Pages Edit only. Keep it separate from the bootstrap token.
+   Account-owned and user-owned API tokens are both supported.
+2. In GitHub, create `staging` and `production` environments with protection
+   rules. Add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as secrets and
+   set these variables per environment: `API_BASE_URL`, `R2_BUCKET`,
+   `PAGES_PROJECT_NAME`. `R2_BUCKET` must match the selected environment in
+   [Wrangler configuration](../apps/api/wrangler.jsonc). The staging Pages
+   project name must end in `-staging`; the production name must not, so a
+   staging deploy cannot overwrite production.
+3. Run **Bootstrap Cloudflare resources** from `main` with
+   `bootstrap-private-cloudflare`. It creates the private R2 bucket and the
+   Pages project on `main`, and refuses to continue if the bucket is public.
+   The command is idempotent and never disables a public bucket for you.
+4. Create an R2 S3 access key scoped to that bucket only with Object Read &
+   Write. Add `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` to the
+   matching GitHub environment. They are only needed after the bucket exists.
+5. Set `API_BASE_URL` to the target Worker URL. For the default `workers.dev`
+   URL it must start with the Wrangler environment name, for example
+   `https://windy-av-api-staging.<your-subdomain>.workers.dev`. The deployment
+   refuses a staging URL that names the production Worker.
+6. Run **Forecast sample** for the environment so the API has an initial
+   published build. It fails before building if any required secret or variable
+   is missing.
+7. Run **Deploy Worker and Pages** for the environment. Its mandatory smoke
+   check fails on an empty bucket with a 503 and repeats the order above.
+
+The order is **Bootstrap → Forecast sample → Deploy Worker and Pages**. After
+the first release, pushes to `main` run CI and then deploy automatically, and
+the forecast workflow runs daily at `05:17 UTC` for production.
+
+Each release or maintenance workflow checks for a newer `main` commit at start.
+The forecast workflow repeats the check after building, immediately before
+publication. These checks are not atomic with branch updates: `main` can advance
+after a check while the current run continues. Forecast builds are immutable and
+the pointer swap is compare-and-swap, so the result remains a complete,
+validated build rather than a partially written one.
+
 ## Deploy and schedule
 
-[Wrangler configuration](../apps/api/wrangler.jsonc) owns bucket bindings,
-rate limits and environment names. Configure those resources and use Workers
-Paid for production headroom. From the repository root:
-
-```sh
-export CLOUDFLARE_ACCOUNT_ID='...'
-export CLOUDFLARE_API_TOKEN='...'
-pnpm run deploy:staging
-pnpm exec tsx scripts/smoke-api.ts --base-url https://STAGING_HOST --model gfs
-```
-
-After staging verification, use `pnpm run deploy:production` and run the smoke
-check separately against the production host. The
-[manual deployment workflow](../.github/workflows/deploy.yml) also supports both
-environments, requires its confirmation input, and runs a deployed smoke check
-when `API_BASE_URL` is configured. The Worker needs no forecast-provider
-credentials and exposes no write, admin or job routes.
+The deployment job redeploys the Worker and runs the API smoke check, then builds
+the map with the environment's `API_BASE_URL`. It verifies the Pages project still
+uses `main` as its production branch, deploys, and checks the embedded
+commit/run/attempt marker at the canonical Pages URL. That URL comes from
+Cloudflare's project record, preserving any suffix assigned when a project name
+was already taken; the deployment summary links to the same URL. Deployment runs
+automatically on `main` and can be dispatched for either environment. The Worker
+needs no forecast-provider credentials and exposes no write, admin or job routes.
 
 `AV_LOCAL_DEVELOPMENT=true` is reserved for local Wrangler: it allows the local
 sampling limiter to work without Cloudflare's client-IP header. Production
 fails closed when that header or the limiter is unavailable.
 
 The [forecast workflow](../.github/workflows/forecast.yml) owns cadence, timeout
-and per-model serialization. It uses the same CLI and publishes only when all
-four R2 secrets exist; otherwise it records skipped publication after local
-validation. A rerun creates a fresh build. GitHub schedules can be delayed or
-disabled; recover with manual dispatch and an explicit cycle, or the same CLI
-on one cron runner.
+and per-model serialization. It validates the environment's publisher
+credentials and bucket mapping before spending time on acquisition, then builds,
+validates and publishes. Missing credentials fail the run rather than reporting
+a green skipped publication. A rerun creates a fresh build. GitHub schedules can
+be delayed or disabled; recover with manual dispatch and an explicit cycle.
+
 
 ## Monitor and recover
 
-Check catalog availability and latest `ageSeconds`/`expiresAt`; `/healthz` proves
+Check catalog availability and the latest forecast horizon (`horizonExhausted`)
+separately from retention expiry; `/healthz` proves
 only service liveness. Check frame times separately for forecast relevance, as
 explained in [time and retention](data.md#time-and-retention).
 Builds expire after seven days. Cache TTLs are bounded by

@@ -199,3 +199,14 @@ th {
     grid-row: 1;
   }
 }
+
+.notice {
+  padding: 8px 10px;
+  border: 1px solid #80672f;
+  background: #2a2414;
+  color: #ffe0a0;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+a { color: #8fceef; }

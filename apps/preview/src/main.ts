@@ -12,6 +12,7 @@ import {
   buildDiagnosticRows,
   coverageSummaryText,
   formatDuration,
+  forecastHorizonNotice,
   formatSampleStatus,
   formatSeriesSummary,
   formatSupportFlags,
@@ -42,6 +43,8 @@ const frameSelect = element<HTMLSelectElement>('frame');
 const opacityInput = element<HTMLInputElement>('opacity');
 const timestampBadge = element<HTMLParagraphElement>('timestamp');
 const freshness = element<HTMLParagraphElement>('freshness');
+const horizonNotice = element<HTMLParagraphElement>('horizon-notice');
+const tileErrorBox = element<HTMLParagraphElement>('tile-error');
 const errorBox = element<HTMLParagraphElement>('error');
 const coverageNote = element<HTMLParagraphElement>('coverage-note');
 const meta = element<HTMLDListElement>('meta');
@@ -78,7 +81,12 @@ let build: PinnedBuild | null = null;
 let selectedFrame: string | null = null;
 let opacity = DEFAULT_OPACITY;
 let expired = false;
-let overlayTileError = false;
+let overlaySourceId = OVERLAY_SOURCE_ID;
+let overlayGeneration = 0;
+const failedTiles = new Set<object>();
+let sourceFailed = false;
+let pendingModel: ModelId | null = null;
+let resumeModel: ModelId | null = null;
 let loadAbort: AbortController | null = null;
 let seriesAbort: AbortController | null = null;
 let clicked: GeoPoint | null = null;
@@ -94,19 +102,32 @@ map.on('click', event => {
   seriesStatus.textContent = `Clicked ${clicked.lat.toFixed(4)}, ${clicked.lon.toFixed(4)}`;
 });
 
-map.on('error', (event: { sourceId?: string }) => {
-  if (!build || expired) return;
-  if (event.sourceId === OVERLAY_SOURCE_ID || (!event.sourceId && map.getSource(OVERLAY_SOURCE_ID))) {
-    overlayTileError = true;
-    showError('Overlay tile failed to load — forecast display may be incomplete.');
-  }
+type OverlayEvent = { sourceId?: string; tile?: object };
+
+function updateTileError(): void {
+  tileErrorBox.hidden = !sourceFailed && failedTiles.size === 0;
+  tileErrorBox.textContent = tileErrorBox.hidden ? '' : 'Overlay tile failed to load — forecast display may be incomplete.';
+}
+
+function resetTileErrors(): void {
+  failedTiles.clear();
+  sourceFailed = false;
+  updateTileError();
+}
+
+map.on('error', (event: OverlayEvent) => {
+  if (!build || expired || event.sourceId !== overlaySourceId) return;
+  if (event.tile) failedTiles.add(event.tile);
+  else sourceFailed = true;
+  updateTileError();
 });
 
-map.on('sourcedata', (event: { sourceId?: string; tile?: unknown; isSourceLoaded?: boolean }) => {
-  if (overlayTileError && event.sourceId === OVERLAY_SOURCE_ID && (event.tile || event.isSourceLoaded)) {
-    overlayTileError = false;
-    clearError();
-  }
+// A different tile succeeding (or the source settling with errors) is not recovery.
+map.on('sourcedata', (event: OverlayEvent) => {
+  if (event.sourceId === overlaySourceId && event.tile && failedTiles.delete(event.tile)) updateTileError();
+});
+map.on('sourcedataabort', (event: OverlayEvent) => {
+  if (event.sourceId === overlaySourceId && event.tile && failedTiles.delete(event.tile)) updateTileError();
 });
 
 function showError(message: string): void {
@@ -127,7 +148,12 @@ function renderMeta(buildValue: PinnedBuild): void {
       const dt = document.createElement('dt');
       dt.textContent = label;
       const dd = document.createElement('dd');
-      dd.textContent = value;
+      if (label === 'Provenance' && /^https?:\/\//.test(value)) {
+        const link = document.createElement('a');
+        link.href = value;
+        link.textContent = 'View source receipts';
+        dd.append(link);
+      } else dd.textContent = value;
       return [dt, dd];
     })
   );
@@ -188,6 +214,9 @@ function updateFreshness(): void {
     expireView();
     return;
   }
+  const notice = forecastHorizonNotice(build.manifest, now);
+  horizonNotice.textContent = notice ?? '';
+  horizonNotice.hidden = notice === null;
   freshness.textContent = `Build ${build.manifest.buildId} · age ${formatDuration(buildAgeMs(build.manifest.createdAt, now))} · expires in ${formatDuration(build.expiresAtMs - now)} · pinned immutable build`;
 }
 
@@ -201,13 +230,15 @@ function setControlsEnabled(enabled: boolean): void {
 
 function removeOverlay(): void {
   if (map.getLayer(OVERLAY_LAYER_ID)) map.removeLayer(OVERLAY_LAYER_ID);
-  if (map.getSource(OVERLAY_SOURCE_ID)) map.removeSource(OVERLAY_SOURCE_ID);
+  if (map.getSource(overlaySourceId)) map.removeSource(overlaySourceId);
 }
 
 function expireView(): void {
   if (expired) return;
   expired = true;
-  overlayTileError = false;
+  resetTileErrors();
+  horizonNotice.hidden = true;
+  horizonNotice.textContent = '';
   if (expiryTimer !== null) {
     window.clearInterval(expiryTimer);
     expiryTimer = null;
@@ -245,13 +276,12 @@ function updateOverlay(): void {
     showError(`No tile template for ${activeLayer}`);
     return;
   }
-  if (overlayTileError) {
-    overlayTileError = false;
-    clearError();
-  }
   removeOverlay();
-  map.addSource(OVERLAY_SOURCE_ID, previewRasterSource(template, selectedFrame, build.maxNativeZoom));
-  map.addLayer(previewRasterLayer(opacity));
+  resetTileErrors();
+  // Give late events from an earlier frame a distinct source identity.
+  overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
+  map.addSource(overlaySourceId, previewRasterSource(template, selectedFrame, build.maxNativeZoom));
+  map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
   const frame = build.manifest.frames.find(item => item.id === selectedFrame);
   timestampBadge.textContent = frame
     ? `Explicit frame ${frame.id} · valid ${frame.validTime} · interval ${frame.intervalStart} → ${frame.intervalEnd}`
@@ -278,9 +308,15 @@ async function loadModel(model: ModelId): Promise<void> {
   seriesAbort = null;
   seriesPanel.replaceChildren();
   seriesStatus.textContent = '';
-  loadAbort = new AbortController();
+  const requestAbort = new AbortController();
+  loadAbort = requestAbort;
+  pendingModel = model;
+  resumeModel = null;
+  modelSelect.value = model;
   expired = false;
-  overlayTileError = false;
+  resetTileErrors();
+  horizonNotice.hidden = true;
+  horizonNotice.textContent = '';
   build = null;
   clicked = null;
   setControlsEnabled(false);
@@ -290,7 +326,8 @@ async function loadModel(model: ModelId): Promise<void> {
   freshness.textContent = `Loading ${model} latest immutable build…`;
   timestampBadge.textContent = 'No frame selected';
   try {
-    const next = await api.latest(model, { signal: loadAbort.signal });
+    const next = await api.latest(model, { signal: requestAbort.signal });
+    if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
     build = next;
     populateLayers(next);
     populateFrames(next);
@@ -311,11 +348,16 @@ async function loadModel(model: ModelId): Promise<void> {
       expiryTimer = window.setInterval(updateFreshness, 5000);
     }
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') return;
+    if (requestAbort.signal.aborted || loadAbort !== requestAbort || (error instanceof DOMException && error.name === 'AbortError')) return;
     const message = error instanceof Error ? error.message : String(error);
     showError(message);
     freshness.textContent = 'No viewable build';
     setControlsEnabled(false);
+  } finally {
+    if (loadAbort === requestAbort) {
+      loadAbort = null;
+      pendingModel = null;
+    }
   }
 }
 
@@ -402,7 +444,9 @@ map.on('load', () => {
 });
 
 window.addEventListener('pagehide', (event: PageTransitionEvent) => {
+  resumeModel = event.persisted ? pendingModel : null;
   loadAbort?.abort();
+  if (event.persisted && seriesAbort) seriesStatus.textContent = 'Point request interrupted. Sample this point again.';
   seriesAbort?.abort();
   seriesAbort = null;
   if (expiryTimer !== null) {
@@ -417,10 +461,20 @@ window.addEventListener('pagehide', (event: PageTransitionEvent) => {
 
 window.addEventListener('pageshow', (event: PageTransitionEvent) => {
   if (!event.persisted) return;
+  if (resumeModel !== null) {
+    const model = resumeModel;
+    resumeModel = null;
+    void loadModel(model);
+    return;
+  }
   if (build && ensureLive()) {
+    setControlsEnabled(true);
     updateFreshness();
     if (expiryTimer === null) {
       expiryTimer = window.setInterval(updateFreshness, 5000);
     }
   }
 });
+
+document.addEventListener('visibilitychange', updateFreshness);
+window.addEventListener('focus', updateFreshness);

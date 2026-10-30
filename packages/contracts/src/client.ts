@@ -5,6 +5,7 @@ import {
   normalizeLon,
   paletteBinLabel,
   sampleValueSchema,
+  type FreshnessSummary,
   type LayerId,
   type Manifest,
   type ModelId,
@@ -57,7 +58,7 @@ export interface LatestPayload {
   maxNativeZoom?: number;
   palettes?: readonly PaletteSummary[];
   coverage?: CoverageSummary;
-  freshness?: { ageSeconds: number; expiresAt: string };
+  freshness?: FreshnessSummary;
 }
 
 export interface FrameSampleLayer {
@@ -97,6 +98,7 @@ export interface PinnedBuild {
   maxNativeZoom: number;
   palettes: readonly PaletteSummary[];
   coverage: CoverageSummary;
+  freshness?: FreshnessSummary;
   fetchedAtMs: number;
   expiresAtMs: number;
 }
@@ -141,7 +143,9 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Coverage caveat', 'Coastal and exclusion borders can differ from the true coastline by about one cell diagonal'],
     ['Expires', manifest.expiresAt]
   ];
-  if (typeof source.provenanceKey === 'string') {
+  if (typeof source.provenanceUrl === 'string') {
+    rows.push(['Provenance', source.provenanceUrl]);
+  } else if (typeof source.provenanceKey === 'string') {
     rows.push(['Provenance', `${source.provenanceKey}${typeof source.provenanceSha256 === 'string' ? ` (${source.provenanceSha256.slice(0, 12)}…)` : ''}`]);
   }
   return rows;
@@ -320,6 +324,7 @@ export class ApiClient {
       maxNativeZoom,
       palettes,
       coverage,
+      ...(raw.freshness === undefined ? {} : { freshness: raw.freshness as FreshnessSummary }),
       fetchedAtMs: this.now(),
       expiresAtMs: expiryTime(manifestRaw.expiresAt)
     };
@@ -484,6 +489,15 @@ export function watchBuildExpiry(expiresAtMs: number, expire: () => void, target
     if (timer !== null) clearTimeout(timer);
     for (const target of targets) for (const event of events) target.removeEventListener(event, check);
   };
+}
+
+/** Forecast usefulness is independent of how long its artifacts are retained. */
+export function forecastHorizonNotice(manifest: Pick<Manifest, 'frames'>, nowMs = Date.now()): string | null {
+  if (manifest.frames.length === 0) return null;
+  const endMs = Math.max(...manifest.frames.map(frame => frameTime(frame.validTime)));
+  return nowMs >= endMs
+    ? `Forecast ended at ${new Date(endMs).toISOString()} — update overdue. Showing historical forecast.`
+    : null;
 }
 
 export function buildAgeMs(createdAt: string, now = Date.now()): number {

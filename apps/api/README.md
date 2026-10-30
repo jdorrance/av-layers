@@ -1,7 +1,7 @@
 # API
 
 `@av/api` serves published forecasts from a private R2 bucket as JSON metadata,
-bounded point samples and XYZ PNG tiles. It reads immutable artifacts and checks
+bounded point samples and lossless WebP XYZ tiles. It reads immutable artifacts and checks
 retained membership and expiry; it never acquires weather or runs the solver.
 
 Run an empty local Worker from the repository root:
@@ -21,6 +21,11 @@ Discover a build with `/v1/models/gfs/latest?expand=manifest`, then pin its
 AV_BUILD_ID='BUILD_ID_FROM_LATEST'
 curl "http://127.0.0.1:8787/v1/models/gfs/runs/$AV_BUILD_ID/sample?lat=32.9&lon=-117.25&frame=f003"
 ```
+
+When source receipts are available, `source.provenanceUrl` links to the complete
+provenance for that build. The API verifies external receipt hashes and applies
+the same retained-build and expiry checks used for forecasts. Older builds with
+inline receipts remain readable through that link.
 
 Outside coverage is a normal sample status or transparent tile. Unknown or
 expired builds return 404; a missing tile inside coverage is an uncached 503.

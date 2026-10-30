@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { manifestSchema, modelIdSchema, modelPointerSchema, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { getProvenanceReference, manifestSchema, modelIdSchema, modelPointerSchema, parseProvenance, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
 import { loadCoverage, localPath, sha256, validateBuild } from './validate.js';
 
@@ -38,6 +38,7 @@ async function casPointer(store: ObjectStorage, model: ModelId, pointer: ModelPo
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { allowSameCycle?: boolean; now?: () => number } = {}): Promise<void> {
   const now = options.now ?? Date.now, manifest = manifestSchema.parse(raw);
+  const provenance = getProvenanceReference(manifest);
   assertLifetime(manifest, now());
   const captured = await readPointer(store, manifest.model);
   if (captured.pointer) {
@@ -78,14 +79,13 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   };
   await Promise.all(Array.from({ length: 4 }, () => worker()));
   if (failed) throw failure;
-  const source = manifest.source as { provenanceKey?: unknown; provenanceSha256?: unknown };
-  if (typeof source.provenanceKey === 'string' && typeof source.provenanceSha256 === 'string') {
-    if (source.provenanceKey !== `${prefix}provenance.json`) throw new Error('Invalid provenance key');
-    const provenanceBytes = await readFile(localPath(root, source.provenanceKey));
-    if (sha256(provenanceBytes) !== source.provenanceSha256) throw new Error(`Local hash mismatch: ${source.provenanceKey}`);
+  if (provenance) {
+    const provenanceBytes = await readFile(localPath(root, provenance.key));
+    if (sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Local hash mismatch: ${provenance.key}`);
+    parseProvenance(decode(provenanceBytes), manifest);
     assertLifetime(manifest, now());
-    await store.put(source.provenanceKey, provenanceBytes, { ifNoneMatch: '*' }, 'application/json');
-    const uploadedProvenance = await store.get(source.provenanceKey);
+    await store.put(provenance.key, provenanceBytes, { ifNoneMatch: '*' }, 'application/json');
+    const uploadedProvenance = await store.get(provenance.key);
     if (!uploadedProvenance || !Buffer.from(uploadedProvenance.bytes).equals(Buffer.from(provenanceBytes))) {
       throw new Error('Provenance readback mismatch');
     }
@@ -111,6 +111,12 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   if (!object) throw new Error('Rollback manifest missing');
   const manifest = manifestSchema.parse(decode(object.bytes));
   if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) throw new Error('Rollback manifest does not match pointer');
+  const provenance = getProvenanceReference(manifest);
+  if (provenance) {
+    const receipt = await store.get(provenance.key);
+    if (!receipt || sha256(receipt.bytes) !== provenance.sha256) throw new Error(`Rollback provenance missing or corrupt: ${provenance.key}`);
+    parseProvenance(decode(receipt.bytes), manifest);
+  }
   for (const artifact of manifest.artifacts) {
     for (const [key, hash] of [[artifact.tilesKey, artifact.tilesSha256], [artifact.samplesKey, artifact.samplesSha256]]) {
       const item = await store.get(key);

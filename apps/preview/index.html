@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="build-deployment" content="%VITE_BUILD_REVISION%" />
     <title>Aviation Forecast Layers preview</title>
   </head>
   <body>
@@ -19,6 +20,8 @@
           <label>Opacity <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5" /></label>
         </div>
         <p id="timestamp" class="badge">No frame selected</p>
+        <p id="horizon-notice" class="notice" role="status" hidden></p>
+        <p id="tile-error" class="error" role="alert" hidden></p>
         <p id="error" class="error" hidden></p>
         <p id="coverage-note" class="muted"></p>
         <div id="legend"></div>

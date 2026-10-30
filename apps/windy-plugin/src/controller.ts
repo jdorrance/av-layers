@@ -1,8 +1,10 @@
 import type { LayerId, ModelId } from '@av/contracts';
 import {
   clampOpacity,
+  forecastHorizonNotice,
   frameBadge,
   frameTileUrl,
+  frameTime,
   matchHostFrame,
   selectExplicitFrame,
   syncTimestampForFrame,
@@ -14,11 +16,18 @@ import {
 export type { WindyTileOptions } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
 
+export interface HostTileEvent {
+  /** Leaflet's tile element identifies a displayed tile across load, error and unload events. */
+  tile: object;
+}
+
+export type HostTileEventName = 'tileloadstart' | 'tileerror' | 'tileload' | 'tileunload';
+
 export interface HostTileLayer {
   setUrl(url: string): unknown;
   setOpacity?(opacity: number): unknown;
-  on?(event: 'tileerror' | 'tileload' | 'load', listener: () => void): unknown;
-  off?(event: 'tileerror' | 'tileload' | 'load', listener: () => void): unknown;
+  on?(event: HostTileEventName, listener: (event: HostTileEvent) => void): unknown;
+  off?(event: HostTileEventName, listener: (event: HostTileEvent) => void): unknown;
   remove?(): unknown;
 }
 
@@ -51,6 +60,7 @@ export interface ControllerState {
   opacity: number;
   badge: string;
   message: string | null;
+  horizonNotice: string | null;
 }
 
 export interface ControllerOptions {
@@ -83,18 +93,29 @@ export class PluginController {
   private badge = 'No frame selected';
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
-  private tileError = false;
-  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly activeTiles = new Set<object>();
+  private readonly failedTiles = new Set<object>();
+  private tileUrl: string | null = null;
+  private timeTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private disposed = false;
   private readonly onTimestamp = (value: number): void => {
     this.syncHost(value);
   };
-  private readonly onTileError = (): void => {
-    this.reportTileError();
+  private readonly onTileStart = (event: HostTileEvent): void => {
+    if (this.canUse()) this.activeTiles.add(event.tile);
   };
-  private readonly onTileLoad = (): void => {
-    this.reportTileLoad();
+  private readonly onTileError = (event: HostTileEvent): void => {
+    if (!this.canUse() || !this.activeTiles.has(event.tile)) return;
+    this.failedTiles.add(event.tile);
+    this.emit();
+  };
+  private readonly onTileLoad = (event: HostTileEvent): void => {
+    if (this.canUse() && this.failedTiles.delete(event.tile)) this.emit();
+  };
+  private readonly onTileUnload = (event: HostTileEvent): void => {
+    this.activeTiles.delete(event.tile);
+    if (this.failedTiles.delete(event.tile)) this.emit();
   };
 
   constructor(options: ControllerOptions) {
@@ -119,7 +140,8 @@ export class PluginController {
       layerId: this.layerId,
       opacity: this.opacity,
       badge: this.badge,
-      message: this.message
+      message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
+      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice(this.build.manifest, this.now()) : null
     };
   }
 
@@ -138,7 +160,7 @@ export class PluginController {
     this.started = true;
     this.phase = 'loading';
     this.message = null;
-    this.tileError = false;
+    this.clearTileState();
     this.emit();
     this.lifecycle = new Lifecycle();
     try {
@@ -174,23 +196,26 @@ export class PluginController {
         return this.state();
       }
       this.badge = frameBadge(first, hostFrame, hostValue).text;
-      const tileLayer = this.host.createTileLayer(frameTileUrl(template, first.id), windyTileOptions(build.maxNativeZoom, this.opacity));
+      this.tileUrl = frameTileUrl(template, first.id);
+      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.maxNativeZoom, this.opacity));
       this.layer = tileLayer;
+      tileLayer.on?.('tileloadstart', this.onTileStart);
       tileLayer.on?.('tileerror', this.onTileError);
-      tileLayer.on?.('load', this.onTileLoad);
+      tileLayer.on?.('tileunload', this.onTileUnload);
       tileLayer.on?.('tileload', this.onTileLoad);
       this.host.map.addLayer(tileLayer);
       this.host.store.on('timestamp', this.onTimestamp);
       this.lifecycle.add(() => {
         this.host.store.off?.('timestamp', this.onTimestamp);
+        tileLayer.off?.('tileloadstart', this.onTileStart);
         tileLayer.off?.('tileerror', this.onTileError);
-        tileLayer.off?.('load', this.onTileLoad);
+        tileLayer.off?.('tileunload', this.onTileUnload);
         tileLayer.off?.('tileload', this.onTileLoad);
         if (this.layer) this.host.map.removeLayer(this.layer);
         this.layer = null;
       });
-      this.lifecycle.add(() => this.cancelExpiryTimer());
-      this.scheduleExpiry();
+      this.lifecycle.add(() => this.cancelTimeTimer());
+      this.scheduleTimeCheck();
       this.phase = 'ready';
       this.emit();
       return this.state();
@@ -199,24 +224,6 @@ export class PluginController {
       this.fail(error instanceof Error ? error.message : String(error));
       return this.state();
     }
-  }
-
-  reportTileError(): ControllerState {
-    if (!this.canUse()) return this.state();
-    this.tileError = true;
-    this.message = TILE_ERROR_MESSAGE;
-    this.emit();
-    return this.state();
-  }
-
-  reportTileLoad(): ControllerState {
-    if (!this.canUse()) return this.state();
-    if (this.tileError) {
-      this.tileError = false;
-      if (this.message === TILE_ERROR_MESSAGE) this.message = null;
-      this.emit();
-    }
-    return this.state();
   }
 
   selectFrame(id: string, options: { syncHost?: boolean } = {}): ControllerState {
@@ -228,7 +235,6 @@ export class PluginController {
       return this.state();
     }
     this.frameId = frame.id;
-    this.tileError = false;
     this.applyUrl();
     this.badge = frameBadge(frame, null, null).text;
     this.message = null;
@@ -248,7 +254,6 @@ export class PluginController {
       return this.state();
     }
     this.layerId = id;
-    this.tileError = false;
     this.applyUrl();
     this.message = null;
     this.emit();
@@ -269,8 +274,6 @@ export class PluginController {
     const matched = matchHostFrame(this.build!.manifest.frames, timestampMs);
     if (matched) {
       this.frameId = matched.id;
-      this.tileError = false;
-      if (this.message === TILE_ERROR_MESSAGE) this.message = null;
       this.applyUrl();
     }
     const selected = this.frameId ? selectExplicitFrame(this.build!.manifest.frames, this.frameId) : null;
@@ -293,10 +296,10 @@ export class PluginController {
     this.disposed = true;
     this.phase = 'disposed';
     this.badge = 'Plugin closed';
-    this.tileError = false;
+    this.clearTileState();
     this.lifecycle?.dispose();
     this.lifecycle = null;
-    this.cancelExpiryTimer();
+    this.cancelTimeTimer();
     this.layer = null;
     this.emit();
   }
@@ -310,33 +313,51 @@ export class PluginController {
   private applyUrl(): void {
     if (!this.build || !this.frameId || !this.layerId || !this.layer) return;
     const template = this.build.templates[this.layerId];
-    if (template) this.layer.setUrl(frameTileUrl(template, this.frameId));
+    if (!template) return;
+    const url = frameTileUrl(template, this.frameId);
+    if (url === this.tileUrl) return;
+    this.clearTileState();
+    this.tileUrl = url;
+    this.layer.setUrl(url);
   }
 
-  private scheduleExpiry(): void {
+  private clearTileState(): void {
+    this.activeTiles.clear();
+    this.failedTiles.clear();
+  }
+
+  private scheduleTimeCheck(): void {
     if (!this.build) return;
-    this.cancelExpiryTimer();
-    const delay = Math.max(0, this.build.expiresAtMs - this.now()) + 1;
-    this.expiryTimer = this.setTimer(() => {
-      this.expiryTimer = null;
-      this.checkExpiry();
+    this.cancelTimeTimer();
+    const now = this.now();
+    const horizonEnd = Math.max(...this.build.manifest.frames.map(frame => frameTime(frame.validTime)));
+    const nextChange = horizonEnd > now
+      ? Math.min(horizonEnd, this.build.expiresAtMs)
+      : this.build.expiresAtMs;
+    const delay = Math.max(0, nextChange - now) + 1;
+    this.timeTimer = this.setTimer(() => {
+      this.timeTimer = null;
+      if (!this.checkExpiry()) {
+        this.emit();
+        this.scheduleTimeCheck();
+      }
     }, Math.min(delay, 2_147_000_000));
   }
 
-  private cancelExpiryTimer(): void {
-    if (this.expiryTimer !== null) {
-      this.clearTimer(this.expiryTimer);
-      this.expiryTimer = null;
+  private cancelTimeTimer(): void {
+    if (this.timeTimer !== null) {
+      this.clearTimer(this.timeTimer);
+      this.timeTimer = null;
     }
   }
 
   private expire(): void {
     if (this.phase === 'expired') return;
     this.phase = 'expired';
-    this.tileError = false;
+    this.clearTileState();
     this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
-    this.cancelExpiryTimer();
+    this.cancelTimeTimer();
     this.lifecycle?.dispose();
     this.lifecycle = null;
     this.layer = null;

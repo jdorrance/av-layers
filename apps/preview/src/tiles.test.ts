@@ -3,15 +3,15 @@ import { clampOpacity, frameTileUrl, previewRasterLayer, previewRasterSource, wi
 
 describe('tile template and options', () => {
   it('substitutes only the pinned frame into a server template', () => {
-    const url = frameTileUrl('https://api.test/tiles/gfs/build/usable-lift-msl/{frame}/{z}/{x}/{y}.png', 'f003');
-    expect(url).toBe('https://api.test/tiles/gfs/build/usable-lift-msl/f003/{z}/{x}/{y}.png');
-    expect(() => frameTileUrl('https://api.test/{z}/{x}/{y}.png', 'f003')).toThrow(RangeError);
+    const url = frameTileUrl('https://api.test/tiles/gfs/build/usable-lift-msl/{frame}/{z}/{x}/{y}.webp', 'f003');
+    expect(url).toBe('https://api.test/tiles/gfs/build/usable-lift-msl/f003/{z}/{x}/{y}.webp');
+    expect(() => frameTileUrl('https://api.test/{z}/{x}/{y}.webp', 'f003')).toThrow(RangeError);
   });
 
   it('builds a MapLibre 256px raster source limited to the native max zoom', () => {
-    const source = previewRasterSource('https://api.test/{frame}/{z}/{x}/{y}.png', 'f003', 5);
+    const source = previewRasterSource('https://api.test/{frame}/{z}/{x}/{y}.webp', 'f003', 5);
     expect(source).toMatchObject({ type: 'raster', tileSize: 256, minzoom: 0, maxzoom: 5 });
-    expect(source.tiles).toEqual(['https://api.test/f003/{z}/{x}/{y}.png']);
+    expect(source.tiles).toEqual(['https://api.test/f003/{z}/{x}/{y}.webp']);
     expect(previewRasterLayer()).not.toHaveProperty('maxzoom');
   });
 

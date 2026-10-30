@@ -49,16 +49,59 @@ const id = '20261030T060000Z-12345678-1234-4234-8234-123456789abc';
 const temp: string[] = [];
 afterEach(async () => { await Promise.all(temp.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
-async function fixture(): Promise<{ root: string; manifest: Manifest }> {
+async function fixture(externalProvenance = false): Promise<{ root: string; manifest: Manifest }> {
   const root = await mkdtemp(join(tmpdir(), 'av-publish-test-')); temp.push(root);
   const bytes = Buffer.from('test artifact contents long enough to exercise a 32-byte tail range'), hash = sha256(bytes), prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString(), intervalStart: new Date(Date.parse('2026-10-30T00:00:00.000Z') + i * 10800000).toISOString(), intervalEnd: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString() }));
   const artifacts = LAYER_IDS.flatMap(layer => frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, samplesKey: `${prefix}/samples/${layer}/${frame.id}.bin`, tilesSha256: hash, samplesSha256: hash })));
   for (const artifact of artifacts) for (const key of [artifact.tilesKey, artifact.samplesKey]) { const path = localPath(root, key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
-  return { root, manifest: { version: 1, model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: 'test', hash }, coverage: { id: 'test', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: {}, tool: {}, palettes: ['lift'], metrics: {} } };
+  const manifest: Manifest = { version: 1, model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: 'test', hash }, coverage: { id: 'test', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: { provider: 'NOAA', frames: [{ hour: 3 }] }, tool: {}, palettes: ['lift'], metrics: {} };
+  if (externalProvenance) {
+    const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: id, cycle: manifest.cycle, frames: manifest.source.frames }));
+    await writeFile(localPath(root, provenanceKey), receipt);
+    manifest.source = { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) };
+  }
+  return { root, manifest };
 }
 
 describe('immutable publication', () => {
+  it('publishes verified external provenance before the manifest and latest pointer', async () => {
+    const { root, manifest } = await fixture(true), store = new MemoryStore();
+    const writes: string[] = [];
+    store.beforePut = key => { writes.push(key); };
+    await publish(store, root, manifest, { now: () => now });
+    const key = manifest.source.provenanceKey as string;
+    expect(sha256(store.objects.get(key)!.bytes)).toBe(manifest.source.provenanceSha256);
+    expect(store.gets).toContainEqual({ key, range: undefined });
+    expect(writes.slice(-3)).toEqual([key, `builds/gfs/${id}/manifest.json`, 'catalog/gfs/latest.json']);
+  });
+  it.each(['missing', 'corrupt'])('rejects %s provenance readback before committing a publication', async defect => {
+    const { root, manifest } = await fixture(true), store = new MemoryStore();
+    const get = store.get.bind(store);
+    store.get = async (key, range) => {
+      const result = await get(key, range);
+      if (key !== manifest.source.provenanceKey) return result;
+      return defect === 'missing' ? null : { bytes: Buffer.from('corrupt receipt'), etag: 'corrupt' };
+    };
+    await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow('Provenance readback mismatch');
+    expect(store.objects.has(`builds/gfs/${id}/manifest.json`)).toBe(false);
+    expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
+  });
+  it('rejects a partial provenance reference before uploading any objects', async () => {
+    const { root, manifest } = await fixture(true), store = new MemoryStore();
+    delete manifest.source.provenanceSha256;
+    await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow(/provenance/i);
+    expect(store.objects.size).toBe(0);
+  });
+  it.each(['wrong cycle', 'wrong schema'])('does not commit a hash-matching %s provenance receipt', async defect => {
+    const { root, manifest } = await fixture(true), store = new MemoryStore();
+    const receipt = Buffer.from(JSON.stringify({ version: defect === 'wrong schema' ? 2 : 1, model: manifest.model, buildId: manifest.buildId, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
+    manifest.source.provenanceSha256 = sha256(receipt);
+    await writeFile(localPath(root, manifest.source.provenanceKey as string), receipt);
+    await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow(/provenance|version/i);
+    expect(store.objects.has(`builds/gfs/${id}/manifest.json`)).toBe(false);
+    expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
+  });
   it('publishes only after artifact and manifest verification', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { now: () => now });
@@ -274,6 +317,49 @@ describe('immutable publication', () => {
     expect(await cleanup(store, 'gfs', true, now)).toBe(1);
     expect(await store.get(`builds/gfs/${fresh}/part`)).not.toBeNull();
     expect(await store.get(`builds/gfs/${id}/manifest.json`)).not.toBeNull();
+  });
+  it.each([false, true])('rolls back a complete build with external provenance=%s', async externalProvenance => {
+    const { root, manifest } = await fixture(externalProvenance), store = new MemoryStore();
+    await publish(store, root, manifest, { now: () => now });
+    const pointerObject = store.objects.get('catalog/gfs/latest.json')!;
+    const pointer = JSON.parse(Buffer.from(pointerObject.bytes).toString()) as ModelPointer;
+    pointer.retained.push({ ...pointer.retained[0], buildId: 'current', manifestKey: 'current' });
+    pointer.latestBuildId = 'current';
+    pointerObject.bytes = Buffer.from(JSON.stringify(pointer));
+    store.gets = [];
+    await rollback(store, 'gfs', id, true, now);
+    expect(JSON.parse(Buffer.from(store.objects.get('catalog/gfs/latest.json')!.bytes).toString()).latestBuildId).toBe(id);
+    expect(store.gets.some(call => call.key.endsWith('/provenance.json'))).toBe(externalProvenance);
+  });
+  it.each(['missing', 'corrupt', 'missing key', 'missing hash', 'wrong key', 'invalid hash', 'wrong cycle', 'wrong model', 'wrong build', 'wrong schema'])('does not change latest when rollback provenance is %s', async defect => {
+    const { root, manifest } = await fixture(true), store = new MemoryStore();
+    await publish(store, root, manifest, { now: () => now });
+    const provenanceKey = manifest.source.provenanceKey as string;
+    if (defect === 'missing') store.objects.delete(provenanceKey);
+    else if (defect === 'corrupt') store.objects.get(provenanceKey)!.bytes = Buffer.from('corrupt receipt');
+    else {
+      if (defect === 'missing key') delete manifest.source.provenanceKey;
+      if (defect === 'missing hash') delete manifest.source.provenanceSha256;
+      if (defect === 'wrong key') manifest.source.provenanceKey = 'builds/gfs/another/provenance.json';
+      if (defect === 'invalid hash') manifest.source.provenanceSha256 = 'invalid';
+      if (['wrong cycle', 'wrong model', 'wrong build', 'wrong schema'].includes(defect)) {
+        const receipt = Buffer.from(JSON.stringify({ version: defect === 'wrong schema' ? 2 : 1, model: defect === 'wrong model' ? 'hrrr' : manifest.model, buildId: defect === 'wrong build' ? 'another' : manifest.buildId, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
+        store.objects.get(provenanceKey)!.bytes = receipt;
+        manifest.source.provenanceSha256 = sha256(receipt);
+      }
+      store.objects.get(`builds/gfs/${id}/manifest.json`)!.bytes = Buffer.from(JSON.stringify(manifest));
+    }
+    const pointerObject = store.objects.get('catalog/gfs/latest.json')!;
+    const pointer = JSON.parse(Buffer.from(pointerObject.bytes).toString()) as ModelPointer;
+    pointer.retained.push({ ...pointer.retained[0], buildId: 'current', manifestKey: 'current' });
+    pointer.latestBuildId = 'current';
+    pointerObject.bytes = Buffer.from(JSON.stringify(pointer));
+    const before = pointerObject.bytes.slice();
+    const writes: string[] = [];
+    store.beforePut = key => { writes.push(key); };
+    await expect(rollback(store, 'gfs', id, true, now)).rejects.toThrow(/provenance|version/i);
+    expect(writes).toEqual([]);
+    expect(store.objects.get('catalog/gfs/latest.json')!.bytes).toEqual(before);
   });
   it('rejects older and same-cycle replacement without intent', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();

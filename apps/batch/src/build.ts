@@ -6,6 +6,7 @@ import { GFS_GRID, getBit, LAYER_IDS, LIFT_RENDER_STYLE, manifestSchema, STATUS_
 import { deriveColumn, METHOD_ID, packCells, type GridField } from '@av/forecast';
 import { acquireGfsFrame, discoverGfsRun, type GfsFrameAcquisition } from './noaa/index.js';
 import { renderArchive } from './render.js';
+import { WEBP_ENCODER } from './webp.js';
 import { summarizeFields } from './summary.js';
 import { loadCoverage, localPath, sha256, validateBuild, verifyCoverage } from './validate.js';
 
@@ -111,7 +112,7 @@ export async function buildSample(options: { out: string; cycle?: string; cacheD
     layers: [...LAYER_IDS],
     artifacts,
     source: sourceSummary,
-    tool: { node: process.version, pmtiles: '1.31.2', pngjs: '7.0.0', liftRenderStyle: LIFT_RENDER_STYLE },
+    tool: { node: process.version, pmtiles: '1.31.2', tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: LIFT_RENDER_STYLE },
     palettes: ['lift', 'rain']
   };
   const tValidate = Date.now();

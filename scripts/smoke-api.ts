@@ -95,9 +95,9 @@ async function main(): Promise<void> {
   const sampleResponse = await get(sampleUrl, 'application/json');
   validateSampleContract(await sampleResponse.json() as SampleContract, model, manifest.buildId, frame, requestedLayers);
 
-  const tileUrl = `${baseUrl}/tiles/${model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.png`;
-  const tile = await get(tileUrl, 'image/png');
-  invariant(tile.headers.get('content-type') === 'image/png', 'tile did not return image/png');
+  const tileUrl = `${baseUrl}/tiles/${model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`;
+  const tile = await get(tileUrl, 'image/webp');
+  invariant(tile.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
   invariant(tile.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
   invariant(tile.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
 

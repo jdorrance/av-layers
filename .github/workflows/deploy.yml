@@ -1,13 +1,17 @@
-name: Deploy read-only Worker
+name: Deploy Worker and Pages
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       environment:
-        description: Target Cloudflare Worker environment
+        description: Target Cloudflare environment
         type: choice
         options:
           - staging
           - production
+        default: production
         required: true
       confirm:
         description: Type deploy-read-only-worker to acknowledge no write routes or public bucket bypass
@@ -16,21 +20,41 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: deploy-api-${{ inputs.environment }}
+  group: deploy-${{ inputs.environment || 'production' }}
   cancel-in-progress: false
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
   deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    environment: ${{ inputs.environment || 'production' }}
     env:
-      TARGET_ENV: ${{ inputs.environment }}
-      CONFIRM: ${{ inputs.confirm }}
+      TARGET_ENV: ${{ inputs.environment || 'production' }}
+      CONFIRM: ${{ inputs.confirm || '' }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      PAGES_PROJECT_NAME: ${{ vars.PAGES_PROJECT_NAME }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Refuse superseded main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+          if [ "${current}" != "${GITHUB_SHA}" ]; then
+            echo 'This revision has been superseded on main; run the latest revision instead.' >&2
+            exit 1
+          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.9
@@ -47,15 +71,15 @@ jobs:
             staging|production) ;;
             *) echo 'unsupported deploy environment' >&2; exit 1 ;;
           esac
-          if [ "${CONFIRM}" != 'deploy-read-only-worker' ]; then
+          if [ "${GITHUB_EVENT_NAME:-}" = 'workflow_dispatch' ] && [ "${CONFIRM:-}" != 'deploy-read-only-worker' ]; then
             echo 'confirm must equal deploy-read-only-worker' >&2
             exit 1
           fi
           test -n "${CLOUDFLARE_API_TOKEN}"
           test -n "${CLOUDFLARE_ACCOUNT_ID}"
-      - name: Verify API
-        run: pnpm --filter @av/api typecheck && pnpm --filter @av/api test
-      - name: Deploy
+      - name: Validate deploy environment mapping
+        run: pnpm exec tsx scripts/cloudflare-ci.ts envcheck --env "${TARGET_ENV}"
+      - name: Deploy Worker
         shell: bash
         run: |
           set -euo pipefail
@@ -63,6 +87,50 @@ jobs:
             staging) pnpm run deploy:staging ;;
             production) pnpm run deploy:production ;;
           esac
-      - name: Deployed contract smoke
-        if: ${{ vars.API_BASE_URL != '' }}
-        run: pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs
+      - name: Smoke API
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! output="$(pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs 2>&1)"; then
+            printf '%s\n' "${output}"
+            echo 'smoke API failed.' >&2
+            echo 'A first deployment with no published forecast returns 503. Run the workflows in this order: Bootstrap Cloudflare resources, Forecast sample, then Deploy Worker and Pages.' >&2
+            exit 1
+          fi
+          printf '%s\n' "${output}"
+      - name: Build preview
+        env:
+          VITE_API_BASE: ${{ vars.API_BASE_URL }}
+          VITE_BUILD_REVISION: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @av/preview build
+      - name: Verify Pages production branch
+        id: pages
+        run: pnpm exec tsx scripts/cloudflare-ci.ts pagescheck --env "${TARGET_ENV}"
+      - name: Deploy Pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec wrangler pages deploy apps/preview/dist --project-name "${PAGES_PROJECT_NAME}" --branch main
+      - name: Verify live Pages revision
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.url }}
+          EXPECTED_DEPLOYMENT_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec tsx scripts/verify-pages-revision.ts
+      - name: Deployment summary
+        if: success()
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.url }}
+        shell: bash
+        run: |
+          {
+            printf '### Deployed %s\n' "${TARGET_ENV}"
+            printf -- '- API: %s\n' "${API_BASE_URL}"
+            printf -- '- Pages: %s\n' "${PAGES_BASE_URL}"
+            printf -- '- Order for a new environment: Bootstrap Cloudflare resources, Forecast sample, Deploy Worker and Pages.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"

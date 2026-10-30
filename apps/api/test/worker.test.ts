@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GFS_GRID, LAYER_IDS } from '@av/contracts';
 
@@ -33,9 +34,19 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString()) 
   const prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
   const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, samplesKey: `${prefix}/samples/${layer}/${frame.id}.bin`, tilesSha256: hash, samplesSha256: hash })));
-  const manifest = { version: 1, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, source: {}, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
+  const manifest = { version: 1, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, source: {} as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
+}
+
+function sidecar(pub: ReturnType<typeof publication>, payload: unknown = {
+  version: 1, model: 'gfs', buildId: pub.manifest.buildId, cycle, provider: 'NOAA', frames: [{ hour: 3, inputs: ['profile.grib2'] }]
+}) {
+  const key = `builds/gfs/${pub.manifest.buildId}/provenance.json`;
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  pub.manifest.source = { provider: 'NOAA', frameCount: 8, provenanceKey: key, provenanceSha256: sha256 };
+  return { key, bytes, sha256, payload };
 }
 
 class MemoryCache {
@@ -53,6 +64,7 @@ class MemoryBucket {
   missingSamples = false;
   shortRange = false;
   expireDuringRange = false;
+  expireDuringProvenance = false;
   install(...pubs: ReturnType<typeof publication>[]) {
     for (const pub of pubs) this.objects.set(pub.retained.manifestKey, pub.manifest);
     this.objects.set('catalog/gfs/latest.json', { version: 1, model: 'gfs', latestBuildId: pubs.at(-1)!.manifest.buildId, retained: pubs.map(p => p.retained) });
@@ -75,7 +87,18 @@ class MemoryBucket {
       return { size: GFS_GRID.width * GFS_GRID.height * 5, body: true, async arrayBuffer() { return bytes.buffer; } };
     }
     const value = this.objects.get(key);
-    return value === undefined ? null : { size: 1, body: true, async json() { return structuredClone(value); }, async arrayBuffer() { return new ArrayBuffer(0); } };
+    if (value === undefined) return null;
+    const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(JSON.stringify(value));
+    const expire = this.expireDuringProvenance && key.endsWith('/provenance.json');
+    return {
+      size: bytes.byteLength,
+      body: true,
+      async json() { return JSON.parse(new TextDecoder().decode(bytes)); },
+      async arrayBuffer() {
+        if (expire) vi.setSystemTime(now + 60_000);
+        return bytes.slice().buffer;
+      }
+    };
   }
 }
 
@@ -113,11 +136,141 @@ describe('read-only worker', () => {
     expect(tilejson.status).toBe(200);
     expect(((await tilejson.json()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/f003/');
     const spec = await (await call('/openapi.json')).json() as { paths: Record<string, { get: { parameters: { name: string }[]; responses: Record<string, { content?: Record<string, { schema: { type?: string } }> }> } }> };
-    for (const path of ['/v1/catalog', '/v1/models/{model}/latest', '/v1/models/{model}/runs/{buildId}/sample', '/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.png']) expect(spec.paths[path].get).toBeDefined();
+    for (const path of ['/v1/catalog', '/v1/models/{model}/latest', '/v1/models/{model}/runs/{buildId}/sample', '/v1/models/{model}/runs/{buildId}/provenance', '/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp']) expect(spec.paths[path].get).toBeDefined();
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.parameters.map((p: { name: string }) => p.name)).toEqual(expect.arrayContaining(['lat', 'lon', 'frame', 'layers']));
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['200'].content?.['application/json'].schema.type).toBe('object');
-    expect(spec.paths['/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.png'].get.responses['200'].content?.['image/png']).toBeDefined();
+    expect(spec.paths['/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp'].get.responses['200'].content?.['image/webp']).toBeDefined();
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['429']).toBeDefined();
+  });
+  it('links verified provenance from compact and full metadata without changing stored manifests', async () => {
+    const pub = publication('build-1'), receipt = sidecar(pub);
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    const url = 'https://api.example/v1/models/gfs/runs/build-1/provenance';
+    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json();
+    expect(latest).toMatchObject({ manifest: { source: { provenanceUrl: url, provenanceSha256: receipt.sha256 } } });
+    const manifestPath = '/v1/models/gfs/runs/build-1';
+    cache.entries.set(`https://api.example${manifestPath}`, new Response(JSON.stringify(pub.manifest), { headers: { etag: '"manifest-build-1"' } }));
+    const full = await call(manifestPath, { headers: { 'if-none-match': '"manifest-build-1"' } });
+    expect(full.status).toBe(200);
+    expect(await full.json()).toMatchObject({ source: { provenanceUrl: url } });
+    const samplePath = '/v1/models/gfs/runs/build-1/sample?lat=80&lon=0&frame=f003&layers=precip-rate';
+    const sampleUrl = `https://api.example${samplePath}`;
+    const oldSampleTag = `"sample-${createHash('sha256').update(sampleUrl).digest('hex')}"`;
+    cache.entries.set(sampleUrl, new Response(JSON.stringify({ source: pub.manifest.source }), { headers: { etag: oldSampleTag } }));
+    const sample = await call(samplePath, { headers: { 'if-none-match': oldSampleTag } });
+    expect(sample.status).toBe(200);
+    expect(await sample.json()).toMatchObject({ source: { provenanceUrl: url } });
+    expect(pub.manifest.source).not.toHaveProperty('provenanceUrl');
+    const result = await call(new URL(url).pathname);
+    expect(result.status).toBe(200);
+    expect(result.headers.get('etag')).toBe(`"${receipt.sha256}"`);
+    expect(await result.text()).toBe(new TextDecoder().decode(receipt.bytes));
+  });
+  it('caches verified provenance while enforcing expiry before cache hits and conditional responses', async () => {
+    const pub = publication('build-1'), receipt = sidecar(pub);
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    const path = '/v1/models/gfs/runs/build-1/provenance';
+    const first = await call(path);
+    expect(first.status).toBe(200);
+    expect(first.headers.get('cache-control')).toBe('public, max-age=60');
+    vi.setSystemTime(now + 10_000);
+    const hit = await call(path, { headers: { 'if-none-match': first.headers.get('etag')! } });
+    expect(hit.status).toBe(304);
+    expect(hit.headers.get('cache-control')).toBe('public, max-age=50');
+    expect(bucket.reads.filter(read => read.key === receipt.key)).toHaveLength(1);
+    const cacheReads = cache.matches;
+    vi.setSystemTime(now + 60_000);
+    const expired = await call(path, { headers: { 'if-none-match': first.headers.get('etag')! } });
+    expect(expired.status).toBe(404);
+    expect(expired.headers.get('cache-control')).toBe('no-store');
+    expect(cache.matches).toBe(cacheReads);
+  });
+  it('rechecks retained membership before serving cached provenance', async () => {
+    const pub = publication('build-1'), receipt = sidecar(pub);
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    const path = '/v1/models/gfs/runs/build-1/provenance';
+    expect((await call(path)).status).toBe(200);
+    const cacheReads = cache.matches;
+    bucket.install(publication('build-2'));
+    vi.setSystemTime(now + 15_000);
+    expect((await call(path)).status).toBe(404);
+    expect(cache.matches).toBe(cacheReads);
+  });
+  it('keeps missing or corrupt provenance failures uncached', async () => {
+    const pub = publication('build-1'), receipt = sidecar(pub);
+    bucket.install(pub);
+    const path = '/v1/models/gfs/runs/build-1/provenance';
+    for (const corrupt of [false, true]) {
+      if (corrupt) bucket.objects.set(receipt.key, new TextEncoder().encode('{"frames":[]}'));
+      const result = await call(path);
+      expect(result.status).toBe(503);
+      expect(result.headers.get('cache-control')).toBe('no-store');
+      expect(await result.json()).toMatchObject({ title: corrupt ? 'publication-invalid' : 'publication-incomplete' });
+      expect(cache.entries.size).toBe(0);
+    }
+    bucket.objects.set(receipt.key, receipt.bytes);
+    expect((await call(path)).status).toBe(200);
+  });
+  it.each([
+    { provenanceKey: 'private/other.json', provenanceSha256: hash },
+    { provenanceKey: 'builds/gfs/build-1/provenance.json' },
+    { provenanceSha256: hash },
+    { provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'not-a-sha256' }
+  ])('rejects invalid provenance references before cache or object access: %j', async source => {
+    const pub = publication('build-1');
+    pub.manifest.source = { ...source, frames: [] };
+    bucket.install(pub);
+    const result = await call('/v1/models/gfs/runs/build-1/provenance');
+    expect(result.status).toBe(503);
+    expect(await result.json()).toMatchObject({ title: 'publication-invalid' });
+    expect(cache.matches).toBe(0);
+    expect(bucket.reads.map(read => read.key)).toEqual(['catalog/gfs/latest.json', pub.retained.manifestKey]);
+  });
+  it('rejects hash-valid provenance with invalid JSON or mismatched identity', async () => {
+    const pub = publication('build-1');
+    const receipt = sidecar(pub, { version: 1, model: 'gfs', buildId: 'another-build', cycle, frames: [] });
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    expect((await call('/v1/models/gfs/runs/build-1/provenance')).status).toBe(503);
+    bucket = new MemoryBucket();
+    const malformed = new TextEncoder().encode('not JSON');
+    pub.manifest.source.provenanceSha256 = createHash('sha256').update(malformed).digest('hex');
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, malformed);
+    expect((await call('/v1/models/gfs/runs/build-1/provenance')).status).toBe(503);
+    expect(cache.entries.size).toBe(0);
+  });
+  it('refuses provenance that expires during its object read', async () => {
+    const pub = publication('build-1'), receipt = sidecar(pub);
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    bucket.expireDuringProvenance = true;
+    const result = await call('/v1/models/gfs/runs/build-1/provenance');
+    expect(result.status).toBe(404);
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(cache.entries.size).toBe(0);
+  });
+  it('serves legacy inline receipts at the same URL and preserves them in the full manifest', async () => {
+    const pub = publication('legacy');
+    const frames = [{ hour: 3, inputs: ['legacy.grib2'] }];
+    pub.manifest.source = { provider: 'NOAA', frames };
+    bucket.install(pub);
+    const url = 'https://api.example/v1/models/gfs/runs/legacy/provenance';
+    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { manifest: { source: Record<string, unknown> } };
+    expect(latest.manifest.source).toEqual({ provider: 'NOAA', frameCount: 1, provenanceUrl: url });
+    expect(await (await call('/v1/models/gfs/runs/legacy')).json()).toMatchObject({ source: { frames, provenanceUrl: url } });
+    const result = await call(new URL(url).pathname);
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ version: 1, model: 'gfs', buildId: 'legacy', cycle, provider: 'NOAA', frames });
+    expect(bucket.reads.some(read => read.key.endsWith('/provenance.json'))).toBe(false);
+  });
+  it('does not advertise provenance when a legacy build has no receipts', async () => {
+    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { manifest: { source: Record<string, unknown> } };
+    expect(latest.manifest.source).not.toHaveProperty('provenanceUrl');
+    expect((await call('/v1/models/gfs/runs/build-1/provenance')).status).toBe(404);
   });
   it('advertises transparent no-lift and invalidates old palette JSON and SVG validators', async () => {
     const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { palettes: { id: string; noLiftColor?: string }[] };
@@ -160,22 +313,22 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/runs/build-1/layers/unknown/f003/tilejson.json')).status).toBe(404);
   });
   it('rejects noncanonical encoded paths, duplicate/unknown query and bad tile coordinates', async () => {
-    for (const path of ['/v1/models/%67fs/latest', '/v1/models/gfs/latest?expand=manifest&expand=manifest', '/v1/models/gfs/latest?other=x', '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&lat=1', '/tiles/gfs/build-1/usable-lift-agl/f003/01/0/0.png', '/tiles/gfs/build-1/usable-lift-agl/f003/1/2/0.png']) {
+    for (const path of ['/v1/models/%67fs/latest', '/v1/models/gfs/latest?expand=manifest&expand=manifest', '/v1/models/gfs/latest?other=x', '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&lat=1', '/tiles/gfs/build-1/usable-lift-agl/f003/01/0/0.webp', '/tiles/gfs/build-1/usable-lift-agl/f003/1/2/0.webp']) {
       const result = await call(path);
       expect(result.status, path).toBe(400);
       expect(result.headers.get('cache-control')).toBe('no-store');
     }
   });
   it('refreshes a stale per-model pointer once on membership miss before blank or cache', async () => {
-    const first = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.png';
+    const first = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     expect((await call(first)).status).toBe(200);
     const newer = publication('build-2');
     bucket.install(publication('build-1'), newer);
     const before = bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json').length;
-    expect((await call('/tiles/gfs/build-2/usable-lift-agl/f003/1/0/0.png')).status).toBe(200);
+    expect((await call('/tiles/gfs/build-2/usable-lift-agl/f003/1/0/0.webp')).status).toBe(200);
     expect(bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json').length - before).toBe(1);
     const cacheReads = cache.matches;
-    const missing = await call('/tiles/gfs/unknown/usable-lift-agl/f003/1/0/0.png');
+    const missing = await call('/tiles/gfs/unknown/usable-lift-agl/f003/1/0/0.webp');
     expect(missing.status).toBe(404);
     expect(((await missing.json()) as { title: string }).title).toBe('not-retained');
     expect(cache.matches).toBe(cacheReads);
@@ -203,18 +356,22 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/hrrr/latest')).status).toBe(503);
   });
   it('validates resource and expiry before cached blank and reduces TTL on hits', async () => {
-    const url = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.png';
+    const url = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     const first = await call(url);
     expect(first.status).toBe(200);
-    expect(first.headers.get('content-type')).toBe('image/png');
+    expect(first.headers.get('content-type')).toBe('image/webp');
     expect(first.headers.get('cache-control')).toBe('public, max-age=60');
-    const png = await first.arrayBuffer();
-    expect(png.byteLength).toBeGreaterThan(200);
-    expect(new DataView(png).getUint32(16)).toBe(256);
-    expect(new DataView(png).getUint32(20)).toBe(256);
+    const webp = await first.arrayBuffer();
+    expect(webp.byteLength).toBeGreaterThan(25);
+    const bytes = new Uint8Array(webp);
+    expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('RIFF');
+    expect(new TextDecoder().decode(bytes.subarray(8, 12))).toBe('WEBP');
+    const dims = (bytes[21]! | (bytes[22]! << 8) | (bytes[23]! << 16) | (bytes[24]! << 24)) >>> 0;
+    expect((dims & 0x3fff) + 1).toBe(256);
+    expect(((dims >>> 14) & 0x3fff) + 1).toBe(256);
     vi.setSystemTime(now + 10_000);
     expect((await call(url)).headers.get('cache-control')).toBe('public, max-age=50');
-    expect((await call('/tiles/gfs/build-1/usable-lift-agl/f999/1/0/0.png')).status).toBe(404);
+    expect((await call('/tiles/gfs/build-1/usable-lift-agl/f999/1/0/0.webp')).status).toBe(404);
     const hits = cache.matches;
     vi.setSystemTime(now + 60_000);
     const expired = await call(url);
@@ -226,7 +383,7 @@ describe('read-only worker', () => {
     const old = publication('old-build');
     old.manifest.coverage.hash = 'b'.repeat(64);
     bucket.install(old, publication('build-1'));
-    for (const path of ['/tiles/gfs/old-build/usable-lift-agl/f003/1/0/0.png', '/v1/models/gfs/runs/old-build/sample?lat=0&lon=0&frame=all']) {
+    for (const path of ['/tiles/gfs/old-build/usable-lift-agl/f003/1/0/0.webp', '/v1/models/gfs/runs/old-build/sample?lat=0&lon=0&frame=all']) {
       const hits = cache.matches;
       const result = await call(path);
       expect(result.status).toBe(503);
@@ -294,13 +451,13 @@ describe('read-only worker', () => {
     expect(bucket.reads).toHaveLength(readCount);
   });
   it('reports an expected but absent archive as 503 and does not cache it', async () => {
-    const result = await call('/tiles/gfs/build-1/usable-lift-agl/f003/0/0/0.png');
+    const result = await call('/tiles/gfs/build-1/usable-lift-agl/f003/0/0/0.webp');
     expect(result.status).toBe(503);
     expect(result.headers.get('cache-control')).toBe('no-store');
     expect(cache.entries.size).toBe(0);
   });
   it('serves HEAD, ETags, CORS and structured method errors', async () => {
-    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.png';
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     const first = await call(path);
     expect(first.headers.get('access-control-allow-origin')).toBe('*');
     const head = await call(path, { method: 'HEAD' });
@@ -363,7 +520,7 @@ describe('read-only worker', () => {
     expect(cache.entries.size).toBe(0);
   });
   it('serves warm tile GET, HEAD and 304 responses without re-reading manifest.json from R2', async () => {
-    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.png';
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     const first = await call(path);
     expect(first.status).toBe(200);
     const manifestReadsAfterCold = bucket.reads.filter(r => r.key === 'builds/gfs/build-1/manifest.json').length;

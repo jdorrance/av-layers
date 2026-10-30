@@ -36,7 +36,7 @@ afterEach(() => {
 it.each([
   ['configured', 'https://api.example.test:9443/prefix'],
   ['default', undefined]
-])('loads the built Windy module with %s API base, normalizes wrapped clicks, cancels stale point requests, and expires a pending series', async (_name, configuredBase) => {
+])('loads the built Windy module with %s API base, shows stale horizons and tile errors, normalizes clicks, cancels stale requests, and expires a pending series', async (_name, configuredBase) => {
   const pluginDir = resolve(import.meta.dirname, '..');
   const rollup = resolve(pluginDir, 'node_modules/rollup/dist/bin/rollup');
   const base = configuredBase ?? 'http://localhost:8787';
@@ -56,8 +56,9 @@ it.each([
     constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; }
   }
   const hostTime = Date.parse('2026-10-30T06:00:00.000Z');
-  const expiresAtMs = Date.now() + 60_000;
-  const clock = vi.spyOn(Date, 'now');
+  const now = hostTime + 1000;
+  const expiresAtMs = now + 60_000;
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
   const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: '2026-10-30T09:00:00.000Z' }));
   const manifest = { model: 'gfs', buildId: 'b1', expiresAt, frames, layers: ['precip-rate'], coverage: { id: 'mask', maxZoom: 5 }, source: {}, method: { id: 'method' } };
@@ -70,7 +71,12 @@ it.each([
     return new Promise(resolve => { resolveSample = resolve; });
   });
   let click: ((event: { latlng: { lat: number; lng: number } }) => void) | undefined;
-  const layer = { url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(), on: vi.fn(), off: vi.fn() };
+  const tileListeners = new Map<string, (event: { tile: object }) => void>();
+  const layer = {
+    url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
+    on: vi.fn((name: string, listener: (event: { tile: object }) => void) => tileListeners.set(name, listener)),
+    off: vi.fn((name: string) => tileListeners.delete(name))
+  };
   const map = { on: vi.fn((_name, listener) => { click = listener; }), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   vi.stubGlobal('document', document);
@@ -91,6 +97,22 @@ it.each([
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
   expect(layer.url).toContain('/f/f006/');
+  const horizonNotice = elements.find(element => element.className === 'av-warning')!;
+  expect(horizonNotice.hidden).toBe(false);
+  expect(horizonNotice.textContent).toContain('Forecast ended at 2026-10-30T06:00:00.000Z');
+  const tileError = elements.find(element => element.className === 'av-error')!;
+  const failed = { tile: {} }, successful = { tile: {} };
+  tileListeners.get('tileloadstart')?.(failed);
+  tileListeners.get('tileloadstart')?.(successful);
+  tileListeners.get('tileerror')?.(failed);
+  tileListeners.get('tileload')?.(successful);
+  tileListeners.get('load')?.(successful);
+  expect(tileError.hidden).toBe(false);
+  expect(tileError.textContent).toContain('Overlay tile failed to load');
+  expect(horizonNotice.hidden).toBe(false);
+  tileListeners.get('tileload')?.(failed);
+  expect(tileError.hidden).toBe(true);
+  expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
   expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([
     ['gfs', false, 'gfs'],
@@ -124,6 +146,8 @@ it.each([
   selects[2].dispatch('change');
   expect(sampleSignal?.aborted).toBe(true);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
+  expect(horizonNotice.hidden).toBe(true);
+  expect(tileListeners.size).toBe(0);
   resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
   await Promise.resolve();
   await Promise.resolve();

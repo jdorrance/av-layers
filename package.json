@@ -36,7 +36,6 @@
     "@av/forecast": "workspace:*",
     "@cloudflare/workers-types": "5.20261030.1",
     "@types/node": "22.19.15",
-    "@types/pngjs": "6.0.5",
     "eslint": "9.39.1",
     "tsx": "4.23.15",
     "typescript": "5.9.3",

@@ -27,7 +27,7 @@ class R2Source implements Source {
 export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number): Promise<ArrayBuffer> {
   const archive = new PMTiles(new R2Source(bucket, key), cache, decompress);
   const header = await archive.getHeader();
-  if (header.tileType !== TileType.Png || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression)) throw new Error('Unsupported PMTiles archive');
+  if (header.tileType !== TileType.Webp || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression)) throw new Error('Unsupported PMTiles archive');
   const tile = await archive.getZxy(z, x, y);
   if (!tile) throw new Error('Expected tile missing');
   return tile.data;

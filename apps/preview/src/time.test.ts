@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildAgeMs, datasetRange, frameBadge, matchHostFrame, selectExplicitFrame, syncTimestampForFrame, watchBuildExpiry } from './time';
+import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, matchHostFrame, selectExplicitFrame, syncTimestampForFrame, watchBuildExpiry } from './time';
 
 afterEach(() => vi.useRealTimers());
 
@@ -91,4 +91,12 @@ describe('host timestamp synchronization', () => {
     expect(syncTimestampForFrame(frames[0], { startMs: NaN, endMs: Infinity })).toBeNull();
     expect(syncTimestampForFrame(frames[0], { startMs: 2, endMs: 1 })).toBeNull();
   });
+});
+
+it('shows forecast-horizon exhaustion at the last valid time, independently of interval ends or retention', () => {
+  const manifest = { frames: [...frames].reverse() };
+  const horizon = Date.parse('2026-10-30T09:00:00Z');
+  expect(forecastHorizonNotice(manifest, horizon - 1)).toBeNull();
+  expect(forecastHorizonNotice(manifest, horizon)).toContain('Forecast ended at 2026-10-30T09:00:00.000Z');
+  expect(forecastHorizonNotice(manifest, horizon + 6 * 3600_000)).toContain('Showing historical forecast');
 });

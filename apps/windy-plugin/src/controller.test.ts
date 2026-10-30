@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Manifest } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
-import { PluginController, type HostStore, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
+import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
+
+afterEach(() => vi.useRealTimers());
 
 const created = '2026-10-30T00:00:00.000Z';
 const expiresAt = '2026-10-31T00:00:00.000Z';
@@ -48,7 +50,7 @@ function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof fram
     model: 'gfs',
     pointer: { version: 1, model: 'gfs', latestBuildId: 'build-1', retained: [{ buildId: 'build-1', manifestKey: 'builds/gfs/build-1/manifest.json', cycle: created, expiresAt: manifest.expiresAt }] },
     manifest,
-    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/build-1/${layer}/{frame}/{z}/{x}/{y}.png`])) as PinnedBuild['templates'],
+    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/build-1/${layer}/{frame}/{z}/{x}/{y}.webp`])) as PinnedBuild['templates'],
     bounds: [-180, -55, 180, 65],
     maxNativeZoom: 5,
     palettes: [],
@@ -62,7 +64,7 @@ class StubLayer implements HostTileLayer {
   url: string;
   options: WindyTileOptions;
   opacity: number;
-  listeners = new Map<string, Set<() => void>>();
+  listeners = new Map<string, Set<(event: HostTileEvent) => void>>();
   constructor(url: string, options: WindyTileOptions) {
     this.url = url;
     this.options = options;
@@ -74,16 +76,16 @@ class StubLayer implements HostTileLayer {
   setOpacity(opacity: number): void {
     this.opacity = opacity;
   }
-  on(event: 'tileerror' | 'tileload' | 'load', listener: () => void): void {
+  on(event: HostTileEventName, listener: (event: HostTileEvent) => void): void {
     const set = this.listeners.get(event) ?? new Set();
     set.add(listener);
     this.listeners.set(event, set);
   }
-  off(event: 'tileerror' | 'tileload' | 'load', listener: () => void): void {
+  off(event: HostTileEventName, listener: (event: HostTileEvent) => void): void {
     this.listeners.get(event)?.delete(listener);
   }
-  emit(event: 'tileerror' | 'tileload' | 'load'): void {
-    for (const listener of this.listeners.get(event) ?? []) listener();
+  emit(event: HostTileEventName | 'load', payload: HostTileEvent = { tile: {} }): void {
+    for (const listener of this.listeners.get(event) ?? []) listener(payload);
   }
 }
 
@@ -154,23 +156,109 @@ describe('PluginController', () => {
     expect(state).toMatchObject({ phase: 'ready', buildId: 'build-1', frameId: 'f006', layerId: 'usable-lift-msl', opacity: 0.5 });
     expect(state?.badge).toContain('Host frame f006');
     expect(stub.added).toHaveLength(1);
-    expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.png');
+    expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.webp');
     expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 5, maxZoom: 18, opacity: 0.5 });
   });
 
-  it('surfaces overlay tile errors explicitly and clears them on tile load or frame switch', async () => {
+  it('keeps each failed tile visible until that tile succeeds or leaves the viewport', async () => {
     const stub = stubHost();
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
     await controller.start();
-    expect(controller.state().message).toBeNull();
-    stub.added[0].emit('tileerror');
+    const layer = stub.added[0];
+    const a = { tile: {} }, b = { tile: {} }, c = { tile: {} };
+    for (const tile of [a, b, c]) layer.emit('tileloadstart', tile);
+    layer.emit('tileerror', a);
+    layer.emit('tileerror', c);
+    layer.emit('tileload', b);
+    layer.emit('load');
     expect(controller.state().message).toContain('Overlay tile failed to load');
-    stub.added[0].emit('load');
-    expect(controller.state().message).toBeNull();
-    stub.added[0].emit('tileerror');
+    layer.emit('tileload', a);
     expect(controller.state().message).toContain('Overlay tile failed to load');
-    controller.selectFrame('f006');
+    layer.emit('tileunload', c);
     expect(controller.state().message).toBeNull();
+    layer.emit('tileerror', c);
+    expect(controller.state().message).toBeNull();
+    controller.dispose();
+  });
+
+  it.each(['frame', 'layer'] as const)('resets failures only on a new %s and ignores old tile events', async change => {
+    const stub = stubHost();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+    await controller.start();
+    const layer = stub.added[0];
+    const oldTile = { tile: {} }, newTile = { tile: {} };
+    layer.emit('tileloadstart', oldTile);
+    layer.emit('tileerror', oldTile);
+    controller.selectFrame('f003');
+    controller.syncHost(Date.parse('2026-10-30T03:00:00.000Z'));
+    controller.selectLayer('usable-lift-msl');
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+    if (change === 'frame') controller.selectFrame('f006');
+    else controller.selectLayer('precip-rate');
+    expect(controller.state().message).toBeNull();
+    layer.emit('tileerror', oldTile);
+    expect(controller.state().message).toBeNull();
+    layer.emit('tileloadstart', newTile);
+    layer.emit('tileerror', newTile);
+    layer.emit('tileload', oldTile);
+    layer.emit('tileunload', oldTile);
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+    layer.emit('tileload', newTile);
+    expect(controller.state().message).toBeNull();
+    controller.dispose();
+  });
+
+  it('preserves other errors when a failed tile recovers', async () => {
+    const stub = stubHost();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+    await controller.start();
+    controller.selectFrame('unknown');
+    const tile = { tile: {} };
+    stub.added[0].emit('tileloadstart', tile);
+    stub.added[0].emit('tileerror', tile);
+    expect(controller.state().message).toContain('Unknown frame unknown');
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+    stub.added[0].emit('tileload', tile);
+    expect(controller.state().message).toBe('Unknown frame unknown');
+    controller.dispose();
+  });
+
+  it('shows exhausted forecast horizons on load while retaining historical viewing', async () => {
+    const stub = stubHost();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse('2026-10-30T10:00:00.000Z') });
+    await controller.start();
+    expect(controller.state().phase).toBe('ready');
+    expect(controller.state().horizonNotice).toContain('Forecast ended at 2026-10-30T09:00:00.000Z');
+    expect(controller.state().message).toBeNull();
+    expect(stub.added).toHaveLength(1);
+    expect(controller.selectFrame('f006').frameId).toBe('f006');
+    controller.dispose();
+  });
+
+  it('announces an idle build reaching its horizon without hiding errors, then expires it at retention end', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse('2026-10-30T08:59:59.000Z'));
+    const stub = stubHost();
+    const onState = vi.fn();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, onState });
+    await controller.start();
+    const tile = { tile: {} };
+    stub.added[0].emit('tileloadstart', tile);
+    stub.added[0].emit('tileerror', tile);
+    expect(controller.state().horizonNotice).toBeNull();
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({
+      phase: 'ready',
+      horizonNotice: expect.stringContaining('Forecast ended'),
+      message: expect.stringContaining('Overlay tile failed to load')
+    }));
+    expect(stub.removed).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(Date.parse(expiresAt) - Date.now() + 1);
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'expired', horizonNotice: null }));
+    expect(stub.removed).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.dispose();
   });
 
   it('syncs an explicit frame to the host timestamp only inside the verified dataset range', async () => {

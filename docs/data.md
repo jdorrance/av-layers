@@ -51,7 +51,9 @@ build began, not time since the model initialized.
 `expiresAt` controls retention and serving eligibility. It does not extend the
 forecast horizon: a retained build may contain only past forecast times.
 Frame times establish whether a retained forecast covers the present; HTTP
-success does not. [Operations](operations.md) explains publication and expiry.
+success does not. The clients show a visible notice when the final forecast time
+has passed, while allowing historical frames to remain viewable until retention
+expires. [Operations](operations.md) explains publication and expiry.
 
 ## Colour and interpolation
 

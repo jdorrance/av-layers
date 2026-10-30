@@ -3,8 +3,8 @@ import { open, readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PMTiles, Compression, TileType } from 'pmtiles';
-import { PNG } from 'pngjs';
-import { CELL_BYTES, expectedTiles, GFS_GRID, LAYER_IDS, manifestSchema, validateArtifactRecords, validateSampleFlags, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
+import { CELL_BYTES, expectedTiles, getProvenanceReference, GFS_GRID, LAYER_IDS, manifestSchema, parseProvenance, validateArtifactRecords, validateSampleFlags, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
+import { decodeWebp } from './webp.js';
 
 const COVERAGE_DIR = fileURLToPath(new URL('../../../packages/contracts/coverage', import.meta.url));
 
@@ -41,12 +41,17 @@ export async function validateArchive(path: string, mask: CoverageMask): Promise
   try {
     const archive = new PMTiles({ getKey: () => path, async getBytes(offset, length) { const data = Buffer.alloc(length); const { bytesRead } = await file.read(data, 0, length, offset); if (!bytesRead) throw new Error('Short archive read'); return { data: data.buffer.slice(data.byteOffset, data.byteOffset + bytesRead) }; } });
     const header = await archive.getHeader();
-    if (header.tileType !== TileType.Png || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression) || header.minZoom !== 0 || header.maxZoom !== mask.maxZoom) throw new Error(`Unsupported archive ${path}: ${JSON.stringify({ type: header.tileType, tileCompression: header.tileCompression, internalCompression: header.internalCompression, minZoom: header.minZoom, maxZoom: header.maxZoom })}`);
+    if (header.tileType !== TileType.Webp || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression) || header.minZoom !== 0 || header.maxZoom !== mask.maxZoom) throw new Error(`Unsupported archive ${path}: ${JSON.stringify({ type: header.tileType, tileCompression: header.tileCompression, internalCompression: header.internalCompression, minZoom: header.minZoom, maxZoom: header.maxZoom })}`);
     for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) {
       const result = await archive.getZxy(tile.z, tile.x, tile.y);
-      if (!result || result.data.byteLength < 8 || Buffer.from(result.data).subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error(`Missing or invalid active tile ${path} ${z}/${tile.x}/${tile.y}`);
-      const png = PNG.sync.read(Buffer.from(result.data));
-      if (png.width !== 256 || png.height !== 256) throw new Error(`Invalid tile dimensions ${path} ${z}/${tile.x}/${tile.y}`);
+      if (!result || result.data.byteLength < 25) throw new Error(`Missing or invalid active tile ${path} ${z}/${tile.x}/${tile.y}`);
+      let dims: { width: number; height: number };
+      try {
+        dims = await decodeWebp(new Uint8Array(result.data));
+      } catch {
+        throw new Error(`Missing or invalid active tile ${path} ${z}/${tile.x}/${tile.y}`);
+      }
+      if (dims.width !== 256 || dims.height !== 256) throw new Error(`Invalid tile dimensions ${path} ${z}/${tile.x}/${tile.y}`);
     }
   } finally { await file.close(); }
 }
@@ -68,17 +73,13 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== cycle + i * 10800000 || Date.parse(frame.intervalEnd) !== cycle + (i + 1) * 10800000 || Date.parse(frame.validTime) !== cycle + (i + 1) * 10800000) throw new Error(`Invalid frame interval ${frame.id}`);
   }
   validateArtifactRecords(manifest);
-  const source = manifest.source as { provenanceKey?: unknown; provenanceSha256?: unknown };
-  if (source.provenanceKey !== undefined || source.provenanceSha256 !== undefined) {
-    const expectedProvenanceKey = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;
-    if (source.provenanceKey !== expectedProvenanceKey || typeof source.provenanceSha256 !== 'string') {
-      throw new Error(`Invalid provenance reference in manifest`);
+  const provenance = getProvenanceReference(manifest);
+  if (provenance) {
+    const provenanceBytes = await readFile(localPath(root, provenance.key));
+    if (sha256(provenanceBytes) !== provenance.sha256) {
+      throw new Error(`Invalid provenance hash ${provenance.key}`);
     }
-    const provenanceBytes = await readFile(localPath(root, expectedProvenanceKey));
-    if (sha256(provenanceBytes) !== source.provenanceSha256) {
-      throw new Error(`Invalid provenance hash ${expectedProvenanceKey}`);
-    }
-    JSON.parse(provenanceBytes.toString('utf8'));
+    parseProvenance(JSON.parse(provenanceBytes.toString('utf8')), manifest);
   }
   const expectedSamples = manifest.grid.width * manifest.grid.height * CELL_BYTES;
   for (const artifact of manifest.artifacts) {

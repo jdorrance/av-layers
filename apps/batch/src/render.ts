@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { PNG } from 'pngjs';
 import { expectedTiles, PALETTES, paletteColor, STATUS_NO_LIFT, type CoverageMask, type LayerId } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
+import { encodeWebp } from './webp.js';
 
 const rgba = new Map<string, readonly [number, number, number, number]>();
 for (const palette of Object.values(PALETTES)) for (const color of palette.colors as readonly string[]) {
@@ -21,8 +21,8 @@ export function mercatorPoint(z: number, x: number, y: number, px: number, py: n
   return { lat, lon };
 }
 
-export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Buffer {
-  const png = new PNG({ width: 256, height: 256 });
+export function renderTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Uint8Array {
+  const data = new Uint8Array(256 * 256 * 4);
   const lats = new Float64Array(512), lons = new Float64Array(512);
   for (let i = 0; i < 256; i++) {
     lats[i * 2] = mercatorPoint(z, x, y, 0, i + 0.25).lat;
@@ -44,9 +44,13 @@ export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId,
       }
     }
     const offset = (py * 256 + px) * 4;
-    if (alpha) { png.data[offset] = Math.round(r / alpha); png.data[offset + 1] = Math.round(g / alpha); png.data[offset + 2] = Math.round(b / alpha); png.data[offset + 3] = Math.round(alpha / 4); }
+    if (alpha) { data[offset] = Math.round(r / alpha); data[offset + 1] = Math.round(g / alpha); data[offset + 2] = Math.round(b / alpha); data[offset + 3] = Math.round(alpha / 4); }
   }
-  return PNG.sync.write(png, { deflateLevel: 6, deflateStrategy: 0 });
+  return data;
+}
+
+export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Promise<Buffer> {
+  return encodeWebp(renderTileRgba(field, mask, layer, z, x, y), 256, 256);
 }
 
 export async function renderArchive(path: string, field: GridField, mask: CoverageMask, layer: LayerId): Promise<void> {
@@ -59,9 +63,9 @@ export async function renderArchive(path: string, field: GridField, mask: Covera
     try {
       db.exec('CREATE TABLE metadata (name TEXT, value TEXT); CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB); CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row); BEGIN');
       const metadata = db.prepare('INSERT INTO metadata VALUES (?, ?)');
-      for (const [key, value] of Object.entries({ name: layer, format: 'png', type: 'overlay', version: '1', minzoom: '0', maxzoom: String(mask.maxZoom), bounds: '-180,-85.051129,180,85.051129' })) metadata.run(key, value);
+      for (const [key, value] of Object.entries({ name: layer, format: 'webp', type: 'overlay', version: '1', minzoom: '0', maxzoom: String(mask.maxZoom), bounds: '-180,-85.051129,180,85.051129' })) metadata.run(key, value);
       const insert = db.prepare('INSERT INTO tiles VALUES (?, ?, ?, ?)');
-      for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) insert.run(z, tile.x, 2 ** z - 1 - tile.y, renderTile(field, mask, layer, z, tile.x, tile.y));
+      for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) insert.run(z, tile.x, 2 ** z - 1 - tile.y, await renderTile(field, mask, layer, z, tile.x, tile.y));
       db.exec('COMMIT');
     } finally { db.close(); }
     await mkdir(dirname(path), { recursive: true });
