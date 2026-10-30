@@ -1,0 +1,25 @@
+{
+  "name": "@av/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --var AV_LOCAL_DEVELOPMENT:true",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@av/contracts": "workspace:*",
+    "@av/forecast": "workspace:*",
+    "@hono/zod-openapi": "1.6.3",
+    "hono": "4.13.14",
+    "pmtiles": "4.5.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261030.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7",
+    "wrangler": "4.156.0"
+  }
+}

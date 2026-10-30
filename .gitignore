@@ -1,0 +1,14 @@
+node_modules/
+dist/
+output/
+.cache/
+.tools/
+.wrangler/
+.dev.vars*
+.env*
+!.env.example
+*.mbtiles
+*.pmtiles
+__pycache__/
+.venv/
+coverage/

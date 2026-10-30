@@ -1,0 +1,17 @@
+{
+  "name": "@av/batch",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@av/contracts": "workspace:*",
+    "@av/forecast": "workspace:*",
+    "@azohra/meteo.grib": "0.1.4",
+    "@aws-sdk/client-s3": "3.1160.0",
+    "pngjs": "7.0.0",
+    "pmtiles": "4.5.0"
+  },
+  "devDependencies": {
+    "@types/pngjs": "6.0.5"
+  }
+}

@@ -1,0 +1,68 @@
+name: Deploy read-only Worker
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target Cloudflare Worker environment
+        type: choice
+        options:
+          - staging
+          - production
+        required: true
+      confirm:
+        description: Type deploy-read-only-worker to acknowledge no write routes or public bucket bypass
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: deploy-api-${{ inputs.environment }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    env:
+      TARGET_ENV: ${{ inputs.environment }}
+      CONFIRM: ${{ inputs.confirm }}
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate deploy inputs and credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${TARGET_ENV}" in
+            staging|production) ;;
+            *) echo 'unsupported deploy environment' >&2; exit 1 ;;
+          esac
+          if [ "${CONFIRM}" != 'deploy-read-only-worker' ]; then
+            echo 'confirm must equal deploy-read-only-worker' >&2
+            exit 1
+          fi
+          test -n "${CLOUDFLARE_API_TOKEN}"
+          test -n "${CLOUDFLARE_ACCOUNT_ID}"
+      - name: Verify API
+        run: pnpm --filter @av/api typecheck && pnpm --filter @av/api test
+      - name: Deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${TARGET_ENV}" in
+            staging) pnpm run deploy:staging ;;
+            production) pnpm run deploy:production ;;
+          esac
+      - name: Deployed contract smoke
+        if: ${{ vars.API_BASE_URL != '' }}
+        run: pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs

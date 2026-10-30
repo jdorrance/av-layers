@@ -1,0 +1,156 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GFS_GRID, setBit, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { sampleGrid } from '@av/forecast';
+import type { GfsFrameAcquisition } from './noaa/types.js';
+
+const CYCLE = '2026-10-30T00:00:00.000Z';
+
+vi.mock('./validate.js', async importOriginal => ({
+  ...await importOriginal<typeof import('./validate.js')>(),
+  loadCoverage: vi.fn(async () => ({ grid: GFS_GRID, output: new Uint8Array(0), halo: new Uint8Array(0), tiles: new Uint8Array(0), maxZoom: 5 })),
+  verifyCoverage: vi.fn(async () => 'a'.repeat(64)),
+  validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest),
+}));
+vi.mock('./render.js', async () => {
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  return { renderArchive: vi.fn(async (path: string) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, new Uint8Array(1)); }) };
+});
+vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
+vi.mock('@av/forecast', async importOriginal => ({ ...await importOriginal<typeof import('@av/forecast')>(), packCells: vi.fn(() => new Uint8Array(1)) }));
+vi.mock('./noaa/index.js', () => ({ acquireGfsFrame: vi.fn(), discoverGfsRun: vi.fn() }));
+
+import { acquireGfsFrame, discoverGfsRun } from './noaa/index.js';
+import { buildSample, deriveFrame } from './build.js';
+
+const ms = (hour: number): string => new Date(Date.parse(CYCLE) + hour * 3600000).toISOString();
+const noMs = (hour: number): string => ms(hour).replace('.000Z', 'Z');
+
+function frame(hour: number): GfsFrameAcquisition {
+  const empty = () => new Float32Array(0);
+  return {
+    schemaVersion: 1,
+    model: 'gfs',
+    cycle: noMs(0),
+    hour,
+    validAt: noMs(hour),
+    capturedAt: '2026-10-30T08:25:13.148Z',
+    grid: { width: GFS_GRID.width, height: GFS_GRID.height, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true },
+    activeIndices: new Uint32Array(0),
+    terrainM: empty(),
+    surfacePressurePa: empty(),
+    temp2mK: empty(),
+    specificHumidity2mKgKg: empty(),
+    pblHeightM: empty(),
+    sensibleHeatFluxWm2: empty(),
+    latentHeatFluxWm2: empty(),
+    precipitationMmPerHour: empty(),
+    pressureLevelsHpa: [],
+    hgtM: [],
+    tempK: [],
+    missing: {
+      terrain: new Uint8Array(0),
+      surfacePressure: new Uint8Array(0),
+      temp2m: new Uint8Array(0),
+      humidity2m: new Uint8Array(0),
+      pbl: new Uint8Array(0),
+      sensibleHeatFlux: new Uint8Array(0),
+      latentHeatFlux: new Uint8Array(0),
+      precipitation: new Uint8Array(0),
+      hgt: [],
+      temp: [],
+    },
+    intervals: {
+      profileTime: noMs(hour),
+      fluxWindow: { start: ms(hour - 3), end: ms(hour) },
+      precipitationWindow: { start: ms(hour - 3), end: ms(hour) },
+      fluxSourceWindow: { start: ms(0), end: ms(hour) },
+      precipitationSourceWindow: { start: ms(0), end: ms(hour) },
+      usedCompanion: hour > 3,
+    },
+    receipt: { schemaVersion: 1, cycle: noMs(0), hour, validAt: noMs(hour), capturedAt: '2026-10-30T08:25:13.148Z' },
+  } as unknown as GfsFrameAcquisition;
+}
+
+const temp: string[] = [];
+afterEach(async () => {
+  await Promise.all(temp.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
+
+async function run(acquire: (hour: number) => GfsFrameAcquisition): Promise<Manifest> {
+  vi.mocked(acquireGfsFrame).mockImplementation(async options => acquire(options.hour));
+  const out = await mkdtemp(join(tmpdir(), 'av-build-test-'));
+  temp.push(out);
+  const path = await buildSample({ out, cycle: CYCLE, cacheDir: join(out, 'cache') });
+  return JSON.parse((await readFile(path)).toString()) as Manifest;
+}
+
+describe('build sample acquisition intervals', () => {
+  it('forwards the cache directory to discovery and acquisition', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'av-build-cache-')); temp.push(out);
+    const cacheDir = join(out, 'cache');
+    vi.mocked(discoverGfsRun).mockResolvedValue({ cycle: noMs(0) } as Awaited<ReturnType<typeof discoverGfsRun>>);
+    vi.mocked(acquireGfsFrame).mockImplementation(async options => frame(options.hour));
+    await buildSample({ out, cacheDir });
+    expect(discoverGfsRun).toHaveBeenCalledWith({ cacheDir });
+    expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ cacheDir }));
+  });
+  it('accepts equivalent zero-millisecond and canonical UTC strings at f003 and f006', async () => {
+    const manifest = await run(frame);
+    expect(manifest.cycle).toBe(CYCLE);
+    expect(manifest.frames.find(f => f.id === 'f003')).toEqual({ id: 'f003', validTime: ms(3), intervalStart: ms(0), intervalEnd: ms(3) });
+    expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(3), intervalEnd: ms(6) });
+  });
+
+  it('rejects a frame cycle with a different actual instant', async () => {
+    await expect(run(hour => ({ ...frame(hour), cycle: noMs(1) }))).rejects.toThrow('Acquisition interval mismatch f3');
+  });
+
+  it('rejects a frame validAt and profile time with a different actual instant', async () => {
+    await expect(run(hour => hour === 6 ? { ...frame(hour), validAt: noMs(5), intervals: { ...frame(hour).intervals, profileTime: noMs(5) } } : frame(hour))).rejects.toThrow('Acquisition interval mismatch f6');
+  });
+
+  it('rejects equivalent-format flux windows with a different actual instant', async () => {
+    await expect(run(hour => hour === 6 ? { ...frame(hour), intervals: { ...frame(hour).intervals, fluxWindow: { start: ms(2), end: ms(5) } } } : frame(hour))).rejects.toThrow('Acquisition interval mismatch f6');
+  });
+
+  it('rejects equivalent-format precipitation windows with a different actual instant', async () => {
+    await expect(run(hour => hour === 6 ? { ...frame(hour), intervals: { ...frame(hour).intervals, precipitationWindow: { start: ms(0), end: ms(6) } } } : frame(hour))).rejects.toThrow('Acquisition interval mismatch f6');
+  });
+});
+
+describe('frame derivation', () => {
+  function fixture(): { input: GfsFrameAcquisition; mask: CoverageMask; index: number } {
+    const index = 360 * GFS_GRID.width + 720;
+    const bits = Math.ceil(GFS_GRID.width * GFS_GRID.height / 8);
+    const mask: CoverageMask = { grid: GFS_GRID, output: new Uint8Array(bits), halo: new Uint8Array(bits), tiles: new Uint8Array(1), maxZoom: 0 };
+    setBit(mask.output, index); setBit(mask.halo, index + 1);
+    const values = (v: number) => new Float32Array([v, v]);
+    const missing = () => new Uint8Array(2);
+    const input = { ...frame(3), activeIndices: new Uint32Array([index, index + 1]), terrainM: values(100), surfacePressurePa: values(100000), temp2mK: values(293.15), specificHumidity2mKgKg: values(0.008), pblHeightM: values(300), sensibleHeatFluxWm2: values(250), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [990, 950, 900], hgtM: [new Float32Array([100, 90]), values(600), values(1100)], tempK: [values(290), values(286.15), values(281.15)], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), pbl: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing(), missing(), missing()], temp: [missing(), missing(), missing()] } };
+    return { input, mask, index };
+  }
+
+  it('derives halo contributors without publishing halo-only points', () => {
+    const { input, mask, index } = fixture(), fields = deriveFrame(input, mask);
+    expect(fields['precip-rate'].flags[index + 1]).toBe(STATUS_VALID);
+    expect(fields['usable-lift-agl'].flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
+    const sample = sampleGrid(GFS_GRID, fields['precip-rate'], 0, 0.1, 'precip-rate', mask);
+    expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
+    expect(sample.value).toBeCloseTo(2.8);
+    expect(sampleGrid(GFS_GRID, fields['precip-rate'], 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+  });
+
+  it('drops finite subterranean heights but not missing profile levels', () => {
+    const { input, mask, index } = fixture();
+    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_VALID);
+    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_VALID);
+    input.missing.hgt[1][0] = 1;
+    input.missing.temp[1][1] = 1;
+    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  });
+});

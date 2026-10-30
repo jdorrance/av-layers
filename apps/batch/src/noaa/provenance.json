@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "component": "apps/batch/src/noaa",
+  "generatedAt": "2026-10-30T07:49:00Z",
+  "purpose": "Minimal GFS primary/secondary acquisition, exact-range decoding, interval differencing, per-cell missingness and proof helper.",
+  "sources": [
+    {
+      "component": "@azohra/meteo.grib",
+      "version": "0.1.4",
+      "repository": "https://github.com/azohra/meteo",
+      "revision": "0296c1fb54aa9c8415e7962d7a4580b496e7ebf8",
+      "license": "MIT",
+      "licenseStatus": "verified MIT package license and repository LICENSE",
+      "usage": "Public parser, grid/product metadata, byteRange/parseIdx and sampleFieldValuesAsync; published Node J2K pool injection for DRT 5.40. No decoder fork.",
+      "paths": [
+        "dist/index.js",
+        "dist/j2k-node.js"
+      ]
+    },
+    {
+      "component": "windgrams NOAA provider helpers",
+      "repository": "/Users/johndorrance/projects/flying/windgrams",
+      "revision": "32fdd75db7a4a1a302ae901b969b0f6625712368",
+      "fileRevision": "0cbc1e5ac2688f28396d9034be5f6e558e63f9b6",
+      "license": "none-found",
+      "licenseStatus": "No LICENSE file was found in the windgrams checkout. No public grant is asserted. Narrow logic was reimplemented; rights require confirmation before redistribution.",
+      "paths": [
+        "packages/providers/src/internal/noaa/transport.ts",
+        "packages/providers/src/internal/noaa/fields.ts",
+        "packages/providers/src/internal/noaa/intervals.ts",
+        "packages/providers/src/internal/noaa/grid.ts",
+        "packages/providers/src/internal/noaa/acquire.ts"
+      ],
+      "usage": "Field-routing, exact-range caching, GFS trailing-window and grid-validation patterns. The broad column builder was not copied."
+    },
+    {
+      "component": "skyjuice SJ-204 GFS input proof",
+      "repository": "/Users/johndorrance/projects/flying/skyjuice",
+      "revision": "043e5bf18dc9b60f4586622d1b8d631af88d9235",
+      "fileRevision": "b752d003a0122046e83cb0d88c44cec08132d05f",
+      "license": "none-found",
+      "licenseStatus": "No LICENSE file was found in the skyjuice checkout. No public grant is asserted. Narrow statistical-interval and duplicate-record semantics were reimplemented; rights require confirmation before redistribution.",
+      "paths": [
+        "workers/forecast/spikes/noaa-thermal-input-proof.ts",
+        "workers/forecast/spikes/noaa-grib-admission.ts",
+        "docs/evidence/SJ-204.md",
+        "docs/evidence/SJ-202.md"
+      ],
+      "usage": "PDT 4.8 interval parsing, continuous increment-0 admission, decoded metadata receipts and per-field bounds. The original duplicate-identity refusal is amended only for full byte-identical GFS messages under explicit user authorization; differing or unverifiable records remain refused."
+    },
+    {
+      "component": "NOAA NCEP GFS 0.25 degree primary/secondary products",
+      "license": "U.S. federal government work; NOAA data terms apply",
+      "licenseStatus": "NOAA publishes the data as U.S. Government open data. Attribution and terms must be rechecked before public redistribution.",
+      "terms": "https://www.noaa.gov/information-technology/open-data-dissemination",
+      "products": [
+        "gfs.tHHz.pgrb2.0p25.fHHH",
+        "gfs.tHHz.pgrb2b.0p25.fHHH"
+      ],
+      "usage": "Primary route for 15 pressure levels and surface fields; secondary route for 875, 825, 775, 725, 675 and 625 hPa HGT/TMP."
+    }
+  ],
+  "notices": [
+    "THIRD_PARTY_NOTICES.txt at the repository root is the authoritative aggregate notice and must remain consistent with this file.",
+    "The windgrams and skyjuice source checkouts contain no LICENSE file; this component records that fact and does not claim a license for those repositories.",
+    "The published @azohra/meteo.grib decoder is used through its public API only. J2K DRT 5.40 uses the package's published j2k-node pool.",
+    "GFS raw fields remain on local or runner cache only; no raw model inputs are published as artifacts.",
+    "GRIB quantization tolerance is derived from Section 5 binary/decimal scaling as 0.5 * 2^E * 10^-D per field, summed for a companion difference plus 1e-9."
+  ],
+  "testFixtures": [
+    {
+      "path": "apps/batch/src/noaa/fixtures/gfs-shtfl-ave-0-6h.grib2",
+      "sha256": "339f72fa3583cf673c60e1ed023c4ca14f1cdfcca840aabd0c2505d4a8c9ef41",
+      "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures/gfs-shtfl-ave-0-6h.grib2",
+      "oracle": "ecCodes 2.48.0 expectation sidecar retained beside the fixture",
+      "covers": "GFS DRT 5.3, global 0.25 degree regular lat-lon, PDT 4.8 mean window 0-6 h"
+    },
+    {
+      "path": "apps/batch/src/noaa/fixtures/gfs-tmp-850mb.grib2",
+      "sha256": "81a42e9010cc1e00f52bd759aa959424ed08da5d2a7ff575c379ce4e87d2a74c",
+      "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures/gfs-tmp-850mb.grib2",
+      "oracle": "ecCodes 2.48.0 expectation sidecar retained beside the fixture",
+      "covers": "GFS DRT 5.3 instantaneous pressure temperature on the global regular grid"
+    },
+    {
+      "path": "apps/batch/src/noaa/fixtures/gfs.t12z.pgrb2.0p25.f021.excerpt.idx",
+      "sha256": "1de8e90838cd7c6c1fb736a357d1a04368d811aa4182b5cf3df7ccaf0a8518e7",
+      "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures-idx/gfs.t12z.pgrb2.0p25.f021.excerpt.idx",
+      "covers": "Real GFS idx labels including APCP 0-21 and 18-21 duplicate-family disambiguation"
+    },
+    {
+      "path": "Prior optional empirical bitmap verification (not a runtime or CI input)",
+      "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures/nam-nest-tmp-bitmap.grib2",
+      "oracle": "ecCodes expectation sidecar in the meteo fixture directory",
+      "covers": "Sparse NAM bitmap propagation through the shared NOAA sample compaction; not a GFS grid-admission fixture"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+name: Forecast sample
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Forecast model
+        type: choice
+        options:
+          - gfs
+        default: gfs
+      cycle:
+        description: Optional upstream cycle (ISO 8601 UTC); empty discovers the latest admissible run
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: forecast-${{ inputs.model || 'gfs' }}
+  cancel-in-progress: false
+jobs:
+  build-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      MODEL: ${{ inputs.model || 'gfs' }}
+      CYCLE: ${{ inputs.cycle || '' }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tools:pmtiles
+      - name: Build sample
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${CYCLE}" ]; then
+            pnpm run build:sample --model "${MODEL}" --out output --cache-dir .cache/gfs --cycle "${CYCLE}"
+          else
+            pnpm run build:sample --model "${MODEL}" --out output --cache-dir .cache/gfs
+          fi
+          manifest="$(find "output/builds/${MODEL}" -mindepth 2 -maxdepth 2 -name manifest.json -print | sort | tail -1)"
+          test -n "${manifest}"
+          printf 'MANIFEST=%s\n' "${manifest}" >> "${GITHUB_ENV}"
+      - name: Validate sample
+        run: pnpm exec tsx apps/batch/src/cli.ts validate --manifest "${MANIFEST}"
+      - name: Publish immutable build and pointer
+        if: ${{ env.R2_ACCESS_KEY_ID != '' && env.R2_SECRET_ACCESS_KEY != '' && env.R2_ACCOUNT_ID != '' && env.R2_BUCKET != '' }}
+        run: pnpm run publish --manifest "${MANIFEST}"
+      - name: Record skipped publication
+        if: ${{ env.R2_ACCESS_KEY_ID == '' || env.R2_SECRET_ACCESS_KEY == '' || env.R2_ACCOUNT_ID == '' || env.R2_BUCKET == '' }}
+        run: |
+          echo 'R2 credentials absent: sample built and validated locally, publication skipped.' >> "${GITHUB_STEP_SUMMARY}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forecast-${{ env.MODEL }}-${{ github.run_id }}
+          path: output/builds/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,86 @@
+name: Forecast maintenance
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Serialized publication maintenance action
+        type: choice
+        options:
+          - rollback
+          - cleanup
+        required: true
+      model:
+        description: Model pointer to maintain
+        type: choice
+        options:
+          - gfs
+          - hrrr
+          - icon-armenia
+        default: gfs
+        required: true
+      build-id:
+        description: Retained build ID for rollback
+        type: string
+        default: ''
+      confirm:
+        description: Type publishers-paused after disabling or pausing every scheduled publisher
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: forecast-${{ inputs.model }}
+  cancel-in-progress: false
+jobs:
+  maintain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ACTION: ${{ inputs.action }}
+      MODEL: ${{ inputs.model }}
+      BUILD_ID: ${{ inputs['build-id'] }}
+      CONFIRM: ${{ inputs.confirm }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate maintenance inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${ACTION}" in
+            rollback|cleanup) ;;
+            *) echo 'unsupported maintenance action' >&2; exit 1 ;;
+          esac
+          case "${MODEL}" in
+            gfs|hrrr|icon-armenia) ;;
+            *) echo 'unsupported model' >&2; exit 1 ;;
+          esac
+          if [ "${CONFIRM}" != 'publishers-paused' ]; then
+            echo 'confirm must equal publishers-paused' >&2
+            exit 1
+          fi
+          if [ "${ACTION}" = 'rollback' ] && ! [[ "${BUILD_ID}" =~ ^[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}$ ]]; then
+            echo 'invalid rollback build id' >&2
+            exit 1
+          fi
+          if [ "${ACTION}" = 'cleanup' ] && [ -n "${BUILD_ID}" ]; then
+            echo 'cleanup does not accept a build id' >&2
+            exit 1
+          fi
+      - name: Rollback pointer
+        if: ${{ inputs.action == 'rollback' }}
+        run: pnpm run rollback --model "${MODEL}" --build-id "${BUILD_ID}" --publishers-paused
+      - name: Cleanup unreferenced builds
+        if: ${{ inputs.action == 'cleanup' }}
+        run: pnpm run cleanup --model "${MODEL}" --publishers-paused

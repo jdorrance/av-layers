@@ -1,0 +1,39 @@
+{
+  "model": "gfs",
+  "buildId": "20261030T000000Z-00000000-0000-4000-8000-000000000000",
+  "frames": [
+    {
+      "id": "f003",
+      "layers": {
+        "usable-lift-msl": {
+          "value": 310,
+          "status": "valid",
+          "support": 4,
+          "interpolated": true
+        },
+        "usable-lift-agl": {
+          "value": 0,
+          "status": "no-usable-lift",
+          "support": 0,
+          "interpolated": false
+        },
+        "precip-rate": {
+          "value": null,
+          "status": "outside-domain",
+          "support": 0,
+          "interpolated": false
+        }
+      }
+    }
+  ],
+  "coverage": {
+    "id": "soaring-land-v1"
+  },
+  "method": {
+    "id": "dry-lenschow-pbl-1p2-v1"
+  },
+  "source": {
+    "model": "gfs"
+  },
+  "expiresAt": "2026-11-06T00:00:01.000Z"
+}

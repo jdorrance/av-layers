@@ -1,0 +1,6251 @@
+{
+  "model": "icon-eu",
+  "referenceTime": "2026-10-30T00:00:00Z",
+  "levels": [
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74
+  ],
+  "forecastHours": [
+    3,
+    6
+  ],
+  "intervalHours": 3,
+  "bbox": {
+    "west": 43.25,
+    "south": 38.5,
+    "east": 46.75,
+    "north": 41.5
+  },
+  "grid": {
+    "type": "icon-native-triangular",
+    "uuid": "abcdef0123456789abcdef0123456789",
+    "number": 78,
+    "pointCount": 1000
+  },
+  "cells": [
+    {
+      "index": 100,
+      "id": "icon-eu-78-100",
+      "latitude": 40,
+      "longitude": 44.5,
+      "terrainM": 1000
+    },
+    {
+      "index": 101,
+      "id": "icon-eu-78-101",
+      "latitude": 39.5,
+      "longitude": 45,
+      "terrainM": 1200
+    },
+    {
+      "index": 102,
+      "id": "icon-eu-78-102",
+      "latitude": 40.5,
+      "longitude": 45.5,
+      "terrainM": 900
+    }
+  ],
+  "records": {
+    "CLAT:0:None": {
+      "field": "CLAT",
+      "hour": 0,
+      "level": null,
+      "metadata": {
+        "shortName": "CLAT",
+        "units": "degrees_north",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0
+      },
+      "values": [
+        40,
+        39.5,
+        40.5
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/CLAT/0/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "CLON:0:None": {
+      "field": "CLON",
+      "hour": 0,
+      "level": null,
+      "metadata": {
+        "shortName": "CLON",
+        "units": "degrees_east",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0
+      },
+      "values": [
+        44.5,
+        45,
+        45.5
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/CLON/0/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HSURF:0:None": {
+      "field": "HSURF",
+      "hour": 0,
+      "level": null,
+      "metadata": {
+        "shortName": "HSURF",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0
+      },
+      "values": [
+        1000,
+        1200,
+        900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HSURF/0/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:45": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 45,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 45
+      },
+      "values": [
+        16000,
+        16200,
+        15900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/45",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:46": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 46,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 46
+      },
+      "values": [
+        15500,
+        15700,
+        15400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/46",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:47": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 47,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 47
+      },
+      "values": [
+        15000,
+        15200,
+        14900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/47",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:48": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 48,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 48
+      },
+      "values": [
+        14500,
+        14700,
+        14400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/48",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:49": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 49,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 49
+      },
+      "values": [
+        14000,
+        14200,
+        13900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/49",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:50": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 50,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 50
+      },
+      "values": [
+        13500,
+        13700,
+        13400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/50",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:51": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 51,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 51
+      },
+      "values": [
+        13000,
+        13200,
+        12900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/51",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:52": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 52,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 52
+      },
+      "values": [
+        12500,
+        12700,
+        12400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/52",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:53": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 53,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 53
+      },
+      "values": [
+        12000,
+        12200,
+        11900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/53",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:54": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 54,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 54
+      },
+      "values": [
+        11500,
+        11700,
+        11400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/54",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:55": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 55,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 55
+      },
+      "values": [
+        11000,
+        11200,
+        10900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/55",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:56": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 56,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 56
+      },
+      "values": [
+        10500,
+        10700,
+        10400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/56",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:57": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 57,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 57
+      },
+      "values": [
+        10000,
+        10200,
+        9900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/57",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:58": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 58,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 58
+      },
+      "values": [
+        9500,
+        9700,
+        9400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/58",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:59": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 59,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 59
+      },
+      "values": [
+        9000,
+        9200,
+        8900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/59",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:60": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 60,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 60
+      },
+      "values": [
+        8500,
+        8700,
+        8400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/60",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:61": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 61,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 61
+      },
+      "values": [
+        8000,
+        8200,
+        7900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/61",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:62": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 62,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 62
+      },
+      "values": [
+        7500,
+        7700,
+        7400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/62",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:63": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 63,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 63
+      },
+      "values": [
+        7000,
+        7200,
+        6900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/63",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:64": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 64,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 64
+      },
+      "values": [
+        6500,
+        6700,
+        6400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/64",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:65": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 65,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 65
+      },
+      "values": [
+        6000,
+        6200,
+        5900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/65",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:66": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 66,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 66
+      },
+      "values": [
+        5500,
+        5700,
+        5400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/66",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:67": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 67,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 67
+      },
+      "values": [
+        5000,
+        5200,
+        4900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/67",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:68": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 68,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 68
+      },
+      "values": [
+        4500,
+        4700,
+        4400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/68",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:69": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 69,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 69
+      },
+      "values": [
+        4000,
+        4200,
+        3900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/69",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:70": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 70,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 70
+      },
+      "values": [
+        3500,
+        3700,
+        3400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/70",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:71": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 71,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 71
+      },
+      "values": [
+        3000,
+        3200,
+        2900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/71",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:72": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 72,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 72
+      },
+      "values": [
+        2500,
+        2700,
+        2400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/72",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:73": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 73,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 73
+      },
+      "values": [
+        2000,
+        2200,
+        1900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/73",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:74": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 74,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 74
+      },
+      "values": [
+        1500,
+        1700,
+        1400
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/74",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "HHL:0:75": {
+      "field": "HHL",
+      "hour": 0,
+      "level": 75,
+      "metadata": {
+        "shortName": "HHL",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 0,
+        "endHour": 0,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 0,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 75
+      },
+      "values": [
+        1000,
+        1200,
+        900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/HHL/0/75",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T_2M:3:None": {
+      "field": "T_2M",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "2t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        293.15,
+        293.15,
+        293.15
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T_2M/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "TD_2M:3:None": {
+      "field": "TD_2M",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "2d",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        283.15,
+        283.15,
+        283.15
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/TD_2M/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "PS:3:None": {
+      "field": "PS",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "sp",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        90000,
+        90000,
+        90000
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/PS/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "MH:3:None": {
+      "field": "MH",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "mld",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        1200,
+        1200,
+        1200
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/MH/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "ASHFL_S:3:None": {
+      "field": "ASHFL_S",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "avg_ishf",
+        "units": "W m**-2",
+        "stepType": "avg",
+        "startHour": 0,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        300,
+        300,
+        300
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/ASHFL_S/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "ALHFL_S:3:None": {
+      "field": "ALHFL_S",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "avg_slhtf",
+        "units": "W m**-2",
+        "stepType": "avg",
+        "startHour": 0,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        200,
+        200,
+        200
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/ALHFL_S/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "TOT_PREC:3:None": {
+      "field": "TOT_PREC",
+      "hour": 3,
+      "level": null,
+      "metadata": {
+        "shortName": "tp",
+        "units": "kg m**-2",
+        "stepType": "accum",
+        "startHour": 0,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300
+      },
+      "values": [
+        1.5,
+        1.5,
+        1.5
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/TOT_PREC/3/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:45": {
+      "field": "P",
+      "hour": 3,
+      "level": 45,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 45
+      },
+      "values": [
+        15922,
+        15822,
+        15972
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/45",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:45": {
+      "field": "T",
+      "hour": 3,
+      "level": 45,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 45
+      },
+      "values": [
+        192.27499999999998,
+        192.27499999999998,
+        192.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/45",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:46": {
+      "field": "P",
+      "hour": 3,
+      "level": 46,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 46
+      },
+      "values": [
+        16943,
+        16843,
+        16993
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/46",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:46": {
+      "field": "T",
+      "hour": 3,
+      "level": 46,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 46
+      },
+      "values": [
+        195.52499999999998,
+        195.52499999999998,
+        195.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/46",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:47": {
+      "field": "P",
+      "hour": 3,
+      "level": 47,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 47
+      },
+      "values": [
+        18029,
+        17929,
+        18079
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/47",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:47": {
+      "field": "T",
+      "hour": 3,
+      "level": 47,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 47
+      },
+      "values": [
+        198.77499999999998,
+        198.77499999999998,
+        198.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/47",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:48": {
+      "field": "P",
+      "hour": 3,
+      "level": 48,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 48
+      },
+      "values": [
+        19185,
+        19085,
+        19235
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/48",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:48": {
+      "field": "T",
+      "hour": 3,
+      "level": 48,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 48
+      },
+      "values": [
+        202.02499999999998,
+        202.02499999999998,
+        202.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/48",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:49": {
+      "field": "P",
+      "hour": 3,
+      "level": 49,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 49
+      },
+      "values": [
+        20416,
+        20316,
+        20466
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/49",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:49": {
+      "field": "T",
+      "hour": 3,
+      "level": 49,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 49
+      },
+      "values": [
+        205.27499999999998,
+        205.27499999999998,
+        205.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/49",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:50": {
+      "field": "P",
+      "hour": 3,
+      "level": 50,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 50
+      },
+      "values": [
+        21727,
+        21627,
+        21777
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/50",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:50": {
+      "field": "T",
+      "hour": 3,
+      "level": 50,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 50
+      },
+      "values": [
+        208.52499999999998,
+        208.52499999999998,
+        208.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/50",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:51": {
+      "field": "P",
+      "hour": 3,
+      "level": 51,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 51
+      },
+      "values": [
+        23121,
+        23021,
+        23171
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/51",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:51": {
+      "field": "T",
+      "hour": 3,
+      "level": 51,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 51
+      },
+      "values": [
+        211.77499999999998,
+        211.77499999999998,
+        211.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/51",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:52": {
+      "field": "P",
+      "hour": 3,
+      "level": 52,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 52
+      },
+      "values": [
+        24606,
+        24506,
+        24656
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/52",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:52": {
+      "field": "T",
+      "hour": 3,
+      "level": 52,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 52
+      },
+      "values": [
+        215.02499999999998,
+        215.02499999999998,
+        215.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/52",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:53": {
+      "field": "P",
+      "hour": 3,
+      "level": 53,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 53
+      },
+      "values": [
+        26187,
+        26087,
+        26237
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/53",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:53": {
+      "field": "T",
+      "hour": 3,
+      "level": 53,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 53
+      },
+      "values": [
+        218.27499999999998,
+        218.27499999999998,
+        218.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/53",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:54": {
+      "field": "P",
+      "hour": 3,
+      "level": 54,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 54
+      },
+      "values": [
+        27869,
+        27769,
+        27919
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/54",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:54": {
+      "field": "T",
+      "hour": 3,
+      "level": 54,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 54
+      },
+      "values": [
+        221.52499999999998,
+        221.52499999999998,
+        221.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/54",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:55": {
+      "field": "P",
+      "hour": 3,
+      "level": 55,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 55
+      },
+      "values": [
+        29660,
+        29560,
+        29710
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/55",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:55": {
+      "field": "T",
+      "hour": 3,
+      "level": 55,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 55
+      },
+      "values": [
+        224.77499999999998,
+        224.77499999999998,
+        224.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/55",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:56": {
+      "field": "P",
+      "hour": 3,
+      "level": 56,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 56
+      },
+      "values": [
+        31566,
+        31466,
+        31616
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/56",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:56": {
+      "field": "T",
+      "hour": 3,
+      "level": 56,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 56
+      },
+      "values": [
+        228.02499999999998,
+        228.02499999999998,
+        228.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/56",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:57": {
+      "field": "P",
+      "hour": 3,
+      "level": 57,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 57
+      },
+      "values": [
+        33596,
+        33496,
+        33646
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/57",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:57": {
+      "field": "T",
+      "hour": 3,
+      "level": 57,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 57
+      },
+      "values": [
+        231.27499999999998,
+        231.27499999999998,
+        231.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/57",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:58": {
+      "field": "P",
+      "hour": 3,
+      "level": 58,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 58
+      },
+      "values": [
+        35756,
+        35656,
+        35806
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/58",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:58": {
+      "field": "T",
+      "hour": 3,
+      "level": 58,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 58
+      },
+      "values": [
+        234.52499999999998,
+        234.52499999999998,
+        234.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/58",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:59": {
+      "field": "P",
+      "hour": 3,
+      "level": 59,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 59
+      },
+      "values": [
+        38056,
+        37956,
+        38106
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/59",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:59": {
+      "field": "T",
+      "hour": 3,
+      "level": 59,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 59
+      },
+      "values": [
+        237.77499999999998,
+        237.77499999999998,
+        237.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/59",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:60": {
+      "field": "P",
+      "hour": 3,
+      "level": 60,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 60
+      },
+      "values": [
+        40504,
+        40404,
+        40554
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/60",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:60": {
+      "field": "T",
+      "hour": 3,
+      "level": 60,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 60
+      },
+      "values": [
+        241.02499999999998,
+        241.02499999999998,
+        241.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/60",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:61": {
+      "field": "P",
+      "hour": 3,
+      "level": 61,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 61
+      },
+      "values": [
+        43109,
+        43009,
+        43159
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/61",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:61": {
+      "field": "T",
+      "hour": 3,
+      "level": 61,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 61
+      },
+      "values": [
+        244.27499999999998,
+        244.27499999999998,
+        244.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/61",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:62": {
+      "field": "P",
+      "hour": 3,
+      "level": 62,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 62
+      },
+      "values": [
+        45883,
+        45783,
+        45933
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/62",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:62": {
+      "field": "T",
+      "hour": 3,
+      "level": 62,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 62
+      },
+      "values": [
+        247.52499999999998,
+        247.52499999999998,
+        247.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/62",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:63": {
+      "field": "P",
+      "hour": 3,
+      "level": 63,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 63
+      },
+      "values": [
+        48836,
+        48736,
+        48886
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/63",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:63": {
+      "field": "T",
+      "hour": 3,
+      "level": 63,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 63
+      },
+      "values": [
+        250.77499999999998,
+        250.77499999999998,
+        250.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/63",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:64": {
+      "field": "P",
+      "hour": 3,
+      "level": 64,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 64
+      },
+      "values": [
+        51979,
+        51879,
+        52029
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/64",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:64": {
+      "field": "T",
+      "hour": 3,
+      "level": 64,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 64
+      },
+      "values": [
+        254.02499999999998,
+        254.02499999999998,
+        254.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/64",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:65": {
+      "field": "P",
+      "hour": 3,
+      "level": 65,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 65
+      },
+      "values": [
+        55325,
+        55225,
+        55375
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/65",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:65": {
+      "field": "T",
+      "hour": 3,
+      "level": 65,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 65
+      },
+      "values": [
+        257.275,
+        257.275,
+        257.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/65",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:66": {
+      "field": "P",
+      "hour": 3,
+      "level": 66,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 66
+      },
+      "values": [
+        58887,
+        58787,
+        58937
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/66",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:66": {
+      "field": "T",
+      "hour": 3,
+      "level": 66,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 66
+      },
+      "values": [
+        260.525,
+        260.525,
+        260.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/66",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:67": {
+      "field": "P",
+      "hour": 3,
+      "level": 67,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 67
+      },
+      "values": [
+        62678,
+        62578,
+        62728
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/67",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:67": {
+      "field": "T",
+      "hour": 3,
+      "level": 67,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 67
+      },
+      "values": [
+        263.775,
+        263.775,
+        263.775
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/67",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:68": {
+      "field": "P",
+      "hour": 3,
+      "level": 68,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 68
+      },
+      "values": [
+        66714,
+        66614,
+        66764
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/68",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:68": {
+      "field": "T",
+      "hour": 3,
+      "level": 68,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 68
+      },
+      "values": [
+        267.025,
+        267.025,
+        267.025
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/68",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:69": {
+      "field": "P",
+      "hour": 3,
+      "level": 69,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 69
+      },
+      "values": [
+        71011,
+        70911,
+        71061
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/69",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:69": {
+      "field": "T",
+      "hour": 3,
+      "level": 69,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 69
+      },
+      "values": [
+        270.275,
+        270.275,
+        270.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/69",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:70": {
+      "field": "P",
+      "hour": 3,
+      "level": 70,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 70
+      },
+      "values": [
+        75584,
+        75484,
+        75634
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/70",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:70": {
+      "field": "T",
+      "hour": 3,
+      "level": 70,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 70
+      },
+      "values": [
+        273.525,
+        273.525,
+        273.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/70",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:71": {
+      "field": "P",
+      "hour": 3,
+      "level": 71,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 71
+      },
+      "values": [
+        80452,
+        80352,
+        80502
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/71",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:71": {
+      "field": "T",
+      "hour": 3,
+      "level": 71,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 71
+      },
+      "values": [
+        276.775,
+        276.775,
+        276.775
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/71",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:72": {
+      "field": "P",
+      "hour": 3,
+      "level": 72,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 72
+      },
+      "values": [
+        85635,
+        85535,
+        85685
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/72",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:72": {
+      "field": "T",
+      "hour": 3,
+      "level": 72,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 72
+      },
+      "values": [
+        280.025,
+        280.025,
+        280.025
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/72",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:73": {
+      "field": "P",
+      "hour": 3,
+      "level": 73,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 73
+      },
+      "values": [
+        91151,
+        91051,
+        91201
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/73",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:73": {
+      "field": "T",
+      "hour": 3,
+      "level": 73,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 73
+      },
+      "values": [
+        283.275,
+        283.275,
+        283.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/73",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:3:74": {
+      "field": "P",
+      "hour": 3,
+      "level": 74,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 74
+      },
+      "values": [
+        97023,
+        96923,
+        97073
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/3/74",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:3:74": {
+      "field": "T",
+      "hour": 3,
+      "level": 74,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 3,
+        "endHour": 3,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 300,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 74
+      },
+      "values": [
+        286.525,
+        286.525,
+        286.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/3/74",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T_2M:6:None": {
+      "field": "T_2M",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "2t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        294.15,
+        294.15,
+        294.15
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T_2M/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "TD_2M:6:None": {
+      "field": "TD_2M",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "2d",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        284.15,
+        284.15,
+        284.15
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/TD_2M/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "PS:6:None": {
+      "field": "PS",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "sp",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        89900,
+        89900,
+        89900
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/PS/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "MH:6:None": {
+      "field": "MH",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "mld",
+        "units": "m",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        1300,
+        1300,
+        1300
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/MH/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "ASHFL_S:6:None": {
+      "field": "ASHFL_S",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "avg_ishf",
+        "units": "W m**-2",
+        "stepType": "avg",
+        "startHour": 0,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        200,
+        200,
+        200
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/ASHFL_S/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "ALHFL_S:6:None": {
+      "field": "ALHFL_S",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "avg_slhtf",
+        "units": "W m**-2",
+        "stepType": "avg",
+        "startHour": 0,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        100,
+        100,
+        100
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/ALHFL_S/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "TOT_PREC:6:None": {
+      "field": "TOT_PREC",
+      "hour": 6,
+      "level": null,
+      "metadata": {
+        "shortName": "tp",
+        "units": "kg m**-2",
+        "stepType": "accum",
+        "startHour": 0,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600
+      },
+      "values": [
+        4,
+        4,
+        4
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/TOT_PREC/6/surface",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:45": {
+      "field": "P",
+      "hour": 6,
+      "level": 45,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 45
+      },
+      "values": [
+        15922,
+        15822,
+        15972
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/45",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:45": {
+      "field": "T",
+      "hour": 6,
+      "level": 45,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 45
+      },
+      "values": [
+        193.27499999999998,
+        193.27499999999998,
+        193.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/45",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:46": {
+      "field": "P",
+      "hour": 6,
+      "level": 46,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 46
+      },
+      "values": [
+        16943,
+        16843,
+        16993
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/46",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:46": {
+      "field": "T",
+      "hour": 6,
+      "level": 46,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 46
+      },
+      "values": [
+        196.52499999999998,
+        196.52499999999998,
+        196.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/46",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:47": {
+      "field": "P",
+      "hour": 6,
+      "level": 47,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 47
+      },
+      "values": [
+        18029,
+        17929,
+        18079
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/47",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:47": {
+      "field": "T",
+      "hour": 6,
+      "level": 47,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 47
+      },
+      "values": [
+        199.77499999999998,
+        199.77499999999998,
+        199.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/47",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:48": {
+      "field": "P",
+      "hour": 6,
+      "level": 48,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 48
+      },
+      "values": [
+        19185,
+        19085,
+        19235
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/48",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:48": {
+      "field": "T",
+      "hour": 6,
+      "level": 48,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 48
+      },
+      "values": [
+        203.02499999999998,
+        203.02499999999998,
+        203.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/48",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:49": {
+      "field": "P",
+      "hour": 6,
+      "level": 49,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 49
+      },
+      "values": [
+        20416,
+        20316,
+        20466
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/49",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:49": {
+      "field": "T",
+      "hour": 6,
+      "level": 49,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 49
+      },
+      "values": [
+        206.27499999999998,
+        206.27499999999998,
+        206.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/49",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:50": {
+      "field": "P",
+      "hour": 6,
+      "level": 50,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 50
+      },
+      "values": [
+        21727,
+        21627,
+        21777
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/50",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:50": {
+      "field": "T",
+      "hour": 6,
+      "level": 50,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 50
+      },
+      "values": [
+        209.52499999999998,
+        209.52499999999998,
+        209.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/50",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:51": {
+      "field": "P",
+      "hour": 6,
+      "level": 51,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 51
+      },
+      "values": [
+        23121,
+        23021,
+        23171
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/51",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:51": {
+      "field": "T",
+      "hour": 6,
+      "level": 51,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 51
+      },
+      "values": [
+        212.77499999999998,
+        212.77499999999998,
+        212.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/51",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:52": {
+      "field": "P",
+      "hour": 6,
+      "level": 52,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 52
+      },
+      "values": [
+        24606,
+        24506,
+        24656
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/52",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:52": {
+      "field": "T",
+      "hour": 6,
+      "level": 52,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 52
+      },
+      "values": [
+        216.02499999999998,
+        216.02499999999998,
+        216.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/52",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:53": {
+      "field": "P",
+      "hour": 6,
+      "level": 53,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 53
+      },
+      "values": [
+        26187,
+        26087,
+        26237
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/53",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:53": {
+      "field": "T",
+      "hour": 6,
+      "level": 53,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 53
+      },
+      "values": [
+        219.27499999999998,
+        219.27499999999998,
+        219.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/53",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:54": {
+      "field": "P",
+      "hour": 6,
+      "level": 54,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 54
+      },
+      "values": [
+        27869,
+        27769,
+        27919
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/54",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:54": {
+      "field": "T",
+      "hour": 6,
+      "level": 54,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 54
+      },
+      "values": [
+        222.52499999999998,
+        222.52499999999998,
+        222.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/54",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:55": {
+      "field": "P",
+      "hour": 6,
+      "level": 55,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 55
+      },
+      "values": [
+        29660,
+        29560,
+        29710
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/55",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:55": {
+      "field": "T",
+      "hour": 6,
+      "level": 55,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 55
+      },
+      "values": [
+        225.77499999999998,
+        225.77499999999998,
+        225.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/55",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:56": {
+      "field": "P",
+      "hour": 6,
+      "level": 56,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 56
+      },
+      "values": [
+        31566,
+        31466,
+        31616
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/56",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:56": {
+      "field": "T",
+      "hour": 6,
+      "level": 56,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 56
+      },
+      "values": [
+        229.02499999999998,
+        229.02499999999998,
+        229.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/56",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:57": {
+      "field": "P",
+      "hour": 6,
+      "level": 57,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 57
+      },
+      "values": [
+        33596,
+        33496,
+        33646
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/57",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:57": {
+      "field": "T",
+      "hour": 6,
+      "level": 57,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 57
+      },
+      "values": [
+        232.27499999999998,
+        232.27499999999998,
+        232.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/57",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:58": {
+      "field": "P",
+      "hour": 6,
+      "level": 58,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 58
+      },
+      "values": [
+        35756,
+        35656,
+        35806
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/58",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:58": {
+      "field": "T",
+      "hour": 6,
+      "level": 58,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 58
+      },
+      "values": [
+        235.52499999999998,
+        235.52499999999998,
+        235.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/58",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:59": {
+      "field": "P",
+      "hour": 6,
+      "level": 59,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 59
+      },
+      "values": [
+        38056,
+        37956,
+        38106
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/59",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:59": {
+      "field": "T",
+      "hour": 6,
+      "level": 59,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 59
+      },
+      "values": [
+        238.77499999999998,
+        238.77499999999998,
+        238.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/59",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:60": {
+      "field": "P",
+      "hour": 6,
+      "level": 60,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 60
+      },
+      "values": [
+        40504,
+        40404,
+        40554
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/60",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:60": {
+      "field": "T",
+      "hour": 6,
+      "level": 60,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 60
+      },
+      "values": [
+        242.02499999999998,
+        242.02499999999998,
+        242.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/60",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:61": {
+      "field": "P",
+      "hour": 6,
+      "level": 61,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 61
+      },
+      "values": [
+        43109,
+        43009,
+        43159
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/61",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:61": {
+      "field": "T",
+      "hour": 6,
+      "level": 61,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 61
+      },
+      "values": [
+        245.27499999999998,
+        245.27499999999998,
+        245.27499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/61",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:62": {
+      "field": "P",
+      "hour": 6,
+      "level": 62,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 62
+      },
+      "values": [
+        45883,
+        45783,
+        45933
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/62",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:62": {
+      "field": "T",
+      "hour": 6,
+      "level": 62,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 62
+      },
+      "values": [
+        248.52499999999998,
+        248.52499999999998,
+        248.52499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/62",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:63": {
+      "field": "P",
+      "hour": 6,
+      "level": 63,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 63
+      },
+      "values": [
+        48836,
+        48736,
+        48886
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/63",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:63": {
+      "field": "T",
+      "hour": 6,
+      "level": 63,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 63
+      },
+      "values": [
+        251.77499999999998,
+        251.77499999999998,
+        251.77499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/63",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:64": {
+      "field": "P",
+      "hour": 6,
+      "level": 64,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 64
+      },
+      "values": [
+        51979,
+        51879,
+        52029
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/64",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:64": {
+      "field": "T",
+      "hour": 6,
+      "level": 64,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 64
+      },
+      "values": [
+        255.02499999999998,
+        255.02499999999998,
+        255.02499999999998
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/64",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:65": {
+      "field": "P",
+      "hour": 6,
+      "level": 65,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 65
+      },
+      "values": [
+        55325,
+        55225,
+        55375
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/65",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:65": {
+      "field": "T",
+      "hour": 6,
+      "level": 65,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 65
+      },
+      "values": [
+        258.275,
+        258.275,
+        258.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/65",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:66": {
+      "field": "P",
+      "hour": 6,
+      "level": 66,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 66
+      },
+      "values": [
+        58887,
+        58787,
+        58937
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/66",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:66": {
+      "field": "T",
+      "hour": 6,
+      "level": 66,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 66
+      },
+      "values": [
+        261.525,
+        261.525,
+        261.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/66",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:67": {
+      "field": "P",
+      "hour": 6,
+      "level": 67,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 67
+      },
+      "values": [
+        62678,
+        62578,
+        62728
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/67",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:67": {
+      "field": "T",
+      "hour": 6,
+      "level": 67,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 67
+      },
+      "values": [
+        264.775,
+        264.775,
+        264.775
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/67",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:68": {
+      "field": "P",
+      "hour": 6,
+      "level": 68,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 68
+      },
+      "values": [
+        66714,
+        66614,
+        66764
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/68",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:68": {
+      "field": "T",
+      "hour": 6,
+      "level": 68,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 68
+      },
+      "values": [
+        268.025,
+        268.025,
+        268.025
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/68",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:69": {
+      "field": "P",
+      "hour": 6,
+      "level": 69,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 69
+      },
+      "values": [
+        71011,
+        70911,
+        71061
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/69",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:69": {
+      "field": "T",
+      "hour": 6,
+      "level": 69,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 69
+      },
+      "values": [
+        271.275,
+        271.275,
+        271.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/69",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:70": {
+      "field": "P",
+      "hour": 6,
+      "level": 70,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 70
+      },
+      "values": [
+        75584,
+        75484,
+        75634
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/70",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:70": {
+      "field": "T",
+      "hour": 6,
+      "level": 70,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 70
+      },
+      "values": [
+        274.525,
+        274.525,
+        274.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/70",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:71": {
+      "field": "P",
+      "hour": 6,
+      "level": 71,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 71
+      },
+      "values": [
+        80452,
+        80352,
+        80502
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/71",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:71": {
+      "field": "T",
+      "hour": 6,
+      "level": 71,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 71
+      },
+      "values": [
+        277.775,
+        277.775,
+        277.775
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/71",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:72": {
+      "field": "P",
+      "hour": 6,
+      "level": 72,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 72
+      },
+      "values": [
+        85635,
+        85535,
+        85685
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/72",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:72": {
+      "field": "T",
+      "hour": 6,
+      "level": 72,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 72
+      },
+      "values": [
+        281.025,
+        281.025,
+        281.025
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/72",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:73": {
+      "field": "P",
+      "hour": 6,
+      "level": 73,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 73
+      },
+      "values": [
+        91151,
+        91051,
+        91201
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/73",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:73": {
+      "field": "T",
+      "hour": 6,
+      "level": 73,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 73
+      },
+      "values": [
+        284.275,
+        284.275,
+        284.275
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/73",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "P:6:74": {
+      "field": "P",
+      "hour": 6,
+      "level": 74,
+      "metadata": {
+        "shortName": "pres",
+        "units": "Pa",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 74
+      },
+      "values": [
+        97023,
+        96923,
+        97073
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/P/6/74",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    },
+    "T:6:74": {
+      "field": "T",
+      "hour": 6,
+      "level": 74,
+      "metadata": {
+        "shortName": "t",
+        "units": "K",
+        "stepType": "instant",
+        "startHour": 6,
+        "endHour": 6,
+        "packingError": 0.01,
+        "gridType": "unstructured_grid",
+        "numberOfDataPoints": 1000,
+        "numberOfGridUsed": 78,
+        "uuidOfHGrid": "abcdef0123456789abcdef0123456789",
+        "dataDate": 20261030,
+        "dataTime": 0,
+        "validityDate": 20261030,
+        "validityTime": 600,
+        "typeOfFirstFixedSurface": 150,
+        "scaleFactorOfFirstFixedSurface": 0,
+        "scaledValueOfFirstFixedSurface": 74
+      },
+      "values": [
+        287.525,
+        287.525,
+        287.525
+      ],
+      "source": {
+        "sourceKind": "fixture",
+        "url": "fixture://icon/T/6/74",
+        "sha256": null,
+        "bytes": null,
+        "range": null,
+        "lastModified": null
+      }
+    }
+  },
+  "provenance": {
+    "provider": "synthetic fixture",
+    "accessProduct": "fixture://icon/",
+    "attribution": "Synthetic test data",
+    "sourceSynthetic": true,
+    "publicationReady": false,
+    "capturedAt": "2026-10-30T01:30:00Z"
+  }
+}

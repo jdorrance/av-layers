@@ -1,0 +1,106 @@
+THIRD-PARTY NOTICES
+
+This file records provenance and third-party license obligations for material
+reused by windy-av-layer. It is not a grant of rights for private upstream
+repositories. No LICENSE file was found in the windgrams or skyjuice source
+checkouts; their code is not distributed under an asserted MIT or other public
+license here. Selected helpers are adapted only because the project plan
+explicitly directs reuse, with revision and attribution recorded below.
+
+1. Provenance and rights status
+
+windgrams
+  Repository revision: 32fdd75db7a4a1a302ae901b969b0f6625712368
+  Reused scope: selected soaring parcel-depth/convective-lift and meteorology
+  helpers, NOAA GFS acquisition patterns, publication/R2 patterns.
+  License status: no LICENSE file identified in the source checkout. No public
+  license grant is asserted. Rights and any applicable notices require
+  confirmation before distribution.
+
+skyjuice
+  Repository revision: 043e5bf18dc9b60f4586622d1b8d631af88d9235
+  Reused scope: GFS thermal-input proof/admission patterns, PDT 4.8
+  statistical-interval and duplicate-record guards, planning references.
+  License status: no LICENSE file identified in the source checkout. No public
+  license grant is asserted. Rights and any applicable notices require
+  confirmation before distribution.
+
+@azohra/meteo.grib and @azohra/meteo.j2k
+  Repository revision: 0296c1fb54aa9c8415e7962d7a4580b496e7ebf8
+  Packages: @azohra/meteo.grib 0.1.4, @azohra/meteo.j2k 0.2.0
+  License: MIT, Copyright (c) 2026 Justin Watts
+  Full MIT text:
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+2. PMTiles tooling and reference implementation
+
+pmtiles 4.5.0 (npm) and go-pmtiles v1.31.2 are BSD-3-Clause.
+The Cloudflare R2Source/reader adaptation in apps/api is derived from
+https://github.com/protomaps/PMTiles/blob/main/serverless/cloudflare/src/index.ts
+
+Pinned go-pmtiles v1.31.2 release assets and SHA-256:
+  go-pmtiles-1.31.2_Darwin_arm64.zip
+    40528f7f616fcbf91207cd48c8fc023d213f6d86c0cbf1f748732803d1880f3d
+  go-pmtiles-1.31.2_Darwin_x86_64.zip
+    1f0dc02eee6c58312dd6c509faee1b5c32f0596568af1bf51f1b034e7a88a65b
+  go-pmtiles_1.31.2_Linux_x86_64.tar.gz
+    3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
+  go-pmtiles_1.31.2_Linux_arm64.tar.gz
+    f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1
+Release: https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/
+
+Full BSD-3-Clause notice:
+
+Copyright 2021 Protomaps LLC
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+3. Pinned dependency licenses
+
+Versions are pinned in package.json manifests. License identifiers are from the
+published packages at those versions.
+  zod 4.6.7                                MIT
+  hono 4.13.14                             MIT
+  @hono/zod-openapi 1.6.3                  MIT
+  pmtiles 4.5.0                            BSD-3-Clause
+  @aws-sdk/client-s3 3.1160.0              Apache-2.0
+  pngjs 7.0.0                              MIT
+  @cornerstonejs/codec-openjpeg 1.3.6      MIT
+  typescript 5.9.3                         Apache-2.0
+  vitest 3.2.7                             MIT
+  eslint 9.39.1                            MIT
+  typescript-eslint 8.72.1                 MIT
+  tsx 4.23.15                              MIT
+  wrangler 4.156.0                         MIT OR Apache-2.0
+  @cloudflare/workers-types 5.20261030.1   MIT OR Apache-2.0
+  @types/node 22.19.15                     MIT
+  @types/pngjs 6.0.5                       MIT
+
+4. Data and masks
+
+Natural Earth 1:50m admin-0 data is public domain. The pinned release,
+checksum and attribute mapping are recorded by packages/contracts/coverage.
+GFS, HRRR and ICON-EU source data remain subject to their providers' terms;
+this repository does not relicense source data.

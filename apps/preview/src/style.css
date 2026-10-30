@@ -1,0 +1,187 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0e1113;
+  color: #e6edf0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: minmax(320px, 390px) 1fr;
+  background: #0e1113;
+}
+
+#panel {
+  overflow-y: auto;
+  padding: 18px;
+  border-right: 1px solid #253036;
+  background: #13191c;
+}
+
+#map {
+  min-height: 100%;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.3rem;
+}
+
+h2 {
+  margin: 18px 0 8px;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8fa4ad;
+}
+
+.muted {
+  color: #8fa4ad;
+  font-size: 0.8rem;
+}
+
+.error {
+  padding: 8px 10px;
+  border: 1px solid #7e2f2f;
+  background: #2a1414;
+  color: #ffb4b4;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+.controls {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.controls label {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+select,
+input[type="range"] {
+  width: 100%;
+}
+
+select {
+  padding: 5px;
+  background: #0e1113;
+  color: #e6edf0;
+  border: 1px solid #36464d;
+  border-radius: 4px;
+}
+
+.badge {
+  margin: 12px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #1d2b31;
+  border: 1px solid #2f444d;
+  font-size: 0.75rem;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 4px 10px;
+  font-size: 0.74rem;
+  margin: 0;
+}
+
+dt {
+  color: #8fa4ad;
+}
+
+dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  min-height: 18px;
+}
+
+.swatch {
+  width: 24px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid #ffffff22;
+  flex: none;
+}
+
+#series-panel {
+  margin-top: 22px;
+  border-top: 1px solid #253036;
+}
+
+button {
+  padding: 7px 10px;
+  background: #1c6b8a;
+  color: white;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.64rem;
+  margin-top: 8px;
+}
+
+th,
+td {
+  padding: 3px 4px;
+  border-bottom: 1px solid #253036;
+  text-align: left;
+  white-space: nowrap;
+}
+
+th {
+  color: #8fa4ad;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55% 45%;
+  }
+
+  #panel {
+    grid-row: 2;
+    border-right: 0;
+    border-top: 1px solid #253036;
+  }
+
+  #map {
+    grid-row: 1;
+  }
+}

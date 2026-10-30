@@ -1,0 +1,23 @@
+{
+  "name": "@av/windy-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/plugin.min.js",
+  "scripts": {
+    "build": "rollup -c",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@windycom/plugin-devtools": "3.0.5"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "28.0.9",
+    "@rollup/plugin-node-resolve": "16.0.3",
+    "@rollup/plugin-terser": "0.4.4",
+    "rollup": "4.52.5",
+    "rollup-plugin-swc3": "0.12.1",
+    "typescript": "5.9.3",
+    "@typescript-eslint/parser": "6.21.0"
+  }
+}

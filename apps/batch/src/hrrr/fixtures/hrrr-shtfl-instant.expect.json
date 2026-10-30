@@ -1,0 +1,29 @@
+{
+  "identification": {
+    "centre": 7,
+    "subCentre": 0,
+    "tablesVersion": 2,
+    "localTablesVersion": 1,
+    "significanceOfReferenceTime": 1,
+    "year": 2026,
+    "month": 10,
+    "day": 30,
+    "hour": 6,
+    "minute": 0,
+    "second": 0,
+    "productionStatus": 0,
+    "typeOfProcessedData": 1
+  },
+  "product": {
+    "productDefinitionTemplateNumber": 0,
+    "numberOfCoordinateValues": 0,
+    "parameterCategory": 0,
+    "parameterNumber": 11,
+    "typeOfGeneratingProcess": 2,
+    "indicatorOfUnitOfTimeRange": 1,
+    "forecastTime": 1,
+    "typeOfFirstFixedSurface": 1,
+    "scaleFactorOfFirstFixedSurface": 0,
+    "scaledValueOfFirstFixedSurface": 0
+  }
+}
