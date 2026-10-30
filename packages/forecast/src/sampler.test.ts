@@ -29,6 +29,32 @@ describe('scalar sampling', () => {
     expect(planSample(g, 1, 2)?.contributors[0].column).toBe(0);
     expect(planSample(grid, 1, -0.1)).toBeNull();
   });
+  it('keeps row-major contributors and exact fractional weights', () => {
+    expect(planSample(grid, 0.25, 0.6)).toEqual({
+      contributors: [
+        { row: 0, column: 0, index: 0, weight: 0.1 },
+        { row: 0, column: 1, index: 1, weight: 0.15 },
+        { row: 1, column: 0, index: 2, weight: 0.30000000000000004 },
+        { row: 1, column: 1, index: 3, weight: 0.44999999999999996 }
+      ],
+      byteRange: { offset: 0, length: 20 }
+    });
+  });
+  it('retains repeated wrapped contributors in a one-column grid', () => {
+    const singleColumn = { ...grid, width: 1, wrapLongitude: true };
+    expect(planSample(singleColumn, 0.25, 0.5)).toEqual({
+      contributors: [
+        { row: 0, column: 0, index: 0, weight: 0.125 },
+        { row: 0, column: 0, index: 0, weight: 0.125 },
+        { row: 1, column: 0, index: 1, weight: 0.375 },
+        { row: 1, column: 0, index: 1, weight: 0.375 }
+      ],
+      byteRange: { offset: 0, length: 10 }
+    });
+    const field = { values: Float32Array.of(10, 30), flags: new Uint8Array(2) };
+    expect(sampleGrid(singleColumn, field, 0.25, 0.5, 'precip-rate')).toEqual({ value: 25, status: 0, support: 0, interpolated: true });
+    expect(planSample(singleColumn, 1, 0)?.contributors).toEqual([{ row: -0, column: 0, index: 0, weight: 1 }]);
+  });
   it('packs little-endian independent layer cells and enforces range length', () => {
     const field = { values: Float32Array.of(1, -2), flags: Uint8Array.of(4, 8) }, bytes = packCells(field);
     expect([...bytes]).toEqual([0, 0, 128, 63, 4, 0, 0, 0, 192, 8]);

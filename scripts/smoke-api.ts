@@ -31,13 +31,23 @@ export function isSampleStatus(value: unknown): value is SampleStatus {
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith('--')) throw new Error(`--${name} requires a value`);
+  return value;
 }
 
 async function get(url: string, accept: string): Promise<Response> {
   const response = await fetch(url, { headers: { accept }, signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`${response.status} ${url}: ${(await response.text()).slice(0, 300)}`);
   return response;
+}
+
+export function validateHealthContract(health: unknown, expectedDeploymentId?: string): void {
+  invariant(health !== null && typeof health === 'object' && 'ok' in health && health.ok === true, '/healthz did not return ok:true');
+  if (expectedDeploymentId !== undefined) {
+    invariant(expectedDeploymentId.length > 0 && 'deploymentId' in health && health.deploymentId === expectedDeploymentId, '/healthz did not return the expected Worker deployment marker');
+  }
 }
 
 export function validateSampleContract(sample: SampleContract, model: string, buildId: string, frame: string, requestedLayers: string[]): void {
@@ -65,9 +75,10 @@ async function main(): Promise<void> {
   const model = arg('model') ?? 'gfs';
   const lat = arg('lat') ?? '32.9';
   const lon = arg('lon') ?? '-117.25';
+  const expectedDeploymentId = arg('expected-deployment-id');
 
   const health = await get(`${baseUrl}/healthz`, 'application/json');
-  invariant((await health.json() as { ok?: unknown }).ok === true, '/healthz did not return ok:true');
+  validateHealthContract(await health.json(), expectedDeploymentId);
 
   const catalog = await get(`${baseUrl}/v1/catalog`, 'application/json');
   const catalogBody = await catalog.json() as { models?: Array<{ model?: string; available?: boolean }> };

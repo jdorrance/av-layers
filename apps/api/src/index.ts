@@ -42,6 +42,7 @@ type Env = {
     BUCKET: R2Bucket;
     SAMPLE_RATE_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> };
     AV_LOCAL_DEVELOPMENT?: string;
+    AV_DEPLOYMENT_ID?: string;
   };
 };
 type WaitContext = { waitUntil(promise: Promise<unknown>): void };
@@ -399,7 +400,8 @@ function registerJsonRoute(
   });
 }
 
-registerJsonRoute('/healthz', '/healthz', {}, {}, z.object({ ok: z.boolean() }), () => json({ ok: true }));
+registerJsonRoute('/healthz', '/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
+  json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
 
 registerJsonRoute(
   '/v1/catalog',

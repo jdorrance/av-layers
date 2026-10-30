@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import {
   LAYERS,
   MODEL_IDS,
@@ -50,16 +51,7 @@ export interface CoverageSummary {
   tileBits?: readonly number[];
 }
 
-export interface LatestPayload {
-  pointer: ModelPointer;
-  manifest?: Manifest;
-  templates?: Record<string, string>;
-  bounds?: readonly [number, number, number, number];
-  maxNativeZoom?: number;
-  palettes?: readonly PaletteSummary[];
-  coverage?: CoverageSummary;
-  freshness?: FreshnessSummary;
-}
+export type LatestPayload = z.infer<typeof latestSchema>;
 
 export interface FrameSampleLayer {
   value: number | null;
@@ -289,18 +281,15 @@ export class ApiClient {
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const raw = requireObject(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal), 'latest response');
-    const pointer = requireObject(raw.pointer, 'pointer') as unknown as ModelPointer;
-    if (pointer.latestBuildId === undefined) throw new InvalidApiResponseError('pointer.latestBuildId is missing');
+    const parsed = latestSchema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
+    if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
+    const raw = parsed.data;
+    const pointer = raw.pointer;
     if (pointer.model !== model) throw new InvalidApiResponseError('pointer model does not match request');
-    const manifestRaw = requireObject(raw.manifest, 'manifest') as unknown as Manifest;
+    const manifestRaw = raw.manifest;
+    if (!manifestRaw) throw new InvalidApiResponseError('expanded manifest is missing');
     if (manifestRaw.model !== model) throw new InvalidApiResponseError('manifest model does not match request');
     if (manifestRaw.buildId !== pointer.latestBuildId) throw new InvalidApiResponseError('manifest build is not the pinned pointer build');
-    if (!Array.isArray(manifestRaw.frames) || manifestRaw.frames.length === 0) throw new InvalidApiResponseError('manifest frames are missing');
-    if (!Array.isArray(manifestRaw.layers) || manifestRaw.layers.length === 0) throw new InvalidApiResponseError('manifest layers are missing');
-    if (raw.freshness !== undefined && latestSchema.safeParse(raw).success === false) {
-      throw new InvalidApiResponseError('latest response does not match contract schema');
-    }
     if (options.requireLive !== false) assertNotExpired(manifestRaw.expiresAt, this.now());
     const templateRaw = requireObject(raw.templates, 'templates');
     const templates = {} as Record<LayerId, string>;
@@ -312,8 +301,8 @@ export class ApiClient {
       throw new InvalidApiResponseError('bounds must be four numbers');
     }
     const maxNativeZoom = requireNumber(raw.maxNativeZoom ?? manifestRaw.coverage.maxZoom, 'maxNativeZoom');
-    const palettes = Array.isArray(raw.palettes) ? (raw.palettes as PaletteSummary[]) : [];
-    const coverage = requireObject(raw.coverage ?? manifestRaw.coverage, 'coverage') as unknown as CoverageSummary;
+    const palettes = raw.palettes ?? [];
+    const coverage = raw.coverage ?? manifestRaw.coverage;
     return {
       baseUrl: this.baseUrl,
       model,
@@ -324,7 +313,7 @@ export class ApiClient {
       maxNativeZoom,
       palettes,
       coverage,
-      ...(raw.freshness === undefined ? {} : { freshness: raw.freshness as FreshnessSummary }),
+      freshness: raw.freshness,
       fetchedAtMs: this.now(),
       expiresAtMs: expiryTime(manifestRaw.expiresAt)
     };

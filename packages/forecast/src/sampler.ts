@@ -13,10 +13,14 @@ export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | n
   if (grid.wrapLongitude) x = snap(((x % grid.width) + grid.width) % grid.width);
   if ((!grid.wrapLongitude && (x < 0 || x > grid.width - 1)) || y < 0 || y > grid.height - 1) return null;
   const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-  const cols = fx === 0 ? [{ column: x0 % grid.width, weight: 1 }] : [{ column: x0, weight: 1 - fx }, { column: (x0 + 1) % grid.width, weight: fx }];
-  const rows = fy === 0 ? [{ row: y0, weight: 1 }] : [{ row: y0, weight: 1 - fy }, { row: y0 + 1, weight: fy }];
-  const contributors = rows.flatMap(row => cols.map(col => ({ row: row.row, column: col.column, index: row.row * grid.width + col.column, weight: row.weight * col.weight })));
-  const indices = contributors.map(c => c.index), first = Math.min(...indices), last = Math.max(...indices);
+  const contributors: Contributor[] = [];
+  let first = Infinity, last = -Infinity;
+  // Keep row-major summation order; zero-weight neighbors never participate.
+  for (let dy = 0; dy < (fy === 0 ? 1 : 2); dy++) for (let dx = 0; dx < (fx === 0 ? 1 : 2); dx++) {
+    const row = dy === 0 ? y0 : y0 + 1, column = (dx === 0 ? x0 : x0 + 1) % grid.width, index = row * grid.width + column;
+    contributors.push({ row, column, index, weight: (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx) });
+    first = Math.min(first, index); last = Math.max(last, index);
+  }
   return { contributors, byteRange: { offset: first * CELL_BYTES, length: (last - first + 1) * CELL_BYTES } };
 }
 export function packCells(field: GridField): Uint8Array {

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { computeFreshness, type Manifest } from '@av/contracts';
-import { OVERLAY_LAYER_ID } from './api';
+import { computeFreshness, manifestSchema, type Manifest } from '@av/contracts';
+import { OVERLAY_LAYER_ID } from '@av/contracts/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -75,7 +75,7 @@ function latest() {
       buildId: manifest.buildId, manifestKey: `builds/gfs/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt
     }] },
     manifest,
-    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${layer}/{frame}/{z}/{x}/{y}.png`])),
+    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${layer}/{frame}/{z}/{x}/{y}.webp`])),
     bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [], coverage: manifest.coverage,
     freshness: computeFreshness(manifest)
   }));
@@ -95,7 +95,7 @@ beforeEach(() => {
   maps.length = 0;
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')) as Manifest;
+  manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
   vi.stubGlobal('document', doc); vi.stubGlobal('window', win);

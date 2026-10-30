@@ -33,4 +33,40 @@ describe('Pages deployment revision verification', () => {
     expect(() => deploymentMarker('main')).toThrow(/commit SHA, run ID and run attempt/);
     expect(() => deploymentMarker('a'.repeat(40))).toThrow(/commit SHA, run ID and run attempt/);
   });
+
+  it('retries a transient connection failure and reports exhausted retries', async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError('connection reset'))
+      .mockResolvedValueOnce(new Response(`<meta ${marker} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0 })).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const failing = vi.fn().mockRejectedValue(new TypeError('connection reset'));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: failing, retries: 1, delayMs: 0 })).rejects.toThrow(/Pages revision verification failed: connection reset/);
+    expect(failing).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['headers', 'body'])('aborts stalled %s and retries with a fresh deadline', async stage => {
+    let stalledSignal: AbortSignal;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => {
+      stalledSignal = init!.signal!;
+      if (stage === 'headers') {
+        return new Promise<Response>((_resolve, reject) => {
+          stalledSignal.addEventListener('abort', () => reject(stalledSignal.reason), { once: true });
+        });
+      }
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('<html>'));
+          stalledSignal.addEventListener('abort', () => controller.error(stalledSignal.reason), { once: true });
+        }
+      }));
+    }).mockImplementationOnce(async (_url, init) => {
+      expect(stalledSignal.aborted).toBe(true);
+      expect(init!.signal).not.toBe(stalledSignal);
+      expect(init!.signal!.aborted).toBe(false);
+      return new Response(`<meta ${marker} />`);
+    });
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0, timeoutMs: 20 })).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

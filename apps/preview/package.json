@@ -3,12 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/api.ts",
-    "./api": "./src/api.ts",
-    "./time": "./src/time.ts",
-    "./tiles": "./src/tiles.ts"
-  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

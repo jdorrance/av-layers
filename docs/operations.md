@@ -82,7 +82,10 @@ needed. Complete these one-time steps before the first release:
 
 The order is **Bootstrap → Forecast sample → Deploy Worker and Pages**. After
 the first release, pushes to `main` run CI and then deploy automatically, and
-the forecast workflow runs daily at `05:17 UTC` for production.
+the forecast workflow runs at `05:17` and `17:17 UTC` for production. These
+twelve-hour updates overlap the normal 24-hour forecast horizons, with room for
+the six-hour job budget. Monitor horizon exhaustion for upstream or scheduling
+delays; this cadence is not an availability guarantee.
 
 Each release or maintenance workflow checks for a newer `main` commit at start.
 The forecast workflow repeats the check after building, immediately before
@@ -93,10 +96,15 @@ validated build rather than a partially written one.
 
 ## Deploy and schedule
 
-The deployment job redeploys the Worker and runs the API smoke check, then builds
-the map with the environment's `API_BASE_URL`. It verifies the Pages project still
-uses `main` as its production branch, deploys, and checks the embedded
-commit/run/attempt marker at the canonical Pages URL. That URL comes from
+The deployment job gives the Worker a commit/run/attempt marker and requires
+`API_BASE_URL` to return that exact marker from its uncached `/healthz` response.
+This catches an API URL pointing at another environment, account, or deployment
+before the map is built or published. Local runs can omit the marker.
+
+The job then builds the map with that API URL, verifies the Pages project still
+uses `main` as its production branch, deploys, and checks the same embedded
+marker at the canonical Pages URL. Revision checks retry temporary network
+failures with a deadline covering both connection and response body. That URL comes from
 Cloudflare's project record, preserving any suffix assigned when a project name
 was already taken; the deployment summary links to the same URL. Deployment runs
 automatically on `main` and can be dispatched for either environment. The Worker

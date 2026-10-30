@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './api';
+import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './client';
 import type { Manifest, ModelPointer } from '@av/contracts';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
@@ -93,6 +93,18 @@ describe('ApiClient.latest', () => {
     const build = await client.latest('gfs');
     expect(build.freshness).toEqual(payload.freshness);
     expect(build.manifest.frames).toEqual(frames);
+  });
+
+  it.each([
+    ['missing freshness', () => ({ ...latestPayload(), freshness: undefined })],
+    ['invalid manifest without freshness', () => ({ ...latestPayload(), freshness: undefined, manifest: { ...manifest(), method: null } })],
+    ['invalid method', () => ({ ...latestPayload(), manifest: { ...manifest(), method: null } })],
+    ['invalid frame time', () => ({ ...latestPayload(), manifest: { ...manifest(), frames: [{ ...frames[0], validTime: 'not-a-time' }] } })],
+    ['incomplete pointer', () => ({ ...latestPayload(), pointer: { model: 'gfs', latestBuildId: manifest().buildId } })],
+    ['missing expanded manifest', () => ({ ...latestPayload(), manifest: undefined })]
+  ])('rejects %s at the response boundary', async (_name, payload) => {
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => jsonResponse(payload()), now: () => Date.parse(created) });
+    await expect(client.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
   it('rejects a manifest that does not match the pinned pointer build', async () => {

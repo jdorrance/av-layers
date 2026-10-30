@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { manifestSchema, type Manifest } from '@av/contracts';
+import { GFS_DISCOVERY_LAG_HOURS, GFS_FORECAST_HOURS } from '../apps/batch/src/noaa/constants';
 import { buildLocalPointer, shouldSeedAssets, validateArtifactRecords as validatePreviewArtifacts } from './sample-preview';
 import { validateArtifactRecords as validateSmokeArtifacts, validateSampleFlags } from './smoke-build';
 import { SAMPLE_STATUSES, isSampleStatus, validateSampleContract, type SampleContract } from './smoke-api';
@@ -255,14 +256,19 @@ describe('workflow structure guards', () => {
     }
     expect(runBlock('deploy.yml', 'Deployment summary')).toContain('"${PAGES_BASE_URL}"');
     expect(runBlock('deploy.yml', 'Deployment summary')).not.toContain('pages.dev');
-    expect(workflowText('deploy.yml')).toContain('EXPECTED_DEPLOYMENT_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}');
-    expect(workflowText('deploy.yml')).toContain('VITE_BUILD_REVISION: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}');
+    expect(env.DEPLOYMENT_ID).toBe('${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}');
+    expect(runBlock('deploy.yml', 'Deploy Worker')).toContain('--var "AV_DEPLOYMENT_ID:${DEPLOYMENT_ID}"');
+    expect(runBlock('deploy.yml', 'Smoke API')).toContain('--expected-deployment-id "${DEPLOYMENT_ID}"');
+    expect(names.indexOf('Smoke API')).toBeLessThan(names.indexOf('Build preview'));
+    expect(names.indexOf('Smoke API')).toBeLessThan(names.indexOf('Deploy Pages'));
+    expect(record(steps.find(step => step.name === 'Build preview')?.env).VITE_BUILD_REVISION).toBe('${{ env.DEPLOYMENT_ID }}');
+    expect(record(steps.find(step => step.name === 'Verify live Pages revision')?.env).EXPECTED_DEPLOYMENT_ID).toBe('${{ env.DEPLOYMENT_ID }}');
     expect(readFileSync(fileURLToPath(new URL('../apps/preview/index.html', import.meta.url)), 'utf8')).toContain('name="build-deployment" content="%VITE_BUILD_REVISION%"');
   });
 
   it('runs the scheduled forecast on main with environment-scoped secrets', () => {
     const forecast = workflow('forecast.yml');
-    expect(record(list(record(forecast.on).schedule)[0]).cron).toBe('17 5 * * *');
+    expect(record(list(record(forecast.on).schedule)[0]).cron).toBe('17 5,17 * * *');
     const dispatch = record(record(forecast.on).workflow_dispatch);
     expect(list(record(record(dispatch.inputs).environment).options)).toEqual(['staging', 'production']);
     expect(list(record(record(dispatch.inputs).model).options)).toEqual(['gfs']);
@@ -277,12 +283,30 @@ describe('workflow structure guards', () => {
     expect(names.indexOf('Validate publication environment mapping')).toBeLessThan(names.indexOf('Build sample'));
     expect(names).not.toContain('Record skipped publication');
     expect(names).toContain('Refuse superseded main revision before publication');
-    expect(names.indexOf('Refuse superseded main revision before publication')).toBeGreaterThan(names.indexOf('Validate sample'));
+    expect(names).not.toContain('Validate sample'); // Build and publication each validate their own boundary.
+    expect(names.indexOf('Refuse superseded main revision before publication')).toBeGreaterThan(names.indexOf('Build sample'));
     expect(names.indexOf('Refuse superseded main revision before publication')).toBeLessThan(names.indexOf('Publish immutable build and pointer'));
     expect(names).toContain('Publish immutable build and pointer');
     expect(names).toContain('Upload build receipts');
     expect(names).toContain('Upload full build artifacts on failure or explicit request');
     expect(runBlock('forecast.yml', 'Validate forecast environment and secrets')).not.toContain('${{');
+  });
+
+  it('finishes the next scheduled job before the previous normal forecast horizon ends', () => {
+    const forecast = workflow('forecast.yml');
+    const cron = String(record(list(record(forecast.on).schedule)[0]).cron);
+    const [minute, hours, day, month, weekday] = cron.split(' ');
+    expect([day, month, weekday]).toEqual(['*', '*', '*']);
+    const starts = hours!.split(',').map(hour => Number(hour) * 60 + Number(minute)).sort((a, b) => a - b);
+    expect(starts.every(Number.isFinite)).toBe(true);
+    const budget = Number(record(record(forecast.jobs)['build-publish'])['timeout-minutes']);
+    for (let i = 0; i < starts.length; i++) {
+      // Discovery admits six-hour cycles only after the configured source lag.
+      const cycle = Math.floor((starts[i]! - GFS_DISCOVERY_LAG_HOURS * 60) / 360) * 360;
+      const horizonEnd = cycle + Math.max(...GFS_FORECAST_HOURS) * 60;
+      const nextStart = starts[(i + 1) % starts.length]! + (i + 1 === starts.length ? 1440 : 0);
+      expect(nextStart + budget).toBeLessThan(horizonEnd);
+    }
   });
 
   it('serializes maintenance with forecast and requires GFS on main', () => {

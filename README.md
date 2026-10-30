@@ -56,7 +56,7 @@ The running API provides its generated reference at `/docs` and `/openapi.json`.
 Releases run in GitHub Actions. After the one-time Cloudflare and GitHub
 environment setup, run **Bootstrap Cloudflare resources**, then **Forecast
 sample**, then **Deploy Worker and Pages**. Pushes to `main` thereafter verify
-and redeploy automatically, and the forecast publishes daily. The exact
+and redeploy automatically, and forecasts publish on a regular schedule. The exact
 variables, secrets, token scopes, and order are in
 [Operations](docs/operations.md#first-deployment).
 

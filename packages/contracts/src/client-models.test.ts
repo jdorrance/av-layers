@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { populateModelOptions } from './models';
+import { populateModelOptions } from './client';
 
 afterEach(() => vi.unstubAllGlobals());
 

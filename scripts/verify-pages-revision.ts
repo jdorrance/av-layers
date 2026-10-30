@@ -6,6 +6,7 @@ export interface PagesRevisionOptions {
   fetchImpl?: typeof fetch;
   retries?: number;
   delayMs?: number;
+  timeoutMs?: number;
 }
 
 export function deploymentMarker(expectedDeploymentId: string): string {
@@ -21,14 +22,21 @@ export async function verifyPagesRevision(options: PagesRevisionOptions): Promis
   let last = '';
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    const response = await fetchImpl(options.url, { headers: { accept: 'text/html' } });
-    if (!response.ok) {
-      last = `status ${response.status}`;
-      continue;
+    try {
+      const response = await fetchImpl(options.url, {
+        headers: { accept: 'text/html' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
+      });
+      if (!response.ok) {
+        last = `status ${response.status}`;
+        await response.body?.cancel();
+        continue;
+      }
+      const html = await response.text();
+      if (html.includes(marker)) return;
+      last = 'served HTML does not contain the expected revision marker';
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
     }
-    const html = await response.text();
-    if (html.includes(marker)) return;
-    last = 'served HTML does not contain the expected revision marker';
   }
   throw new Error(`Pages revision verification failed: ${last}`);
 }

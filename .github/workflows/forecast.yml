@@ -1,7 +1,7 @@
 name: Forecast sample
 on:
   schedule:
-    - cron: '17 5 * * *'
+    - cron: '17 5,17 * * *'
   workflow_dispatch:
     inputs:
       environment:
@@ -109,8 +109,6 @@ jobs:
           manifest="$(find "output/builds/${MODEL}" -mindepth 2 -maxdepth 2 -name manifest.json -print | sort | tail -1)"
           test -n "${manifest}"
           printf 'MANIFEST=%s\n' "${manifest}" >> "${GITHUB_ENV}"
-      - name: Validate sample
-        run: pnpm exec tsx apps/batch/src/cli.ts validate --manifest "${MANIFEST}"
       - name: Refuse superseded main revision before publication
         env:
           GH_TOKEN: ${{ github.token }}

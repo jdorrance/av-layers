@@ -33,6 +33,7 @@ jobs:
     environment: ${{ inputs.environment || 'production' }}
     env:
       TARGET_ENV: ${{ inputs.environment || 'production' }}
+      DEPLOYMENT_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CONFIRM: ${{ inputs.confirm || '' }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
@@ -84,14 +85,14 @@ jobs:
         run: |
           set -euo pipefail
           case "${TARGET_ENV}" in
-            staging) pnpm run deploy:staging ;;
-            production) pnpm run deploy:production ;;
+            staging) pnpm run deploy:staging --var "AV_DEPLOYMENT_ID:${DEPLOYMENT_ID}" ;;
+            production) pnpm run deploy:production --var "AV_DEPLOYMENT_ID:${DEPLOYMENT_ID}" ;;
           esac
       - name: Smoke API
         shell: bash
         run: |
           set -euo pipefail
-          if ! output="$(pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs 2>&1)"; then
+          if ! output="$(pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs --expected-deployment-id "${DEPLOYMENT_ID}" 2>&1)"; then
             printf '%s\n' "${output}"
             echo 'smoke API failed.' >&2
             echo 'A first deployment with no published forecast returns 503. Run the workflows in this order: Bootstrap Cloudflare resources, Forecast sample, then Deploy Worker and Pages.' >&2
@@ -101,7 +102,7 @@ jobs:
       - name: Build preview
         env:
           VITE_API_BASE: ${{ vars.API_BASE_URL }}
-          VITE_BUILD_REVISION: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          VITE_BUILD_REVISION: ${{ env.DEPLOYMENT_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -117,7 +118,7 @@ jobs:
       - name: Verify live Pages revision
         env:
           PAGES_BASE_URL: ${{ steps.pages.outputs.url }}
-          EXPECTED_DEPLOYMENT_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_DEPLOYMENT_ID: ${{ env.DEPLOYMENT_ID }}
         shell: bash
         run: |
           set -euo pipefail

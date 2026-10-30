@@ -28,7 +28,7 @@ import {
   type GeoPoint,
   type PaletteSummary,
   type PinnedBuild
-} from './api';
+} from '@av/contracts/client';
 import './style.css';
 
 function element<T extends HTMLElement>(id: string): T {

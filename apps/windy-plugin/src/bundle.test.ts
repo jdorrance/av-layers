@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
+import { computeFreshness, latestSchema, manifestSchema, validateArtifactRecords } from '@av/contracts';
 
 class FakeElement {
   children: FakeElement[] = [];
@@ -61,8 +63,24 @@ it.each([
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
   const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: '2026-10-30T09:00:00.000Z' }));
-  const manifest = { model: 'gfs', buildId: 'b1', expiresAt, frames, layers: ['precip-rate'], coverage: { id: 'mask', maxZoom: 5 }, source: {}, method: { id: 'method' } };
-  const latest = { pointer: { model: 'gfs', latestBuildId: 'b1' }, manifest, templates: { 'precip-rate': `${base}/f/{frame}/{z}/{x}/{y}` }, bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [], coverage: manifest.coverage };
+  const fixture = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const manifest = manifestSchema.parse({
+    ...fixture, buildId: 'b1', expiresAt, frames, layers: ['precip-rate'],
+    artifacts: frames.map(frame => ({
+      layer: 'precip-rate', frame: frame.id,
+      tilesKey: `builds/gfs/b1/precip-rate/${frame.id}.pmtiles`, samplesKey: `builds/gfs/b1/samples/precip-rate/${frame.id}.bin`,
+      tilesSha256: 'a'.repeat(64), samplesSha256: 'b'.repeat(64)
+    }))
+  });
+  validateArtifactRecords(manifest);
+  const latest = latestSchema.parse({
+    pointer: { version: 1, model: 'gfs', latestBuildId: 'b1', retained: [{
+      buildId: 'b1', manifestKey: 'builds/gfs/b1/manifest.json', cycle: manifest.cycle, expiresAt
+    }] },
+    manifest, templates: { 'precip-rate': `${base}/f/{frame}/{z}/{x}/{y}.webp` },
+    bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [], coverage: manifest.coverage,
+    freshness: computeFreshness(manifest, now)
+  });
   let resolveSample!: (response: Response) => void;
   let sampleSignal: AbortSignal | null | undefined;
   const fetchImpl = vi.fn<typeof fetch>((url, init) => {

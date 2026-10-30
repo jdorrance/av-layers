@@ -126,6 +126,23 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('read-only worker', () => {
+  it('reports the current deployment marker without storage reads or caching, while supporting local runs', async () => {
+    const local = await call('/healthz');
+    expect(local.status).toBe(200);
+    expect(await local.json()).toEqual({ ok: true });
+    for (const deploymentId of [`${'a'.repeat(40)}-12345-1`, `${'a'.repeat(40)}-12345-2`]) {
+      const response = await worker.fetch(new Request('https://api.example/healthz'), {
+        BUCKET: bucket as unknown as R2Bucket, SAMPLE_RATE_LIMITER: limiter, AV_DEPLOYMENT_ID: deploymentId
+      }, ctx);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, deploymentId });
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.has('etag')).toBe(false);
+    }
+    expect(bucket.reads).toHaveLength(0);
+    expect(cache.matches).toBe(0);
+  });
+
   it('routes metadata, palette suffixes, tilejson and generated OpenAPI', async () => {
     const latest = await call('/v1/models/gfs/latest?expand=manifest');
     expect(latest.status).toBe(200);

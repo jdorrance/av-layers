@@ -12,3 +12,4 @@ output/
 __pycache__/
 .venv/
 /coverage/
+*.tsbuildinfo
