@@ -46,7 +46,7 @@ export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId,
     const offset = (py * 256 + px) * 4;
     if (alpha) { png.data[offset] = Math.round(r / alpha); png.data[offset + 1] = Math.round(g / alpha); png.data[offset + 2] = Math.round(b / alpha); png.data[offset + 3] = Math.round(alpha / 4); }
   }
-  return PNG.sync.write(png, { deflateLevel: z % 2 ? 9 : 1, deflateStrategy: 0 });
+  return PNG.sync.write(png, { deflateLevel: 6, deflateStrategy: 0 });
 }
 
 export async function renderArchive(path: string, field: GridField, mask: CoverageMask, layer: LayerId): Promise<void> {
@@ -65,7 +65,7 @@ export async function renderArchive(path: string, field: GridField, mask: Covera
       db.exec('COMMIT');
     } finally { db.close(); }
     await mkdir(dirname(path), { recursive: true });
-    execFileSync(binary, ['convert', mbtiles, path], { stdio: 'inherit' });
-    execFileSync(binary, ['verify', path], { stdio: 'inherit' });
+    execFileSync(binary, ['convert', '--no-deduplication', mbtiles, path], { stdio: 'pipe' });
+    execFileSync(binary, ['verify', path], { stdio: 'pipe' });
   } finally { await rm(dir, { recursive: true, force: true }); }
 }

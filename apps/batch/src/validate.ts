@@ -4,7 +4,7 @@ import { resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PMTiles, Compression, TileType } from 'pmtiles';
 import { PNG } from 'pngjs';
-import { CELL_BYTES, expectedTiles, getBit, GFS_GRID, LAYER_IDS, manifestSchema, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
+import { CELL_BYTES, expectedTiles, GFS_GRID, LAYER_IDS, manifestSchema, validateArtifactRecords, validateSampleFlags, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
 
 const COVERAGE_DIR = fileURLToPath(new URL('../../../packages/contracts/coverage', import.meta.url));
 
@@ -52,20 +52,13 @@ export async function validateArchive(path: string, mask: CoverageMask): Promise
 }
 
 export function validateSamples(samples: Buffer, mask: CoverageMask, layer: LayerId, key: string): void {
-  for (let offset = 0; offset < samples.length; offset += CELL_BYTES) {
-    const flags = samples[offset + 4], status = flags & STATUS_MASK;
-    if (flags & ~31 || (layer === 'precip-rate' && (status === STATUS_NO_LIFT || flags & ~STATUS_MASK))) throw new Error(`Invalid sample flags in ${key}`);
-    if (status < STATUS_UNAVAILABLE && !Number.isFinite(samples.readFloatLE(offset))) throw new Error(`Invalid sample value in ${key}`);
-    if (status === STATUS_OUTSIDE && flags !== STATUS_OUTSIDE) throw new Error(`Invalid outside flags in ${key}`);
-    const index = offset / CELL_BYTES;
-    if ((status === STATUS_OUTSIDE) === (getBit(mask.output, index) || getBit(mask.halo, index))) throw new Error(`Sample coverage mismatch in ${key}`);
-  }
+  validateSampleFlags(samples, mask.grid.width * mask.grid.height * CELL_BYTES, layer, mask, key);
 }
 
-export async function validateBuild(root: string, raw: unknown, mask: CoverageMask): Promise<Manifest> {
+export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string): Promise<Manifest> {
   const manifest = manifestSchema.parse(raw);
   if (manifest.model !== 'gfs' || JSON.stringify(manifest.grid) !== JSON.stringify(GFS_GRID) || manifest.coverage.maxZoom !== 5) throw new Error('Unsupported model, grid or zoom');
-  if (manifest.coverage.id !== 'soaring-land-v1' || manifest.coverage.hash !== await verifyCoverage(mask)) throw new Error('Coverage identity mismatch');
+  if (manifest.coverage.id !== 'soaring-land-v1' || manifest.coverage.hash !== (expectedCoverageHash ?? await verifyCoverage(mask))) throw new Error('Coverage identity mismatch');
   const cycle = Date.parse(manifest.cycle), created = Date.parse(manifest.createdAt), expiry = Date.parse(manifest.expiresAt);
   if (!(created < expiry) || expiry > created + 7 * 86400000 || !Number.isFinite(cycle)) throw new Error('Invalid build timestamps');
   const frames = Array.from({ length: 8 }, (_, i) => `f${String((i + 1) * 3).padStart(3, '0')}`);
@@ -74,14 +67,12 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     const frame = manifest.frames[i];
     if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== cycle + i * 10800000 || Date.parse(frame.intervalEnd) !== cycle + (i + 1) * 10800000 || Date.parse(frame.validTime) !== cycle + (i + 1) * 10800000) throw new Error(`Invalid frame interval ${frame.id}`);
   }
-  if (manifest.artifacts.length !== 24 || new Set(manifest.artifacts.map(a => `${a.layer}/${a.frame}`)).size !== 24) throw new Error('Incomplete artifact set');
-  const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
-  for (const layer of LAYER_IDS) for (const frame of frames) {
-    const artifact = manifest.artifacts.find(a => a.layer === layer && a.frame === frame);
-    if (!artifact || artifact.tilesKey !== `${prefix}${layer}/${frame}.pmtiles` || artifact.samplesKey !== `${prefix}samples/${layer}/${frame}.bin`) throw new Error(`Invalid artifact keys for ${layer}/${frame}`);
+  validateArtifactRecords(manifest);
+  const expectedSamples = manifest.grid.width * manifest.grid.height * CELL_BYTES;
+  for (const artifact of manifest.artifacts) {
     const samples = await readFile(localPath(root, artifact.samplesKey));
-    if (samples.length !== manifest.grid.width * manifest.grid.height * CELL_BYTES || sha256(samples) !== artifact.samplesSha256) throw new Error(`Invalid samples ${artifact.samplesKey}`);
-    validateSamples(samples, mask, layer, artifact.samplesKey);
+    if (samples.length !== expectedSamples || sha256(samples) !== artifact.samplesSha256) throw new Error(`Invalid samples ${artifact.samplesKey}`);
+    validateSamples(samples, mask, artifact.layer, artifact.samplesKey);
     const bytes = await readFile(localPath(root, artifact.tilesKey));
     if (sha256(bytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
     await validateArchive(localPath(root, artifact.tilesKey), mask);

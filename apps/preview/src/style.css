@@ -96,6 +96,20 @@ select {
   font-size: 0.75rem;
 }
 
+.diagnostics {
+  margin-top: 18px;
+  padding-top: 10px;
+  border-top: 1px solid #253036;
+}
+
+.diagnostics summary {
+  cursor: pointer;
+  color: #8fa4ad;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 dl {
   display: grid;
   grid-template-columns: 100px 1fr;

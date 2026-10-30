@@ -1,10 +1,33 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { ModelId } from '@av/contracts';
-import { ApiClient, assertNotExpired, type FrameSample, type PinnedBuild, type PaletteSummary } from './api';
-import { buildAgeMs, formatDuration, watchBuildExpiry } from './time';
-import { DEFAULT_OPACITY, OVERLAY_LAYER_ID, OVERLAY_SOURCE_ID, previewRasterLayer, previewRasterSource } from './tiles';
-import { populateModelOptions } from './models';
+import { paletteBinLabel, type LayerId, type ModelId } from '@av/contracts';
+import {
+  ApiClient,
+  DEFAULT_OPACITY,
+  OVERLAY_LAYER_ID,
+  OVERLAY_SOURCE_ID,
+  activePalettes,
+  assertNotExpired,
+  buildAgeMs,
+  buildDiagnosticRows,
+  coverageSummaryText,
+  formatDuration,
+  formatSampleStatus,
+  formatSeriesSummary,
+  formatSupportFlags,
+  noLiftLabel,
+  normalizePoint,
+  paletteNoteText,
+  populateModelOptions,
+  previewRasterLayer,
+  previewRasterSource,
+  samePoint,
+  watchBuildExpiry,
+  type FrameSample,
+  type GeoPoint,
+  type PaletteSummary,
+  type PinnedBuild
+} from './api';
 import './style.css';
 
 function element<T extends HTMLElement>(id: string): T {
@@ -20,7 +43,8 @@ const opacityInput = element<HTMLInputElement>('opacity');
 const timestampBadge = element<HTMLParagraphElement>('timestamp');
 const freshness = element<HTMLParagraphElement>('freshness');
 const errorBox = element<HTMLParagraphElement>('error');
-const meta = element<HTMLDivElement>('meta');
+const coverageNote = element<HTMLParagraphElement>('coverage-note');
+const meta = element<HTMLDListElement>('meta');
 const legend = element<HTMLDivElement>('legend');
 const seriesButton = element<HTMLButtonElement>('series-button');
 const seriesStatus = element<HTMLParagraphElement>('series-status');
@@ -54,16 +78,35 @@ let build: PinnedBuild | null = null;
 let selectedFrame: string | null = null;
 let opacity = DEFAULT_OPACITY;
 let expired = false;
+let overlayTileError = false;
 let loadAbort: AbortController | null = null;
 let seriesAbort: AbortController | null = null;
-let clicked: { lat: number; lon: number } | null = null;
+let clicked: GeoPoint | null = null;
 let expiryTimer: number | null = null;
 let disposeExpiry = () => {};
 
 map.on('click', event => {
-  clicked = { lat: event.lngLat.lat, lon: event.lngLat.lng };
+  seriesAbort?.abort();
+  seriesAbort = null;
+  seriesPanel.replaceChildren();
+  clicked = normalizePoint(event.lngLat.lat, event.lngLat.lng);
   seriesButton.disabled = !build || expired;
   seriesStatus.textContent = `Clicked ${clicked.lat.toFixed(4)}, ${clicked.lon.toFixed(4)}`;
+});
+
+map.on('error', (event: { sourceId?: string }) => {
+  if (!build || expired) return;
+  if (event.sourceId === OVERLAY_SOURCE_ID || (!event.sourceId && map.getSource(OVERLAY_SOURCE_ID))) {
+    overlayTileError = true;
+    showError('Overlay tile failed to load — forecast display may be incomplete.');
+  }
+});
+
+map.on('sourcedata', (event: { sourceId?: string; tile?: unknown; isSourceLoaded?: boolean }) => {
+  if (overlayTileError && event.sourceId === OVERLAY_SOURCE_ID && (event.tile || event.isSourceLoaded)) {
+    overlayTileError = false;
+    clearError();
+  }
 });
 
 function showError(message: string): void {
@@ -76,49 +119,31 @@ function clearError(): void {
   errorBox.textContent = '';
 }
 
-function sourceLabel(buildValue: PinnedBuild): string {
-  const source = buildValue.manifest.source as Record<string, unknown>;
-  const model = typeof source.model === 'string' ? source.model : buildValue.model.toUpperCase();
-  const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native columns` : 'native model columns';
-  return `${model} · ${native}`;
-}
-
 function renderMeta(buildValue: PinnedBuild): void {
-  const manifest = buildValue.manifest;
-  const grid = manifest.grid;
-  const rows: Array<[string, string]> = [
-    ['Build', manifest.buildId],
-    ['Cycle', manifest.cycle],
-    ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
-    ['Source', sourceLabel(buildValue)],
-    ['Display', `z0–${buildValue.maxNativeZoom} · 256 px raster · overzoomed above z${buildValue.maxNativeZoom}`],
-    ['Grid', `${grid.width} × ${grid.height} · ${grid.dx}° × ${Math.abs(grid.dy)}° EPSG:4326`],
-    ['Coverage', `${buildValue.coverage.id} · ${buildValue.bounds[1]}° to ${buildValue.bounds[3]}° lat`],
-    ['Exclusions', 'soaring-land-v1: land/coastal + 50 km seaward buffer; excludes RUS, ATA, GRL'],
-    ['MSL / AGL', 'MSL uses model terrain + usable AGL; AGL uses the same model terrain, not a high-resolution DEM'],
-    ['Method caveat', '1.2 m/s sink threshold; PBL closure only for the first layer; parcel-crossing/profile-top/PBL support flags are explicit'],
-    ['Coverage caveat', 'Coastal and exclusion borders can differ from the true coastline by about one cell diagonal'],
-    ['Expiry', manifest.expiresAt]
-  ];
-  meta.replaceChildren(...rows.flatMap(([label, value]) => {
-    const dt = document.createElement('dt');
-    dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.textContent = value;
-    return [dt, dd];
-  }));
+  coverageNote.textContent = coverageSummaryText(buildValue);
+  const rows = buildDiagnosticRows(buildValue);
+  meta.replaceChildren(
+    ...rows.flatMap(([label, value]) => {
+      const dt = document.createElement('dt');
+      dt.textContent = label;
+      const dd = document.createElement('dd');
+      dd.textContent = value;
+      return [dt, dd];
+    })
+  );
 }
 
-function renderLegend(palettes: readonly PaletteSummary[]): void {
+function renderLegend(palettes: readonly PaletteSummary[], activeLayer: string | null): void {
   legend.replaceChildren();
-  if (palettes.length === 0) {
+  const visible = activePalettes(palettes, activeLayer);
+  if (visible.length === 0) {
     const note = document.createElement('p');
     note.className = 'muted';
     note.textContent = 'Palette registry summary was not returned by the API.';
     legend.append(note);
     return;
   }
-  for (const palette of palettes) {
+  for (const palette of visible) {
     const section = document.createElement('section');
     const title = document.createElement('h2');
     title.textContent = `${palette.id} · ${palette.units}`;
@@ -130,9 +155,7 @@ function renderLegend(palettes: readonly PaletteSummary[]): void {
       swatch.className = 'swatch';
       swatch.style.background = color;
       const label = document.createElement('span');
-      const from = palette.edges[index];
-      const to = palette.edges[index + 1];
-      label.textContent = to === undefined ? `≥ ${from}` : index === palette.colors.length - 1 ? `${from}–${to}+` : `${from}–${to}`;
+      label.textContent = paletteBinLabel(palette.edges, palette.colors.length, index);
       row.append(swatch, label);
       section.append(row);
     });
@@ -143,16 +166,15 @@ function renderLegend(palettes: readonly PaletteSummary[]): void {
       swatch.className = 'swatch';
       swatch.style.background = palette.noLiftColor;
       const label = document.createElement('span');
-      label.textContent = 'no usable lift';
+      label.textContent = noLiftLabel(palette.noLiftColor);
       row.append(swatch, label);
       section.append(row);
     }
-    if (palette.provisional || palette.transparentBelow !== undefined) {
+    const noteText = paletteNoteText(palette);
+    if (noteText) {
       const note = document.createElement('p');
       note.className = 'muted';
-      note.textContent = palette.transparentBelow === undefined
-        ? 'Provisional palette.'
-        : `Transparent below ${palette.transparentBelow} ${palette.units}; provisional palette.`;
+      note.textContent = noteText;
       section.append(note);
     }
     legend.append(section);
@@ -185,8 +207,14 @@ function removeOverlay(): void {
 function expireView(): void {
   if (expired) return;
   expired = true;
+  overlayTileError = false;
+  if (expiryTimer !== null) {
+    window.clearInterval(expiryTimer);
+    expiryTimer = null;
+  }
   loadAbort?.abort();
   seriesAbort?.abort();
+  seriesAbort = null;
   seriesPanel.replaceChildren();
   seriesStatus.textContent = '';
   removeOverlay();
@@ -210,10 +238,16 @@ function ensureLive(): boolean {
 
 function updateOverlay(): void {
   if (!build || !selectedFrame || !ensureLive()) return;
-  const template = build.templates[layerSelect.value as keyof typeof build.templates];
+  const activeLayer = layerSelect.value as LayerId;
+  renderLegend(build.palettes, activeLayer);
+  const template = build.templates[activeLayer];
   if (!template) {
-    showError(`No tile template for ${layerSelect.value}`);
+    showError(`No tile template for ${activeLayer}`);
     return;
+  }
+  if (overlayTileError) {
+    overlayTileError = false;
+    clearError();
   }
   removeOverlay();
   map.addSource(OVERLAY_SOURCE_ID, previewRasterSource(template, selectedFrame, build.maxNativeZoom));
@@ -241,15 +275,18 @@ async function loadModel(model: ModelId): Promise<void> {
   disposeExpiry();
   loadAbort?.abort();
   seriesAbort?.abort();
+  seriesAbort = null;
   seriesPanel.replaceChildren();
   seriesStatus.textContent = '';
   loadAbort = new AbortController();
   expired = false;
+  overlayTileError = false;
   build = null;
   clicked = null;
   setControlsEnabled(false);
   removeOverlay();
   clearError();
+  coverageNote.textContent = '';
   freshness.textContent = `Loading ${model} latest immutable build…`;
   timestampBadge.textContent = 'No frame selected';
   try {
@@ -258,8 +295,14 @@ async function loadModel(model: ModelId): Promise<void> {
     populateLayers(next);
     populateFrames(next);
     renderMeta(next);
-    renderLegend(next.palettes);
-    map.fitBounds([[next.bounds[0], next.bounds[1]], [next.bounds[2], next.bounds[3]]], { padding: 24, duration: 0 });
+    renderLegend(next.palettes, layerSelect.value);
+    map.fitBounds(
+      [
+        [next.bounds[0], next.bounds[1]],
+        [next.bounds[2], next.bounds[3]]
+      ],
+      { padding: 24, duration: 0 }
+    );
     updateOverlay();
     updateFreshness();
     setControlsEnabled(true);
@@ -276,22 +319,11 @@ async function loadModel(model: ModelId): Promise<void> {
   }
 }
 
-function statusText(sample: FrameSample['layers'][string]): string {
-  if (sample.status === 'valid') return sample.value === null ? '—' : String(sample.value);
-  if (sample.status === 'no-usable-lift') return 'no lift';
-  if (sample.status === 'unavailable') return 'unavailable';
-  return 'outside coverage';
-}
-
-function supportText(support: number): string {
-  const flags: string[] = [];
-  if (support & 4) flags.push('parcel');
-  if (support & 8) flags.push('top');
-  if (support & 16) flags.push('PBL');
-  return flags.join('+') || '—';
-}
-
-function renderSeries(payload: { frames: FrameSample[]; method: unknown; source: unknown; coverage: unknown; expiresAt: string }, layers: string[]): void {
+function renderSeries(
+  payload: { frames: FrameSample[]; method: unknown; source: unknown; coverage: unknown; expiresAt: string },
+  layers: string[],
+  point: GeoPoint
+): void {
   const table = document.createElement('table');
   const head = document.createElement('tr');
   for (const text of ['Frame', 'Valid', ...layers.map(layer => `${layer} value`), ...layers.map(layer => `${layer} status/support`)]) {
@@ -303,10 +335,10 @@ function renderSeries(payload: { frames: FrameSample[]; method: unknown; source:
   for (const frame of payload.frames) {
     const row = document.createElement('tr');
     const cells = [frame.id, frame.validTime];
-    for (const layer of layers) cells.push(statusText(frame.layers[layer]));
+    for (const layer of layers) cells.push(formatSampleStatus(frame.layers[layer]));
     for (const layer of layers) {
       const sample = frame.layers[layer];
-      cells.push(`${sample.status} / ${supportText(sample.support)}${sample.interpolated ? ' / interpolated' : ''}`);
+      cells.push(`${sample.status} / ${formatSupportFlags(sample.support)}${sample.interpolated ? ' / interpolated' : ''}`);
     }
     for (const text of cells) {
       const td = document.createElement('td');
@@ -316,9 +348,7 @@ function renderSeries(payload: { frames: FrameSample[]; method: unknown; source:
     table.append(row);
   }
   seriesPanel.replaceChildren(table);
-  const method = payload.method as { id?: unknown } | null;
-  const coverage = payload.coverage as { id?: unknown } | null;
-  seriesStatus.textContent = `8 explicit frames × ${layers.length} layers · method ${String(method?.id ?? 'unknown')} · coverage ${String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
+  seriesStatus.textContent = formatSeriesSummary(payload, layers, point);
 }
 
 layerSelect.addEventListener('change', updateOverlay);
@@ -340,28 +370,29 @@ seriesButton.addEventListener('click', async () => {
   const requestAbort = new AbortController();
   seriesAbort = requestAbort;
   const requestedBuild = build;
+  const requestedPoint = { ...clicked };
   seriesButton.disabled = true;
-  seriesStatus.textContent = 'Requesting all 8 frames × 3 layers…';
+  seriesStatus.textContent = `Requesting all 8 frames × 3 layers at ${requestedPoint.lat.toFixed(4)}, ${requestedPoint.lon.toFixed(4)}…`;
   try {
     const layers = [...requestedBuild.manifest.layers];
     const payload = await api.sample(requestedBuild, {
-      lat: clicked.lat,
-      lon: clicked.lon,
+      lat: requestedPoint.lat,
+      lon: requestedPoint.lon,
       frames: 'all',
       layers,
       signal: requestAbort.signal
     });
-    if (requestAbort.signal.aborted || build !== requestedBuild || !ensureLive()) return;
+    if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
     assertNotExpired(payload.expiresAt);
-    renderSeries(payload, layers);
+    renderSeries(payload, layers, requestedPoint);
   } catch (error) {
-    if (requestAbort.signal.aborted || build !== requestedBuild || !ensureLive()) return;
+    if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
     const message = error instanceof Error ? error.message : String(error);
     seriesStatus.textContent = `Series failed: ${message}`;
   } finally {
     if (seriesAbort === requestAbort) {
       seriesAbort = null;
-      if (!expired) seriesButton.disabled = false;
+      if (!expired && clicked) seriesButton.disabled = false;
     }
   }
 });
@@ -370,11 +401,26 @@ map.on('load', () => {
   void loadModel('gfs');
 });
 
-window.addEventListener('pagehide', () => {
-  disposeExpiry();
+window.addEventListener('pagehide', (event: PageTransitionEvent) => {
   loadAbort?.abort();
   seriesAbort?.abort();
-  if (expiryTimer !== null) window.clearInterval(expiryTimer);
+  seriesAbort = null;
+  if (expiryTimer !== null) {
+    window.clearInterval(expiryTimer);
+    expiryTimer = null;
+  }
+  if (event.persisted) return;
+  disposeExpiry();
   removeOverlay();
   map.remove();
+});
+
+window.addEventListener('pageshow', (event: PageTransitionEvent) => {
+  if (!event.persisted) return;
+  if (build && ensureLive()) {
+    updateFreshness();
+    if (expiryTimer === null) {
+      expiryTimer = window.setInterval(updateFreshness, 5000);
+    }
+  }
 });

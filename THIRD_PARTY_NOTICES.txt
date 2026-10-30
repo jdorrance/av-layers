@@ -4,8 +4,7 @@ This file records provenance and third-party license obligations for material
 reused by windy-av-layer. It is not a grant of rights for private upstream
 repositories. No LICENSE file was found in the windgrams or skyjuice source
 checkouts; their code is not distributed under an asserted MIT or other public
-license here. Selected helpers are adapted only because the project plan
-explicitly directs reuse, with revision and attribution recorded below.
+license here. Revisions, adaptation scope, and attribution are recorded below.
 
 1. Provenance and rights status
 
@@ -52,16 +51,7 @@ pmtiles 4.5.0 (npm) and go-pmtiles v1.31.2 are BSD-3-Clause.
 The Cloudflare R2Source/reader adaptation in apps/api is derived from
 https://github.com/protomaps/PMTiles/blob/main/serverless/cloudflare/src/index.ts
 
-Pinned go-pmtiles v1.31.2 release assets and SHA-256:
-  go-pmtiles-1.31.2_Darwin_arm64.zip
-    40528f7f616fcbf91207cd48c8fc023d213f6d86c0cbf1f748732803d1880f3d
-  go-pmtiles-1.31.2_Darwin_x86_64.zip
-    1f0dc02eee6c58312dd6c509faee1b5c32f0596568af1bf51f1b034e7a88a65b
-  go-pmtiles_1.31.2_Linux_x86_64.tar.gz
-    3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f
-  go-pmtiles_1.31.2_Linux_arm64.tar.gz
-    f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1
-Release: https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/
+Release assets and SHA-256 checksums are maintained in scripts/setup-pmtiles.mjs.
 
 Full BSD-3-Clause notice:
 

@@ -1,10 +1,10 @@
 import bcast from '@windy/broadcast';
 import { map } from '@windy/map';
 import store from '@windy/store';
-import { ApiClient, assertNotExpired } from '../../preview/src/api';
 import type { LayerId, ModelId } from '@av/contracts';
+import { ApiClient, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
 import config, { API_BASE } from './pluginConfig';
-import { PluginController, type HostMap, type HostStore, type WindyHost } from './controller';
+import { PluginController, type HostMap, type HostStore, type HostTileLayer, type WindyHost } from './controller';
 import { PluginPanel } from './view';
 
 const api = new ApiClient({ baseUrl: API_BASE });
@@ -19,12 +19,15 @@ const hostStore = store as unknown as HostStore;
 const host: WindyHost = {
   map: hostMap,
   store: hostStore,
-  createTileLayer: (url, options) => L.tileLayer(url, options as unknown as Record<string, unknown>)
+  createTileLayer: (url, options) => L.tileLayer(url, options as unknown as Record<string, unknown>) as unknown as HostTileLayer
 };
 
 function onClick(event: { latlng?: { lat: number; lng: number } }): void {
   if (!event.latlng) return;
-  panel?.setClicked(event.latlng.lat, event.latlng.lng);
+  seriesAbort?.abort();
+  seriesAbort = null;
+  const point = normalizePoint(event.latlng.lat, event.latlng.lng);
+  panel?.setClicked(point.lat, point.lon);
   panel?.setSeriesEnabled(controller?.state().phase === 'ready');
 }
 
@@ -36,16 +39,38 @@ async function requestSeries(): Promise<void> {
   seriesAbort?.abort();
   const requestAbort = new AbortController();
   seriesAbort = requestAbort;
+  const requestedPoint = { ...point };
   panel.setSeriesEnabled(false);
-  panel.setSeriesStatus('Requesting all 8 frames × 3 layers…');
+  panel.setSeriesStatus(`Requesting all 8 frames × 3 layers at ${requestedPoint.lat.toFixed(4)}, ${requestedPoint.lon.toFixed(4)}…`);
   try {
     const layers = [...build.manifest.layers];
-    const payload = await api.sample(build, { lat: point.lat, lon: point.lon, frames: 'all', layers, signal: requestAbort.signal });
-    if (requestAbort.signal.aborted || controller !== activeController || activeController.currentBuild !== build || activeController.checkExpiry()) return;
+    const payload = await api.sample(build, {
+      lat: requestedPoint.lat,
+      lon: requestedPoint.lon,
+      frames: 'all',
+      layers,
+      signal: requestAbort.signal
+    });
+    if (
+      requestAbort.signal.aborted ||
+      controller !== activeController ||
+      activeController.currentBuild !== build ||
+      !samePoint(panel.clickedPoint, requestedPoint) ||
+      activeController.checkExpiry()
+    ) {
+      return;
+    }
     assertNotExpired(payload.expiresAt);
-    panel.renderSeries(payload, layers);
+    panel.renderSeries(payload, layers, requestedPoint);
   } catch (error) {
-    if (requestAbort.signal.aborted || controller !== activeController || activeController.checkExpiry()) return;
+    if (
+      requestAbort.signal.aborted ||
+      controller !== activeController ||
+      !samePoint(panel.clickedPoint, requestedPoint) ||
+      activeController.checkExpiry()
+    ) {
+      return;
+    }
     panel.setSeriesStatus(`Series failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     if (seriesAbort === requestAbort) {
@@ -84,6 +109,7 @@ function ensurePanel(): PluginPanel {
 async function startController(model: ModelId): Promise<void> {
   controller?.dispose();
   seriesAbort?.abort();
+  seriesAbort = null;
   const ui = ensurePanel();
   ui.setVisible(true);
   ui.setError(null);
@@ -92,6 +118,7 @@ async function startController(model: ModelId): Promise<void> {
   controller = new PluginController({
     model,
     host,
+    hostRange: () => (controller?.currentBuild ? datasetRange(controller.currentBuild.manifest.frames) : null),
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
     onState: state => {
       if (state.phase === 'ready' && state.buildId) {

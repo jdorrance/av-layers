@@ -3,7 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CELL_BYTES, STATUS_MASK, SUPPORT_MASK, manifestSchema, type Manifest } from '@av/contracts';
+import { CELL_BYTES, manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+
+export { validateArtifactRecords, validateSampleFlags };
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -16,46 +18,6 @@ function sha256(bytes: Uint8Array): string {
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
-}
-
-export function validateArtifactRecords(manifest: Manifest): void {
-  invariant(manifest.frames.length === 8, `expected 8 frames, found ${manifest.frames.length}`);
-  invariant(manifest.layers.length === 3, `expected 3 layers, found ${manifest.layers.length}`);
-  invariant(manifest.artifacts.length === 24, `expected 24 artifact records, found ${manifest.artifacts.length}`);
-  const frames = new Set(manifest.frames.map(frame => frame.id));
-  const layers = new Set(manifest.layers);
-  const combinations = new Set<string>();
-  const paths = new Set<string>();
-  const prefix = `builds/${manifest.model}/${manifest.buildId}`;
-  for (const artifact of manifest.artifacts) {
-    invariant(frames.has(artifact.frame), `unknown artifact frame ${artifact.frame}`);
-    invariant(layers.has(artifact.layer), `unknown artifact layer ${artifact.layer}`);
-    const combination = `${artifact.layer}/${artifact.frame}`;
-    invariant(!combinations.has(combination), `duplicate artifact record ${combination}`);
-    combinations.add(combination);
-    invariant(artifact.tilesKey === `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`, `unexpected tilesKey ${artifact.tilesKey}`);
-    invariant(artifact.samplesKey === `${prefix}/samples/${artifact.layer}/${artifact.frame}.bin`, `unexpected samplesKey ${artifact.samplesKey}`);
-    for (const key of [artifact.tilesKey, artifact.samplesKey]) {
-      invariant(!paths.has(key), `duplicate object path ${key}`);
-      paths.add(key);
-    }
-  }
-  invariant(combinations.size === 24, `expected 24 layer/frame records, found ${combinations.size}`);
-  invariant(paths.size === 48, `expected 48 unique object paths, found ${paths.size}`);
-  for (const frame of manifest.frames) for (const layer of manifest.layers) invariant(combinations.has(`${layer}/${frame.id}`), `missing artifact record ${layer}/${frame.id}`);
-}
-
-export function validateSampleFlags(bytes: Uint8Array, expectedLength: number, layer?: string): void {
-  invariant(bytes.length === expectedLength, `samples length ${bytes.length}, expected ${expectedLength}`);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let offset = 0; offset < bytes.length; offset += CELL_BYTES) {
-    const flags = bytes[offset + 4]!, status = flags & STATUS_MASK;
-    invariant(status <= 3, `invalid status bits at offset ${offset}`);
-    invariant((flags & ~(STATUS_MASK | SUPPORT_MASK)) === 0, `invalid support bits at offset ${offset}`);
-    invariant(layer !== 'precip-rate' || (status !== 1 && (flags & SUPPORT_MASK) === 0), `invalid precip-rate lift flags at offset ${offset}`);
-    invariant(status !== 3 || flags === 3, `invalid outside-domain support bits at offset ${offset}`);
-    invariant(status >= 2 || Number.isFinite(view.getFloat32(offset, true)), `non-finite sample value at offset ${offset}`);
-  }
 }
 
 async function main(): Promise<void> {

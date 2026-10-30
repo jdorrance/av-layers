@@ -1,3 +1,5 @@
+import { GFS_GRID } from '@av/contracts';
+
 export const GFS_PRIMARY_LEVELS_HPA = Object.freeze([
   1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400,
 ]) as readonly number[];
@@ -19,15 +21,7 @@ export const GFS_PRODUCTS = Object.freeze({
   secondary: 'pgrb2b.0p25',
 } as const);
 
-export const GFS_CONTRACT_GRID = Object.freeze({
-  width: 1440,
-  height: 721,
-  lon0: -180,
-  lat0: 90,
-  dx: 0.25,
-  dy: -0.25,
-  wrapLongitude: true,
-});
+export const GFS_CONTRACT_GRID = Object.freeze({ ...GFS_GRID });
 
 export const GFS_NATIVE_GRID = Object.freeze({
   ni: 1440,

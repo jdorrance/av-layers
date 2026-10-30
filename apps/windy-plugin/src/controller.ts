@@ -1,13 +1,24 @@
 import type { LayerId, ModelId } from '@av/contracts';
-import type { PinnedBuild } from '../../preview/src/api';
-import { frameBadge, matchHostFrame, selectExplicitFrame, syncTimestampForFrame, type DatasetRange } from '../../preview/src/time';
-import { clampOpacity, frameTileUrl, windyTileOptions, type WindyTileOptions } from '../../preview/src/tiles';
-export type { WindyTileOptions } from '../../preview/src/tiles';
+import {
+  clampOpacity,
+  frameBadge,
+  frameTileUrl,
+  matchHostFrame,
+  selectExplicitFrame,
+  syncTimestampForFrame,
+  windyTileOptions,
+  type DatasetRange,
+  type PinnedBuild,
+  type WindyTileOptions
+} from '@av/contracts/client';
+export type { WindyTileOptions } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
 
 export interface HostTileLayer {
   setUrl(url: string): unknown;
   setOpacity?(opacity: number): unknown;
+  on?(event: 'tileerror' | 'tileload' | 'load', listener: () => void): unknown;
+  off?(event: 'tileerror' | 'tileload' | 'load', listener: () => void): unknown;
   remove?(): unknown;
 }
 
@@ -55,6 +66,8 @@ export interface ControllerOptions {
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
+const TILE_ERROR_MESSAGE = 'Overlay tile failed to load — forecast display may be incomplete.';
+
 export class PluginController {
   private readonly options: ControllerOptions;
   private readonly host: WindyHost;
@@ -70,11 +83,18 @@ export class PluginController {
   private badge = 'No frame selected';
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
+  private tileError = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private disposed = false;
   private readonly onTimestamp = (value: number): void => {
     this.syncHost(value);
+  };
+  private readonly onTileError = (): void => {
+    this.reportTileError();
+  };
+  private readonly onTileLoad = (): void => {
+    this.reportTileLoad();
   };
 
   constructor(options: ControllerOptions) {
@@ -118,6 +138,7 @@ export class PluginController {
     this.started = true;
     this.phase = 'loading';
     this.message = null;
+    this.tileError = false;
     this.emit();
     this.lifecycle = new Lifecycle();
     try {
@@ -133,9 +154,10 @@ export class PluginController {
         return this.state();
       }
       this.build = build;
-      const initialLayer = this.options.initialLayer && build.manifest.layers.includes(this.options.initialLayer)
-        ? this.options.initialLayer
-        : build.manifest.layers[0];
+      const initialLayer =
+        this.options.initialLayer && build.manifest.layers.includes(this.options.initialLayer)
+          ? this.options.initialLayer
+          : build.manifest.layers[0];
       this.layerId = initialLayer ?? null;
       const hostTimestamp = this.host.store.get('timestamp');
       const hostValue = typeof hostTimestamp === 'number' && Number.isFinite(hostTimestamp) ? hostTimestamp : null;
@@ -152,14 +174,18 @@ export class PluginController {
         return this.state();
       }
       this.badge = frameBadge(first, hostFrame, hostValue).text;
-      this.layer = this.host.createTileLayer(
-        frameTileUrl(template, first.id),
-        windyTileOptions(build.maxNativeZoom, this.opacity)
-      );
-      this.host.map.addLayer(this.layer);
+      const tileLayer = this.host.createTileLayer(frameTileUrl(template, first.id), windyTileOptions(build.maxNativeZoom, this.opacity));
+      this.layer = tileLayer;
+      tileLayer.on?.('tileerror', this.onTileError);
+      tileLayer.on?.('load', this.onTileLoad);
+      tileLayer.on?.('tileload', this.onTileLoad);
+      this.host.map.addLayer(tileLayer);
       this.host.store.on('timestamp', this.onTimestamp);
       this.lifecycle.add(() => {
         this.host.store.off?.('timestamp', this.onTimestamp);
+        tileLayer.off?.('tileerror', this.onTileError);
+        tileLayer.off?.('load', this.onTileLoad);
+        tileLayer.off?.('tileload', this.onTileLoad);
         if (this.layer) this.host.map.removeLayer(this.layer);
         this.layer = null;
       });
@@ -175,6 +201,24 @@ export class PluginController {
     }
   }
 
+  reportTileError(): ControllerState {
+    if (!this.canUse()) return this.state();
+    this.tileError = true;
+    this.message = TILE_ERROR_MESSAGE;
+    this.emit();
+    return this.state();
+  }
+
+  reportTileLoad(): ControllerState {
+    if (!this.canUse()) return this.state();
+    if (this.tileError) {
+      this.tileError = false;
+      if (this.message === TILE_ERROR_MESSAGE) this.message = null;
+      this.emit();
+    }
+    return this.state();
+  }
+
   selectFrame(id: string, options: { syncHost?: boolean } = {}): ControllerState {
     if (!this.canUse()) return this.state();
     const frame = selectExplicitFrame(this.build!.manifest.frames, id);
@@ -184,6 +228,7 @@ export class PluginController {
       return this.state();
     }
     this.frameId = frame.id;
+    this.tileError = false;
     this.applyUrl();
     this.badge = frameBadge(frame, null, null).text;
     this.message = null;
@@ -203,6 +248,7 @@ export class PluginController {
       return this.state();
     }
     this.layerId = id;
+    this.tileError = false;
     this.applyUrl();
     this.message = null;
     this.emit();
@@ -223,6 +269,8 @@ export class PluginController {
     const matched = matchHostFrame(this.build!.manifest.frames, timestampMs);
     if (matched) {
       this.frameId = matched.id;
+      this.tileError = false;
+      if (this.message === TILE_ERROR_MESSAGE) this.message = null;
       this.applyUrl();
     }
     const selected = this.frameId ? selectExplicitFrame(this.build!.manifest.frames, this.frameId) : null;
@@ -245,6 +293,7 @@ export class PluginController {
     this.disposed = true;
     this.phase = 'disposed';
     this.badge = 'Plugin closed';
+    this.tileError = false;
     this.lifecycle?.dispose();
     this.lifecycle = null;
     this.cancelExpiryTimer();
@@ -284,6 +333,7 @@ export class PluginController {
   private expire(): void {
     if (this.phase === 'expired') return;
     this.phase = 'expired';
+    this.tileError = false;
     this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
     this.cancelExpiryTimer();

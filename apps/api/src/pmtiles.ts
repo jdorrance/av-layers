@@ -6,7 +6,7 @@ async function decompress(buffer: ArrayBuffer, compression: Compression): Promis
   throw new Error('Unsupported PMTiles compression');
 }
 
-const cache = new ResolvedValueCache(25, undefined, decompress);
+const cache = new ResolvedValueCache(256, undefined, decompress);
 const bucketIds = new WeakMap<object, number>();
 let nextBucketId = 0;
 

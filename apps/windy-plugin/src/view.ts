@@ -1,7 +1,20 @@
-import type { LayerId } from '@av/contracts';
-import type { FrameSample, PinnedBuild } from '../../preview/src/api';
+import { paletteBinLabel, type LayerId } from '@av/contracts';
+import {
+  activePalettes,
+  buildDiagnosticRows,
+  coverageSummaryText,
+  formatSampleStatus,
+  formatSeriesSummary,
+  formatSupportFlags,
+  noLiftLabel,
+  normalizePoint,
+  paletteNoteText,
+  populateModelOptions,
+  type FrameSample,
+  type GeoPoint,
+  type PinnedBuild
+} from '@av/contracts/client';
 import type { ControllerState } from './controller';
-import { populateModelOptions } from '../../preview/src/models';
 
 export interface PanelCallbacks {
   onModel(model: string): void;
@@ -25,6 +38,8 @@ const CSS = `
 .av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
 .av-badge{margin:8px 0;padding:5px 7px;background:#1d2b31;border:1px solid #2f444d;border-radius:4px;font-size:11px}
 .av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
+.av-diagnostics{margin-top:12px;border-top:1px solid #253036;padding-top:8px}
+.av-diagnostics summary{cursor:pointer;color:#8fa4ad;font-size:11px;font-weight:600;margin-bottom:6px}
 .av-meta{display:grid;grid-template-columns:76px 1fr;gap:3px 8px;margin:8px 0;font-size:10.5px}
 .av-meta dt{color:#8fa4ad}.av-meta dd{margin:0;word-break:break-word}
 .av-panel h2{margin:10px 0 5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8fa4ad}
@@ -59,6 +74,7 @@ export class PluginPanel {
   private readonly opacityInput = node('input');
   private readonly badge = node('p', 'av-badge');
   private readonly status = node('p', 'av-muted');
+  private readonly coverage = node('p', 'av-muted');
   private readonly meta = node('dl', 'av-meta');
   private readonly legend = node('div', 'av-legend');
   private readonly error = node('p', 'av-error');
@@ -66,7 +82,8 @@ export class PluginPanel {
   private readonly series = node('div', 'av-series');
   private readonly seriesButton = node('button', 'av-button', 'Sample clicked point (8 × 3)');
   private renderedBuildId: string | null = null;
-  private clicked: { lat: number; lon: number } | null = null;
+  private currentBuild: PinnedBuild | null = null;
+  private clicked: GeoPoint | null = null;
 
   constructor(callbacks: PanelCallbacks) {
     ensureStyles();
@@ -79,7 +96,10 @@ export class PluginPanel {
     header.append(title, back);
     populateModelOptions(this.modelSelect);
     this.modelSelect.addEventListener('change', () => callbacks.onModel(this.modelSelect.value));
-    this.layerSelect.addEventListener('change', () => callbacks.onLayer(this.layerSelect.value as LayerId));
+    this.layerSelect.addEventListener('change', () => {
+      if (this.currentBuild) this.renderLegend(this.currentBuild, this.layerSelect.value);
+      callbacks.onLayer(this.layerSelect.value as LayerId);
+    });
     this.frameSelect.addEventListener('change', () => callbacks.onFrame(this.frameSelect.value));
     this.opacityInput.type = 'range';
     this.opacityInput.min = '0';
@@ -93,14 +113,20 @@ export class PluginPanel {
     this.error.hidden = true;
     const controls = node('div', 'av-controls');
     controls.append(
-      node('label', undefined, 'Model'), this.modelSelect,
-      node('label', undefined, 'Layer'), this.layerSelect,
-      node('label', undefined, 'Frame'), this.frameSelect,
-      node('label', undefined, 'Opacity'), this.opacityInput
+      node('label', undefined, 'Model'),
+      this.modelSelect,
+      node('label', undefined, 'Layer'),
+      this.layerSelect,
+      node('label', undefined, 'Frame'),
+      this.frameSelect,
+      node('label', undefined, 'Opacity'),
+      this.opacityInput
     );
     const seriesPanel = node('section', 'av-series-panel');
     seriesPanel.append(node('h2', undefined, 'Point series'), this.seriesStatus, this.seriesButton, this.series);
-    this.root.append(header, this.status, controls, this.badge, this.error, this.meta, this.legend, seriesPanel);
+    const diagnostics = node('details', 'av-diagnostics');
+    diagnostics.append(node('summary', undefined, 'Build & method diagnostics'), this.meta);
+    this.root.append(header, this.status, controls, this.badge, this.error, this.coverage, this.legend, seriesPanel, diagnostics);
   }
 
   setVisible(visible: boolean): void {
@@ -126,12 +152,13 @@ export class PluginPanel {
   }
 
   setClicked(lat: number, lon: number): void {
-    this.clicked = { lat, lon };
+    this.series.replaceChildren();
+    this.clicked = normalizePoint(lat, lon);
     this.seriesButton.disabled = false;
-    this.seriesStatus.textContent = `Clicked ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+    this.seriesStatus.textContent = `Clicked ${this.clicked.lat.toFixed(4)}, ${this.clicked.lon.toFixed(4)}`;
   }
 
-  get clickedPoint(): { lat: number; lon: number } | null {
+  get clickedPoint(): GeoPoint | null {
     return this.clicked;
   }
 
@@ -141,50 +168,46 @@ export class PluginPanel {
 
   renderBuild(build: PinnedBuild): void {
     const key = `${build.model}:${build.manifest.buildId}`;
+    this.currentBuild = build;
     if (this.renderedBuildId === key) return;
     this.renderedBuildId = key;
     this.modelSelect.value = build.model;
     this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(layer, layer)));
     this.layerSelect.value = build.manifest.layers[0] ?? '';
     this.frameSelect.replaceChildren(...build.manifest.frames.map(frame => new Option(`${frame.id} · ${frame.validTime}`, frame.id)));
-    const source = build.manifest.source as Record<string, unknown>;
-    const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native` : 'native model columns';
-    const rows: Array<[string, string]> = [
-      ['Build', build.manifest.buildId],
-      ['Source', `${typeof source.model === 'string' ? source.model : build.model.toUpperCase()} · ${native}`],
-      ['Display', `z0–${build.maxNativeZoom} · 256 px · overzoomed above z${build.maxNativeZoom}`],
-      ['Coverage', `${build.coverage.id} · excludes RUS, ATA, GRL · 55°S–65°N`],
-      ['Method', build.manifest.method.id],
-      ['MSL/AGL', 'Model terrain + usable AGL; AGL uses model terrain, not high-res DEM'],
-      ['Caveat', '1.2 m/s sink threshold; PBL closure for first layer only; coastal border ± one cell diagonal'],
-      ['Expires', build.manifest.expiresAt]
-    ];
+    this.coverage.textContent = Array.isArray(build.bounds) ? coverageSummaryText(build) : `Coverage ${build.coverage.id} · excludes RUS, ATA, GRL`;
+    const rows = Array.isArray(build.bounds) && build.manifest.grid && build.manifest.method?.hash
+      ? buildDiagnosticRows(build)
+      : [
+          ['Build', build.manifest.buildId],
+          ['Method', build.manifest.method?.id ?? 'unknown'],
+          ['Expires', build.manifest.expiresAt]
+        ];
     this.meta.replaceChildren(...rows.flatMap(([label, value]) => [node('dt', undefined, label), node('dd', undefined, value)]));
-    this.renderLegend(build);
+    this.renderLegend(build, this.layerSelect.value);
   }
 
-  private renderLegend(build: PinnedBuild): void {
+  private renderLegend(build: PinnedBuild, activeLayer: string | null): void {
     this.legend.replaceChildren();
-    for (const palette of build.palettes) {
+    for (const palette of activePalettes(build.palettes, activeLayer)) {
       const section = node('section');
       section.append(node('h2', undefined, `${palette.id} · ${palette.units}`));
       palette.colors.forEach((color, index) => {
         const row = node('div', 'av-legend-row');
         const swatch = node('span', 'av-swatch');
         swatch.style.background = color;
-        const from = palette.edges[index];
-        const to = palette.edges[index + 1];
-        row.append(swatch, node('span', undefined, to === undefined ? `≥ ${from}` : index === palette.colors.length - 1 ? `${from}–${to}+` : `${from}–${to}`));
+        row.append(swatch, node('span', undefined, paletteBinLabel(palette.edges, palette.colors.length, index)));
         section.append(row);
       });
       if (palette.noLiftColor) {
         const row = node('div', 'av-legend-row');
         const swatch = node('span', 'av-swatch');
         swatch.style.background = palette.noLiftColor;
-        row.append(swatch, node('span', undefined, 'no usable lift'));
+        row.append(swatch, node('span', undefined, noLiftLabel(palette.noLiftColor)));
         section.append(row);
       }
-      if (palette.provisional) section.append(node('p', 'av-muted', 'Provisional palette.'));
+      const noteText = paletteNoteText(palette);
+      if (noteText) section.append(node('p', 'av-muted', noteText));
       this.legend.append(section);
     }
   }
@@ -193,7 +216,10 @@ export class PluginPanel {
     this.badge.textContent = state.badge;
     this.setError(state.message);
     if (state.frameId) this.frameSelect.value = state.frameId;
-    if (state.layerId) this.layerSelect.value = state.layerId;
+    if (state.layerId) {
+      this.layerSelect.value = state.layerId;
+      if (this.currentBuild) this.renderLegend(this.currentBuild, state.layerId);
+    }
     this.opacityInput.value = String(state.opacity);
     const usable = state.phase === 'ready';
     this.modelSelect.disabled = !usable;
@@ -207,7 +233,11 @@ export class PluginPanel {
     if (state.phase === 'error') this.setStatus('No viewable build');
   }
 
-  renderSeries(payload: { frames: FrameSample[]; method: unknown; source: unknown; coverage: unknown; expiresAt: string }, layers: string[]): void {
+  renderSeries(
+    payload: { frames: FrameSample[]; method: unknown; source: unknown; coverage: unknown; expiresAt: string },
+    layers: string[],
+    point?: GeoPoint
+  ): void {
     const table = node('table');
     const head = node('tr');
     for (const label of ['Frame', 'Valid', ...layers.map(layer => `${layer}`), ...layers.map(layer => `${layer} status`)]) {
@@ -218,19 +248,17 @@ export class PluginPanel {
       const row = node('tr');
       const cells = [frame.id, frame.validTime];
       for (const layer of layers) {
-        const sample = frame.layers[layer];
-        cells.push(sample.status === 'valid' ? (sample.value === null ? '—' : String(sample.value)) : sample.status === 'no-usable-lift' ? 'no lift' : sample.status === 'unavailable' ? 'unavailable' : 'outside');
+        cells.push(formatSampleStatus(frame.layers[layer]));
       }
       for (const layer of layers) {
         const sample = frame.layers[layer];
-        cells.push(`${sample.status} / ${sample.support}${sample.interpolated ? ' / interp' : ''}`);
+        cells.push(`${sample.status} / ${formatSupportFlags(sample.support)}${sample.interpolated ? ' / interp' : ''}`);
       }
       for (const text of cells) row.append(node('td', undefined, text));
       table.append(row);
     }
     this.series.replaceChildren(table);
-    const method = payload.method as { id?: unknown } | null;
-    const coverage = payload.coverage as { id?: unknown } | null;
-    this.seriesStatus.textContent = `8 frames × ${layers.length} layers · ${String(method?.id ?? 'unknown')} · ${String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
+    const targetPoint = point ?? this.clicked ?? { lat: 0, lon: 0 };
+    this.seriesStatus.textContent = formatSeriesSummary(payload, layers, targetPoint);
   }
 }

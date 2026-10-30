@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Manifest } from '@av/contracts';
-import type { PinnedBuild } from '../../preview/src/api';
+import type { PinnedBuild } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
 import { PluginController, type HostStore, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
@@ -62,6 +62,7 @@ class StubLayer implements HostTileLayer {
   url: string;
   options: WindyTileOptions;
   opacity: number;
+  listeners = new Map<string, Set<() => void>>();
   constructor(url: string, options: WindyTileOptions) {
     this.url = url;
     this.options = options;
@@ -72,6 +73,17 @@ class StubLayer implements HostTileLayer {
   }
   setOpacity(opacity: number): void {
     this.opacity = opacity;
+  }
+  on(event: 'tileerror' | 'tileload' | 'load', listener: () => void): void {
+    const set = this.listeners.get(event) ?? new Set();
+    set.add(listener);
+    this.listeners.set(event, set);
+  }
+  off(event: 'tileerror' | 'tileload' | 'load', listener: () => void): void {
+    this.listeners.get(event)?.delete(listener);
+  }
+  emit(event: 'tileerror' | 'tileload' | 'load'): void {
+    for (const listener of this.listeners.get(event) ?? []) listener();
   }
 }
 
@@ -144,6 +156,21 @@ describe('PluginController', () => {
     expect(stub.added).toHaveLength(1);
     expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.png');
     expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 5, maxZoom: 18, opacity: 0.5 });
+  });
+
+  it('surfaces overlay tile errors explicitly and clears them on tile load or frame switch', async () => {
+    const stub = stubHost();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+    await controller.start();
+    expect(controller.state().message).toBeNull();
+    stub.added[0].emit('tileerror');
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+    stub.added[0].emit('load');
+    expect(controller.state().message).toBeNull();
+    stub.added[0].emit('tileerror');
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+    controller.selectFrame('f006');
+    expect(controller.state().message).toBeNull();
   });
 
   it('syncs an explicit frame to the host timestamp only inside the verified dataset range', async () => {

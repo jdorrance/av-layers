@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { manifestSchema, modelPointerSchema, type Manifest, type ModelPointer } from '@av/contracts';
+import { manifestSchema, modelPointerSchema, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+
+export { validateArtifactRecords };
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
@@ -20,33 +22,6 @@ function arg(name: string): string | undefined {
 
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
-}
-
-export function validateArtifactRecords(manifest: Manifest): void {
-  invariant(manifest.frames.length === 8, `expected 8 frames, found ${manifest.frames.length}`);
-  invariant(manifest.layers.length === 3, `expected 3 layers, found ${manifest.layers.length}`);
-  invariant(manifest.artifacts.length === 24, `expected 24 artifact records, found ${manifest.artifacts.length}`);
-  const frames = new Set(manifest.frames.map(frame => frame.id));
-  const layers = new Set(manifest.layers);
-  const combinations = new Set<string>();
-  const paths = new Set<string>();
-  const prefix = `builds/${manifest.model}/${manifest.buildId}`;
-  for (const artifact of manifest.artifacts) {
-    invariant(frames.has(artifact.frame), `unknown artifact frame ${artifact.frame}`);
-    invariant(layers.has(artifact.layer), `unknown artifact layer ${artifact.layer}`);
-    const combination = `${artifact.layer}/${artifact.frame}`;
-    invariant(!combinations.has(combination), `duplicate artifact record ${combination}`);
-    combinations.add(combination);
-    invariant(artifact.tilesKey === `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`, `unexpected tilesKey ${artifact.tilesKey}`);
-    invariant(artifact.samplesKey === `${prefix}/samples/${artifact.layer}/${artifact.frame}.bin`, `unexpected samplesKey ${artifact.samplesKey}`);
-    for (const key of [artifact.tilesKey, artifact.samplesKey]) {
-      invariant(!paths.has(key), `duplicate object path ${key}`);
-      paths.add(key);
-    }
-  }
-  invariant(combinations.size === 24, `expected 24 layer/frame records, found ${combinations.size}`);
-  invariant(paths.size === 48, `expected 48 unique object paths, found ${paths.size}`);
-  for (const frame of manifest.frames) for (const layer of manifest.layers) invariant(combinations.has(`${layer}/${frame.id}`), `missing artifact record ${layer}/${frame.id}`);
 }
 
 export function buildLocalPointer(manifest: Manifest, manifestKey: string): ModelPointer {

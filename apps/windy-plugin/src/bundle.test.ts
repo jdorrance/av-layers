@@ -36,7 +36,7 @@ afterEach(() => {
 it.each([
   ['configured', 'https://api.example.test:9443/prefix'],
   ['default', undefined]
-])('loads the built Windy module with %s API base and expires a pending series', async (_name, configuredBase) => {
+])('loads the built Windy module with %s API base, normalizes wrapped clicks, cancels stale point requests, and expires a pending series', async (_name, configuredBase) => {
   const pluginDir = resolve(import.meta.dirname, '..');
   const rollup = resolve(pluginDir, 'node_modules/rollup/dist/bin/rollup');
   const base = configuredBase ?? 'http://localhost:8787';
@@ -70,7 +70,7 @@ it.each([
     return new Promise(resolve => { resolveSample = resolve; });
   });
   let click: ((event: { latlng: { lat: number; lng: number } }) => void) | undefined;
-  const layer = { url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn() };
+  const layer = { url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(), on: vi.fn(), off: vi.fn() };
   const map = { on: vi.fn((_name, listener) => { click = listener; }), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   vi.stubGlobal('document', document);
@@ -98,22 +98,33 @@ it.each([
     ['icon-armenia', true, 'icon-armenia (unavailable: regional coverage not implemented)']
   ]);
   expect(selects[2].value).toBe('f006');
-  click?.({ latlng: { lat: 1, lng: 2 } });
+  selects[2].value = 'f003';
+  selects[2].dispatch('change');
+  expect(store.set).toHaveBeenCalledWith('timestamp', Date.parse('2026-10-30T03:00:00.000Z'));
+
+  click?.({ latlng: { lat: 1, lng: 190 } });
   const button = elements.find(element => element.textContent === 'Sample clicked point (8 × 3)')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
-  expect(fetchImpl.mock.calls[1][0]).toContain(`${base}/v1/models/gfs/runs/b1/sample?`);
-  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
+  expect(fetchImpl.mock.calls[1][0]).toContain('lon=-170');
+  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
   const series = elements.find(element => element.className === 'av-series')!;
   await vi.waitFor(() => expect(series.children).toHaveLength(1));
+
+  button.dispatch('click');
+  const firstSignal = sampleSignal;
+  click?.({ latlng: { lat: 2, lng: 3 } });
+  expect(firstSignal?.aborted).toBe(true);
+  expect(series.children).toHaveLength(0);
+
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
   clock.mockReturnValue(expiresAtMs);
-  selects[2].value = 'f003';
+  selects[2].value = 'f006';
   selects[2].dispatch('change');
   expect(sampleSignal?.aborted).toBe(true);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
-  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', expiresAt, frames: [] })));
+  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
   await Promise.resolve();
   await Promise.resolve();
   expect(series.children).toHaveLength(0);

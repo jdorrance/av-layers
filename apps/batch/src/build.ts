@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { GFS_GRID, getBit, LAYER_IDS, manifestSchema, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
+import { GFS_GRID, getBit, LAYER_IDS, LIFT_RENDER_STYLE, manifestSchema, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type LayerId, type Manifest } from '@av/contracts';
 import { deriveColumn, METHOD_ID, packCells, type GridField } from '@av/forecast';
 import { acquireGfsFrame, discoverGfsRun, type GfsFrameAcquisition } from './noaa/index.js';
 import { renderArchive } from './render.js';
@@ -45,7 +45,7 @@ export async function buildSample(options: { out: string; cycle?: string; cacheD
   const root = resolve(options.out), mask = await loadCoverage();
   const cacheDir = options.cacheDir ?? join(root, '.cache', 'gfs');
   const requestedCycle = options.cycle ?? (await discoverGfsRun({ cacheDir })).cycle;
-  if (!Number.isFinite(Date.parse(requestedCycle)) || (options.cycle !== undefined && new Date(requestedCycle).toISOString() !== requestedCycle)) throw new Error('Cycle must be an ISO UTC timestamp with milliseconds');
+  if (!/^\d{4}-\d{2}-\d{2}T(?:00|06|12|18):00:00(?:\.000)?Z$/.test(requestedCycle) || !Number.isFinite(Date.parse(requestedCycle)) || new Date(requestedCycle).toISOString().replace('.000Z', 'Z') !== requestedCycle.replace('.000Z', 'Z')) throw new Error('Cycle must be a valid GFS 00/06/12/18Z ISO UTC timestamp');
   const cycle = new Date(requestedCycle).toISOString();
   const active = new Uint32Array(Array.from({ length: GFS_GRID.width * GFS_GRID.height }, (_, i) => i).filter(i => getBit(mask.output, i) || getBit(mask.halo, i)));
   const prefix = `builds/gfs/${buildId}`, frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: unknown[] = [], summaries: Record<string, ReturnType<typeof summarizeFields>> = {};
@@ -73,7 +73,7 @@ export async function buildSample(options: { out: string; cycle?: string; cacheD
       artifacts.push({ layer, frame: id, tilesKey, samplesKey, tilesSha256: sha256(archive), samplesSha256: sha256(samples) });
     }
   }
-  const manifest = manifestSchema.parse({ version: 1, model: 'gfs', buildId, cycle, createdAt: created.toISOString(), expiresAt: new Date(started + 7 * 86400000).toISOString(), method: { id: METHOD_ID, hash: sha256(methodSource) }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'coverage/soaring-land-v1/manifest.json', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: { provider: 'NOAA', frames: receipts, temporalApproximation: 'interval flux with endpoint profile and PBL' }, tool: { node: process.version, pmtiles: '1.31.2', pngjs: '7.0.0' }, palettes: ['lift', 'rain'], metrics: { ...counts, frames: summaries, elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024 } });
+  const manifest = manifestSchema.parse({ version: 1, model: 'gfs', buildId, cycle, createdAt: created.toISOString(), expiresAt: new Date(started + 7 * 86400000).toISOString(), method: { id: METHOD_ID, hash: sha256(methodSource) }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'coverage/soaring-land-v1/manifest.json', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: { provider: 'NOAA', frames: receipts, temporalApproximation: 'interval flux with endpoint profile and PBL' }, tool: { node: process.version, pmtiles: '1.31.2', pngjs: '7.0.0', liftRenderStyle: LIFT_RENDER_STYLE }, palettes: ['lift', 'rain'], metrics: { ...counts, frames: summaries, elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024 } });
   await validateBuild(root, manifest, mask);
   const path = localPath(root, `${prefix}/manifest.json`);
   await writeFile(path, JSON.stringify(manifest), { flag: 'wx' });

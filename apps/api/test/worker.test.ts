@@ -33,7 +33,7 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString()) 
   const prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
   const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, samplesKey: `${prefix}/samples/${layer}/${frame.id}.bin`, tilesSha256: hash, samplesSha256: hash })));
-  const manifest = { version: 1, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, source: {}, tool: {}, palettes: ['lift', 'rain'], metrics: {} };
+  const manifest = { version: 1, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, source: {}, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
 }
@@ -118,6 +118,46 @@ describe('read-only worker', () => {
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['200'].content?.['application/json'].schema.type).toBe('object');
     expect(spec.paths['/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.png'].get.responses['200'].content?.['image/png']).toBeDefined();
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['429']).toBeDefined();
+  });
+  it('advertises transparent no-lift and invalidates old palette JSON and SVG validators', async () => {
+    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { palettes: { id: string; noLiftColor?: string }[] };
+    expect(latest.palettes.find(palette => palette.id === 'lift')?.noLiftColor).toBe('#00000000');
+    for (const extension of ['json', 'svg']) {
+      const path = `/v1/palettes/lift.${extension}`;
+      const result = await call(path, { headers: { 'if-none-match': '"palette-lift-v1"' } });
+      expect(result.status).toBe(200);
+      expect(result.headers.get('etag')).toBe('"palette-lift-v2"');
+      if (extension === 'json') expect(await result.json()).toMatchObject({ noLiftColor: '#00000000' });
+      else expect(await result.text()).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
+      expect((await call(path, { headers: { 'if-none-match': '"palette-lift-v2"' } })).status).toBe(304);
+      const rain = await call(`/v1/palettes/rain.${extension}`, { headers: { 'if-none-match': '"palette-rain-v1"' } });
+      expect(rain.status).toBe(200);
+      expect(rain.headers.get('etag')).toBe('"palette-rain-v2"');
+    }
+  });
+  it('matches the expanded legend to retained legacy and marked builds', async () => {
+    const old = publication('legacy'), current = publication('current');
+    delete old.manifest.tool.liftRenderStyle;
+    bucket.install(current, old);
+    let result = await call('/v1/models/gfs/latest?expand=manifest');
+    expect(result.status).toBe(200);
+    let body = await result.json() as { palettes: { id: string; noLiftColor?: string }[] };
+    expect(body.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#55184d');
+    expect((await call('/v1/models/gfs/runs/current')).status).toBe(200);
+    expect((await (await call('/v1/palettes/lift.json')).json() as { noLiftColor: string }).noLiftColor).toBe('#00000000');
+    bucket = new MemoryBucket();
+    bucket.install(old, current);
+    result = await call('/v1/models/gfs/latest?expand=manifest');
+    expect(result.status).toBe(200);
+    body = await result.json() as { palettes: { id: string; noLiftColor?: string }[] };
+    expect(body.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#00000000');
+    expect((await call('/v1/models/gfs/runs/legacy')).status).toBe(200);
+  });
+  it('validates route parameter lengths and rejects unknown models and layers', async () => {
+    expect((await call(`/v1/models/${'a'.repeat(129)}/latest`)).status).toBe(400);
+    expect((await call(`/v1/models/gfs/runs/${'a'.repeat(129)}`)).status).toBe(400);
+    expect((await call('/v1/models/unknown/latest')).status).toBe(404);
+    expect((await call('/v1/models/gfs/runs/build-1/layers/unknown/f003/tilejson.json')).status).toBe(404);
   });
   it('rejects noncanonical encoded paths, duplicate/unknown query and bad tile coordinates', async () => {
     for (const path of ['/v1/models/%67fs/latest', '/v1/models/gfs/latest?expand=manifest&expand=manifest', '/v1/models/gfs/latest?other=x', '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&lat=1', '/tiles/gfs/build-1/usable-lift-agl/f003/01/0/0.png', '/tiles/gfs/build-1/usable-lift-agl/f003/1/2/0.png']) {
@@ -321,5 +361,37 @@ describe('read-only worker', () => {
     const result = await call('/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&layers=precip-rate');
     expect(result.status).toBe(404);
     expect(cache.entries.size).toBe(0);
+  });
+  it('serves warm tile GET, HEAD and 304 responses without re-reading manifest.json from R2', async () => {
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.png';
+    const first = await call(path);
+    expect(first.status).toBe(200);
+    const manifestReadsAfterCold = bucket.reads.filter(r => r.key === 'builds/gfs/build-1/manifest.json').length;
+    expect(manifestReadsAfterCold).toBe(1);
+    expect((await call(path)).status).toBe(200);
+    expect((await call(path, { method: 'HEAD' })).status).toBe(200);
+    expect((await call(path, { headers: { 'if-none-match': first.headers.get('etag')! } })).status).toBe(304);
+    expect(bucket.reads.filter(r => r.key === 'builds/gfs/build-1/manifest.json')).toHaveLength(1);
+  });
+  it('rejects inherited object property names on palette endpoints with 404', async () => {
+    for (const bad of ['constructor.json', 'toString.json', 'valueOf.svg']) {
+      const res = await call(`/v1/palettes/${bad}`);
+      expect(res.status, bad).toBe(404);
+    }
+    expect((await call('/v1/palettes/__proto__.json')).status).toBe(400);
+  });
+  it('logs diagnostic details when an unexpected storage error occurs while returning a safe 503', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('R2 backend timeout'));
+    const res = await call('/v1/models/gfs/latest');
+    expect(res.status).toBe(503);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Unhandled API error',
+      expect.objectContaining({
+        method: 'GET',
+        path: '/v1/models/gfs/latest',
+        error: expect.objectContaining({ message: 'R2 backend timeout' })
+      })
+    );
   });
 });

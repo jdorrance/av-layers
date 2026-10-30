@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ExpiredBuildError, InvalidApiResponseError, pinnedViewState, type LatestPayload } from './api';
+import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './api';
 import type { Manifest, ModelPointer } from '@av/contracts';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
+it('labels transparent and legacy opaque no-lift legend swatches accurately', () => {
+  expect(noLiftLabel('#00000000')).toBe('no usable lift (transparent)');
+  expect(noLiftLabel('#55184d')).toBe('no usable lift');
+});
 const layerIds = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
 const frames = ['f003', 'f006', 'f009', 'f012', 'f015', 'f018', 'f021', 'f024'].map((id, index) => {
   const start = new Date(Date.parse(created) + index * 3 * 3600_000 + 3 * 3600_000).toISOString();
@@ -76,7 +80,6 @@ describe('ApiClient.latest', () => {
     expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.png');
     expect(build.maxNativeZoom).toBe(5);
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
-    expect(pinnedViewState(build, Date.parse(created)).expired).toBe(false);
   });
 
   it('rejects a manifest that does not match the pinned pointer build', async () => {
@@ -159,13 +162,20 @@ describe('ApiClient.sample', () => {
     await expect(pending).rejects.toBeInstanceOf(ExpiredBuildError);
   });
 
-  it('rejects a sample for a different model', async () => {
+  it('rejects a sample for a different model or mismatched coordinates or malformed layer status', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(latestPayload()))
-      .mockResolvedValueOnce(jsonResponse({ ...(samplePayload() as object), model: 'hrrr' }));
+      .mockResolvedValueOnce(jsonResponse({ ...(samplePayload() as object), model: 'hrrr' }))
+      .mockResolvedValueOnce(jsonResponse({ ...(samplePayload() as object), lat: 12, lon: 34 }))
+      .mockResolvedValueOnce(jsonResponse({
+        ...(samplePayload() as object),
+        frames: [{ ...frames[0], layers: Object.fromEntries(layerIds.map(layer => [layer, { value: 310, status: 'bogus', support: 0, interpolated: false }])) }]
+      }));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
     const build = await client.latest('gfs');
-    await expect(client.sample(build, { lat: 0, lon: 0 })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    await expect(client.sample(build, { lat: -32.9, lon: -68.9 })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    await expect(client.sample(build, { lat: -32.9, lon: -68.9 })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    await expect(client.sample(build, { lat: -32.9, lon: -68.9 })).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
   it('rejects out-of-range coordinates and oversized requests', async () => {
