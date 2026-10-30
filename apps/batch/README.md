@@ -1,7 +1,7 @@
 # Batch
 
 `@av/batch` turns admitted upstream weather fields into immutable forecast
-archives, numeric arrays and a manifest. Its CLI also validates, publishes,
+archives, a numeric block pack and a manifest. Its CLI also validates, publishes,
 rolls back and cleans up builds. GFS is the integrated build path; regional
 products are deferred in the [roadmap](../../docs/roadmap.md).
 

@@ -1,9 +1,11 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
-  CELL_BYTES,
-  GFS_GRID,
+  GFS_PRODUCT,
+  getProduct,
   LAYER_IDS,
+  MAX_SAMPLE_VALUES,
+  MAX_SAMPLE_RANGE_BYTES,
   LIFT_COLORS,
   LIFT_RENDER_STYLE,
   MODEL_IDS,
@@ -24,13 +26,14 @@ import {
   parseProvenance,
   provenanceSchema,
   sampleResponseSchema,
+  validateArtifactRecords,
   type CoverageMask,
   type LayerId,
   type Manifest,
   type ModelId,
   type ModelPointer
 } from '@av/contracts';
-import { cellsFromRange, planSample, sampleCells } from '@av/forecast';
+import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, type Sample, type SamplePackLayout } from '@av/forecast';
 import output from '../../../packages/contracts/coverage/output.bin';
 import halo from '../../../packages/contracts/coverage/halo.bin';
 import tiles from '../../../packages/contracts/coverage/tiles.bin';
@@ -48,14 +51,16 @@ type Env = {
 type WaitContext = { waitUntil(promise: Promise<unknown>): void };
 
 const mask: CoverageMask = {
-  grid: GFS_GRID,
+  grid: GFS_PRODUCT.grid,
   output: new Uint8Array(output),
   halo: new Uint8Array(halo),
   tiles: new Uint8Array(tiles),
-  maxZoom: 5
+  maxZoom: GFS_PRODUCT.maxNativeZoom
 };
+let sampleLayout: SamplePackLayout | undefined;
 const pointerCache = new WeakMap<R2Bucket, Map<ModelId, { pointer: ModelPointer; until: number }>>();
 const manifestCache = new WeakMap<R2Bucket, Map<string, Manifest>>();
+const artifactIndexes = new WeakMap<Manifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
 const MAX_CACHED_MANIFESTS = 64;
 const IMMUTABLE_TTL = 86400;
 // Transparent 256 × 256 lossless tile, generated with the batch WebP encoder.
@@ -102,7 +107,7 @@ function ensureLive(expiresAt: string): void {
 }
 
 const fileWitness = z.object({ bytes: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) });
-const witnessSchema = z.object({ id: z.literal('soaring-land-v1'), output: fileWitness, halo: fileWitness, tiles: fileWitness });
+const witnessSchema = z.object({ id: z.literal(GFS_PRODUCT.coverageId), output: fileWitness, halo: fileWitness, tiles: fileWitness });
 const witnessPromise: Promise<string | null> = (async () => {
   const bytes = witnessData as unknown as ArrayBuffer;
   if (!(bytes instanceof ArrayBuffer)) fail(503, 'coverage-unavailable', 'Invalid bundled coverage witness');
@@ -189,15 +194,28 @@ async function manifest(
     fail(503, 'publication-invalid', 'Manifest does not match retained entry');
   }
   ensureLive(m.expiresAt);
+  const product = getProduct(model);
   if (
-    model !== 'gfs' ||
-    m.coverage.id !== 'soaring-land-v1' ||
+    !product || product !== GFS_PRODUCT ||
+    m.coverage.id !== product.coverageId ||
     m.coverage.hash !== (await witnessPromise) ||
     m.coverage.maxZoom > mask.maxZoom ||
-    (Object.keys(GFS_GRID) as (keyof typeof GFS_GRID)[]).some(key => m.grid[key] !== GFS_GRID[key])
+    (Object.keys(product.grid) as (keyof typeof product.grid)[]).some(key => m.grid[key] !== product.grid[key])
   ) {
     entries.delete(cacheKey);
     fail(503, 'coverage-unavailable', 'Coverage for this publication is unavailable');
+  }
+  sampleLayout ??= prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
+  if (!artifactIndexes.has(m)) {
+    try { validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
+    if (m.samples.storedCells !== sampleLayout.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
+    const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
+    const layers = new Map(m.layers.map((layer, i) => [layer, i]));
+    const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
+    for (const item of m.artifacts) {
+      index.set(`${item.layer}/${item.frame}`, { ...item, channel: frames.get(item.frame)! * m.layers.length + layers.get(item.layer)! });
+    }
+    artifactIndexes.set(m, index);
   }
   if (!entries.has(cacheKey)) {
     if (entries.size >= MAX_CACHED_MANIFESTS) {
@@ -228,10 +246,10 @@ function servedSource(m: Manifest, origin: string, compact = true): Record<strin
 function artifact(m: Manifest, layer: LayerId, frame: string) {
   validateId(frame);
   if (!m.layers.includes(layer) || !m.frames.some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
-  const item = m.artifacts.find(a => a.layer === layer && a.frame === frame);
+  const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
   if (!item) fail(503, 'publication-incomplete', 'Artifact missing from manifest');
   const prefix = `builds/${m.model}/${m.buildId}`;
-  if (item.tilesKey !== `${prefix}/${layer}/${frame}.pmtiles` || item.samplesKey !== `${prefix}/samples/${layer}/${frame}.bin`) {
+  if (item.tilesKey !== `${prefix}/${layer}/${frame}.pmtiles`) {
     fail(503, 'publication-invalid', 'Invalid artifact key');
   }
   return item;
@@ -677,7 +695,7 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
   const requested = url.searchParams.get('frame');
   const frameIds = requested === 'all' ? m.frames.map(f => f.id) : requested === null ? [m.frames[0].id] : requested.split(',');
   const layers = url.searchParams.get('layers')?.split(',') ?? [...m.layers];
-  if (frameIds.length > 8 || layers.length > 3) fail(429, 'sample-limit', 'Select at most eight frames and three layers');
+  if (frameIds.length * layers.length > MAX_SAMPLE_VALUES) fail(429, 'sample-limit', `Select at most ${MAX_SAMPLE_VALUES} frame/layer values`);
   if (!frameIds.length || !layers.length || new Set(frameIds).size !== frameIds.length || new Set(layers).size !== layers.length) {
     fail(400, 'invalid-query', 'Select distinct frames and layers');
   }
@@ -689,7 +707,7 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
       return f;
     })
     .sort((a, b) => a.validTime.localeCompare(b.validTime));
-  const jobs = frames.flatMap(frame => selectedLayers.map(layer => ({ frame, layer, artifact: artifact(m, layer, frame.id) })));
+  const jobs = frames.flatMap(frame => selectedLayers.map(layer => ({ frame, layer, channel: artifact(m, layer, frame.id).channel })));
   const canonical = new URL(url.origin + url.pathname);
   canonical.searchParams.set('lat', String(lat));
   canonical.searchParams.set('lon', String(lon));
@@ -699,49 +717,36 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
     const outside = !isCovered(mask, lat, lon);
     const plan = outside ? null : planSample(m.grid, lat, lon);
-    const values = new Map<string, { value: number | null; status: number; support: number; interpolated: boolean }>();
-    let cursor = 0;
-    async function worker() {
-      for (;;) {
-        const job = jobs[cursor++];
-        if (!job) return;
-        let value = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false } as {
-          value: number | null;
-          status: number;
-          support: number;
-          interpolated: boolean;
-        };
-        if (plan) {
-          const { offset, length } = plan.byteRange;
-          const size = m.grid.width * m.grid.height * CELL_BYTES;
-          if (
-            !Number.isSafeInteger(size) ||
-            !Number.isSafeInteger(offset) ||
-            !Number.isSafeInteger(length) ||
-            offset < 0 ||
-            length <= 0 ||
-            offset + length > size ||
-            length > 2 * m.grid.width * CELL_BYTES
-          ) {
-            fail(503, 'publication-invalid', 'Invalid sample range');
-          }
-          const object = await bucket.get(job.artifact.samplesKey, { range: { offset, length } });
-          if (!object || !('body' in object) || object.size !== size) fail(503, 'publication-incomplete', 'Sample array missing or invalid');
-          const bytes = new Uint8Array(await object.arrayBuffer());
-          if (bytes.byteLength !== length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-          value = sampleCells(plan, cellsFromRange(plan, bytes), job.layer);
-        }
-        values.set(`${job.frame.id}/${job.layer}`, value);
+    const packed = plan ? planPackedSample(sampleLayout!, plan, m.samples.channelCount, jobs.map(job => job.channel)) : null;
+    if (packed) {
+      const { offset, length } = packed.byteRange;
+      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > m.samples.bytes) {
+        fail(503, 'publication-invalid', 'Invalid sample range');
       }
+      if (length > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample range exceeds the byte budget');
     }
-    await Promise.all(Array.from({ length: Math.min(4, jobs.length) }, worker));
+    const source = servedSource(m, url.origin);
+    let bytes: Uint8Array = new Uint8Array();
+    if (packed) {
+      const object = await bucket.get(m.samples.key, { range: packed.byteRange });
+      if (!object || !('body' in object) || object.size !== m.samples.bytes) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
+      bytes = new Uint8Array(await object.arrayBuffer());
+      ensureLive(m.expiresAt);
+      if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
+    }
+    const values = new Map<string, Sample>();
+    for (const job of jobs) {
+      values.set(`${job.frame.id}/${job.layer}`, plan && packed
+        ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), job.layer)
+        : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false });
+    }
     const result = {
       model: m.model,
       buildId: m.buildId,
       lat,
       lon,
       method: m.method,
-      source: servedSource(m, url.origin),
+      source,
       coverage: m.coverage,
       expiresAt: m.expiresAt,
       frames: frames.map(frame => ({
@@ -756,8 +761,8 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
     };
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString()));
     const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}-v2`);
-  }, 'source-v2');
+    return json(result, m.expiresAt, `sample-${tag}-v3`);
+  }, 'sample-blocks-v1');
 }
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });

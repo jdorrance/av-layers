@@ -19,6 +19,11 @@ describe('packaged libwebp lossless codec', () => {
     expect(WEBP_ENCODER.options).toMatchObject({ lossless: true, exact: true });
   });
 
+  it.each([0, 2, 4, 6])('preserves exact RGBA at benchmark effort %i', async effort => {
+    const rgba = Uint8Array.from([1, 2, 3, 0, 185, 59, 136, 128, 0, 255, 0, 255, 0, 0, 255, 255]);
+    expect((await decodeWebp(await encodeWebp(rgba, 2, 2, effort))).data).toEqual(rgba);
+  });
+
   it('decodes an independently encoded libwebp image and respects byte-view bounds', async () => {
     // cwebp 1.5.0 -lossless -exact, from a 2x2 RGBA PNG containing these pixels.
     const fixture = Buffer.from('UklGRjgAAABXRUJQVlA4TCsAAAAvAUAAEB9AIEBRrPJ/mBsCgaT9hcYjEKAotttNIEBw7lzgn7S6F9Yhov8RAA==', 'base64');
@@ -36,6 +41,8 @@ describe('packaged libwebp lossless codec', () => {
   });
 
   it('rejects invalid dimensions and incomplete RGBA input', async () => {
+    await expect(encodeWebp(new Uint8Array(4), 1, 1, 7)).rejects.toThrow(RangeError);
+    await expect(encodeWebp(new Uint8Array(4), 1, 1, 1.5)).rejects.toThrow(RangeError);
     await expect(encodeWebp(new Uint8Array(4), 0, 1)).rejects.toThrow(RangeError);
     await expect(encodeWebp(new Uint8Array(4), 1.5, 1)).rejects.toThrow(RangeError);
     await expect(encodeWebp(new Uint8Array(4), 16384, 1)).rejects.toThrow(RangeError);

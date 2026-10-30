@@ -1,13 +1,12 @@
-import { getBit, LAYER_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP, type CoverageMask, type LayerId } from '@av/contracts';
+import { coverageIndices, LAYER_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP, type CoverageMask, type LayerId } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 
-export function summarizeFields(fields: Record<LayerId, GridField>, mask: CoverageMask) {
+export function summarizeFields(fields: Record<LayerId, GridField>, mask: CoverageMask, outputIndices = coverageIndices(mask).output) {
   return Object.fromEntries(LAYER_IDS.map(layer => {
     const field = fields[layer];
     const counts = { valid: 0, noLift: 0, unavailable: 0, outside: 0, parcelCrossing: 0, profileTop: 0, pblClosure: 0 };
     let min = Infinity, max = -Infinity, total = 0;
-    for (let i = 0; i < mask.grid.width * mask.grid.height; i++) {
-      if (!getBit(mask.output, i)) continue;
+    for (const i of outputIndices) {
       const flags = field.flags[i], status = flags & STATUS_MASK;
       if (status === STATUS_VALID) {
         const value = field.values[i];

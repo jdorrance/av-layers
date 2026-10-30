@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
 
 export { validateArtifactRecords };
 
@@ -84,11 +84,9 @@ async function main(): Promise<void> {
   const bucket = config.r2_buckets?.[0]?.bucket_name;
   invariant(typeof bucket === 'string' && bucket, 'apps/api/wrangler.jsonc must bind one private R2 bucket');
 
-  for (const artifact of manifest.artifacts) {
-    for (const key of [artifact.tilesKey, artifact.samplesKey]) {
-      const file = join(outputRoot, key);
-      invariant(existsSync(file) && statSync(file).size > 0, `missing real artifact: ${key}`);
-    }
+  for (const { key } of forecastObjects(manifest)) {
+    const file = join(outputRoot, key);
+    invariant(existsSync(file) && statSync(file).size > 0, `missing real artifact: ${key}`);
   }
 
   const node = node22();
@@ -96,12 +94,11 @@ async function main(): Promise<void> {
   const marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
   mkdirSync(markerDir, { recursive: true });
 
-  // Seed the receipt even when an older preview marker already covers the arrays.
+  // Seed provenance independently of the immutable forecast payloads.
   if (provenance) putObject(node, bucket, provenance.key, join(outputRoot, provenance.key), 'application/json', persistTo);
   if (shouldSeedAssets(existsSync(marker), reseed)) {
-    for (const artifact of manifest.artifacts) {
-      putObject(node, bucket, artifact.tilesKey, join(outputRoot, artifact.tilesKey), 'application/vnd.pmtiles', persistTo);
-      putObject(node, bucket, artifact.samplesKey, join(outputRoot, artifact.samplesKey), 'application/octet-stream', persistTo);
+    for (const { key, contentType } of forecastObjects(manifest)) {
+      putObject(node, bucket, key, join(outputRoot, key), contentType, persistTo);
     }
     putObject(node, bucket, manifestKey, manifestPath, 'application/json', persistTo);
     writeFileSync(marker, JSON.stringify({ bucket, buildId: manifest.buildId, manifestSha, artifacts: manifest.artifacts.length }));

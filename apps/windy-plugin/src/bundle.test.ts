@@ -66,10 +66,11 @@ it.each([
   const fixture = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
   const manifest = manifestSchema.parse({
     ...fixture, buildId: 'b1', expiresAt, frames, layers: ['precip-rate'],
+    samples: { ...fixture.samples, key: 'builds/gfs/b1/samples.bin', channelCount: frames.length, bytes: fixture.samples.storedCells * frames.length * 5 },
     artifacts: frames.map(frame => ({
       layer: 'precip-rate', frame: frame.id,
-      tilesKey: `builds/gfs/b1/precip-rate/${frame.id}.pmtiles`, samplesKey: `builds/gfs/b1/samples/precip-rate/${frame.id}.bin`,
-      tilesSha256: 'a'.repeat(64), samplesSha256: 'b'.repeat(64)
+      tilesKey: `builds/gfs/b1/precip-rate/${frame.id}.pmtiles`,
+      tilesSha256: 'a'.repeat(64)
     }))
   });
   validateArtifactRecords(manifest);

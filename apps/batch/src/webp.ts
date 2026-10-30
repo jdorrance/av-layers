@@ -9,11 +9,12 @@ export interface WebpImage {
 const options = { lossless: true, exact: true, quality: 75, effort: 4 } as const;
 export const WEBP_ENCODER = { package: 'sharp', version: sharp.versions.sharp, libwebp: sharp.versions.webp, libvips: sharp.versions.vips, options } as const;
 
-export async function encodeWebp(rgba: Uint8Array, width = 256, height = 256): Promise<Buffer> {
+export async function encodeWebp(rgba: Uint8Array, width = 256, height = 256, effort: number = options.effort): Promise<Buffer> {
   if (![width, height].every(n => Number.isInteger(n) && n > 0 && n <= 16383) || rgba.byteLength !== width * height * 4) {
     throw new RangeError('Invalid WebP dimensions or RGBA byte length');
   }
-  return sharp(rgba, { raw: { width, height, channels: 4 } }).webp(options).toBuffer();
+  if (!Number.isInteger(effort) || effort < 0 || effort > 6) throw new RangeError('Invalid WebP effort');
+  return sharp(rgba, { raw: { width, height, channels: 4 } }).webp({ ...options, effort }).toBuffer();
 }
 
 /** Fully decode the lossless format produced by this batch pipeline. */

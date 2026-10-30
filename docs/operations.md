@@ -30,19 +30,27 @@ unchanged. Build IDs are never reused.
 
 Publication refuses older cycles, expired builds and builds more than six hours
 old. Use `--allow-same-cycle` only for an intentional method replacement. Retained
-membership is capped at 128 builds; publication refuses overflow instead of
-dropping live builds.
+membership has a bounded cap in the [shared contract](../packages/contracts/src/index.ts);
+publication refuses overflow instead of dropping live builds. `pnpm capacity`
+checks cadence against retention, including headroom for replacement builds.
 
 <details>
 <summary>What upload verification establishes</summary>
 
 Local artifacts are checked with SHA-256. Uploads use single-part PUTs with
-`Content-MD5`, at most four concurrently. Readback checks size, the expected MD5
+`Content-MD5`, at most four concurrently and within the publisher's byte budget.
+Oversized artifacts fail before allocation or upload. Readback checks size, the expected MD5
 ETag and a 32-byte tail with matching ETag; the complete manifest is read back.
 Multipart or opaque ETags are rejected. This relies on R2 validating MD5 and
 faithfully reporting stored-object ETags. It is not an independent remote
 SHA-256 scrub and cannot detect corrupt bytes hidden behind dishonest or stale
 backend metadata.
+
+The forecast workflow builds and publishes in one process. It reuses a successful
+validation result only while its manifest contents and output root are unchanged;
+it still hashes every byte actually uploaded. Standalone `publish` performs full
+validation. No receipt file, path, timestamp or caller-supplied digest can bypass
+that validation.
 
 </details>
 
@@ -84,7 +92,7 @@ The order is **Bootstrap → Forecast sample → Deploy Worker and Pages**. Afte
 the first release, pushes to `main` run CI and then deploy automatically, and
 the forecast workflow runs at `05:17` and `17:17 UTC` for production. These
 twelve-hour updates overlap the normal 24-hour forecast horizons, with room for
-the six-hour job budget. Monitor horizon exhaustion for upstream or scheduling
+the workflow timeout. Monitor horizon exhaustion for upstream or scheduling
 delays; this cadence is not an availability guarantee.
 
 Each release or maintenance workflow checks for a newer `main` commit at start.
@@ -117,7 +125,7 @@ fails closed when that header or the limiter is unavailable.
 The [forecast workflow](../.github/workflows/forecast.yml) owns cadence, timeout
 and per-model serialization. It validates the environment's publisher
 credentials and bucket mapping before spending time on acquisition, then builds,
-validates and publishes. Missing credentials fail the run rather than reporting
+validates, checks [resource budgets](../apps/batch/src/capacity.ts), and publishes. Missing credentials fail the run rather than reporting
 a green skipped publication. A rerun creates a fresh build. GitHub schedules can
 be delayed or disabled; recover with manual dispatch and an explicit cycle.
 
@@ -153,3 +161,10 @@ R2 operations and storage, Worker CPU/cache hits, and cold versus warm tile/samp
 latency. Include runner and Worker costs. Use recorded representative networks
 before claiming latency targets or savings; adjust scope or cadence from measured
 results. [Development](development.md) describes validation and evidence collection.
+
+For capacity planning, `pnpm capacity --cadence-hours 1 --frames 16 --layers 6`
+reports tile work, numeric storage, point-read size and retained builds. It exits
+unsuccessfully when a proposed workload exceeds admission limits. Retained bytes
+exclude archives, replacements and failed uploads; add their measured sizes.
+Keep cleanup serialized with publishers; lifecycle deletion and more frequent
+scheduling are not free substitutes for that protocol.

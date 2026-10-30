@@ -4,6 +4,8 @@ import {
   GFS_PRODUCTS,
 } from './constants.ts';
 import { NoaaError } from './errors.ts';
+import { discoverGfsRunWithTransport } from './discover.ts';
+import { prefetchFields } from './prefetch.ts';
 import { inspectGfsField, type InspectedGfsField } from './admission.ts';
 import {
   gfsCompanionSpecs,
@@ -19,13 +21,14 @@ import {
   recoverTrailingWindow,
   validAt,
 } from './intervals.ts';
-import { NoaaTransport, selectGfsRecord, type NoaaTransportStats } from './transport.ts';
+import { NoaaTransport, gfsRecordWorkingBytes, selectGfsRecord, type NoaaTransportStats } from './transport.ts';
 import { NoaaFieldSampler } from './sampling.ts';
 import type {
   AcquireGfsFrameOptions,
   DecodedFieldReceipt,
   GfsFieldSpec,
   GfsFrameAcquisition,
+  GfsAcquisitionSession, GfsAcquisitionSessionOptions, GfsAcquisitionStats,
 } from './types.ts';
 
 const TOTAL_CELLS = GFS_CONTRACT_GRID.width * GFS_CONTRACT_GRID.height;
@@ -81,12 +84,16 @@ export function contractIndexToNativeIndex(index: number): number {
 }
 
 interface LoadedField {
-  inspected: InspectedGfsField;
+  inspected?: InspectedGfsField;
+  grid: InspectedGfsField['grid'];
+  packingError: number;
   receipt: DecodedFieldReceipt;
+  indexSha256: string;
+  sampled?: SampledColumn;
 }
 
-interface SampledColumn {
-  values: Float64Array;
+interface SampledColumn<T extends Float32Array | Float64Array = Float64Array> {
+  values: T;
   missing: Uint8Array;
   missingCount: number;
 }
@@ -101,25 +108,77 @@ function hoursInWindow(receipt: DecodedFieldReceipt): number {
   return (Date.parse(window.end) - Date.parse(window.start)) / 3_600_000;
 }
 
-export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: NoaaTransportStats): Promise<GfsFrameAcquisition> {
-  const { hour } = options;
-  const cycle = validateCycle(options.cycle);
-  validateHour(hour);
+interface AcquisitionContext {
+  cycle: string; activeIndices: Uint32Array; nativeIndices: Uint32Array;
+  transport: NoaaTransport; sampler: NoaaFieldSampler; signal: AbortSignal;
+  fail: (reason: unknown) => void; fetchConcurrency: number; prefetchBytes: number;
+  stats: GfsAcquisitionStats; raw: Map<string, Omit<LoadedField, 'inspected'>>;
+}
+
+export async function createGfsAcquisitionSession(options: GfsAcquisitionSessionOptions, transportStats?: NoaaTransportStats): Promise<GfsAcquisitionSession> {
   const activeIndices = validateActiveIndices(options.activeIndices);
+  const fetchConcurrency = options.fetchConcurrency ?? 2, prefetchBytes = options.prefetchBytes ?? 64 * 1024 * 1024;
+  if (!Number.isInteger(fetchConcurrency) || fetchConcurrency < 1 || fetchConcurrency > 8 || !Number.isSafeInteger(prefetchBytes) || prefetchBytes < 1) invalid('Invalid acquisition prefetch budget');
+  const controller = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  signal.throwIfAborted();
+  const transport = new NoaaTransport({ ...options, signal, stats: transportStats });
+  const sampler = new NoaaFieldSampler();
+  const cancelDecoder = () => { void sampler.close().catch(() => {}); };
+  signal.addEventListener('abort', cancelDecoder, { once: true });
+  let cycle: string;
+  try { cycle = validateCycle(options.cycle ?? (await discoverGfsRunWithTransport({ ...options, signal }, transport)).cycle); }
+  catch (error) { controller.abort(error); signal.removeEventListener('abort', cancelDecoder); await sampler.close(); throw error; }
+  const stats: GfsAcquisitionStats = { transport: transport.stats, byPacking: sampler.stats, loadMs: 0, admitMs: 0, rawCompanionHits: 0, peakPrefetchBytes: 0 };
+  const context: AcquisitionContext = {
+    cycle, activeIndices, nativeIndices: Uint32Array.from(activeIndices, contractIndexToNativeIndex), transport, sampler, signal,
+    fail: reason => controller.abort(reason), fetchConcurrency, prefetchBytes, stats, raw: new Map(),
+  };
+  let closed = false, active: Promise<GfsFrameAcquisition> | undefined, closing: Promise<void> | undefined;
+  return {
+    cycle, stats,
+    async acquire(hour) {
+      if (closed) invalid('GFS acquisition session is closed');
+      if (active) invalid('Acquire frames sequentially within a GFS session');
+      validateHour(hour); signal.throwIfAborted();
+      active = acquireFrame(context, hour);
+      try { return await active; }
+      catch (error) { closed = true; controller.abort(error); context.raw.clear(); await sampler.close(); throw error; }
+      finally { active = undefined; }
+    },
+    close() {
+      closing ??= (async () => {
+        closed = true; controller.abort(new NoaaError('invalid-option', 'GFS acquisition session is closed'));
+        context.raw.clear(); signal.removeEventListener('abort', cancelDecoder);
+        const [decoder] = await Promise.allSettled([sampler.close(), active]);
+        if (decoder.status === 'rejected') throw decoder.reason;
+      })();
+      return closing;
+    },
+  };
+}
+
+export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: NoaaTransportStats): Promise<GfsFrameAcquisition> {
+  validateHour(options.hour);
+  const session = await createGfsAcquisitionSession(options, stats);
+  try { return await session.acquire(options.hour); }
+  finally { await session.close(); }
+}
+
+async function acquireFrame(context: AcquisitionContext, hour: number): Promise<GfsFrameAcquisition> {
+  const { cycle, activeIndices, nativeIndices, transport, sampler } = context;
   const capturedAt = new Date().toISOString();
-  const transport = new NoaaTransport({
-    fetch: options.fetch,
-    fetchImpl: options.fetchImpl,
-    signal: options.signal,
-    cacheDir: options.cacheDir,
-    stats,
-  });
+  const nextRaw = new Map<string, Omit<LoadedField, 'inspected'>>();
   const stamp = cycleStamp(cycle);
   const currentStartHour = gfsWindowStart(hour);
   const primaryUrl = gfsFileUrl(cycle, hour, GFS_PRODUCTS.primary);
   const secondaryUrl = gfsFileUrl(cycle, hour, GFS_PRODUCTS.secondary);
-  const primaryIndex = await transport.index(`${primaryUrl}.idx`, stamp);
-  const secondaryIndex = await transport.index(`${secondaryUrl}.idx`, stamp);
+  const indexRequests = [transport.index(`${primaryUrl}.idx`, stamp), transport.index(`${secondaryUrl}.idx`, stamp)] as const;
+  const [primaryIndex, secondaryIndex] = await Promise.all(indexRequests).catch(async error => {
+    context.fail(error);
+    await Promise.allSettled(indexRequests);
+    throw error;
+  });
 
   const load = async (
     spec: GfsFieldSpec,
@@ -133,9 +192,19 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
     const index = spec.role === 'companion'
       ? await transport.index(`${url}.idx`, stamp)
       : spec.product === 'primary' ? primaryIndex : secondaryIndex;
+    if (gfsRecordWorkingBytes(index, spec) > context.prefetchBytes) throw new NoaaError('transport', 'GRIB record exceeds acquisition byte budget');
+    const rawKey = `${url}\n${spec.key}`;
+    const prior = spec.role === 'companion' ? context.raw.get(rawKey) : undefined;
+    if (prior && prior.indexSha256 === index.asset.sha256 && prior.receipt.forecastLabel === spec.forecast && prior.grid.gridKey === expectedGridKey) {
+      context.stats.rawCompanionHits++;
+      return { ...prior, receipt: { ...structuredClone(prior.receipt), role: 'companion' } };
+    }
+    const started = performance.now();
     const selection = await selectGfsRecord(transport, url, index, spec);
     const selected = selection.selected;
     const bytes = selection.bytes ?? await transport.field(url, selected.record);
+    context.stats.loadMs += performance.now() - started;
+    const admittedAt = performance.now();
     const inspected = inspectGfsField(bytes.bytes, {
       cycle,
       spec,
@@ -143,6 +212,7 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
       expectedEndHour: endHour,
       expectedGridKey,
     });
+    context.stats.admitMs += performance.now() - admittedAt;
     const receipt: DecodedFieldReceipt = {
       ...inspected.receipt,
       product: spec.product,
@@ -153,44 +223,47 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
       asset: bytes.asset,
       ...(selection.duplicates ? { duplicates: selection.duplicates } : {}),
     };
-    return { inspected, receipt };
+    return { inspected, grid: inspected.grid, packingError: inspected.packingError, receipt, indexSha256: index.asset.sha256 };
   };
 
-  const sampler = new NoaaFieldSampler();
-  const decode = async (loaded: LoadedField, nativeIndices: Uint32Array): Promise<SampledColumn> => {
+  const decode = async <T extends Float32Array | Float64Array = Float64Array>(loaded: LoadedField, nativeIndices: Uint32Array, destination?: T): Promise<SampledColumn<T>> => {
     transport.abort();
-    const sampled = await sampler.sample(loaded.inspected, nativeIndices);
+    if (loaded.sampled) return loaded.sampled as SampledColumn<T>;
+    if (!loaded.inspected) throw new NoaaError('decode', 'Admitted field is missing');
+    const sampled = await sampler.sample(loaded.inspected, nativeIndices, destination);
+    loaded.inspected = undefined; // Do not retain compressed bytes after sampling.
     loaded.receipt.decodedMissingCount = sampled.missingCount;
     return sampled;
   };
 
+  const prefetch = (specs: readonly GfsFieldSpec[], gridKey: string) => prefetchFields(
+    specs,
+    spec => gfsRecordWorkingBytes(spec.product === 'primary' ? primaryIndex : secondaryIndex, spec),
+    spec => load(spec, hour, hour, gridKey),
+    { concurrency: context.fetchConcurrency, maxBytes: context.prefetchBytes, signal: context.signal, fail: context.fail,
+      peak: bytes => { context.stats.peakPrefetchBytes = Math.max(context.stats.peakPrefetchBytes, bytes); } },
+  );
+  const instant = (loaded: LoadedField) => decode(loaded, nativeIndices, new Float32Array(activeIndices.length));
   try {
     const specs = gfsCurrentSpecs(hour);
     const surfaceSpecs = specs.filter((spec) => spec.kind !== 'height' && spec.kind !== 'temperature');
     const terrainSpec = surfaceSpecs.find((spec) => spec.kind === 'terrain');
     if (!terrainSpec) throw new NoaaError('invalid-option', 'GFS terrain spec missing');
     const terrainField = await load(terrainSpec, hour, hour);
-    const sourceGrid = terrainField.inspected.grid;
+    const sourceGrid = terrainField.grid;
     if (sourceGrid.kind !== 'latlon') {
       throw new NoaaError('unsupported-grid', 'GFS terrain is not regular lat-lon');
     }
-    const nativeIndices = Uint32Array.from(activeIndices, contractIndexToNativeIndex);
-    const terrain = await decode(terrainField, nativeIndices);
+    const terrain = await instant(terrainField);
 
     const receipts: DecodedFieldReceipt[] = [terrainField.receipt];
-    const outputs: Partial<Record<'surfacePressure' | 'temp2m' | 'spfh2m' | 'pbl', SampledColumn>> = {};
+    const outputs: Partial<Record<'surfacePressure' | 'temp2m' | 'spfh2m' | 'pbl', SampledColumn<Float32Array>>> = {};
 
-    for (const spec of surfaceSpecs) {
-      if (
-        spec.kind === 'terrain' ||
-        spec.kind === 'sensible-flux' ||
-        spec.kind === 'latent-flux' ||
-        spec.kind === 'precipitation'
-      ) {
-        continue;
-      }
-      const loaded = await load(spec, hour, hour, sourceGrid.gridKey);
-      const sampled = await decode(loaded, nativeIndices);
+    const instantSpecs = surfaceSpecs.filter(spec => spec.statistic === 'instant' && spec.kind !== 'terrain');
+    let surfaceIndex = 0;
+    for await (const loaded of prefetch(instantSpecs, sourceGrid.gridKey)) {
+      const spec = instantSpecs[surfaceIndex++]!;
+      const sampled = await instant(loaded);
       receipts.push(loaded.receipt);
       if (spec.kind === 'surface-pressure') outputs.surfacePressure = sampled;
       else if (spec.kind === 'temp-2m') outputs.temp2m = sampled;
@@ -213,6 +286,10 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
     for (const spec of intervalSpecs) {
       const current = await load(spec, currentStartHour, hour, sourceGrid.gridKey);
       const currentSampled = await decode(current, nativeIndices);
+      if (!needsCompanion) nextRaw.set(`${current.receipt.url}\n${spec.key}`, {
+        grid: current.grid, packingError: current.packingError, receipt: structuredClone(current.receipt),
+        indexSha256: current.indexSha256, sampled: currentSampled,
+      });
       receipts.push(current.receipt);
       let companion: LoadedField | null = null;
       let companionSampled: SampledColumn | null = null;
@@ -234,8 +311,8 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
         currentHours: hoursInWindow(current.receipt),
         previousHours: companion ? hoursInWindow(companion.receipt) : 0,
         statistic: spec.statistic === 'accumulation' ? 'accumulation' : 'mean',
-        packingErrorCurrent: current.inspected.packingError,
-        packingErrorPrevious: companion?.inspected.packingError ?? 0,
+        packingErrorCurrent: current.packingError,
+        packingErrorPrevious: companion?.packingError ?? 0,
       });
       intervalOutputs.set(spec.kind, recovered);
       windowReceipts.set(spec.key, { current: current.receipt, companion: companion?.receipt ?? null });
@@ -260,20 +337,14 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
     const tempK: Float32Array[] = [];
     const hgtMissing: Uint8Array[] = [];
     const tempMissing: Uint8Array[] = [];
-    for (const levelHpa of GFS_PRESSURE_LEVELS_HPA) {
-      const heightSpec = specs.find((spec) => spec.key === `${levelHpa}.hgt`);
-      const tempSpec = specs.find((spec) => spec.key === `${levelHpa}.tmp`);
-      if (!heightSpec || !tempSpec) throw new NoaaError('invalid-option', `Missing GFS pressure spec ${levelHpa}`);
-      const heightField = await load(heightSpec, hour, hour, sourceGrid.gridKey);
-      const heightSampled = await decode(heightField, nativeIndices);
-      receipts.push(heightField.receipt);
-      hgtM.push(Float32Array.from(heightSampled.values));
-      hgtMissing.push(heightSampled.missing);
-      const tempField = await load(tempSpec, hour, hour, sourceGrid.gridKey);
-      const tempSampled = await decode(tempField, nativeIndices);
-      receipts.push(tempField.receipt);
-      tempK.push(Float32Array.from(tempSampled.values));
-      tempMissing.push(tempSampled.missing);
+    const pressureSpecs = specs.filter(spec => spec.kind === 'height' || spec.kind === 'temperature');
+    let pressureIndex = 0;
+    for await (const loaded of prefetch(pressureSpecs, sourceGrid.gridKey)) {
+      const spec = pressureSpecs[pressureIndex++]!;
+      const sampled = await instant(loaded);
+      receipts.push(loaded.receipt);
+      if (spec.kind === 'height') { hgtM.push(sampled.values); hgtMissing.push(sampled.missing); }
+      else { tempK.push(sampled.values); tempMissing.push(sampled.missing); }
     }
 
     const surfacePressure = outputs.surfacePressure;
@@ -308,6 +379,7 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
       (precipPair.companion?.packingError ?? 0) +
       1e-9;
 
+    context.raw = nextRaw;
     return {
       schemaVersion: 1,
       model: 'gfs',
@@ -316,12 +388,12 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
       validAt: validAt(cycle, hour),
       capturedAt,
       grid: { ...GFS_CONTRACT_GRID, wrapLongitude: true },
-      activeIndices,
-      terrainM: Float32Array.from(terrain.values),
-      surfacePressurePa: Float32Array.from(surfacePressure.values),
-      temp2mK: Float32Array.from(temp2m.values),
-      specificHumidity2mKgKg: Float32Array.from(spfh2m.values),
-      pblHeightM: Float32Array.from(pbl.values),
+      activeIndices: new Uint32Array(activeIndices),
+      terrainM: terrain.values,
+      surfacePressurePa: surfacePressure.values,
+      temp2mK: temp2m.values,
+      specificHumidity2mKgKg: spfh2m.values,
+      pblHeightM: pbl.values,
       sensibleHeatFluxWm2: sensible.values,
       latentHeatFluxWm2: latent.values,
       precipitationMmPerHour: precipitation.values,
@@ -382,7 +454,8 @@ export async function acquireGfsFrame(options: AcquireGfsFrameOptions, stats?: N
         },
       },
     };
-  } finally {
-    await sampler.close();
+  } catch (error) {
+    context.fail(error);
+    throw error;
   }
 }

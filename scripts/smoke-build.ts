@@ -1,19 +1,15 @@
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { CELL_BYTES, manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+import { forecastObjects, manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+import { fileSha256, loadCoverage, localPath, validateSamplePack } from '../apps/batch/src/validate.js';
 
 export { validateArtifactRecords, validateSampleFlags };
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
 }
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -28,24 +24,17 @@ async function main(): Promise<void> {
 
   const manifest = manifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
   const root = dirname(dirname(dirname(dirname(manifestPath))));
-  const expectedSamples = manifest.grid.width * manifest.grid.height * CELL_BYTES;
   validateArtifactRecords(manifest);
+  await validateSamplePack(localPath(root, manifest.samples.key), manifest, await loadCoverage());
 
   for (const artifact of manifest.artifacts) {
-    const tilesPath = join(root, artifact.tilesKey);
-    const samplesPath = join(root, artifact.samplesKey);
+    const tilesPath = localPath(root, artifact.tilesKey);
     invariant(existsSync(tilesPath), `missing archive: ${artifact.tilesKey}`);
-    invariant(existsSync(samplesPath), `missing samples: ${artifact.samplesKey}`);
-    const tilesBytes = readFileSync(tilesPath);
-    const samplesBytes = readFileSync(samplesPath);
-    invariant(sha256(tilesBytes) === artifact.tilesSha256, `archive hash mismatch: ${artifact.tilesKey}`);
-    invariant(sha256(samplesBytes) === artifact.samplesSha256, `samples hash mismatch: ${artifact.samplesKey}`);
-    invariant(statSync(samplesPath).size === expectedSamples, `samples length ${samplesBytes.length}, expected ${expectedSamples}: ${artifact.samplesKey}`);
-    validateSampleFlags(samplesBytes, expectedSamples, artifact.layer);
+    invariant(await fileSha256(tilesPath) === artifact.tilesSha256, `archive hash mismatch: ${artifact.tilesKey}`);
     execFileSync(pmtilesBin, ['verify', tilesPath], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 });
   }
 
-  console.log(`smoke-build: ok ${manifest.model} ${manifest.buildId} (${manifest.frames.length} frames, ${manifest.artifacts.length} artifact records, ${manifest.artifacts.length * 2} object paths)`);
+  console.log(`smoke-build: ok ${manifest.model} ${manifest.buildId} (${manifest.frames.length} frames, ${manifest.artifacts.length} artifact records, ${forecastObjects(manifest).length} object paths)`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

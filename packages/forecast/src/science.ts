@@ -36,7 +36,12 @@ export function usableLiftDepthM(depthM: number, velocityMps: number): number | 
   if (!Number.isFinite(depthM) || !Number.isFinite(velocityMps) || depthM <= 0 || velocityMps <= 0 || velocityMps * LENSCHOW_F_MAX < SINK_RATE_MPS) return null;
   if (velocityMps * lenschowNormalizedUpdraft(1) >= SINK_RATE_MPS) return depthM;
   let lo = LENSCHOW_PEAK_ZETA, hi = 1;
-  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (velocityMps * lenschowNormalizedUpdraft(mid) >= SINK_RATE_MPS) lo = mid; else hi = mid; }
+  for (let i = 0; i < 60; i++) {
+    const previousLo = lo, previousHi = hi, mid = (lo + hi) / 2;
+    if (velocityMps * lenschowNormalizedUpdraft(mid) >= SINK_RATE_MPS) lo = mid; else hi = mid;
+    // The next deterministic iteration cannot change an identical bracket.
+    if (lo === previousLo && hi === previousHi) break;
+  }
   return depthM * (lo + hi) / 2;
 }
 export function deriveColumn(input: ColumnInput): ColumnResult {

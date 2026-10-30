@@ -1,5 +1,6 @@
 import type { IdxRecord } from '@azohra/meteo.grib';
 import type { NoaaTransportStats } from './transport.ts';
+import type { FieldSamplingStats } from './sampling.ts';
 
 export interface NoaaFetchOptions {
   fetch?: typeof fetch;
@@ -27,6 +28,35 @@ export interface AcquireGfsFrameOptions extends NoaaFetchOptions {
   hour: number;
   activeIndices: Uint32Array;
   cacheDir?: string;
+}
+
+export interface GfsAcquisitionSessionOptions extends NoaaFetchOptions {
+  cycle?: string;
+  activeIndices: Uint32Array;
+  cacheDir?: string;
+  now?: Date;
+  /** At most this many records fetched ahead; defaults to 2. */
+  fetchConcurrency?: number;
+  /** Hard bound on reserved compressed record buffers; defaults to 64 MiB. */
+  prefetchBytes?: number;
+}
+
+export interface GfsAcquisitionStats {
+  transport: NoaaTransportStats;
+  byPacking: Record<string, FieldSamplingStats>;
+  loadMs: number;
+  admitMs: number;
+  rawCompanionHits: number;
+  peakPrefetchBytes: number;
+}
+
+/** One cycle/index ordering per session. Acquire frames sequentially; returned
+ * fields/receipts belong to the caller. Always close the session in finally. */
+export interface GfsAcquisitionSession {
+  readonly cycle: string;
+  readonly stats: GfsAcquisitionStats;
+  acquire(hour: number): Promise<GfsFrameAcquisition>;
+  close(): Promise<void>;
 }
 
 export type GfsFieldKind =

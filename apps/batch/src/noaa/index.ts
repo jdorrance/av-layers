@@ -2,7 +2,7 @@ export * from './constants.ts';
 export * from './errors.ts';
 export * from './types.ts';
 export { discoverGfsRun } from './discover.ts';
-export { acquireGfsFrame, contractIndexToNativeIndex } from './acquire.ts';
+export { acquireGfsFrame, createGfsAcquisitionSession, contractIndexToNativeIndex } from './acquire.ts';
 export { proveGfsInputs } from './prove.ts';
 export {
   gfsWindowStart,

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { manifestSchema } from '@av/contracts';
+import { forecastObjects, manifestSchema } from '@av/contracts';
 
 const commands = vi.hoisted(() => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
 vi.mock('node:child_process', () => commands);
@@ -30,7 +30,7 @@ async function preview(options: { receipt?: 'valid' | 'missing' | 'corrupt' | 'w
   const receipt = Buffer.from(JSON.stringify({ version: options.receipt === 'wrong schema' ? 2 : 1, model: manifest.model, buildId: manifest.buildId, cycle: options.receipt === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
   const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
   if (options.receipt) manifest.source = { provenanceKey, provenanceSha256: hash(receipt) };
-  for (const artifact of manifest.artifacts) for (const key of [artifact.tilesKey, artifact.samplesKey]) {
+  for (const { key } of forecastObjects(manifest)) {
     await mkdir(dirname(join(root, key)), { recursive: true });
     await writeFile(join(root, key), 'fixture artifact');
   }
@@ -77,9 +77,9 @@ describe('local preview provenance', () => {
     expect(commands.spawnSync).not.toHaveBeenCalled();
     expect(commands.spawn).not.toHaveBeenCalled();
   });
-  it('continues to seed legacy builds without an external receipt', async () => {
+  it('seeds numeric v2 builds with inline provenance', async () => {
     const { objectKeys } = await preview({});
-    expect(objectKeys).toHaveLength(50);
+    expect(objectKeys).toHaveLength(27);
     expect(objectKeys.some(key => key.endsWith('/provenance.json'))).toBe(false);
     expect(commands.spawn).toHaveBeenCalledOnce();
   });

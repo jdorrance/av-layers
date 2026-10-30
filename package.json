@@ -21,6 +21,7 @@
     "test": "vitest run",
     "build": "pnpm typecheck && pnpm --filter @av/preview build && pnpm --filter @av/windy-plugin build && pnpm --filter @av/api build",
     "build:sample": "tsx apps/batch/src/cli.ts build:sample",
+    "capacity": "tsx apps/batch/src/cli.ts capacity",
     "input:proof": "tsx apps/batch/src/cli.ts input-proof",
     "sample-preview": "tsx scripts/sample-preview.ts",
     "masks:build": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py",

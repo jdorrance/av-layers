@@ -2,9 +2,24 @@
 
 [Home](../README.md) · [Roadmap](roadmap.md)
 
-The GFS pipeline has been verified with a real forecast in a local runtime.
-Cloudflare publication and live client host integrations (including the optional
-Windy consumer) remain release work.
+The GFS pipeline has completed real builds, exact output comparisons, local
+Worker checks, and desktop/mobile-emulated preview checks. Cloudflare publication,
+physical devices and live consumer hosts remain release work.
+
+## Current evidence
+
+The complete packed build (`cell-major-blocks-v1`, 43.84 MB numeric pack and
+2,280-byte all-frame point range) and prepared renderer match the baseline
+implementation (87.2 s vs 648.1 s on cached local GFS inputs). Resource
+admission and CI budget checks are implemented in
+[`apps/batch/src/capacity.ts`](../apps/batch/src/capacity.ts).
+
+Local preview checks cover frame/layer switching, legend identity, forecast
+requests and point tables. Emulation establishes those observed behaviors, not
+physical-device speed or deployed cache performance.
+
+<details>
+<summary>Earlier local checkpoints</summary>
 
 ## Local GFS validation
 
@@ -39,16 +54,17 @@ quarter-pixel numeric samples. Point values remain MSL `null` and AGL `0` for
 physical no-lift.
 
 The local receipt is `output/evidence/no-lift-transparency-proof.json` (generated,
-not checked in). Earlier immutable archives and their historical receipts remain
-unchanged; their legends retain their original rendering style.
+not checked in). These PNG and flat-array artifacts are historical evidence.
+Current production serving uses the packed contract and lossless WebP.
+
+</details>
 
 ## Release boundaries
 
 Remote R2 uploads, publication integrity checks against Cloudflare, and a
-deployed Worker have not yet been demonstrated by this evidence. The preview
-server was opened, but the record does not include automated visual assertions.
-Plugin loader tests use fixtures; actual host behavior for external consumers
-still needs validation.
+deployed Worker have not yet been demonstrated by this evidence. Plugin loader
+tests use fixtures; actual host behavior for external consumers still needs
+validation. No deployment or publication was performed during this performance work.
 
 HRRR and ICON-Armenia products are deferred. The current build path supports GFS;
 the clients expose the reserved regional model IDs as unavailable.

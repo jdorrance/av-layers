@@ -4,7 +4,7 @@ import { loadCoverage, validateBuild, verifyCoverage } from './validate.js';
 
 function manifest(hash: string) {
   const timestamp = '2026-10-30T00:00:00.000Z', digest = '0'.repeat(64);
-  return { version: 1, model: 'gfs', buildId: 'test', cycle: timestamp, createdAt: timestamp, expiresAt: '2026-10-31T00:00:00.000Z', method: { id: 'test', hash: digest }, coverage: { id: 'soaring-land-v1', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames: [{ id: 'f003', validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp }], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'tile', samplesKey: 'samples', tilesSha256: digest, samplesSha256: digest }], source: {}, tool: {}, palettes: ['rain'], metrics: {} };
+  return { version: 2, model: 'gfs', buildId: 'test', cycle: timestamp, createdAt: timestamp, expiresAt: '2026-10-31T00:00:00.000Z', method: { id: 'test', hash: digest }, coverage: { id: 'soaring-land-v1', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames: [{ id: 'f003', validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp }], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'tile', tilesSha256: digest }], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 1, bytes: 5, key: 'builds/gfs/test/samples.bin', sha256: digest }, source: {}, tool: {}, palettes: ['rain'], metrics: {} };
 }
 
 describe('coverage integrity', () => {

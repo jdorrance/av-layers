@@ -78,9 +78,10 @@ Support flags union only the actual contributors. Rendering samples four fixed
 quarter-pixel offsets in global Web Mercator coordinates, palettes each scalar,
 and averages premultiplied colour before encoding straight alpha.
 
-Each layer/frame has an independent, uncompressed row-major sample array:
-little-endian `Float32` value followed by a status/support byte. The low two
+Each numeric record contains a little-endian `Float32` value followed by a
+status/support byte. The low two
 bits encode status; three further bits identify parcel crossing, profile top
 and PBL closure. [Contracts](../packages/contracts/src/index.ts) owns their
 constants. Grid axes and wrap behavior come from the manifest. The sampler plans
-one contiguous range spanning the needed cells, including longitude-wrap cases.
+the contributing cells; the [numeric block layout](architecture.md#why-these-boundaries-exist)
+maps them to one bounded range, including longitude-wrap cases.

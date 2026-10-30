@@ -3,11 +3,12 @@ import { createNodeJ2kDecoderPool } from '@azohra/meteo.grib/j2k-node';
 import { NoaaError } from './errors.ts';
 import type { InspectedGfsField } from './admission.ts';
 
-export function compactNoaaSamples(values: ArrayLike<number>, mask: ArrayLike<number> | undefined, count: number) {
+export function compactNoaaSamples<T extends Float32Array | Float64Array = Float64Array>(values: ArrayLike<number>, mask: ArrayLike<number> | undefined, count: number, destination?: T) {
   if (values.length !== count || (mask && mask.length !== count)) {
     throw new NoaaError('decode', 'Decoded sample or mask count differs from requested cells');
   }
-  const compact = new Float64Array(count);
+  const compact = destination ?? new Float64Array(count) as T;
+  if (compact.length !== count) throw new NoaaError('decode', 'Compaction destination has wrong length');
   const missing = new Uint8Array(count);
   let missingCount = 0;
   for (let i = 0; i < count; i++) {
@@ -21,21 +22,45 @@ export function compactNoaaSamples(values: ArrayLike<number>, mask: ArrayLike<nu
   return { values: compact, missing, missingCount };
 }
 
-export class NoaaFieldSampler {
-  private pool: Awaited<ReturnType<typeof createNodeJ2kDecoderPool>> | undefined;
+export interface FieldSamplingStats { records: number; failures: number; decodeMs: number; compactMs: number; sampledValues: number }
 
-  async sample(inspected: InspectedGfsField, indices: Uint32Array) {
-    if (inspected.packing === 40) this.pool ??= await createNodeJ2kDecoderPool({ size: 2 });
-    const sampled = await sampleFieldValuesAsync(inspected.field, indices, {
-      missingValue: Number.NaN,
-      ...(inspected.packing === 40 && this.pool
-        ? { decodeJ2k: this.pool.decode, decodeJ2kSampled: this.pool.decodeSampled }
-        : {}),
-    });
-    return compactNoaaSamples(sampled.values, sampled.missingMask, indices.length);
+export class NoaaFieldSampler {
+  private pool: ReturnType<typeof createNodeJ2kDecoderPool> | undefined;
+  private closed = false;
+  private closing?: Promise<void>;
+  readonly stats: Record<string, FieldSamplingStats> = {};
+
+  async sample<T extends Float32Array | Float64Array = Float64Array>(inspected: InspectedGfsField, indices: Uint32Array, destination?: T) {
+    if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
+    const stats = this.stats[String(inspected.packing)] ??= { records: 0, failures: 0, decodeMs: 0, compactMs: 0, sampledValues: 0 };
+    const started = performance.now();
+    let decodedAt = started;
+    try {
+      // Store the promise before awaiting: concurrent first-use shares one pool.
+      const pool = inspected.packing === 40 ? await (this.pool ??= createNodeJ2kDecoderPool({ size: 2 })) : undefined;
+      if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
+      const sampled = await sampleFieldValuesAsync(inspected.field, indices, {
+        missingValue: Number.NaN,
+        ...(pool ? { decodeJ2k: pool.decode, decodeJ2kSampled: pool.decodeSampled } : {}),
+      });
+      decodedAt = performance.now();
+      if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
+      const result = compactNoaaSamples(sampled.values, sampled.missingMask, indices.length, destination);
+      stats.records++;
+      stats.sampledValues += indices.length;
+      return result;
+    } catch (error) {
+      stats.failures++;
+      if (decodedAt === started) decodedAt = performance.now();
+      throw error;
+    } finally {
+      stats.decodeMs += decodedAt - started;
+      stats.compactMs += performance.now() - decodedAt;
+    }
   }
 
-  async close(): Promise<void> {
-    if (this.pool) await this.pool.close();
+  close(): Promise<void> {
+    this.closed = true;
+    return this.closing ??= (async () => { if (this.pool) await (await this.pool).close(); })();
   }
 }

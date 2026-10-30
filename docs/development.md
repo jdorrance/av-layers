@@ -36,6 +36,9 @@ To investigate GFS acquisition without rendering a forecast, run
 an optional `--cycle` selects an upstream run. The
 [proof entry point](../apps/batch/src/noaa/prove.ts) owns the diagnostic scope.
 
+For performance and capacity changes, run `pnpm capacity` and keep exact-value
+and pixel comparisons alongside timing evidence.
+
 ## Documentation ownership
 
 The root README owns orientation, the document index and development checks.

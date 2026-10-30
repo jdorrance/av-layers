@@ -20,10 +20,12 @@ model run: **spatial map fields** and **vertical/time point profiles**.
    deep zoom, timestamp synchronization, cancellation, and page/plugin lifecycle.
 3. **Add atmospheric point profiles and Skew-T / windgram charts.** Retain
    pressure, height, temperature, moisture, and U/V wind across levels and times
-   in bounded compressed spatial profile chunks so a point query reads a single
+   in bounded spatial profile products so a point query reads a single
    column/time bundle rather than one object per variable × level × hour. Share
    build identity and UTC valid time with map layers, starting with nearest
-   native cell selection and explicit method labels.
+   native cell selection and explicit method labels. The block-pack experiments
+   in [performance](performance.md) establish the storage foundation; compression,
+   frame grouping and profile semantics need their own measured product contract.
 4. **Lossless WebP tiles (implemented across build, archive, and API).**
    All map layers render through `renderTileRgba` + `encodeWebp` into PMTiles
    archives (`TileType.Webp`) served as `image/webp` at `.../{z}/{x}/{y}.webp`.

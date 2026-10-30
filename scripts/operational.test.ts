@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { manifestSchema, type Manifest } from '@av/contracts';
+import { forecastObjects, manifestSchema, type Manifest } from '@av/contracts';
 import { GFS_DISCOVERY_LAG_HOURS, GFS_FORECAST_HOURS } from '../apps/batch/src/noaa/constants';
 import { buildLocalPointer, shouldSeedAssets, validateArtifactRecords as validatePreviewArtifacts } from './sample-preview';
 import { validateArtifactRecords as validateSmokeArtifacts, validateSampleFlags } from './smoke-build';
@@ -70,12 +70,12 @@ describe('project runtime', () => {
 });
 
 describe('real contract-shaped fixtures', () => {
-  it('parses a manifest with 8 frames, 3 layers, 24 records and 48 object paths', () => {
+  it('parses a manifest with 8 frames, 3 layers, 24 tile records and one numeric pack', () => {
     const manifest = manifestFixture();
     expect(manifest.frames).toHaveLength(8);
     expect(manifest.layers).toHaveLength(3);
     expect(manifest.artifacts).toHaveLength(24);
-    expect(new Set(manifest.artifacts.flatMap(item => [item.tilesKey, item.samplesKey])).size).toBe(48);
+    expect(new Set(forecastObjects(manifest).map(item => item.key)).size).toBe(25);
     expect(() => validatePreviewArtifacts(manifest)).not.toThrow();
     expect(() => validateSmokeArtifacts(manifest)).not.toThrow();
   });
@@ -277,16 +277,19 @@ describe('workflow structure guards', () => {
     expect(job.environment).toBe("${{ inputs.environment || 'production' }}");
     expect(record(forecast.concurrency).group).toBe("forecast-${{ inputs.environment || 'production' }}-gfs");
     expect(record(forecast.concurrency)['cancel-in-progress']).toBe(false);
-    const names = stepNames(forecast, 'build-publish');
-    expect(names.indexOf('Validate forecast environment and secrets')).toBeLessThan(names.indexOf('Build sample'));
+    const names = stepNames(forecast, 'build-publish'), combined = 'Build, validate and publish';
+    expect(names.indexOf('Validate forecast environment and secrets')).toBeLessThan(names.indexOf(combined));
     expect(names.indexOf('Validate publication environment mapping')).toBeGreaterThan(names.indexOf('Validate forecast environment and secrets'));
-    expect(names.indexOf('Validate publication environment mapping')).toBeLessThan(names.indexOf('Build sample'));
+    expect(names.indexOf('Validate publication environment mapping')).toBeLessThan(names.indexOf(combined));
     expect(names).not.toContain('Record skipped publication');
-    expect(names).toContain('Refuse superseded main revision before publication');
-    expect(names).not.toContain('Validate sample'); // Build and publication each validate their own boundary.
-    expect(names.indexOf('Refuse superseded main revision before publication')).toBeGreaterThan(names.indexOf('Build sample'));
-    expect(names.indexOf('Refuse superseded main revision before publication')).toBeLessThan(names.indexOf('Publish immutable build and pointer'));
-    expect(names).toContain('Publish immutable build and pointer');
+    expect(names).not.toContain('Validate sample');
+    const runner = list(job.steps).map(record).find(step => step.name === combined);
+    expect(runner?.run).toBe('pnpm exec tsx scripts/build-and-publish.ts');
+    expect(record(runner?.env).GH_TOKEN).toBe('${{ github.token }}');
+    const source = readFileSync(new URL('./build-and-publish.ts', import.meta.url), 'utf8');
+    expect(source).toContain("GITHUB_REF !== 'refs/heads/main'");
+    expect(source.indexOf('git/ref/heads/main')).toBeGreaterThan(source.indexOf('onValidated:'));
+    expect(source.indexOf('if (stdout.trim() !== revision)')).toBeLessThan(source.indexOf('await publish('));
     expect(names).toContain('Upload build receipts');
     expect(names).toContain('Upload full build artifacts on failure or explicit request');
     expect(runBlock('forecast.yml', 'Validate forecast environment and secrets')).not.toContain('${{');

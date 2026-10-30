@@ -13,7 +13,7 @@ it('fails closed if bundled mask bytes do not match the coverage witness', async
   const retained = { buildId: 'old', manifestKey: 'builds/gfs/old/manifest.json', cycle, expiresAt };
   const pointer = { version: 1, model: 'gfs', latestBuildId: 'old', retained: [retained] };
   const frame = { id: 'f003', validTime: cycle, intervalStart: cycle, intervalEnd: cycle };
-  const manifest = { version: 1, model: 'gfs', buildId: 'old', cycle, createdAt: cycle, expiresAt, method: { id: 'method', hash }, coverage: { id: 'soaring-land-v1', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames: [frame], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'builds/gfs/old/precip-rate/f003.pmtiles', samplesKey: 'builds/gfs/old/samples/precip-rate/f003.bin', tilesSha256: hash, samplesSha256: hash }], source: {}, tool: {}, palettes: ['rain'], metrics: {} };
+  const manifest = { version: 2, model: 'gfs', buildId: 'old', cycle, createdAt: cycle, expiresAt, method: { id: 'method', hash }, coverage: { id: 'soaring-land-v1', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames: [frame], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'builds/gfs/old/precip-rate/f003.pmtiles', tilesSha256: hash }], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 1, bytes: 5, key: 'builds/gfs/old/samples.bin', sha256: hash }, source: {}, tool: {}, palettes: ['rain'], metrics: {} };
   const cache = { match: vi.fn(), put: vi.fn() };
   vi.stubGlobal('caches', { default: cache });
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -27,6 +27,6 @@ it('fails closed if bundled mask bytes do not match the coverage witness', async
       expect(response.headers.get('cache-control')).toBe('no-store');
     }
     expect(cache.match).not.toHaveBeenCalled();
-    expect(get.mock.calls.every(([key]) => !key.includes('/samples/'))).toBe(true);
+    expect(get.mock.calls.every(([key]) => !key.endsWith('/samples.bin'))).toBe(true);
   } finally { vi.useRealTimers(); vi.unstubAllGlobals(); }
 });

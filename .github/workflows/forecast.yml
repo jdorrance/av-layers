@@ -36,7 +36,7 @@ jobs:
   build-publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 60
     environment: ${{ inputs.environment || 'production' }}
     env:
       TARGET_ENV: ${{ inputs.environment || 'production' }}
@@ -97,32 +97,11 @@ jobs:
       - name: Validate publication environment mapping
         run: pnpm exec tsx scripts/cloudflare-ci.ts publicationcheck --env "${TARGET_ENV}"
       - run: pnpm tools:pmtiles
-      - name: Build sample
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -n "${CYCLE}" ]; then
-            pnpm run build:sample --model "${MODEL}" --out output --cache-dir .cache/gfs --cycle "${CYCLE}"
-          else
-            pnpm run build:sample --model "${MODEL}" --out output --cache-dir .cache/gfs
-          fi
-          manifest="$(find "output/builds/${MODEL}" -mindepth 2 -maxdepth 2 -name manifest.json -print | sort | tail -1)"
-          test -n "${manifest}"
-          printf 'MANIFEST=%s\n' "${manifest}" >> "${GITHUB_ENV}"
-      - name: Refuse superseded main revision before publication
+      - name: Build, validate and publish
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
-          if [ "${current}" != "${GITHUB_SHA}" ]; then
-            echo 'This revision was superseded during the build; rerun the latest revision before publishing.' >&2
-            exit 1
-          fi
-      - name: Publish immutable build and pointer
-        id: publish
-        run: pnpm run publish --manifest "${MANIFEST}"
+        run: pnpm exec tsx scripts/build-and-publish.ts
       - name: Upload build receipts
         uses: actions/upload-artifact@v4
         if: always()
@@ -131,6 +110,8 @@ jobs:
           path: |
             output/builds/*/*/manifest.json
             output/builds/*/*/provenance.json
+            output/builds/*/*/performance.json
+            output/builds/*/*/publication.json
           if-no-files-found: warn
           retention-days: 7
       - name: Upload full build artifacts on failure or explicit request

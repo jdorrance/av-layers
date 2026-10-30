@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Manifest } from '@av/contracts';
+import { SAMPLE_BLOCK_SIZE, type Manifest } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
@@ -21,7 +21,7 @@ function frames() {
 function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof frames> } = {}): PinnedBuild {
   const frameList = overrides.frames ?? frames();
   const manifest: Manifest = {
-    version: 1,
+    version: 2,
     model: 'gfs',
     buildId: 'build-1',
     cycle: created,
@@ -36,10 +36,9 @@ function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof fram
       layer,
       frame: frame.id,
       tilesKey: `builds/gfs/build-1/${layer}/${frame.id}.pmtiles`,
-      samplesKey: `builds/gfs/build-1/samples/${layer}/${frame.id}.bin`,
-      tilesSha256: 'c'.repeat(64),
-      samplesSha256: 'd'.repeat(64)
+      tilesSha256: 'c'.repeat(64)
     }))),
+    samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: 1, channelCount: frameList.length * layerIds.length, bytes: frameList.length * layerIds.length * 5, key: 'builds/gfs/build-1/samples.bin', sha256: 'd'.repeat(64) },
     source: {},
     tool: {},
     palettes: ['lift', 'rain'],

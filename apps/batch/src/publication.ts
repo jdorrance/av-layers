@@ -1,14 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { getProvenanceReference, manifestSchema, modelIdSchema, modelPointerSchema, parseProvenance, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { forecastObjects, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
-import { loadCoverage, localPath, sha256, validateBuild } from './validate.js';
+import { loadCoverage, localPath, runConcurrent, sha256, validateBuild, wasValidatedInProcess } from './validate.js';
+import { BUILD_BUDGETS } from './capacity.js';
 
 const encode = (value: unknown): Uint8Array => Buffer.from(JSON.stringify(value));
 const decode = (value: Uint8Array): unknown => JSON.parse(Buffer.from(value).toString('utf8'));
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
 const manifestKey = (model: ModelId, id: string): string => `builds/${model}/${id}/manifest.json`;
 const safeId = (id: string): boolean => /^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(id);
+export const UPLOAD_BUFFER_BYTES = BUILD_BUDGETS.samplePackBytes;
 
 export function buildIdTime(id: string): number {
   if (!safeId(id)) throw new Error('Invalid build ID');
@@ -20,7 +22,9 @@ export function buildIdTime(id: string): number {
 
 function assertLifetime(manifest: Manifest, now: number): void {
   const start = buildIdTime(manifest.buildId);
-  if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > 6 * 3600000 || Date.parse(manifest.expiresAt) <= now) throw new Error('Build is outside its publication lifetime');
+  if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > 6 * 3600000 || Date.parse(manifest.expiresAt) <= now) {
+    throw new Error('Build is outside its publication lifetime');
+  }
 }
 
 async function readPointer(store: ObjectStorage, model: ModelId): Promise<{ pointer: ModelPointer | null; etag?: string }> {
@@ -37,6 +41,7 @@ async function casPointer(store: ObjectStorage, model: ModelId, pointer: ModelPo
 }
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { allowSameCycle?: boolean; now?: () => number } = {}): Promise<void> {
+  const validatedHere = wasValidatedInProcess(root, raw);
   const now = options.now ?? Date.now, manifest = manifestSchema.parse(raw);
   const provenance = getProvenanceReference(manifest);
   assertLifetime(manifest, now());
@@ -48,37 +53,30 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (captured.pointer.retained.some(item => item.buildId === manifest.buildId)) throw new Error('Build ID already retained');
   }
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
-  if (retained.length >= 128) throw new Error('Retained build limit reached');
-  await validateBuild(root, manifest, await loadCoverage());
+  if (retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
+  if (!validatedHere) await validateBuild(root, manifest, await loadCoverage());
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
-  const files = manifest.artifacts.flatMap(a => [{ key: a.tilesKey, hash: a.tilesSha256 }, { key: a.samplesKey, hash: a.samplesSha256 }]);
-  if (files.length !== 48 || new Set(files.map(f => f.key)).size !== 48 || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
-  let next = 0, failed = false, failure: unknown;
-  const worker = async (): Promise<void> => {
-    while (!failed && next < files.length) {
-      const file = files[next++];
-      try {
-        assertLifetime(manifest, now());
-        const bytes = await readFile(localPath(root, file.key));
-        if (failed) return;
-        if (sha256(bytes) !== file.hash) throw new Error(`Local hash mismatch: ${file.key}`);
-        const length = Math.min(bytes.length, 32);
-        if (!length) throw new Error(`Empty artifact: ${file.key}`);
-        const r2SinglePutContentMd5 = createHash('md5').update(bytes).digest();
-        const expectedR2SinglePutMd5Etag = `"${r2SinglePutContentMd5.toString('hex')}"`;
-        assertLifetime(manifest, now());
-        await store.put(file.key, bytes, { ifNoneMatch: '*' }, file.key.endsWith('.pmtiles') ? 'application/vnd.pmtiles' : 'application/octet-stream', r2SinglePutContentMd5.toString('base64'));
-        const uploaded = await store.head(file.key);
-        if (!uploaded || uploaded.size !== bytes.length || uploaded.etag !== expectedR2SinglePutMd5Etag) throw new Error(`R2 single-PUT MD5 ETag or size mismatch: ${file.key}`);
-        const range = await store.get(file.key, { offset: bytes.length - length, length });
-        if (!range || range.etag !== expectedR2SinglePutMd5Etag || !Buffer.from(range.bytes).equals(bytes.subarray(bytes.length - length))) throw new Error(`R2 tail or ETag mismatch: ${file.key}`);
-      } catch (error) {
-        if (!failed) { failed = true; failure = error; }
-      }
+  const files = forecastObjects(manifest);
+  if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
+  await runConcurrent(files, 4, async file => {
+    assertLifetime(manifest, now());
+    const bytes = await readFile(localPath(root, file.key));
+    if (!bytes.length || bytes.length > UPLOAD_BUFFER_BYTES) throw new Error(`Artifact exceeds upload buffer budget: ${file.key}`);
+    if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
+    const length = Math.min(bytes.length, 32);
+    const md5 = createHash('md5').update(bytes).digest();
+    const expectedEtag = `"${md5.toString('hex')}"`;
+    assertLifetime(manifest, now());
+    await store.put(file.key, bytes, { ifNoneMatch: '*' }, file.contentType, md5.toString('base64'));
+    const uploaded = await store.head(file.key);
+    if (!uploaded || uploaded.size !== bytes.length || uploaded.etag !== expectedEtag) {
+      throw new Error(`R2 single-PUT MD5 ETag or size mismatch: ${file.key}`);
     }
-  };
-  await Promise.all(Array.from({ length: 4 }, () => worker()));
-  if (failed) throw failure;
+    const range = await store.get(file.key, { offset: bytes.length - length, length });
+    if (!range || range.etag !== expectedEtag || !Buffer.from(range.bytes).equals(bytes.subarray(bytes.length - length))) {
+      throw new Error(`R2 tail or ETag mismatch: ${file.key}`);
+    }
+  });
   if (provenance) {
     const provenanceBytes = await readFile(localPath(root, provenance.key));
     if (sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Local hash mismatch: ${provenance.key}`);
@@ -110,18 +108,19 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   const object = await store.get(retained.manifestKey);
   if (!object) throw new Error('Rollback manifest missing');
   const manifest = manifestSchema.parse(decode(object.bytes));
-  if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) throw new Error('Rollback manifest does not match pointer');
+  if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) {
+    throw new Error('Rollback manifest does not match pointer');
+  }
   const provenance = getProvenanceReference(manifest);
   if (provenance) {
     const receipt = await store.get(provenance.key);
     if (!receipt || sha256(receipt.bytes) !== provenance.sha256) throw new Error(`Rollback provenance missing or corrupt: ${provenance.key}`);
     parseProvenance(decode(receipt.bytes), manifest);
   }
-  for (const artifact of manifest.artifacts) {
-    for (const [key, hash] of [[artifact.tilesKey, artifact.tilesSha256], [artifact.samplesKey, artifact.samplesSha256]]) {
-      const item = await store.get(key);
-      if (!item || sha256(item.bytes) !== hash) throw new Error(`Rollback artifact missing or corrupt: ${key}`);
-    }
+  validateArtifactRecords(manifest);
+  for (const { key, sha256: hash } of forecastObjects(manifest)) {
+    const item = await store.get(key);
+    if (!item || sha256(item.bytes) !== hash) throw new Error(`Rollback artifact missing or corrupt: ${key}`);
   }
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   await casPointer(store, model, { ...pointer, latestBuildId: target }, captured.etag);

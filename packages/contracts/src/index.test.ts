@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, compactSource, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
+import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, compactSource, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
@@ -11,6 +11,12 @@ describe('contracts', () => {
     const haloLeft: CoverageMask = { ...mask, output: Uint8Array.of(2), halo: Uint8Array.of(1) };
     expect(isCovered(haloLeft, 0, -90)).toBe(false);
     expect(isTileCovered(mask, 0, 0, 0)).toBe(true); expect(isTileCovered(mask, 1, 1, 0)).toBe(true); expect(expectedTiles(mask, 1)).toEqual([{ z: 1, x: 1, y: 0 }]);
+    const unionMask: CoverageMask = { grid: { width: 33, height: 2, lat0: 1, lon0: 0, dx: 1, dy: -1, wrapLongitude: false }, output: new Uint8Array(9), halo: new Uint8Array(9), tiles: new Uint8Array(1), maxZoom: 0 };
+    for (const index of [0, 31, 32, 65]) setBit(unionMask.output, index);
+    for (const index of [1, 31, 64, 71]) setBit(unionMask.halo, index);
+    const indices = coverageIndices(unionMask);
+    expect([...indices.output]).toEqual([0, 31, 32, 65]);
+    expect([...indices.active]).toEqual([0, 1, 31, 32, 64, 65]);
   });
   it('returns specified palette endpoints, no-lift, rain transparency, and own-property palette checks', () => {
     expect(paletteColor('usable-lift-msl', null, 1)).toBeNull(); expect(paletteColor('usable-lift-msl', 300, 0)).toBe('#b93b88');
@@ -79,13 +85,12 @@ describe('contracts', () => {
         { id: 'f006', validTime: '2026-10-30T06:00:00Z', intervalStart: '2026-10-30T03:00:00Z', intervalEnd: '2026-10-30T06:00:00Z' }
       ],
       layers: ['precip-rate'],
+      samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 2, bytes: 10, key: 'builds/gfs/b1/samples.bin', sha256: hash },
       artifacts: ['f003', 'f006'].map(frame => ({
         layer: 'precip-rate',
         frame,
         tilesKey: `builds/gfs/b1/precip-rate/${frame}.pmtiles`,
-        samplesKey: `builds/gfs/b1/samples/precip-rate/${frame}.bin`,
-        tilesSha256: hash,
-        samplesSha256: hash
+        tilesSha256: hash
       }))
     } as unknown as Manifest;
     expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
@@ -94,6 +99,6 @@ describe('contracts', () => {
     const item = { buildId: 'one', manifestKey: 'key', cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z' };
     expect(modelPointerSchema.safeParse({ version: 1, model: 'gfs', latestBuildId: 'one', retained: [item] }).success).toBe(true);
     expect(modelPointerSchema.safeParse({ version: 1, model: 'gfs', latestBuildId: 'other', retained: [item] }).success).toBe(false);
-    expect(modelPointerSchema.safeParse({ version: 1, model: 'gfs', latestBuildId: 'one', retained: Array(129).fill(item) }).success).toBe(false);
+    expect(modelPointerSchema.safeParse({ version: 1, model: 'gfs', latestBuildId: 'one', retained: Array(257).fill(item) }).success).toBe(false);
   });
 });

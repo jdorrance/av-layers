@@ -6,10 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GFS_GRID, LAYER_IDS, type Manifest, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
 
-vi.mock('./validate.js', async importOriginal => ({ ...await importOriginal<typeof import('./validate.js')>(), loadCoverage: vi.fn(async () => ({})), validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest) }));
+vi.mock('./validate.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('./validate.js')>();
+  return { ...actual, wasValidatedInProcess: vi.fn(actual.wasValidatedInProcess), loadCoverage: vi.fn(async () => ({})), validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest) };
+});
 
 import { buildIdTime, cleanup, publish, rollback } from './publication.js';
-import { localPath, sha256 } from './validate.js';
+import { localPath, sha256, validateBuild, wasValidatedInProcess } from './validate.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date }>();
@@ -51,11 +54,11 @@ afterEach(async () => { await Promise.all(temp.splice(0).map(path => rm(path, { 
 
 async function fixture(externalProvenance = false): Promise<{ root: string; manifest: Manifest }> {
   const root = await mkdtemp(join(tmpdir(), 'av-publish-test-')); temp.push(root);
-  const bytes = Buffer.from('test artifact contents long enough to exercise a 32-byte tail range'), hash = sha256(bytes), prefix = `builds/gfs/${id}`;
+  const bytes = Buffer.from('test artifact contents long enough to exercise a 32-byte tail range'.padEnd(120, '.')), hash = sha256(bytes), prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString(), intervalStart: new Date(Date.parse('2026-10-30T00:00:00.000Z') + i * 10800000).toISOString(), intervalEnd: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString() }));
-  const artifacts = LAYER_IDS.flatMap(layer => frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, samplesKey: `${prefix}/samples/${layer}/${frame.id}.bin`, tilesSha256: hash, samplesSha256: hash })));
-  for (const artifact of artifacts) for (const key of [artifact.tilesKey, artifact.samplesKey]) { const path = localPath(root, key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
-  const manifest: Manifest = { version: 1, model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: 'test', hash }, coverage: { id: 'test', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, source: { provider: 'NOAA', frames: [{ hour: 3 }] }, tool: {}, palettes: ['lift'], metrics: {} };
+  const artifacts = LAYER_IDS.flatMap(layer => frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
+  for (const key of [...artifacts.map(a => a.tilesKey), `${prefix}/samples.bin`]) { const path = localPath(root, key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
+  const manifest: Manifest = { version: 2, model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: 'test', hash }, coverage: { id: 'test', hash, maskKey: 'mask', maxZoom: 5 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 24, bytes: 120, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', frames: [{ hour: 3 }] }, tool: {}, palettes: ['lift'], metrics: {} };
   if (externalProvenance) {
     const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: id, cycle: manifest.cycle, frames: manifest.source.frames }));
     await writeFile(localPath(root, provenanceKey), receipt);
@@ -65,6 +68,18 @@ async function fixture(externalProvenance = false): Promise<{ root: string; mani
 }
 
 describe('immutable publication', () => {
+  it('reuses a process-local validation result but still checks the actual uploaded bytes', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    const checks = vi.mocked(validateBuild).mock.calls.length;
+    vi.mocked(wasValidatedInProcess).mockReturnValueOnce(true);
+    await publish(store, root, manifest, { now: () => now });
+    expect(vi.mocked(validateBuild).mock.calls.length).toBe(checks);
+    const nextStore = new MemoryStore();
+    await writeFile(localPath(root, manifest.samples.key), 'changed after validation');
+    vi.mocked(wasValidatedInProcess).mockReturnValueOnce(true);
+    await expect(publish(nextStore, root, manifest, { now: () => now })).rejects.toThrow('Local hash mismatch');
+    expect(nextStore.objects.has('catalog/gfs/latest.json')).toBe(false);
+  });
   it('publishes verified external provenance before the manifest and latest pointer', async () => {
     const { root, manifest } = await fixture(true), store = new MemoryStore();
     const writes: string[] = [];
@@ -106,10 +121,10 @@ describe('immutable publication', () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { now: () => now });
     expect(JSON.parse(Buffer.from((await store.get('catalog/gfs/latest.json'))!.bytes).toString()).latestBuildId).toBe(id);
-    expect(store.objects.size).toBe(50);
-    expect(store.checksums).toHaveLength(48);
+    expect(store.objects.size).toBe(27);
+    expect(store.checksums).toHaveLength(25);
     const artifactGets = store.gets.filter(call => call.key.startsWith(`builds/gfs/${id}/`) && !call.key.endsWith('/manifest.json'));
-    expect(artifactGets).toHaveLength(48);
+    expect(artifactGets).toHaveLength(25);
     expect(artifactGets.every(call => call.range?.length === 32)).toBe(true);
     await expect(publish(store, root, manifest, { now: () => now, allowSameCycle: true })).rejects.toThrow();
   });
@@ -146,7 +161,7 @@ describe('immutable publication', () => {
     release();
     await result;
     expect(maximum).toBe(4);
-    expect(store.checksums).toHaveLength(48);
+    expect(store.checksums).toHaveLength(25);
   });
   it('drains active uploads after failure without admitting more files or committing', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
@@ -388,7 +403,7 @@ describe('immutable publication', () => {
   });
   it('refuses a missing local artifact and does not commit', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    await rm(localPath(root, manifest.artifacts[1].samplesKey));
+    await rm(localPath(root, manifest.samples.key));
     await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow();
     expect(await store.get('catalog/gfs/latest.json')).toBeNull();
   });
@@ -401,7 +416,7 @@ describe('immutable publication', () => {
   });
   it('refuses to evict an unexpired retained build when full', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    const retained = Array.from({ length: 128 }, (_, i) => ({ buildId: `existing-${i}`, manifestKey: `existing-${i}`, cycle: '2026-10-29T18:00:00.000Z', expiresAt: manifest.expiresAt }));
+    const retained = Array.from({ length: 256 }, (_, i) => ({ buildId: `existing-${i}`, manifestKey: `existing-${i}`, cycle: '2026-10-29T18:00:00.000Z', expiresAt: manifest.expiresAt }));
     await store.put('catalog/gfs/latest.json', Buffer.from(JSON.stringify({ version: 1, model: 'gfs', latestBuildId: retained[0].buildId, retained })), { ifNoneMatch: '*' });
     await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow('limit');
     expect(store.objects.size).toBe(1);

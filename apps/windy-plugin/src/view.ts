@@ -84,6 +84,7 @@ export class PluginPanel {
   private readonly series = node('div', 'av-series');
   private readonly seriesButton = node('button', 'av-button', 'Sample clicked point (8 × 3)');
   private renderedBuildId: string | null = null;
+  private renderedLegend: { buildId: string; layer: string | null; palettes: PinnedBuild['palettes'] } | null = null;
   private currentBuild: PinnedBuild | null = null;
   private clicked: GeoPoint | null = null;
 
@@ -172,7 +173,10 @@ export class PluginPanel {
   renderBuild(build: PinnedBuild): void {
     const key = `${build.model}:${build.manifest.buildId}`;
     this.currentBuild = build;
-    if (this.renderedBuildId === key) return;
+    if (this.renderedBuildId === key) {
+      this.renderLegend(build, this.layerSelect.value);
+      return;
+    }
     this.renderedBuildId = key;
     this.modelSelect.value = build.model;
     this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(layer, layer)));
@@ -201,8 +205,14 @@ export class PluginPanel {
   }
 
   private renderLegend(build: PinnedBuild, activeLayer: string | null): void {
+    const buildId = `${build.model}:${build.manifest.buildId}`;
+    const palettes = activePalettes(build.palettes, activeLayer);
+    const previous = this.renderedLegend;
+    if (previous?.buildId === buildId && previous.layer === activeLayer &&
+      previous.palettes.length === palettes.length && previous.palettes.every((palette, index) => palette === palettes[index])) return;
+    this.renderedLegend = { buildId, layer: activeLayer, palettes };
     this.legend.replaceChildren();
-    for (const palette of activePalettes(build.palettes, activeLayer)) {
+    for (const palette of palettes) {
       const section = node('section');
       section.append(node('h2', undefined, `${palette.id} · ${palette.units}`));
       palette.colors.forEach((color, index) => {

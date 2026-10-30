@@ -4,6 +4,37 @@ import { deriveColumn, dewPointMixingRatioKgKg, LENSCHOW_F_MAX, usableLiftDepthM
 
 const base: ColumnInput = { terrainM: 0, surfaceTemperatureC: 20, surfacePressureHpa: 1000, humidity: { specificHumidityKgKg: 0.008 }, sensibleHeatFluxWm2: 250, latentHeatFluxWm2: 100, pblHeightM: 300, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 9 }, { heightM: 1500, temperatureC: 8 }] };
 describe('dry column science', () => {
+  it('preserves the fixed-iteration lift-depth result at thresholds and across seeded brackets', () => {
+    // Frozen algorithm before the stagnation optimization; exact doubles matter.
+    const reference = (depth: number, velocity: number): number | null => {
+      const curve = (z: number) => 4 * Math.cbrt(z) * (1 - 0.8 * z);
+      if (!Number.isFinite(depth) || !Number.isFinite(velocity) || depth <= 0 || velocity <= 0 || velocity * LENSCHOW_F_MAX < 1.2) return null;
+      if (velocity * curve(1) >= 1.2) return depth;
+      let lo = 0.3125, hi = 1;
+      for (let i = 0; i < 60; i++) {
+        const mid = (lo + hi) / 2;
+        if (velocity * curve(mid) >= 1.2) lo = mid; else hi = mid;
+      }
+      return depth * (lo + hi) / 2;
+    };
+    let seed = 0x6352e7;
+    const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
+    for (const depth of [Number.MIN_VALUE, 1, 10_000, Number.MAX_VALUE, NaN, -1]) {
+      for (const velocity of [0, 1.2 / LENSCHOW_F_MAX, (1.2 / LENSCHOW_F_MAX) * (1 + Number.EPSILON), 1.5, 10, NaN]) {
+        expect(usableLiftDepthM(depth, velocity)).toBe(reference(depth, velocity));
+      }
+    }
+    for (let i = 0; i < 10_000; i++) {
+      const depth = 10 ** (random() * 8 - 3), velocity = 0.5 + random() * 1.2;
+      expect(usableLiftDepthM(depth, velocity)).toBe(reference(depth, velocity));
+    }
+  });
+  it('validates upper levels even when crossing or non-convection could return early', () => {
+    const levels = [{ heightM: 500, temperatureC: 20 }, { heightM: 400, temperatureC: 0 }];
+    for (const sensibleHeatFluxWm2 of [-100, 250]) {
+      expect(deriveColumn({ ...base, sensibleHeatFluxWm2, levels }).branch).toBe('unavailable');
+    }
+  });
   it('resolves a crossing above PBL and does not require PBL', () => {
     const a = deriveColumn({ ...base, pblHeightM: null });
     expect(a.branch).toBe('parcel-crossing'); expect(a.depthM).toBeGreaterThan(300); expect(a.depthM).toBeCloseTo(1153.8461538, 4);

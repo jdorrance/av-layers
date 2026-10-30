@@ -19,37 +19,37 @@ function candidateCycles(now: Date): string[] {
   );
 }
 
-function productFor(spec: GfsFieldSpec): 'primary' | 'secondary' {
-  return spec.product;
+async function checkSpecList(
+  cycle: string,
+  transport: NoaaTransport,
+  indexes: Map<string, IndexResult>,
+  specs: readonly GfsFieldSpec[],
+  hour: number,
+  role: 'current' | 'companion',
+  duplicates: DiscoveredGfsRun['duplicates']
+): Promise<void> {
+  for (const spec of specs) {
+    const index = indexes.get(`${spec.product}:${hour}`);
+    if (!index) throw new NoaaError('run-unavailable', `Missing ${role === 'companion' ? 'companion ' : ''}GFS index for ${spec.key}`);
+    const url = gfsFileUrl(cycle, hour, GFS_PRODUCTS[spec.product]);
+    const selection = await selectGfsRecord(transport, url, index, spec);
+    if (selection.duplicates) duplicates.push({ key: spec.key, role, url, verification: selection.duplicates });
+  }
 }
 
 async function checkRun(cycle: string, transport: NoaaTransport): Promise<DiscoveredGfsRun> {
   const stamp = cycleStamp(cycle);
   const indexes = new Map<string, IndexResult>();
   const duplicates: DiscoveredGfsRun['duplicates'] = [];
-  for (const hour of GFS_FORECAST_HOURS) {
-    for (const product of ['primary', 'secondary'] as const) {
-      const name = GFS_PRODUCTS[product];
-      const index = await transport.index(`${gfsFileUrl(cycle, hour, name)}.idx`, stamp);
-      indexes.set(`${product}:${hour}`, index);
-    }
+  const inventoryJobs = GFS_FORECAST_HOURS.flatMap(hour => (['primary', 'secondary'] as const).map(product => ({ hour, product })));
+  for (const { hour, product } of inventoryJobs) {
+    const index = await transport.index(`${gfsFileUrl(cycle, hour, GFS_PRODUCTS[product])}.idx`, stamp);
+    indexes.set(`${product}:${hour}`, index);
   }
   for (const hour of GFS_FORECAST_HOURS) {
-    for (const spec of gfsCurrentSpecs(hour)) {
-      const index = indexes.get(`${productFor(spec)}:${hour}`);
-      if (!index) throw new NoaaError('run-unavailable', `Missing GFS index for ${spec.key}`);
-      const url = gfsFileUrl(cycle, hour, GFS_PRODUCTS[spec.product]);
-      const selection = await selectGfsRecord(transport, url, index, spec);
-      if (selection.duplicates) duplicates.push({ key: spec.key, role: 'current', url, verification: selection.duplicates });
-    }
+    await checkSpecList(cycle, transport, indexes, gfsCurrentSpecs(hour), hour, 'current', duplicates);
     if (gfsWindowNeedsCompanion(hour)) {
-      for (const spec of gfsCompanionSpecs(hour)) {
-        const index = indexes.get(`${productFor(spec)}:${hour - 3}`);
-        if (!index) throw new NoaaError('run-unavailable', `Missing companion GFS index for ${spec.key}`);
-        const url = gfsFileUrl(cycle, hour - 3, GFS_PRODUCTS[spec.product]);
-        const selection = await selectGfsRecord(transport, url, index, spec);
-        if (selection.duplicates) duplicates.push({ key: spec.key, role: 'companion', url, verification: selection.duplicates });
-      }
+      await checkSpecList(cycle, transport, indexes, gfsCompanionSpecs(hour), hour - 3, 'companion', duplicates);
     }
   }
   return {
@@ -64,14 +64,13 @@ async function checkRun(cycle: string, transport: NoaaTransport): Promise<Discov
 }
 
 export async function discoverGfsRun(options: DiscoverGfsRunOptions = {}, stats?: NoaaTransportStats): Promise<DiscoveredGfsRun> {
+  const transport = new NoaaTransport({ ...options, stats });
+  return discoverGfsRunWithTransport(options, transport);
+}
+
+// Shared transport keeps admitted inventories and duplicate evidence build-owned.
+export async function discoverGfsRunWithTransport(options: DiscoverGfsRunOptions, transport: NoaaTransport): Promise<DiscoveredGfsRun> {
   const now = options.now ?? new Date();
-  const transport = new NoaaTransport({
-    fetch: options.fetch,
-    fetchImpl: options.fetchImpl,
-    signal: options.signal,
-    cacheDir: options.cacheDir,
-    stats,
-  });
   const failures: string[] = [];
   for (const cycle of candidateCycles(now)) {
     options.signal?.throwIfAborted();

@@ -5,7 +5,7 @@ sampling artifacts. A read-only Worker serves those artifacts to any client that
 pins one build for the duration of a view.
 
 ```text
-Forecast providers → batch acquisition → science → tiles + numeric arrays
+Forecast providers → batch acquisition → science → tiles + numeric pack
                                                    ↓ validate and publish
                                               private R2 bucket
                                                    ↓
@@ -32,11 +32,14 @@ Forecast providers → batch acquisition → science → tiles + numeric arrays
 
 ## Why these boundaries exist
 
-Each layer and forecast frame has a PMTiles archive for display and a numeric
-array for sampling. Archives group tiles into a manageable publication unit;
-the Worker extracts requested tiles through range reads. Separate numeric
-arrays preserve scalar values and status flags independently of palette colours
-or display zoom. Rendering and point sampling share scalar interpolation logic.
+Each layer and forecast frame has a PMTiles archive for display. One numeric
+pack stores all frame/layer channels in spatial blocks, with neighboring cells
+duplicated at block edges. The Worker reads a point's contributors in one bounded
+range, including across longitude wrap. Numeric values and status flags remain
+independent of palette colours and display zoom. Rendering and point sampling
+share scalar interpolation logic. The [pack implementation](../packages/forecast/src/sample-pack.ts)
+owns ordering, offsets and reconstruction; the [capacity module](../apps/batch/src/capacity.ts)
+enforces build and point-range budgets.
 The [data contract](data.md) defines what those values and statuses mean.
 
 A manifest identifies the artifacts, method, coverage, provenance and expiry of
@@ -52,3 +55,11 @@ or knowledge of archive internals.
 
 GFS is the integrated build path. See [status](status.md) for evidence and
 [roadmap](roadmap.md) for regional coverage, export and serving work.
+
+Trusted [product definitions](../packages/contracts/src/index.ts) own required
+frames, layers, grid and native zoom. Batch admission checks resource budgets
+before downloading inputs. Adding a product requires a provider and coverage
+proof; adding a layer does not require rerunning shared column science. Use
+`pnpm capacity` to inspect the current workload and model growth before raising
+limits. Deeper display zoom uses client overzoom rather than automatically
+expanding the native tile pyramid.

@@ -1,13 +1,14 @@
-import { mkdtemp, open, rm } from 'node:fs/promises';
+import { mkdtemp, open, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { expectedTiles, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type Grid } from '@av/contracts';
-import { sampleGrid, type GridField } from '@av/forecast';
-import { mercatorPoint, renderArchive, renderTile } from './render.js';
+import { expectedTiles, paletteColor, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
+import { QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
+import { createRenderer, mercatorPoint, renderArchive, renderTile, renderTileRgba } from './render.js';
 import { validateArchive } from './validate.js';
 import { decodeWebp } from './webp.js';
+import * as codec from './webp.js';
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -23,12 +24,35 @@ async function reader(path: string): Promise<{ archive: PMTiles; close: () => Pr
   return { archive: new PMTiles({ getKey: () => path, async getBytes(offset, length) { const bytes = Buffer.alloc(length), result = await file.read(bytes, 0, length, offset); return { data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + result.bytesRead) }; } }), close: () => file.close() };
 }
 
+function referenceTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Uint8Array {
+  const data = new Uint8Array(256 * 256 * 4);
+  for (let i = 0; i < 256 * 256; i++) {
+    const px = i & 255, py = i >> 8;
+    let r = 0, g = 0, b = 0, alpha = 0;
+    for (const [dx, dy] of QUAD_OFFSETS) {
+      const pt = mercatorPoint(z, x, y, px + 0.25 + dx * 0.5, py + 0.25 + dy * 0.5);
+      const sample = sampleGrid(mask.grid, field, pt.lat, pt.lon, layer, mask);
+      const hex = paletteColor(layer, sample.status === STATUS_NO_LIFT ? 0 : sample.value, sample.status);
+      if (!hex) continue;
+      const opacity = hex.length === 9 ? parseInt(hex.slice(7, 9), 16) : 255;
+      r += parseInt(hex.slice(1, 3), 16) * opacity;
+      g += parseInt(hex.slice(3, 5), 16) * opacity;
+      b += parseInt(hex.slice(5, 7), 16) * opacity;
+      alpha += opacity;
+    }
+    if (alpha) {
+      data.set([Math.round(r / alpha), Math.round(g / alpha), Math.round(b / alpha), Math.round(alpha / 4)], i * 4);
+    }
+  }
+  return data;
+}
+
 describe('rendered WebP and PMTiles fixtures', () => {
   it('compiles eight-digit colors and weights different alpha values before unpremultiplication', async () => {
     vi.resetModules();
     vi.doMock('@av/contracts', async importOriginal => {
       const actual = await importOriginal<typeof import('@av/contracts')>();
-      return { ...actual, PALETTES: { ...actual.PALETTES, rain: { ...actual.PALETTES.rain, colors: ['#ff000080', '#0000ff40'] } }, paletteColor: (layer: Parameters<typeof actual.paletteColor>[0], value: number | null, status: number) => layer === 'precip-rate' && status === STATUS_VALID && value !== null ? value < 0.5 ? '#ff000080' : '#0000ff40' : actual.paletteColor(layer, value, status) };
+      return { ...actual, PALETTES: { ...actual.PALETTES, rain: { ...actual.PALETTES.rain, colors: ['#ff000080', '#0000ff40'] } } };
     });
     try {
       const { renderTile: renderPartial } = await import('./render.js');
@@ -37,6 +61,27 @@ describe('rendered WebP and PMTiles fixtures', () => {
       for (let i = 0; i < 4; i++) setBit(mask.output, i);
       const field: GridField = { values: new Float32Array([0.2, 1, 0.2, 1]), flags: new Uint8Array(4) };
       expect(pixel(await decodeWebp(await renderPartial(field, mask, 'precip-rate', 5, 16, 16)), 30, 30)).toEqual([170, 0, 85, 96]);
+    } finally { vi.doUnmock('@av/contracts'); vi.resetModules(); }
+  });
+
+  it('does not replace nonzero hidden RGB with the shared transparent payload', async () => {
+    vi.resetModules();
+    vi.doMock('@av/contracts', async importOriginal => {
+      const actual = await importOriginal<typeof import('@av/contracts')>();
+      return { ...actual, PALETTES: { ...actual.PALETTES, rain: { ...actual.PALETTES.rain, colors: ['#ff000001'] } } };
+    });
+    try {
+      const { createRenderer: createPartial } = await import('./render.js');
+      const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
+      const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+      setBit(mask.output, 0);
+      const field = { values: new Float32Array(4).fill(1), flags: new Uint8Array(4) }, renderer = createPartial(mask);
+      const image = await decodeWebp(await renderer.renderTile(field, 'precip-rate', 5, 16, 16));
+      expect(pixel(image, 30, 30)).toEqual([255, 0, 0, 0]);
+      field.values.fill(0);
+      const blank = await decodeWebp(await renderer.renderTile(field, 'precip-rate', 5, 16, 16));
+      expect(pixel(blank, 30, 30)).toEqual([0, 0, 0, 0]);
+      expect(renderer.metrics().blankTiles).toBe(1);
     } finally { vi.doUnmock('@av/contracts'); vi.resetModules(); }
   });
 
@@ -89,7 +134,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
   it('separates center scalar coverage from quarter-pixel premultiplied color', async () => {
     const grid = { width: 3, height: 3, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }, mask = maskFor(grid, 5);
     const field: GridField = { values: new Float32Array(9).fill(2), flags: new Uint8Array(9).fill(STATUS_OUTSIDE) };
-    for (let row = 0; row < 3; row++) for (let col = 0; col < 2; col++) { setBit(mask.output, row * 3 + col); field.flags[row * 3 + col] = STATUS_VALID; }
+    for (let i = 0; i < 9; i++) if (i % 3 < 2) { setBit(mask.output, i); field.flags[i] = STATUS_VALID; }
     const center = mercatorPoint(5, 16, 16, 11.5, 0.5), inside = mercatorPoint(5, 16, 16, 11.25, 0.25), outside = mercatorPoint(5, 16, 16, 11.75, 0.25);
     expect(sampleGrid(grid, field, center.lat, center.lon, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
     expect(sampleGrid(grid, field, inside.lat, inside.lon, 'precip-rate', mask).value).toBeCloseTo(2);
@@ -132,12 +177,81 @@ describe('rendered WebP and PMTiles fixtures', () => {
     try {
       const header = await source.archive.getHeader();
       expect(header.numAddressedTiles).toBe(21); expect(header.numTileContents).toBe(21); expect(header.maxZoom).toBe(2);
-      for (let z = 0; z <= mask.maxZoom; z++) for (const tile of expectedTiles(mask, z)) {
-        const data = await source.archive.getZxy(z, tile.x, tile.y);
+      const allTiles = Array.from({ length: mask.maxZoom + 1 }, (_, z) => expectedTiles(mask, z)).flat();
+      for (const tile of allTiles) {
+        const data = await source.archive.getZxy(tile.z, tile.x, tile.y);
         expect(data).toBeDefined();
         expect((await decodeWebp(new Uint8Array(data!.data))).data.every(byte => byte === 0)).toBe(true);
       }
     }
     finally { await source.close(); }
   }, 30000);
+});
+
+describe('build-owned prepared renderer', () => {
+  it('matches sampleGrid + paletteColor and reuses only bounded geometry across fields', () => {
+    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    for (let i = 0; i < 12; i++) if (i !== 5) setBit(mask.output, i);
+    const renderer = createRenderer(mask, { geometryCacheBytes: 2 * 57344 });
+    const field = { values: Float32Array.from([0.1, 0.5, 1, 2, 300, 600, 1500, 2750, 0, -10, 50, 100]), flags: Uint8Array.from([0, 1, 0, 2, 0, 0, 1, 0, 3, 0, 0, 0]) };
+    for (const layer of ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const) {
+      if (layer === 'precip-rate') field.flags.fill(0);
+      const expected = referenceTileRgba(field, mask, layer, 1, 0, 0);
+      expect(renderer.renderTileRgba(field, layer, 1, 0, 0)).toEqual(expected);
+      expect(renderTileRgba(field, mask, layer, 1, 0, 0)).toEqual(expected);
+    }
+    expect(renderer.metrics()).toMatchObject({ geometryHits: 2, geometryMisses: 1, geometryBytes: 57344 });
+    renderer.renderTileRgba(field, 'precip-rate', 1, 0, 1);
+    renderer.renderTileRgba(field, 'precip-rate', 1, 1, 1);
+    expect(renderer.metrics().geometryBytes).toBe(2 * 57344);
+    expect(renderer.metrics().peakGeometryBytes).toBe(2 * 57344);
+    renderer.renderTileRgba(field, 'precip-rate', 1, 0, 0);
+    expect(renderer.metrics().geometryMisses).toBe(4);
+    const uncached = createRenderer(mask, { geometryCacheBytes: 0 });
+    uncached.renderTileRgba(field, 'precip-rate', 1, 0, 0);
+    expect(uncached.metrics().geometryBytes).toBe(0);
+  });
+
+  it('shares an exactly blank payload and keeps the archive writer bounded', async () => {
+    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 2);
+    for (let i = 0; i < 12; i++) setBit(mask.output, i);
+    for (let i = 0; i < 21; i++) setBit(mask.tiles, i);
+    const field = { values: new Float32Array(12), flags: new Uint8Array(12).fill(STATUS_NO_LIFT) };
+    const renderer = createRenderer(mask, { encodeConcurrency: 2 });
+    const spy = vi.spyOn(codec, 'encodeWebp');
+    const dir = await mkdtemp(join(tmpdir(), 'av-render-')); temporary.push(dir);
+    try {
+      const a = await renderer.renderTile(field, 'usable-lift-agl', 0, 0, 0);
+      const b = await renderer.renderTile(field, 'usable-lift-msl', 1, 0, 0);
+      expect(a).toBe(b);
+      await renderer.renderArchive(join(dir, 'blank.pmtiles'), field, 'usable-lift-agl');
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(renderer.metrics()).toMatchObject({ peakPendingTiles: 2, blankTiles: 23 });
+      await validateArchive(join(dir, 'blank.pmtiles'), mask);
+    } finally { spy.mockRestore(); }
+  });
+
+  it('drains already-started encodes before rejecting a failed archive', async () => {
+    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    for (let i = 0; i < 12; i++) setBit(mask.output, i);
+    for (let i = 0; i < 5; i++) setBit(mask.tiles, i);
+    const field = { values: new Float32Array(12).fill(2), flags: new Uint8Array(12) };
+    const renderer = createRenderer(mask, { encodeConcurrency: 2 });
+    const original = codec.encodeWebp;
+    let fail!: () => void, finish!: () => void, drained = false, settled = false;
+    const failure = new Promise<void>(resolve => { fail = resolve; }), completion = new Promise<void>(resolve => { finish = resolve; });
+    const spy = vi.spyOn(codec, 'encodeWebp')
+      .mockImplementationOnce(async () => { await failure; throw new Error('encode failed'); })
+      .mockImplementationOnce(async (...args) => { await completion; const result = await original(...args); drained = true; return result; });
+    const dir = await mkdtemp(join(tmpdir(), 'av-render-')); temporary.push(dir);
+    try {
+      const work = renderer.renderArchive(join(dir, 'failed.pmtiles'), field, 'precip-rate').catch(error => { settled = true; return error; });
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+      fail(); await Promise.resolve(); await Promise.resolve();
+      expect(settled).toBe(false); finish();
+      expect(await work).toMatchObject({ message: 'encode failed' });
+      expect(drained).toBe(true); expect(spy).toHaveBeenCalledTimes(2);
+      await expect(stat(join(dir, 'failed.pmtiles'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { fail(); finish(); spy.mockRestore(); }
+  });
 });

@@ -16,6 +16,11 @@ export const gridSchema = z.object({ width: z.number().int().positive(), height:
 export type Grid = z.infer<typeof gridSchema>;
 export const GFS_GRID: Grid = { width: 1440, height: 721, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true };
 export const CELL_BYTES = 5;
+export const SAMPLE_BLOCK_SIZE = 16;
+export const MAX_SAMPLE_VALUES = 256;
+export const MAX_SAMPLE_RANGE_BYTES = 256 * 1024;
+export const RETENTION_DAYS = 7;
+export const MAX_RETAINED_BUILDS = 256;
 export const STATUS_VALID = 0, STATUS_NO_LIFT = 1, STATUS_UNAVAILABLE = 2, STATUS_OUTSIDE = 3, STATUS_MASK = 3;
 export const SUPPORT_PARCEL_CROSSING = 4, SUPPORT_PROFILE_TOP = 8, SUPPORT_PBL_CLOSURE = 16, SUPPORT_MASK = 28;
 
@@ -26,11 +31,23 @@ export function normalizeLon(lon: number): number {
 }
 
 export interface CoverageMask { grid: Grid; output: Uint8Array; halo: Uint8Array; tiles: Uint8Array; maxZoom: number }
-export function getBit(bits: Uint8Array, index: number): boolean { return Number.isSafeInteger(index) && index >= 0 && index < bits.length * 8 && (bits[Math.floor(index / 8)] & (1 << (index % 8))) !== 0; }
+export function getBit(bits: Uint8Array, index: number): boolean {
+  return Number.isSafeInteger(index) && index >= 0 && index < bits.length * 8 && (bits[index >> 3] & (1 << (index & 7))) !== 0;
+}
 export function setBit(bits: Uint8Array, index: number, value = true): void {
   if (!Number.isSafeInteger(index) || index < 0 || index >= bits.length * 8) throw new RangeError('bit index out of bounds');
-  const i = Math.floor(index / 8), bit = 1 << (index % 8);
+  const i = index >> 3, bit = 1 << (index & 7);
   bits[i] = value ? bits[i] | bit : bits[i] & ~bit;
+}
+/** Stable row-major index lists reused across acquisition, derivation and summaries. */
+export function coverageIndices(mask: CoverageMask): { output: Uint32Array; active: Uint32Array } {
+  const size = mask.grid.width * mask.grid.height, out: number[] = [], act: number[] = [];
+  for (let i = 0; i < size; i++) {
+    const isOut = getBit(mask.output, i);
+    if (isOut) out.push(i);
+    if (isOut || getBit(mask.halo, i)) act.push(i);
+  }
+  return { output: Uint32Array.from(out), active: Uint32Array.from(act) };
 }
 const snap = (n: number) => Math.abs(n - Math.round(n)) <= 1e-10 ? Math.round(n) : n;
 export function isCovered(mask: CoverageMask, lat: number, lon: number): boolean {
@@ -54,8 +71,11 @@ export function isTileCovered(mask: CoverageMask, z: number, x: number, y: numbe
 }
 export function expectedTiles(mask: CoverageMask, z: number): { z: number; x: number; y: number }[] {
   if (!Number.isInteger(z) || z < 0 || z > mask.maxZoom || z > 24) return [];
-  const result: { z: number; x: number; y: number }[] = [];
-  for (let y = 0; y < 2 ** z; y++) for (let x = 0; x < 2 ** z; x++) if (isTileCovered(mask, z, x, y)) result.push({ z, x, y });
+  const span = 2 ** z, total = span * span, result: { z: number; x: number; y: number }[] = [];
+  for (let i = 0; i < total; i++) {
+    const x = i % span, y = (i - x) / span;
+    if (isTileCovered(mask, z, x, y)) result.push({ z, x, y });
+  }
   return result;
 }
 
@@ -114,6 +134,22 @@ export const LAYERS = {
   }
 } as const satisfies Record<LayerId, LayerSpec>;
 
+/** Trusted product admission. New providers must declare their native product here. */
+export interface ProductDefinition {
+  readonly grid: Grid;
+  readonly coverageId: string;
+  readonly maxNativeZoom: number;
+  readonly frameHours: readonly number[];
+  readonly intervalHours: number;
+  readonly layers: readonly LayerId[];
+}
+export const GFS_PRODUCT: ProductDefinition = {
+  grid: GFS_GRID, coverageId: 'soaring-land-v1', maxNativeZoom: 5,
+  frameHours: [3, 6, 9, 12, 15, 18, 21, 24], intervalHours: 3, layers: LAYER_IDS
+};
+const products: Partial<Record<ModelId, ProductDefinition>> = { gfs: GFS_PRODUCT };
+export function getProduct(model: ModelId): ProductDefinition | undefined { return products[model]; }
+
 export function isPaletteId(value: string): value is PaletteId {
   return Object.hasOwn(PALETTES, value);
 }
@@ -125,28 +161,34 @@ export function paletteBinLabel(edges: readonly number[], colorCount: number, in
   if (to === undefined) return `≥ ${from}`;
   return index === colorCount - 1 ? `${from}–${to}+` : `${from}–${to}`;
 }
-export function paletteColor(layer: LayerId, value: number | null, status: number): string | null {
-  if ((status & STATUS_MASK) >= STATUS_UNAVAILABLE) return null;
+export function paletteBinIndex(layer: LayerId, value: number | null, status: number, colorCount?: number): number {
+  const code = status & STATUS_MASK;
+  if (code >= STATUS_UNAVAILABLE) return -1;
   const spec = LAYERS[layer];
-  if (spec.supportsNoLift && (status & STATUS_MASK) === STATUS_NO_LIFT) return null;
-  if (value === null || !Number.isFinite(value)) return null;
+  if ((spec.supportsNoLift && code === STATUS_NO_LIFT) || value === null || !Number.isFinite(value) || (spec.hideNonPositiveValues && value <= 0)) return -1;
   const palette = PALETTES[spec.palette];
-  if ('transparentBelow' in palette && value < palette.transparentBelow) return null;
-  if (spec.hideNonPositiveValues && value <= 0) return null;
-  let i = 0;
-  while (i + 1 < palette.colors.length && i + 1 < palette.edges.length && value >= palette.edges[i + 1]) i++;
-  return palette.colors[i];
+  if ('transparentBelow' in palette && value < palette.transparentBelow) return -1;
+  const maxBin = Math.min(colorCount ?? palette.colors.length, palette.edges.length) - 1;
+  for (let i = maxBin; i > 0; i--) if (value >= palette.edges[i]) return i;
+  return 0;
+}
+export function paletteColor(layer: LayerId, value: number | null, status: number): string | null {
+  const palette = PALETTES[LAYERS[layer].palette];
+  const bin = paletteBinIndex(layer, value, status, palette.colors.length);
+  return bin < 0 ? null : palette.colors[bin];
 }
 
 const timestamp = z.iso.datetime();
 const key = z.string().min(1);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const frameSchema = z.object({ id: key, validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp });
-export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, samplesKey: key, tilesSha256: sha256, samplesSha256: sha256 });
-export const manifestSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().nonnegative() }), grid: gridSchema, frames: z.array(frameSchema).min(1), layers: z.array(layerIdSchema).min(1), artifacts: z.array(artifactSchema).min(1), source: z.record(z.string(), z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
+export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, tilesSha256: sha256 });
+/** Channels follow frames, then layers, in manifest order; the coverage determines block offsets. */
+export const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
+export const manifestSchema = z.object({ version: z.literal(2), model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().nonnegative() }), grid: gridSchema, frames: z.array(frameSchema).min(1), layers: z.array(layerIdSchema).min(1), artifacts: z.array(artifactSchema).min(1), samples: samplePackSchema, source: z.record(z.string(), z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
 export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, frames: z.array(z.unknown()) }).passthrough();
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
-export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(128) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
+export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
 export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean() });
 export const sampleResponseSchema = z.object({ model: z.string(), buildId: z.string(), lat: z.number().finite(), lon: z.number().finite(), method: manifestSchema.shape.method, source: manifestSchema.shape.source, coverage: manifestSchema.shape.coverage, expiresAt: z.string(), frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueSchema) })) });
 export const paletteSchema = z.object({ id: z.string(), edges: z.array(z.number()), colors: z.array(z.string()), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().optional(), provisional: z.boolean().optional() }).passthrough();
@@ -164,6 +206,14 @@ export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: ma
 export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
 export type FreshnessSummary = z.infer<typeof freshnessSchema>;
+
+/** The immutable forecast payloads; manifest and provenance are published separately. */
+export function forecastObjects(manifest: Manifest): { key: string; sha256: string; contentType: string }[] {
+  return [
+    { key: manifest.samples.key, sha256: manifest.samples.sha256, contentType: 'application/octet-stream' },
+    ...manifest.artifacts.map(a => ({ key: a.tilesKey, sha256: a.tilesSha256, contentType: 'application/vnd.pmtiles' }))
+  ];
+}
 
 /** A sidecar belongs to one build; absent legacy references are allowed, incomplete ones are not. */
 export function getProvenanceReference(
@@ -220,13 +270,14 @@ export function validateArtifactRecords(manifest: Manifest): void {
   if (frames.size === 0 || frames.size !== manifest.frames.length) throw new Error(`expected distinct frames, found ${manifest.frames.length}`);
   if (layers.size === 0 || layers.size !== manifest.layers.length) throw new Error(`expected distinct layers, found ${manifest.layers.length}`);
   const expectedRecords = frames.size * layers.size;
-  const expectedPaths = expectedRecords * 2;
   if (manifest.artifacts.length !== expectedRecords) {
     throw new Error(`expected ${expectedRecords} artifact records, found ${manifest.artifacts.length}`);
   }
   const combinations = new Set<string>();
-  const paths = new Set<string>();
   const prefix = `builds/${manifest.model}/${manifest.buildId}`;
+  if (manifest.samples.key !== `${prefix}/samples.bin` || manifest.samples.channelCount !== expectedRecords || !Number.isSafeInteger(manifest.samples.bytes) || manifest.samples.bytes !== manifest.samples.storedCells * expectedRecords * CELL_BYTES) {
+    throw new Error('Invalid sample pack metadata');
+  }
   for (const artifact of manifest.artifacts) {
     if (!frames.has(artifact.frame)) throw new Error(`unknown artifact frame ${artifact.frame}`);
     if (!layers.has(artifact.layer)) throw new Error(`unknown artifact layer ${artifact.layer}`);
@@ -234,16 +285,6 @@ export function validateArtifactRecords(manifest: Manifest): void {
     if (combinations.has(combination)) throw new Error(`duplicate artifact record ${combination}`);
     combinations.add(combination);
     if (artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`) throw new Error(`unexpected tilesKey ${artifact.tilesKey}`);
-    if (artifact.samplesKey !== `${prefix}/samples/${artifact.layer}/${artifact.frame}.bin`) throw new Error(`unexpected samplesKey ${artifact.samplesKey}`);
-    for (const objectPath of [artifact.tilesKey, artifact.samplesKey]) {
-      if (paths.has(objectPath)) throw new Error(`duplicate object path ${objectPath}`);
-      paths.add(objectPath);
-    }
-  }
-  if (combinations.size !== expectedRecords) throw new Error(`expected ${expectedRecords} layer/frame records, found ${combinations.size}`);
-  if (paths.size !== expectedPaths) throw new Error(`expected ${expectedPaths} unique object paths, found ${paths.size}`);
-  for (const frame of manifest.frames) for (const layer of manifest.layers) {
-    if (!combinations.has(`${layer}/${frame.id}`)) throw new Error(`missing artifact record ${layer}/${frame.id}`);
   }
 }
 
@@ -252,17 +293,17 @@ export function validateSampleFlags(bytes: Uint8Array, expectedLength: number, l
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const spec = layer !== undefined && isLayerId(layer) ? LAYERS[layer] : null;
   for (let offset = 0; offset < bytes.length; offset += CELL_BYTES) {
-    const flags = bytes[offset + 4]!, status = flags & STATUS_MASK;
-    if (status > 3) throw new Error(`invalid status bits at offset ${offset} in ${key}`);
-    if ((flags & ~(STATUS_MASK | SUPPORT_MASK)) !== 0) throw new Error(`invalid support bits at offset ${offset} in ${key}`);
-    if (spec && ((!spec.supportsNoLift && status === STATUS_NO_LIFT) || (!spec.supportsLiftFlags && (flags & SUPPORT_MASK) !== 0))) {
-      throw new Error(`invalid ${layer} lift flags at offset ${offset} in ${key}`);
-    }
-    if (status === STATUS_OUTSIDE && flags !== STATUS_OUTSIDE) throw new Error(`invalid outside-domain support bits at offset ${offset} in ${key}`);
-    if (status < STATUS_UNAVAILABLE && !Number.isFinite(view.getFloat32(offset, true))) throw new Error(`non-finite sample value at offset ${offset} in ${key}`);
-    if (mask) {
-      const index = offset / CELL_BYTES;
-      if ((status === STATUS_OUTSIDE) === (getBit(mask.output, index) || getBit(mask.halo, index))) throw new Error(`Sample coverage mismatch in ${key}`);
-    }
+    const index = offset / CELL_BYTES;
+    validateSampleCell(view, offset, spec, key, mask ? getBit(mask.output, index) || getBit(mask.halo, index) : undefined);
   }
+}
+
+/** Validate one wire record; flat and block storage share the same value/flag rules. */
+export function validateSampleCell(view: DataView, offset: number, spec: LayerSpec | null, key: string, active?: boolean): void {
+  const flags = view.getUint8(offset + 4), status = flags & STATUS_MASK;
+  if ((flags & ~(STATUS_MASK | SUPPORT_MASK)) !== 0) throw new Error(`invalid support bits at offset ${offset} in ${key}`);
+  if (spec && ((!spec.supportsNoLift && status === STATUS_NO_LIFT) || (!spec.supportsLiftFlags && (flags & SUPPORT_MASK) !== 0))) throw new Error(`invalid ${spec.id} lift flags at offset ${offset} in ${key}`);
+  if (status === STATUS_OUTSIDE && flags !== STATUS_OUTSIDE) throw new Error(`invalid outside-domain support bits at offset ${offset} in ${key}`);
+  if (status < STATUS_UNAVAILABLE && !Number.isFinite(view.getFloat32(offset, true))) throw new Error(`non-finite sample value at offset ${offset} in ${key}`);
+  if (active !== undefined && (status === STATUS_OUTSIDE) === active) throw new Error(`Sample coverage mismatch in ${key}`);
 }

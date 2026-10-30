@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, LAYER_IDS } from '@av/contracts';
+import { GFS_GRID, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -21,20 +21,22 @@ vi.mock('../../../packages/contracts/coverage/tiles.bin', async () => ({ default
 vi.mock('../../../packages/contracts/coverage/manifest.json', async () => ({ default: (await coverageFixture).manifest }));
 
 import worker from '../src/index';
+import { prepareSamplePackLayout } from '@av/forecast';
 
 const now = Date.parse('2026-10-30T00:00:00Z');
 const cycle = '2026-10-29T18:00:00Z';
 const hash = 'a'.repeat(64);
 const coverageHash = (await coverageFixture).hash;
+const sampleLayout = prepareSamplePackLayout(GFS_GRID, new Uint8Array((await coverageFixture).output), new Uint8Array((await coverageFixture).halo));
 const layers = [...LAYER_IDS];
 const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); }, passThroughOnException() {}, props: {} };
 let pending: Promise<unknown>[] = [];
 
-function publication(id: string, expiry = new Date(now + 60_000).toISOString()) {
+function publication(id: string, expiry = new Date(now + 60_000).toISOString(), frameCount = 8) {
   const prefix = `builds/gfs/${id}`;
-  const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
-  const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, samplesKey: `${prefix}/samples/${layer}/${frame.id}.bin`, tilesSha256: hash, samplesSha256: hash })));
-  const manifest = { version: 1, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, source: {} as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
+  const frames = Array.from({ length: frameCount }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
+  const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
+  const manifest = { version: 2, model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: 'masks/v1', maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: {} as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
 }
@@ -72,7 +74,7 @@ class MemoryBucket {
   async get(key: string, options?: { range?: { offset: number; length: number } }) {
     const range = options?.range;
     this.reads.push({ key, range });
-    if (key.includes('/samples/')) {
+    if (key.endsWith('/samples.bin')) {
       if (this.missingSamples || !range) return null;
       this.active++; this.maxActive = Math.max(this.maxActive, this.active);
       await new Promise(resolve => setTimeout(resolve, 1));
@@ -80,11 +82,14 @@ class MemoryBucket {
       if (this.expireDuringRange) vi.setSystemTime(now + 60_000);
       const bytes = new Uint8Array(range.length - (this.shortRange ? 1 : 0));
       const view = new DataView(bytes.buffer);
+      const manifest = this.objects.get(key.replace(/samples\.bin$/, 'manifest.json')) as ReturnType<typeof publication>['manifest'];
       for (let i = 0; i + 5 <= bytes.length; i += 5) {
-        view.setFloat32(i, key.includes('precip-rate') ? 7 : 310, true);
-        view.setUint8(i + 4, key.includes('usable-lift-msl') ? 2 : 0);
+        const channel = ((range.offset + i) / 5) % manifest.samples.channelCount;
+        const layer = manifest.layers[channel % manifest.layers.length], frame = Math.floor(channel / manifest.layers.length);
+        view.setFloat32(i, (layer === 'precip-rate' ? 7 : 310) + frame, true);
+        view.setUint8(i + 4, layer === 'usable-lift-msl' ? 2 : 0);
       }
-      return { size: GFS_GRID.width * GFS_GRID.height * 5, body: true, async arrayBuffer() { return bytes.buffer; } };
+      return { size: manifest.samples.bytes, body: true, async arrayBuffer() { return bytes.buffer; } };
     }
     const value = this.objects.get(key);
     if (value === undefined) return null;
@@ -408,7 +413,7 @@ describe('read-only worker', () => {
       expect(((await result.json()) as { title: string }).title).toBe('coverage-unavailable');
       expect(cache.matches).toBe(hits);
     }
-    expect(bucket.reads.filter(r => r.key.includes('/samples/'))).toHaveLength(0);
+    expect(bucket.reads.filter(r => r.key.endsWith('/samples.bin'))).toHaveLength(0);
   });
   it('limits sample requests before any R2 reads and fails closed if limiter or client IP is unavailable', async () => {
     const path = '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0';
@@ -487,7 +492,7 @@ describe('read-only worker', () => {
     expect(invalid.headers.get('access-control-allow-origin')).toBe('*');
     expect((await call(path, { method: 'OPTIONS' })).status).toBe(204);
   });
-  it('performs at most 24 bounded, independent coalesced ranges at concurrency four', async () => {
+  it('serves all24 results from one bounded pack read and reuses canonical cache keys', async () => {
     const result = await call('/v1/models/gfs/runs/build-1/sample?lat=0.125&lon=179.875&frame=all');
     expect(result.status).toBe(200);
     const body = await result.json() as { frames: { layers: Record<string, { status: string; value: number | null }> }[] };
@@ -495,20 +500,80 @@ describe('read-only worker', () => {
     expect(body.frames[0].layers['usable-lift-msl'].status).toBe('unavailable');
     expect(body.frames[0].layers['usable-lift-agl'].value).toBe(310);
     expect(body.frames[0].layers['precip-rate'].value).toBe(7);
-    const reads = bucket.reads.filter(r => r.key.includes('/samples/'));
-    expect(reads).toHaveLength(24);
-    expect(new Set(reads.map(r => r.key)).size).toBe(24);
-    expect(reads.every(r => r.range?.length === 14400)).toBe(true);
-    expect(bucket.maxActive).toBeLessThanOrEqual(4);
-    expect(bucket.maxActive).toBeGreaterThan(1);
+    const reads = bucket.reads.filter(r => r.key.endsWith('/samples.bin'));
+    expect(reads).toHaveLength(1);
+    expect(new Set(reads.map(r => r.key)).size).toBe(1);
+    expect(reads.every(r => r.range?.length === 2280)).toBe(true);
+    expect(bucket.maxActive).toBe(1);
     await call('/v1/models/gfs/runs/build-1/sample?lon=179.875&lat=.125&frame=all');
-    expect(bucket.reads.filter(r => r.key.includes('/samples/'))).toHaveLength(24);
+    expect(bucket.reads.filter(r => r.key.endsWith('/samples.bin'))).toHaveLength(1);
   });
+  it.each(['missing', 'short', 'expired'] as const)('does one uncached read for a %s pack and permits a healthy retry', async defect => {
+    bucket.missingSamples = defect === 'missing';
+    bucket.shortRange = defect === 'short';
+    bucket.expireDuringRange = defect === 'expired';
+    const path = '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&frame=all';
+    const result = await call(path);
+    expect(result.status).toBe(defect === 'expired' ? 404 : 503);
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(1);
+    expect(cache.entries.size).toBe(0);
+    bucket.missingSamples = false; bucket.shortRange = false; bucket.expireDuringRange = false;
+    vi.setSystemTime(now);
+    expect((await call(path)).status).toBe(200);
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(2);
+  });
+
+  it('uses declared frame/layer channel order while canonicalizing requested order', async () => {
+    const pub = publication('ordered');
+    pub.manifest.frames.reverse();
+    pub.manifest.layers = [...layers].reverse();
+    bucket.install(pub);
+    const first = await call('/v1/models/gfs/runs/ordered/sample?lat=0&lon=0&frame=f006,f003&layers=usable-lift-agl,precip-rate');
+    expect(first.status).toBe(200);
+    const body = await first.json() as { frames: { id: string; layers: Record<string, { value: number }> }[] };
+    expect(body.frames.map(frame => frame.id)).toEqual(['f003', 'f006']);
+    expect(body.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([14, 13]);
+    expect(body.frames.map(frame => frame.layers['usable-lift-agl'].value)).toEqual([317, 316]);
+    expect((await call('/v1/models/gfs/runs/ordered/sample?lon=0&lat=0&layers=precip-rate,usable-lift-agl&frame=f003,f006')).status).toBe(200);
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(1);
+  });
+
+  it('supports more than eight frames within the result budget', async () => {
+    bucket.install(publication('longer', undefined, 9));
+    const result = await call('/v1/models/gfs/runs/longer/sample?lat=0&lon=0&frame=all');
+    expect(result.status).toBe(200);
+    expect((await result.json() as { frames: unknown[] }).frames).toHaveLength(9);
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(1);
+  });
+
+  it('bounds requested results and packed range bytes before numeric reads', async () => {
+    bucket.install(publication('large', undefined, 1024));
+    for (const query of ['lat=0&lon=0&frame=all', 'lat=0.125&lon=0.125&frame=f003&layers=precip-rate']) {
+      const result = await call(`/v1/models/gfs/runs/large/sample?${query}`);
+      expect(result.status).toBe(429);
+      expect(result.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(0);
+    expect(cache.entries.size).toBe(0);
+  });
+
+  it.each(['storedCells', 'channelCount', 'bytes', 'key'] as const)('rejects inconsistent pack %s before numeric reads or response cache', async field => {
+    const pub = publication('bad');
+    if (field === 'key') pub.manifest.samples.key = 'builds/another/samples.bin';
+    else pub.manifest.samples[field]++;
+    bucket.install(pub);
+    const result = await call('/v1/models/gfs/runs/bad/sample?lat=0&lon=0&frame=all');
+    expect(result.status).toBe(503);
+    expect(cache.entries.size).toBe(0);
+    expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(0);
+  });
+
   it('does zero numeric reads outside coverage and fails missing or short ranges visibly', async () => {
     let result = await call('/v1/models/gfs/runs/build-1/sample?lat=-50&lon=0&frame=all');
     expect(result.status).toBe(200);
     expect(((await result.json()) as { frames: { layers: Record<string, { status: string }> }[] }).frames[0].layers['precip-rate'].status).toBe('outside-domain');
-    expect(bucket.reads.filter(r => r.key.includes('/samples/'))).toHaveLength(0);
+    expect(bucket.reads.filter(r => r.key.endsWith('/samples.bin'))).toHaveLength(0);
     bucket.missingSamples = true;
     result = await call('/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&layers=precip-rate');
     expect(result.status).toBe(503);
@@ -517,7 +582,8 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&layers=precip-rate')).status).toBe(503);
   });
   it('rejects oversized selection, malformed coordinates and invalid pointers', async () => {
-    expect((await call('/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&frame=f001,f002,f003,f004,f005,f006,f007,f008,f009')).status).toBe(429);
+    const tooMany = Array.from({ length: Math.floor(MAX_SAMPLE_VALUES / 3) + 1 }, (_, i) => `f${i}`).join(',');
+    expect((await call(`/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&frame=${tooMany}`)).status).toBe(429);
     for (const query of ['lat=nan&lon=0', 'lat=91&lon=0', 'lat=0&lon=', 'lat=0&lon=0&layers=precip-rate,precip-rate']) {
       const result = await call(`/v1/models/gfs/runs/build-1/sample?${query}`);
       expect(result.status).toBe(400);
@@ -547,6 +613,54 @@ describe('read-only worker', () => {
     expect((await call(path, { headers: { 'if-none-match': first.headers.get('etag')! } })).status).toBe(304);
     expect(bucket.reads.filter(r => r.key === 'builds/gfs/build-1/manifest.json')).toHaveLength(1);
   });
+  it('indexes every independently loaded manifest during concurrent cold requests', async () => {
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
+    const responses = await Promise.all(Array.from({ length: 4 }, () => call(path)));
+    expect(responses.map(result => result.status)).toEqual([200, 200, 200, 200]);
+    const reads = bucket.reads.filter(read => read.key.endsWith('/manifest.json')).length;
+    expect((await call(path)).status).toBe(200);
+    expect(bucket.reads.filter(read => read.key.endsWith('/manifest.json'))).toHaveLength(reads);
+    vi.setSystemTime(now + 60_000);
+    const matches = cache.matches;
+    expect((await call(path)).status).toBe(404);
+    expect(cache.matches).toBe(matches);
+  });
+
+  it('rejects ambiguous artifact records without caching the invalid manifest', async () => {
+    const pub = publication('build-1');
+    pub.manifest.artifacts.push({ ...pub.manifest.artifacts[0] });
+    bucket.install(pub);
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
+    const bad = await call(path);
+    expect(bad.status).toBe(503);
+    expect((await bad.json() as { title: string }).title).toBe('publication-invalid');
+    expect(cache.entries.size).toBe(0);
+    pub.manifest.artifacts.pop();
+    expect((await call(path)).status).toBe(200);
+    expect(bucket.reads.filter(read => read.key.endsWith('/manifest.json'))).toHaveLength(2);
+  });
+
+  it('does not cache a cold manifest that expires while its body is read', async () => {
+    const get = bucket.get.bind(bucket);
+    const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
+      const object = await get(key, options);
+      if (!key.endsWith('/manifest.json') || !object || !object.json) return object;
+      const json = object.json.bind(object);
+      return { ...object, async json() {
+        const raw = await json();
+        vi.setSystemTime(now + 60_000);
+        return raw;
+      } };
+    });
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
+    expect((await call(path)).status).toBe(404);
+    expect(cache.entries.size).toBe(0);
+    spy.mockRestore();
+    vi.setSystemTime(now);
+    expect((await call(path)).status).toBe(200);
+    expect(bucket.reads.filter(read => read.key.endsWith('/manifest.json'))).toHaveLength(2);
+  });
+
   it('rejects inherited object property names on palette endpoints with 404', async () => {
     for (const bad of ['constructor.json', 'toString.json', 'valueOf.svg']) {
       const res = await call(`/v1/palettes/${bad}`);

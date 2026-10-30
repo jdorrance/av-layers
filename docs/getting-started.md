@@ -57,7 +57,7 @@ pnpm exec tsx apps/batch/src/cli.ts validate --manifest "$AV_MANIFEST"
 pnpm exec tsx scripts/smoke-build.ts --manifest "$AV_MANIFEST"
 ```
 
-The manifest identifies the immutable archives and numeric arrays. Their
+The manifest identifies the immutable archives and numeric block pack. Their
 meaning, coverage and limits are described in [data](data.md); scientific
 assumptions are in [science](science.md).
 

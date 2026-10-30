@@ -17,7 +17,7 @@ const frames = ['f003', 'f006', 'f009', 'f012', 'f015', 'f018', 'f021', 'f024'].
 
 function manifest(): Manifest {
   return {
-    version: 1,
+    version: 2,
     model: 'gfs',
     buildId: '20261030T000000Z-abc',
     cycle: created,
@@ -32,10 +32,9 @@ function manifest(): Manifest {
       layer,
       frame: frame.id,
       tilesKey: `builds/gfs/20261030T000000Z-abc/${layer}/${frame.id}.pmtiles`,
-      samplesKey: `builds/gfs/20261030T000000Z-abc/samples/${layer}/${frame.id}.bin`,
-      tilesSha256: 'c'.repeat(64),
-      samplesSha256: 'd'.repeat(64)
+      tilesSha256: 'c'.repeat(64)
     }))),
+    samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 365296, channelCount: 24, bytes: 43835520, key: 'builds/gfs/20261030T000000Z-abc/samples.bin', sha256: 'd'.repeat(64) },
     source: { nativeResolutionDeg: 0.25, model: 'GFS' },
     tool: { name: 'av-batch', version: '0.0.0' },
     palettes: ['lift', 'rain'],
