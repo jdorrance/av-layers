@@ -1,10 +1,15 @@
 import z from 'zod';
+import { LIFT_METHOD, METHODS, PRECIPITATION_METHOD, methodDescriptorSchema, methodIdSchema } from './methods.js';
+export * from './methods.js';
+import { geographicToGrid, gridSchema, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type RegularLatLonGrid } from './geometry.js';
+export * from './geometry.js';
+export * from './json.js';
 
-export const MODEL_IDS = ['gfs', 'hrrr', 'icon-armenia'] as const;
+export const MODEL_IDS = ['gfs'] as const;
 export const LAYER_IDS = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
 export const PALETTE_IDS = ['lift', 'rain'] as const;
 export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
-export const modelIdSchema = z.enum(MODEL_IDS);
+export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 export const layerIdSchema = z.enum(LAYER_IDS);
 export const paletteIdSchema = z.enum(PALETTE_IDS);
 export const sampleStatusSchema = z.enum(SAMPLE_STATUSES);
@@ -12,9 +17,7 @@ export type ModelId = z.infer<typeof modelIdSchema>;
 export type LayerId = z.infer<typeof layerIdSchema>;
 export type PaletteId = z.infer<typeof paletteIdSchema>;
 export type SampleStatus = z.infer<typeof sampleStatusSchema>;
-export const gridSchema = z.object({ width: z.number().int().positive(), height: z.number().int().positive(), lon0: z.number().finite(), lat0: z.number().finite(), dx: z.number().finite().refine(v => v !== 0), dy: z.number().finite().refine(v => v !== 0), wrapLongitude: z.boolean() });
-export type Grid = z.infer<typeof gridSchema>;
-export const GFS_GRID: Grid = { width: 1440, height: 721, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true };
+export const GFS_GRID: RegularLatLonGrid = { kind: 'regular-latlon', width: 1440, height: 721, earthRadiusM: 6371229, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true };
 export const CELL_BYTES = 5;
 export const SAMPLE_BLOCK_SIZE = 16;
 export const MAX_SAMPLE_VALUES = 256;
@@ -30,7 +33,7 @@ export function normalizeLon(lon: number): number {
   return wrapped === -180 && lon > 0 ? 180 : Object.is(wrapped, -0) ? 0 : wrapped;
 }
 
-export interface CoverageMask { grid: Grid; output: Uint8Array; halo: Uint8Array; tiles: Uint8Array; maxZoom: number }
+export interface CoverageMask { grid: Grid; bounds?: GeographicBounds; output: Uint8Array; halo: Uint8Array; tiles: Uint8Array; maxZoom: number }
 export function getBit(bits: Uint8Array, index: number): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index < bits.length * 8 && (bits[index >> 3] & (1 << (index & 7))) !== 0;
 }
@@ -49,14 +52,21 @@ export function coverageIndices(mask: CoverageMask): { output: Uint32Array; acti
   }
   return { output: Uint32Array.from(out), active: Uint32Array.from(act) };
 }
-const snap = (n: number) => Math.abs(n - Math.round(n)) <= 1e-10 ? Math.round(n) : n;
 export function isCovered(mask: CoverageMask, lat: number, lon: number): boolean {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -55 || lat > 65 || lon < -180 || lon > 180) return false;
+  if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
   const { grid } = mask;
-  let x = snap((lon - grid.lon0) / grid.dx);
-  const y = snap((lat - grid.lat0) / grid.dy);
-  if (grid.wrapLongitude) x = snap(((x % grid.width) + grid.width) % grid.width);
-  if ((!grid.wrapLongitude && (x < -0.5 || x > grid.width - 0.5)) || y < -0.5 || y > grid.height - 0.5) return false;
+  // Keep the regular-grid hot path allocation-free except for the result-free arithmetic.
+  let x: number, y: number;
+  if (grid.kind === 'regular-latlon') {
+    x = snapGridCoordinate((lon - grid.lon0) / grid.dx);
+    y = snapGridCoordinate((lat - grid.lat0) / grid.dy);
+    if (grid.wrapLongitude) x = snapGridCoordinate(((x % grid.width) + grid.width) % grid.width);
+  } else {
+    const point = geographicToGrid(grid, lat, lon);
+    if (!point) return false;
+    ({ x, y } = point);
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (!grid.wrapLongitude && (x < -0.5 || x > grid.width - 0.5)) || y < -0.5 || y > grid.height - 0.5) return false;
   const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
   const c0 = grid.wrapLongitude ? ((x0 % grid.width) + grid.width) % grid.width : x0;
   const c1 = grid.wrapLongitude ? (((x0 + 1) % grid.width) + grid.width) % grid.width : x0 + 1;
@@ -89,6 +99,11 @@ export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_CO
 export interface LayerSpec {
   readonly id: LayerId;
   readonly kind: 'scalar';
+  readonly label: string;
+  readonly quantity: string;
+  readonly verticalReference: 'MSL' | 'model-AGL' | 'surface';
+  readonly timeSupport: 'interval-mean' | 'interval-flux-endpoint-profile';
+  readonly methodId: string;
   readonly units: string;
   readonly palette: PaletteId;
   readonly supportsNoLift: boolean;
@@ -101,6 +116,8 @@ export interface LayerSpec {
 export const LAYERS = {
   'usable-lift-msl': {
     id: 'usable-lift-msl',
+    label: 'Usable lift top (MSL)', quantity: 'usable-lift-top', verticalReference: 'MSL',
+    timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD.id,
     kind: 'scalar',
     units: 'm MSL',
     palette: 'lift',
@@ -112,6 +129,8 @@ export const LAYERS = {
   },
   'usable-lift-agl': {
     id: 'usable-lift-agl',
+    label: 'Usable lift depth (model AGL)', quantity: 'usable-lift-top', verticalReference: 'model-AGL',
+    timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD.id,
     kind: 'scalar',
     units: 'm AGL',
     palette: 'lift',
@@ -123,6 +142,8 @@ export const LAYERS = {
   },
   'precip-rate': {
     id: 'precip-rate',
+    label: 'Precipitation rate', quantity: 'precipitation-rate', verticalReference: 'surface',
+    timeSupport: 'interval-mean', methodId: PRECIPITATION_METHOD.id,
     kind: 'scalar',
     units: 'mm/h',
     palette: 'rain',
@@ -136,6 +157,13 @@ export const LAYERS = {
 
 /** Trusted product admission. New providers must declare their native product here. */
 export interface ProductDefinition {
+  readonly id: string;
+  readonly source: { readonly modelFamily: string; readonly configurationId: string; readonly domainId: string };
+  readonly label: string;
+  readonly attribution: string;
+  readonly bounds: readonly [number, number, number, number];
+  readonly coverageDescription: string;
+  readonly freshness: { readonly maxCycleAgeHours: number; readonly minHorizonHours: number };
   readonly grid: Grid;
   readonly coverageId: string;
   readonly maxNativeZoom: number;
@@ -144,6 +172,10 @@ export interface ProductDefinition {
   readonly layers: readonly LayerId[];
 }
 export const GFS_PRODUCT: ProductDefinition = {
+  id: 'gfs-soaring', source: { modelFamily: 'gfs', configurationId: 'noaa-gfs-0p25', domainId: 'global' },
+  label: 'GFS', attribution: 'NOAA GFS · Aviation Forecast Layers', bounds: [-180, -55, 180, 65],
+  coverageDescription: 'Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.',
+  freshness: { maxCycleAgeHours: 18, minHorizonHours: 6 },
   grid: GFS_GRID, coverageId: 'soaring-land-v1', maxNativeZoom: 7,
   frameHours: [3, 6, 9, 12, 15, 18, 21, 24], intervalHours: 3, layers: LAYER_IDS
 };
@@ -178,6 +210,45 @@ export function paletteColor(layer: LayerId, value: number | null, status: numbe
   return bin < 0 ? null : palette.colors[bin];
 }
 
+export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional() });
+export const layerDescriptorSchema = z.object({
+  id: layerIdSchema, kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
+  verticalReference: z.enum(['MSL', 'model-AGL', 'surface']), timeSupport: z.enum(['interval-mean', 'interval-flux-endpoint-profile']),
+  methodId: methodIdSchema, palette: paletteIdSchema, supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
+  noLiftSampleValue: z.number().finite().nullable(), zeroOnNoLiftInterpolation: z.boolean(), hideNonPositiveValues: z.boolean()
+});
+export const descriptorSchema = z.object({
+  layers: z.record(z.string(), layerDescriptorSchema), palettes: z.array(paletteSchema).min(1).max(16),
+  methods: z.record(methodIdSchema, methodDescriptorSchema),
+  attribution: z.string().min(1).max(2048), coverageDescription: z.string().max(2048),
+  bounds: z.tuple([z.number().finite(), z.number().min(-90).max(90), z.number().finite(), z.number().min(-90).max(90)]),
+  maxSampleValues: z.number().int().positive().max(MAX_SAMPLE_VALUES)
+}).superRefine((descriptors, ctx) => {
+  for (const layer of Object.values(descriptors.layers)) {
+    const method = descriptors.methods[layer.methodId];
+    if (!method || !method.outputs.includes(layer.id)) ctx.addIssue({ code: 'custom', path: ['methods', layer.methodId], message: 'Layer lacks its declared method output' });
+  }
+  for (const [id, method] of Object.entries(descriptors.methods)) {
+    if (method.id !== id || !Object.values(descriptors.layers).some(layer => layer.methodId === id)) ctx.addIssue({ code: 'custom', path: ['methods', id], message: 'Method identity or layer membership mismatch' });
+  }
+});
+export const recipeIdentitySchema = z.object({
+  id: z.string().min(1).max(128), hash: z.string().regex(/^[a-f0-9]{64}$/),
+  source: z.object({ modelFamily: modelIdSchema, configurationId: z.string().min(1), domainId: z.string().min(1) }),
+  sourceRevision: z.string().min(1).max(128), sourceDirty: z.boolean(), lockHash: z.string().regex(/^[a-f0-9]{64}$/)
+});
+export function createRecipeIdentity(product: ProductDefinition, hash: string, sourceRevision = 'fixture', sourceDirty = false, lockHash = hash): z.infer<typeof recipeIdentitySchema> {
+  return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
+}
+export function createProductDescriptors(product: ProductDefinition = GFS_PRODUCT): z.infer<typeof descriptorSchema> {
+  return descriptorSchema.parse({
+    layers: Object.fromEntries(product.layers.map(id => [id, LAYERS[id]])),
+    methods: Object.fromEntries([...new Set(product.layers.map(id => LAYERS[id].methodId))].map(id => [id, METHODS[id]])),
+    palettes: [...new Set(product.layers.map(id => LAYERS[id].palette))].map(id => PALETTES[id]),
+    attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
+  });
+}
+
 const timestamp = z.iso.datetime();
 const key = z.string().min(1);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -185,13 +256,12 @@ export const frameSchema = z.object({ id: key, validTime: timestamp, intervalSta
 export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, tilesSha256: sha256 });
 /** Channels follow frames, then layers, in manifest order; the coverage determines block offsets. */
 export const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
-export const manifestSchema = z.object({ version: z.literal(2), model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().nonnegative() }), grid: gridSchema, frames: z.array(frameSchema).min(1), layers: z.array(layerIdSchema).min(1), artifacts: z.array(artifactSchema).min(1), samples: samplePackSchema, source: z.record(z.string(), z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
-export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, frames: z.array(z.unknown()) }).passthrough();
+export const manifestSchema = z.object({ version: z.literal(3), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().nonnegative() }), grid: gridSchema, frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length), artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), samples: samplePackSchema, source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
+export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, provider: z.string().min(1).max(256).optional(), temporalApproximation: z.string().max(2048).optional(), frames: z.array(z.unknown()).max(MAX_SAMPLE_VALUES) }).strict();
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
 export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean() });
 export const sampleResponseSchema = z.object({ model: z.string(), buildId: z.string(), lat: z.number().finite(), lon: z.number().finite(), method: manifestSchema.shape.method, source: manifestSchema.shape.source, coverage: manifestSchema.shape.coverage, expiresAt: z.string(), frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueSchema) })) });
-export const paletteSchema = z.object({ id: z.string(), edges: z.array(z.number()), colors: z.array(z.string()), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().optional(), provisional: z.boolean().optional() }).passthrough();
 export const freshnessSchema = z.object({
   ageSeconds: z.number(),
   expiresAt: z.string(),
@@ -215,12 +285,11 @@ export function forecastObjects(manifest: Manifest): { key: string; sha256: stri
   ];
 }
 
-/** A sidecar belongs to one build; absent legacy references are allowed, incomplete ones are not. */
+/** Every admitted alpha build has one immutable provenance sidecar. */
 export function getProvenanceReference(
   manifest: Pick<Manifest, 'model' | 'buildId' | 'source'>
-): { key: string; sha256: string } | null {
+): { key: string; sha256: string } {
   const source = manifest.source;
-  if (!Object.hasOwn(source, 'provenanceKey') && !Object.hasOwn(source, 'provenanceSha256')) return null;
   const digest = sha256.safeParse(source.provenanceSha256);
   if (source.provenanceKey !== `builds/${manifest.model}/${manifest.buildId}/provenance.json` || !digest.success) {
     throw new Error('Invalid provenance reference');
@@ -237,12 +306,6 @@ export function parseProvenance(
     throw new Error('Provenance does not match manifest');
   }
   return provenance;
-}
-
-export function compactSource(source: Record<string, unknown>): Record<string, unknown> {
-  if (!('frames' in source) || !Array.isArray(source.frames)) return source;
-  const { frames, ...rest } = source;
-  return { ...rest, frameCount: typeof rest.frameCount === 'number' ? rest.frameCount : frames.length };
 }
 
 export function computeFreshness(
@@ -266,6 +329,15 @@ export function computeFreshness(
 
 export function validateArtifactRecords(manifest: Manifest): void {
   const frames = new Set(manifest.frames.map(frame => frame.id));
+  if (manifest.layers.length * manifest.frames.length > manifest.descriptors.maxSampleValues) throw new Error('Sample value budget exceeded');
+  if (manifest.recipe.source.modelFamily !== manifest.model) throw new Error('Recipe model identity mismatch');
+  for (const layer of manifest.layers) {
+    const descriptor = manifest.descriptors.layers[layer];
+    if (!descriptor || descriptor.id !== layer || !manifest.descriptors.palettes.some(p => p.id === descriptor.palette)) throw new Error('Incomplete product descriptors');
+  }
+  for (const frame of manifest.frames) {
+    if (Date.parse(frame.intervalStart) > Date.parse(frame.intervalEnd) || Date.parse(frame.validTime) !== Date.parse(frame.intervalEnd)) throw new Error('Invalid frame time support');
+  }
   const layers = new Set(manifest.layers);
   if (frames.size === 0 || frames.size !== manifest.frames.length) throw new Error(`expected distinct frames, found ${manifest.frames.length}`);
   if (layers.size === 0 || layers.size !== manifest.layers.length) throw new Error(`expected distinct layers, found ${manifest.layers.length}`);
@@ -307,3 +379,5 @@ export function validateSampleCell(view: DataView, offset: number, spec: LayerSp
   if (status < STATUS_UNAVAILABLE && !Number.isFinite(view.getFloat32(offset, true))) throw new Error(`non-finite sample value at offset ${offset} in ${key}`);
   if (active !== undefined && (status === STATUS_OUTSIDE) === active) throw new Error(`Sample coverage mismatch in ${key}`);
 }
+
+export { coverageDescriptorSchema, coveragePrefix, type CoverageDescriptor } from './coverage.js';

@@ -2,7 +2,7 @@ import bcast from '@windy/broadcast';
 import { map } from '@windy/map';
 import store from '@windy/store';
 import type { LayerId, ModelId } from '@av/contracts';
-import { ApiClient, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
+import { ApiClient, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
 import config, { API_BASE } from './pluginConfig';
 import { PluginController, type HostMap, type HostStore, type HostTileLayer, type WindyHost } from './controller';
 import { PluginPanel } from './view';
@@ -41,7 +41,7 @@ async function requestSeries(): Promise<void> {
   seriesAbort = requestAbort;
   const requestedPoint = { ...point };
   panel.setSeriesEnabled(false);
-  panel.setSeriesStatus(`Requesting all 8 frames × 3 layers at ${requestedPoint.lat.toFixed(4)}, ${requestedPoint.lon.toFixed(4)}…`);
+  panel.setSeriesStatus(sampleRequestText(build, requestedPoint));
   try {
     const layers = [...build.manifest.layers];
     const payload = await api.sample(build, {

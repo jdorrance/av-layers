@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { GFS_GRID, LAYER_IDS, PALETTES, SAMPLE_BLOCK_SIZE } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, LAYER_IDS, PALETTES, SAMPLE_BLOCK_SIZE } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
@@ -31,7 +31,7 @@ it('renders build-specific opaque or transparent no-lift legends and discloses d
     const panel = new PluginPanel(callbacks);
     const build = {
       model: 'gfs',
-      manifest: { buildId: color, layers: ['usable-lift-msl', 'precip-rate'], frames: [], source: {}, method: { id: 'method' }, expiresAt: 'later' },
+      manifest: { descriptors: createProductDescriptors(), buildId: color, layers: ['usable-lift-msl', 'precip-rate'], frames: [], source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) }, method: { id: 'method' }, expiresAt: 'later' },
       maxNativeZoom: 5,
       coverage: { id: 'mask' },
       palettes: [
@@ -62,7 +62,7 @@ it('normalizes wrapped longitudes and clears existing series when clicking a new
     {
       frames: [{ id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z', layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } }],
       method: { id: 'dry-lenschow-pbl-1p2-v1' },
-      source: {},
+      source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
       coverage: { id: 'soaring-land-v1' },
       expiresAt: '2026-10-31T00:00:00Z'
     },
@@ -107,8 +107,8 @@ it.each(['https://api.test/provenance.json', 'http://localhost:8787/provenance.j
   panel.renderBuild({
     model: 'gfs', bounds: [-180, -55, 180, 65], maxNativeZoom: 5, coverage: { id: 'mask' }, palettes: [],
     manifest: {
-      buildId: 'build-1', layers: ['precip-rate'], frames: [], cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z',
-      grid: { width: 1440, height: 721, dx: 0.25, dy: -0.25 }, source: { provenanceUrl }, method: { id: 'method', hash: 'a'.repeat(64) }
+      descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)), buildId: 'build-1', layers: ['precip-rate'], frames: [], cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z',
+      grid: GFS_GRID, source: { provenanceUrl }, method: { id: 'method', hash: 'a'.repeat(64) }
     }
   } as unknown as PinnedBuild);
   const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
@@ -133,9 +133,9 @@ it('reuses legend nodes for unchanged state and refreshes them for layer, palett
     baseUrl: 'https://api.test', model: 'gfs',
     pointer: { version: 1, model: 'gfs', latestBuildId: 'build-1', retained: [{ buildId: 'build-1', manifestKey: 'builds/gfs/build-1/manifest.json', cycle, expiresAt }] },
     manifest: {
-      version: 2, model: 'gfs', buildId: 'build-1', cycle, createdAt: cycle, expiresAt,
+      version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)), model: 'gfs', buildId: 'build-1', cycle, createdAt: cycle, expiresAt,
       method: { id: 'method', hash: 'b'.repeat(64) }, coverage, grid: GFS_GRID,
-      frames, layers: [...LAYER_IDS], source: {}, tool: {}, palettes: ['lift', 'rain'], metrics: {},
+      frames, layers: [...LAYER_IDS], source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) }, tool: {}, palettes: ['lift', 'rain'], metrics: {},
       artifacts: LAYER_IDS.map(layer => ({ layer, frame: 'f003', tilesKey: `builds/gfs/build-1/${layer}/f003.pmtiles`, tilesSha256: 'c'.repeat(64) })),
       samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: 1, channelCount: LAYER_IDS.length, bytes: LAYER_IDS.length * 5, key: 'builds/gfs/build-1/samples.bin', sha256: 'd'.repeat(64) }
     },

@@ -1,0 +1,2187 @@
+{
+  "version": 1,
+  "scope": "Local prequalification and controlled stage experiments; intermediate code identities are retained in each receipt. These observations do not close final whole-build, deployed load, lifecycle or Windy-host gates.",
+  "pathPolicy": "Machine-specific repository and temporary path prefixes are replaced in data; originalSha256 identifies the untouched local source receipt.",
+  "records": [
+    {
+      "sourceReceipt": "output/evidence/foundation-full-comparison.json",
+      "originalSha256": "3e479c67fa045b530cfa67e05cb0698abdeb451b6c3601fa2a2667fea60c1551",
+      "data": {
+        "version": 1,
+        "passed": true,
+        "baselineManifest": "<temporary>/av-foundation-baseline-output/builds/gfs/20261101T171249Z-98ea399d-3f9c-4573-985e-255051515138/manifest.json",
+        "baselineManifestSha256": "cdee8f3f31d68c762255b913fa9d31ed4d968c2c00947ec4a43bbde8b5e18eb0",
+        "candidateManifest": "<temporary>/av-foundation-candidate-output/builds/gfs/20261101T173548Z-185f8e36-fc4d-49f0-9ef2-cc7fa917bacc/manifest.json",
+        "candidateManifestSha256": "4329d527a3745def24ffff834d34516c5b4331b9af58698d365e4c6d766a464e",
+        "elapsedMs": 78683.642416,
+        "samples": {
+          "byteExact": true,
+          "bytes": 43835520,
+          "sha256": "db7ae8e8c36f532304df10ba08f87e6b0644b7ed779ffd3840e9a4053e2ee8b0"
+        },
+        "sourceFrames": {
+          "equalExcludingCapturedAt": true,
+          "count": 8,
+          "sha256": "f58f4de46eecbf9c544d2d89ad998d5ceb631bdf01c80a0280d8355c1ee8235d"
+        },
+        "archivePolicy": "Compare every expected address, exact dimensions and decoded RGBA SHA256; archive ordering and compressed bytes may differ. Decoded content digest cache is bounded to 2,048 entries.",
+        "totalTilesCompared": 97032,
+        "uniquePayloadDecodes": 54199,
+        "artifacts": [
+          {
+            "key": "f003/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "3acba4cba3ad63423165807265552d5791987c4331c52c4996bdf91703835a2b"
+          },
+          {
+            "key": "f003/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "f222be46bddb2e322996a18cb7ae8a123515e32697837148caedcb6b08f1004f"
+          },
+          {
+            "key": "f003/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "52856c38a43788b27baf576b11a6d2937bed09bc278749a29e42400dcca8ab32"
+          },
+          {
+            "key": "f006/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "78bd959e77b8fc092d49c9303bd77f5549530d584ee9dfa120defe7c3f934467"
+          },
+          {
+            "key": "f006/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "1397c133188de05778453b6e7a2243757a946755c4b1544e3d5ed8e7f9a54b5c"
+          },
+          {
+            "key": "f006/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "ef4a18103ee53574ba48ed67208963e12ee351572b9ccefa3300b4b642b0df51"
+          },
+          {
+            "key": "f009/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "721681d9135968a5497d82f8c852c9fcacbc24efe4ac0bc47d96d4e149335b82"
+          },
+          {
+            "key": "f009/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "c42729e20527fdf07399165c9bff69f06311cf0184ea00d4fcca2fc6c65b8c5e"
+          },
+          {
+            "key": "f009/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "c10cd5d4d528e8386b2cd90a8904a6efb231d649afbb8e7d4d0962a40523a2b0"
+          },
+          {
+            "key": "f012/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "4fb80d6c52ce4ae802bdd72d00c591c67f8b638250e3941d42cabb402d9c9ceb"
+          },
+          {
+            "key": "f012/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "ce6e0f6e977b051116b8872a81cc1a7d62a4796b121cbce2d6df4224a7f61b51"
+          },
+          {
+            "key": "f012/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "aed0e8c3b836def331d6683ea6a66906533039ba8a3d7d5a49f7cef32c14ab80"
+          },
+          {
+            "key": "f015/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "a30872cfcc841e23ce40261de06e22fe609551837260d8bb9a976da64fb93195"
+          },
+          {
+            "key": "f015/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "6a224cdae99a6bac6aa1d61feb7aa871e9a811a8f1a07d86d80a39af25199e61"
+          },
+          {
+            "key": "f015/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "a537ca514855fddc56db43aa9de8e1ba4c8f86fe2e1993517890c1ada3d0cd89"
+          },
+          {
+            "key": "f018/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "7ad07fe298b3a77e2c0a458091733eb8d49c1cb96d08cd85e4c8d0694ffed368"
+          },
+          {
+            "key": "f018/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "40762a847af04e3d9e06da5b0d0590fc0757272eedb13128ae18e82076f3a365"
+          },
+          {
+            "key": "f018/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "814b444818f5d71341732bf3a90cf221de2049407b3e5f63b4f9e0be5e1310e2"
+          },
+          {
+            "key": "f021/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "5195c2d693057c53f2febfc6e5c894b7c072c803c88e5d3922f5bdb2837fba00"
+          },
+          {
+            "key": "f021/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "16e59c9950f2ccb58df56592706c1fa7717425188c6cebd8ff42f444ee78921b"
+          },
+          {
+            "key": "f021/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "8f494eff0414a1060112f7fa419d64c04ecabbd5746970888127e936af844cd1"
+          },
+          {
+            "key": "f024/usable-lift-msl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "a8b6785085cafcaafc4286c8820c726f9a97ac0f88573bc2a933b02dc271844c"
+          },
+          {
+            "key": "f024/usable-lift-agl",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "7b08e3002eb52d05d6d8f8fab666d90a579c183870f62358febf5d00f3ebe330"
+          },
+          {
+            "key": "f024/precip-rate",
+            "tiles": 4043,
+            "encodedIdentical": 4043,
+            "orderedRgbaSha256": "688adc7c4907357cd6d7773edf2e8f93c2e11e6a3e08c9899c2f256b812b8c54"
+          }
+        ]
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/fresh-cold-acquisition.json",
+      "originalSha256": "f15a5d09852f584e059a5d163cd71d978da2315e2794fbb056c7d1606139a256",
+      "data": {
+        "kind": "gfs-acquisition-cache-fill",
+        "node": "v22.23.4",
+        "platform": "darwin 24.6.0",
+        "cpu": "Apple M4 Max",
+        "cycle": "2026-11-01T12:00:00Z",
+        "hours": [
+          3,
+          6,
+          9,
+          12,
+          15,
+          18,
+          21,
+          24
+        ],
+        "activeCells": 226187,
+        "concurrency": "production-default",
+        "networkAllowed": true,
+        "elapsedMs": 124988.176666,
+        "cpuMicros": {
+          "user": 25187862,
+          "system": 1866505
+        },
+        "peakRssBytes": 693616640,
+        "outputSha256": "562aa7b38ecf9f53437252ddce5335a5fb3e3021bdb14db40affb5d0c8b3a260",
+        "stats": {
+          "transport": {
+            "networkRequests": 419,
+            "cacheReads": 0,
+            "memoryIndexHits": 12,
+            "retries": 1
+          },
+          "byPacking": {
+            "3": {
+              "records": 400,
+              "failures": 0,
+              "decodeMs": 19564.00341000006,
+              "compactMs": 138.1161859999538,
+              "sampledValues": 90474800
+            }
+          },
+          "loadMs": 186269.28628699994,
+          "admitMs": 41.834530999947674,
+          "rawCompanionHits": 12,
+          "peakPrefetchBytes": 113065696
+        }
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/sampler-fastpath-summary.json",
+      "originalSha256": "6b6c083e76f9ea25c3a60a4dd280348fe1b704ee693e6b6c44de51f802df64b0",
+      "data": {
+        "method": "Existing pinned f003 offline renderer benchmark vs frozen1d78d1c baseline; Node22.23.4, M4Max; three separate16tile processes and one128tile process, eachfirstcold+5warm iterations alternatingbaseline/candidate. ExactRGBA hashes compared in everyrun. Sharedhost; localstage observation, not a CI completion claim.",
+        "sourceSha256": {
+          "packages/forecast/src/sampler.ts": "fe7a16a43bbc5299aea2cc548080b8101e85522259a9d7a4722ecb278b3523c0",
+          "packages/forecast/src/prepared.test.ts": "4ffa4956fc624ab1a8c29d3d532a8ac3902bf6ca6bb89493b59687a233730940",
+          "scripts/benchmark-render.ts": "17df4cab803438ea6e81c304512ac171f5dd7077ac5dc359fd65912cd19e66c1"
+        },
+        "validation": {
+          "focusedTests": 27,
+          "eslint": "passed",
+          "rootTypecheck": "passed"
+        },
+        "runs": [
+          {
+            "receipt": "sampler-fastpath-known-r1.json",
+            "tileCount": 16,
+            "layers": [
+              "usable-lift-msl",
+              "usable-lift-agl",
+              "precip-rate"
+            ],
+            "frame": 3,
+            "exactPixels": true,
+            "coldRasterMs": {
+              "baseline": 346.55749899999955,
+              "candidate": 167.53629199999887
+            },
+            "warmMedianRasterMs": {
+              "baseline": 346.7687499999997,
+              "candidate": 161.72904100000142
+            },
+            "warmReductionPercent": 53.36112582232351,
+            "sha256": "828066826b59a00e3944cd7bc4846e87fd1e0f0a080dc4b450bbbfbfd32df4e6"
+          },
+          {
+            "receipt": "sampler-fastpath-known-r2.json",
+            "tileCount": 16,
+            "layers": [
+              "usable-lift-msl",
+              "usable-lift-agl",
+              "precip-rate"
+            ],
+            "frame": 3,
+            "exactPixels": true,
+            "coldRasterMs": {
+              "baseline": 344.96608100000185,
+              "candidate": 167.71120899999733
+            },
+            "warmMedianRasterMs": {
+              "baseline": 348.6509120000046,
+              "candidate": 162.0647869999957
+            },
+            "warmReductionPercent": 53.51660316322546,
+            "sha256": "828066826b59a00e3944cd7bc4846e87fd1e0f0a080dc4b450bbbfbfd32df4e6"
+          },
+          {
+            "receipt": "sampler-fastpath-known-r3.json",
+            "tileCount": 16,
+            "layers": [
+              "usable-lift-msl",
+              "usable-lift-agl",
+              "precip-rate"
+            ],
+            "frame": 3,
+            "exactPixels": true,
+            "coldRasterMs": {
+              "baseline": 350.36604099999795,
+              "candidate": 167.8846299999991
+            },
+            "warmMedianRasterMs": {
+              "baseline": 355.317038999995,
+              "candidate": 162.59824999999546
+            },
+            "warmReductionPercent": 54.23854413016266,
+            "sha256": "828066826b59a00e3944cd7bc4846e87fd1e0f0a080dc4b450bbbfbfd32df4e6"
+          },
+          {
+            "receipt": "sampler-fastpath-known-128.json",
+            "tileCount": 128,
+            "layers": [
+              "usable-lift-msl",
+              "usable-lift-agl",
+              "precip-rate"
+            ],
+            "frame": 3,
+            "exactPixels": true,
+            "coldRasterMs": {
+              "baseline": 2520.7548390000015,
+              "candidate": 1147.9708850000097
+            },
+            "warmMedianRasterMs": {
+              "baseline": 2656.405028000012,
+              "candidate": 1263.1977280000065
+            },
+            "warmReductionPercent": 52.44709618129812,
+            "sha256": "d534489be8eac841f0b0e0598c904d560f1ad6c7a3069c68e542ccde58ec3e06"
+          }
+        ]
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/raster-workers-final-128.json",
+      "originalSha256": "8cb4084b038eb97ed6ecc3e3656b9506742aff54be279d85a507a1eba02d85eb",
+      "data": {
+        "kind": "bounded-raster-workers",
+        "node": "v22.23.4",
+        "cpu": "Apple M4 Max",
+        "availableParallelism": 16,
+        "sourceSha256": "81e99a5cac7c20aa954abdcaecb669e815d0161818fb67aad25dddec57fff135",
+        "exactPixels": true,
+        "sharedBytesTotal": 15835891,
+        "geometryCacheBytes": 25165824,
+        "pendingLimit": 8,
+        "maximumPendingRgbaBytes": 2097152,
+        "layers": [
+          "usable-lift-msl",
+          "usable-lift-agl",
+          "precip-rate"
+        ],
+        "tiles": [
+          {
+            "z": 7,
+            "x": 2,
+            "y": 33
+          },
+          {
+            "z": 7,
+            "x": 23,
+            "y": 33
+          },
+          {
+            "z": 7,
+            "x": 58,
+            "y": 33
+          },
+          {
+            "z": 7,
+            "x": 13,
+            "y": 34
+          },
+          {
+            "z": 7,
+            "x": 35,
+            "y": 34
+          },
+          {
+            "z": 7,
+            "x": 75,
+            "y": 34
+          },
+          {
+            "z": 7,
+            "x": 22,
+            "y": 35
+          },
+          {
+            "z": 7,
+            "x": 60,
+            "y": 35
+          },
+          {
+            "z": 7,
+            "x": 10,
+            "y": 36
+          },
+          {
+            "z": 7,
+            "x": 35,
+            "y": 36
+          },
+          {
+            "z": 7,
+            "x": 3,
+            "y": 37
+          },
+          {
+            "z": 7,
+            "x": 25,
+            "y": 37
+          },
+          {
+            "z": 7,
+            "x": 68,
+            "y": 37
+          },
+          {
+            "z": 7,
+            "x": 22,
+            "y": 38
+          },
+          {
+            "z": 7,
+            "x": 65,
+            "y": 38
+          },
+          {
+            "z": 7,
+            "x": 20,
+            "y": 39
+          },
+          {
+            "z": 7,
+            "x": 42,
+            "y": 39
+          },
+          {
+            "z": 7,
+            "x": 17,
+            "y": 40
+          },
+          {
+            "z": 7,
+            "x": 38,
+            "y": 40
+          },
+          {
+            "z": 7,
+            "x": 87,
+            "y": 40
+          },
+          {
+            "z": 7,
+            "x": 28,
+            "y": 41
+          },
+          {
+            "z": 7,
+            "x": 65,
+            "y": 41
+          },
+          {
+            "z": 7,
+            "x": 126,
+            "y": 41
+          },
+          {
+            "z": 7,
+            "x": 31,
+            "y": 42
+          },
+          {
+            "z": 7,
+            "x": 67,
+            "y": 42
+          },
+          {
+            "z": 7,
+            "x": 93,
+            "y": 42
+          },
+          {
+            "z": 7,
+            "x": 29,
+            "y": 43
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 43
+          },
+          {
+            "z": 7,
+            "x": 89,
+            "y": 43
+          },
+          {
+            "z": 7,
+            "x": 18,
+            "y": 44
+          },
+          {
+            "z": 7,
+            "x": 39,
+            "y": 44
+          },
+          {
+            "z": 7,
+            "x": 76,
+            "y": 44
+          },
+          {
+            "z": 7,
+            "x": 99,
+            "y": 44
+          },
+          {
+            "z": 7,
+            "x": 28,
+            "y": 45
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 45
+          },
+          {
+            "z": 7,
+            "x": 90,
+            "y": 45
+          },
+          {
+            "z": 7,
+            "x": 113,
+            "y": 45
+          },
+          {
+            "z": 7,
+            "x": 38,
+            "y": 46
+          },
+          {
+            "z": 7,
+            "x": 78,
+            "y": 46
+          },
+          {
+            "z": 7,
+            "x": 101,
+            "y": 46
+          },
+          {
+            "z": 7,
+            "x": 27,
+            "y": 47
+          },
+          {
+            "z": 7,
+            "x": 67,
+            "y": 47
+          },
+          {
+            "z": 7,
+            "x": 89,
+            "y": 47
+          },
+          {
+            "z": 7,
+            "x": 113,
+            "y": 47
+          },
+          {
+            "z": 7,
+            "x": 37,
+            "y": 48
+          },
+          {
+            "z": 7,
+            "x": 76,
+            "y": 48
+          },
+          {
+            "z": 7,
+            "x": 98,
+            "y": 48
+          },
+          {
+            "z": 7,
+            "x": 25,
+            "y": 49
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 49
+          },
+          {
+            "z": 7,
+            "x": 88,
+            "y": 49
+          },
+          {
+            "z": 7,
+            "x": 110,
+            "y": 49
+          },
+          {
+            "z": 7,
+            "x": 37,
+            "y": 50
+          },
+          {
+            "z": 7,
+            "x": 80,
+            "y": 50
+          },
+          {
+            "z": 7,
+            "x": 101,
+            "y": 50
+          },
+          {
+            "z": 7,
+            "x": 28,
+            "y": 51
+          },
+          {
+            "z": 7,
+            "x": 68,
+            "y": 51
+          },
+          {
+            "z": 7,
+            "x": 90,
+            "y": 51
+          },
+          {
+            "z": 7,
+            "x": 112,
+            "y": 51
+          },
+          {
+            "z": 7,
+            "x": 60,
+            "y": 52
+          },
+          {
+            "z": 7,
+            "x": 81,
+            "y": 52
+          },
+          {
+            "z": 7,
+            "x": 103,
+            "y": 52
+          },
+          {
+            "z": 7,
+            "x": 36,
+            "y": 53
+          },
+          {
+            "z": 7,
+            "x": 78,
+            "y": 53
+          },
+          {
+            "z": 7,
+            "x": 100,
+            "y": 53
+          },
+          {
+            "z": 7,
+            "x": 58,
+            "y": 54
+          },
+          {
+            "z": 7,
+            "x": 79,
+            "y": 54
+          },
+          {
+            "z": 7,
+            "x": 101,
+            "y": 54
+          },
+          {
+            "z": 7,
+            "x": 34,
+            "y": 55
+          },
+          {
+            "z": 7,
+            "x": 74,
+            "y": 55
+          },
+          {
+            "z": 7,
+            "x": 97,
+            "y": 55
+          },
+          {
+            "z": 7,
+            "x": 29,
+            "y": 56
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 56
+          },
+          {
+            "z": 7,
+            "x": 90,
+            "y": 56
+          },
+          {
+            "z": 7,
+            "x": 27,
+            "y": 57
+          },
+          {
+            "z": 7,
+            "x": 60,
+            "y": 57
+          },
+          {
+            "z": 7,
+            "x": 82,
+            "y": 57
+          },
+          {
+            "z": 7,
+            "x": 28,
+            "y": 58
+          },
+          {
+            "z": 7,
+            "x": 67,
+            "y": 58
+          },
+          {
+            "z": 7,
+            "x": 96,
+            "y": 58
+          },
+          {
+            "z": 7,
+            "x": 42,
+            "y": 59
+          },
+          {
+            "z": 7,
+            "x": 77,
+            "y": 59
+          },
+          {
+            "z": 7,
+            "x": 115,
+            "y": 59
+          },
+          {
+            "z": 7,
+            "x": 65,
+            "y": 60
+          },
+          {
+            "z": 7,
+            "x": 93,
+            "y": 60
+          },
+          {
+            "z": 7,
+            "x": 39,
+            "y": 61
+          },
+          {
+            "z": 7,
+            "x": 74,
+            "y": 61
+          },
+          {
+            "z": 7,
+            "x": 105,
+            "y": 61
+          },
+          {
+            "z": 7,
+            "x": 41,
+            "y": 62
+          },
+          {
+            "z": 7,
+            "x": 75,
+            "y": 62
+          },
+          {
+            "z": 7,
+            "x": 109,
+            "y": 62
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 63
+          },
+          {
+            "z": 7,
+            "x": 102,
+            "y": 63
+          },
+          {
+            "z": 7,
+            "x": 40,
+            "y": 64
+          },
+          {
+            "z": 7,
+            "x": 77,
+            "y": 64
+          },
+          {
+            "z": 7,
+            "x": 116,
+            "y": 64
+          },
+          {
+            "z": 7,
+            "x": 44,
+            "y": 65
+          },
+          {
+            "z": 7,
+            "x": 100,
+            "y": 65
+          },
+          {
+            "z": 7,
+            "x": 13,
+            "y": 66
+          },
+          {
+            "z": 7,
+            "x": 68,
+            "y": 66
+          },
+          {
+            "z": 7,
+            "x": 108,
+            "y": 66
+          },
+          {
+            "z": 7,
+            "x": 36,
+            "y": 67
+          },
+          {
+            "z": 7,
+            "x": 73,
+            "y": 67
+          },
+          {
+            "z": 7,
+            "x": 117,
+            "y": 67
+          },
+          {
+            "z": 7,
+            "x": 44,
+            "y": 68
+          },
+          {
+            "z": 7,
+            "x": 82,
+            "y": 68
+          },
+          {
+            "z": 7,
+            "x": 9,
+            "y": 69
+          },
+          {
+            "z": 7,
+            "x": 68,
+            "y": 69
+          },
+          {
+            "z": 7,
+            "x": 114,
+            "y": 69
+          },
+          {
+            "z": 7,
+            "x": 40,
+            "y": 70
+          },
+          {
+            "z": 7,
+            "x": 78,
+            "y": 70
+          },
+          {
+            "z": 7,
+            "x": 0,
+            "y": 71
+          },
+          {
+            "z": 7,
+            "x": 69,
+            "y": 71
+          },
+          {
+            "z": 7,
+            "x": 112,
+            "y": 71
+          },
+          {
+            "z": 7,
+            "x": 44,
+            "y": 72
+          },
+          {
+            "z": 7,
+            "x": 108,
+            "y": 72
+          },
+          {
+            "z": 7,
+            "x": 42,
+            "y": 73
+          },
+          {
+            "z": 7,
+            "x": 106,
+            "y": 73
+          },
+          {
+            "z": 7,
+            "x": 44,
+            "y": 74
+          },
+          {
+            "z": 7,
+            "x": 115,
+            "y": 74
+          },
+          {
+            "z": 7,
+            "x": 105,
+            "y": 75
+          },
+          {
+            "z": 7,
+            "x": 43,
+            "y": 76
+          },
+          {
+            "z": 7,
+            "x": 118,
+            "y": 76
+          },
+          {
+            "z": 7,
+            "x": 113,
+            "y": 77
+          },
+          {
+            "z": 7,
+            "x": 117,
+            "y": 78
+          },
+          {
+            "z": 7,
+            "x": 40,
+            "y": 80
+          },
+          {
+            "z": 7,
+            "x": 37,
+            "y": 82
+          },
+          {
+            "z": 7,
+            "x": 37,
+            "y": 84
+          },
+          {
+            "z": 7,
+            "x": 37,
+            "y": 86
+          }
+        ],
+        "summaries": [
+          {
+            "workers": 0,
+            "medianMs": 1276.5470000000005,
+            "minMs": 1274.656500000001,
+            "maxMs": 1286.920333000001,
+            "startup": {
+              "workers": 0,
+              "elapsedMs": 0.03070900000011534,
+              "rssBefore": 570556416,
+              "rssAfter": 570556416
+            }
+          },
+          {
+            "workers": 1,
+            "medianMs": 1307.8711669999975,
+            "minMs": 1302.917459000002,
+            "maxMs": 1314.1552080000001,
+            "startup": {
+              "workers": 1,
+              "elapsedMs": 102.21533400000044,
+              "rssBefore": 575815680,
+              "rssAfter": 598212608
+            }
+          },
+          {
+            "workers": 2,
+            "medianMs": 939.1228330000013,
+            "minMs": 933.4757910000008,
+            "maxMs": 940.7844580000019,
+            "startup": {
+              "workers": 2,
+              "elapsedMs": 116.89987499999916,
+              "rssBefore": 589807616,
+              "rssAfter": 640122880
+            }
+          },
+          {
+            "workers": 3,
+            "medianMs": 732.8899170000004,
+            "minMs": 731.5923340000008,
+            "maxMs": 735.9784580000014,
+            "startup": {
+              "workers": 3,
+              "elapsedMs": 120.54508400000122,
+              "rssBefore": 604356608,
+              "rssAfter": 670695424
+            }
+          }
+        ],
+        "runs": [
+          {
+            "workers": 0,
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 2434.2863749999997,
+            "userCpuMs": 2499.965,
+            "systemCpuMs": 35.354,
+            "rssBytes": 578338816,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 256,
+            "geometryMisses": 128,
+            "prepareMs": 1105.8893839999955,
+            "rasterMs": 1292.5255399999974
+          },
+          {
+            "workers": 0,
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 1276.241083,
+            "userCpuMs": 1263.496,
+            "systemCpuMs": 13.746,
+            "rssBytes": 578437120,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1242.6878309999975
+          },
+          {
+            "workers": 0,
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 1282.073375,
+            "userCpuMs": 1270.266,
+            "systemCpuMs": 13.352,
+            "rssBytes": 578437120,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1248.956761999998
+          },
+          {
+            "workers": 0,
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 1286.920333000001,
+            "userCpuMs": 1285.257,
+            "systemCpuMs": 13.15,
+            "rssBytes": 577552384,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1253.511913000007
+          },
+          {
+            "workers": 0,
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 1274.656500000001,
+            "userCpuMs": 1269.032,
+            "systemCpuMs": 12.627,
+            "rssBytes": 575799296,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1241.5421720000195
+          },
+          {
+            "workers": 0,
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 1276.5470000000005,
+            "userCpuMs": 1267.843,
+            "systemCpuMs": 10.671,
+            "rssBytes": 575815680,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1243.3827869999677
+          },
+          {
+            "workers": 1,
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 2419.477458000001,
+            "userCpuMs": 2526.03,
+            "systemCpuMs": 23.81,
+            "rssBytes": 615940096,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 256,
+            "geometryMisses": 128,
+            "prepareMs": 1062.905158999989,
+            "rasterMs": 1351.390544999971
+          },
+          {
+            "workers": 1,
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 1306.6932909999996,
+            "userCpuMs": 1348.986,
+            "systemCpuMs": 13.528,
+            "rssBytes": 617578496,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1302.500375000005
+          },
+          {
+            "workers": 1,
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 1302.917459000002,
+            "userCpuMs": 1347.513,
+            "systemCpuMs": 12.845,
+            "rssBytes": 622362624,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1299.201231999994
+          },
+          {
+            "workers": 1,
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 1308.0975839999992,
+            "userCpuMs": 1368.339,
+            "systemCpuMs": 15.196,
+            "rssBytes": 622788608,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1303.7414420000168
+          },
+          {
+            "workers": 1,
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 1314.1552080000001,
+            "userCpuMs": 1360.967,
+            "systemCpuMs": 15.254,
+            "rssBytes": 622854144,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1309.5375499999645
+          },
+          {
+            "workers": 1,
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 1307.8711669999975,
+            "userCpuMs": 1348.654,
+            "systemCpuMs": 13.388,
+            "rssBytes": 623951872,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1303.698031
+          },
+          {
+            "workers": 2,
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 1542.4762919999994,
+            "userCpuMs": 2764.021,
+            "systemCpuMs": 25.938,
+            "rssBytes": 667009024,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 256,
+            "geometryMisses": 128,
+            "prepareMs": 1127.682957999994,
+            "rasterMs": 1468.530957000039
+          },
+          {
+            "workers": 2,
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 940.0228329999991,
+            "userCpuMs": 1457.488,
+            "systemCpuMs": 15.137,
+            "rssBytes": 667566080,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1392.363410000009
+          },
+          {
+            "workers": 2,
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 935.6917920000014,
+            "userCpuMs": 1444.148,
+            "systemCpuMs": 13.947,
+            "rssBytes": 668401664,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1386.9855029999599
+          },
+          {
+            "workers": 2,
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 933.4757910000008,
+            "userCpuMs": 1443.016,
+            "systemCpuMs": 14.643,
+            "rssBytes": 668418048,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1382.5672610000183
+          },
+          {
+            "workers": 2,
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 939.1228330000013,
+            "userCpuMs": 1470.559,
+            "systemCpuMs": 18.363,
+            "rssBytes": 668909568,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1391.4331630000015
+          },
+          {
+            "workers": 2,
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 940.7844580000019,
+            "userCpuMs": 1459.011,
+            "systemCpuMs": 15.733,
+            "rssBytes": 668975104,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1390.9624199999962
+          },
+          {
+            "workers": 3,
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 1157.4222919999993,
+            "userCpuMs": 2863.338,
+            "systemCpuMs": 27.412,
+            "rssBytes": 702939136,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 256,
+            "geometryMisses": 128,
+            "prepareMs": 1169.3817979999985,
+            "rasterMs": 1453.6572849999684
+          },
+          {
+            "workers": 3,
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 732.8899170000004,
+            "userCpuMs": 1398.27,
+            "systemCpuMs": 13.571,
+            "rssBytes": 702955520,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1333.3873319999948
+          },
+          {
+            "workers": 3,
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 731.5923340000008,
+            "userCpuMs": 1396.217,
+            "systemCpuMs": 14.081,
+            "rssBytes": 703283200,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1334.1504129999412
+          },
+          {
+            "workers": 3,
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 735.9784580000014,
+            "userCpuMs": 1390.353,
+            "systemCpuMs": 16.387,
+            "rssBytes": 703561728,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1339.792830999988
+          },
+          {
+            "workers": 3,
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 733.557417,
+            "userCpuMs": 1386.928,
+            "systemCpuMs": 13.867,
+            "rssBytes": 703578112,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1332.3152119999831
+          },
+          {
+            "workers": 3,
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 732.3839999999982,
+            "userCpuMs": 1386.961,
+            "systemCpuMs": 13.083,
+            "rssBytes": 703692800,
+            "peakPending": 8,
+            "outputSha256": "bb7af6dab97c3a2ef0ab114700fa58057372f0fef13de14ebd3da18022e78d1b",
+            "geometryHits": 384,
+            "geometryMisses": 0,
+            "prepareMs": 0,
+            "rasterMs": 1333.62475299996
+          }
+        ],
+        "note": "Sequential variants, nonexclusive host. Cold means first operation; no OS cache purge. RSS is process-wide with shared acquisition and allocator history. Worker startup including shared input copy is excluded from raster runs and reported separately. Stage evidence only; no full-build resource claim."
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/worker-grouped-archives-final.json",
+      "originalSha256": "6637540bf12837439046884e92355cc2111f30b06fc09e4db95a95f9b023db54",
+      "data": {
+        "kind": "z7-archive-grouping",
+        "node": "v22.23.4",
+        "cpu": "Apple M4 Max",
+        "exactPixels": true,
+        "frames": [
+          3
+        ],
+        "layers": [
+          "usable-lift-msl",
+          "usable-lift-agl",
+          "precip-rate"
+        ],
+        "tiles": [
+          {
+            "z": 0,
+            "x": 0,
+            "y": 0
+          },
+          {
+            "z": 7,
+            "x": 2,
+            "y": 33
+          },
+          {
+            "z": 7,
+            "x": 10,
+            "y": 36
+          },
+          {
+            "z": 7,
+            "x": 42,
+            "y": 39
+          },
+          {
+            "z": 7,
+            "x": 67,
+            "y": 42
+          },
+          {
+            "z": 7,
+            "x": 99,
+            "y": 44
+          },
+          {
+            "z": 7,
+            "x": 27,
+            "y": 47
+          },
+          {
+            "z": 7,
+            "x": 66,
+            "y": 49
+          },
+          {
+            "z": 7,
+            "x": 90,
+            "y": 51
+          },
+          {
+            "z": 7,
+            "x": 58,
+            "y": 54
+          },
+          {
+            "z": 7,
+            "x": 90,
+            "y": 56
+          },
+          {
+            "z": 7,
+            "x": 77,
+            "y": 59
+          },
+          {
+            "z": 7,
+            "x": 75,
+            "y": 62
+          },
+          {
+            "z": 7,
+            "x": 100,
+            "y": 65
+          },
+          {
+            "z": 7,
+            "x": 82,
+            "y": 68
+          },
+          {
+            "z": 7,
+            "x": 112,
+            "y": 71
+          },
+          {
+            "z": 7,
+            "x": 43,
+            "y": 76
+          }
+        ],
+        "runs": [
+          {
+            "variant": "baseline",
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 974.4457080000002,
+            "prepareMs": 475.06604000000016,
+            "rasterMs": 374.2977970000002,
+            "encodeWorkMs": 2083.099498,
+            "convertMs": 47.518876000000546,
+            "verifyMs": 43.766583999999966,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 0,
+            "state": "cold-process",
+            "elapsedMs": 526.744917,
+            "prepareMs": 270.48254299999917,
+            "rasterMs": 297.2432889999991,
+            "encodeWorkMs": 53.642959999998766,
+            "convertMs": 46.99854099999993,
+            "verifyMs": 43.133458999999675,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 509.0358749999996,
+            "prepareMs": 281.83520900000076,
+            "rasterMs": 281.4693319999951,
+            "encodeWorkMs": 51.65741800000342,
+            "convertMs": 46.58741699999882,
+            "verifyMs": 42.89266700000098,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "baseline",
+            "repetition": 1,
+            "state": "warm-process",
+            "elapsedMs": 1037.0742499999997,
+            "prepareMs": 514.1962939999967,
+            "rasterMs": 418.7930439999973,
+            "encodeWorkMs": 2202.2988290000008,
+            "convertMs": 47.91841799999929,
+            "verifyMs": 42.35900099999981,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "baseline",
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 1036.850875,
+            "prepareMs": 512.325296,
+            "rasterMs": 419.5383370000018,
+            "encodeWorkMs": 2220.4568339999996,
+            "convertMs": 46.88262400000076,
+            "verifyMs": 43.45787500000006,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 2,
+            "state": "warm-process",
+            "elapsedMs": 515.7933750000002,
+            "prepareMs": 273.94212700000026,
+            "rasterMs": 298.9713780000038,
+            "encodeWorkMs": 55.231878000000506,
+            "convertMs": 46.64837499999885,
+            "verifyMs": 43.31054200000017,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 501.32245799999964,
+            "prepareMs": 279.56587500000023,
+            "rasterMs": 281.5620370000006,
+            "encodeWorkMs": 53.68903800000135,
+            "convertMs": 46.300500000000284,
+            "verifyMs": 43.12083399999938,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "baseline",
+            "repetition": 3,
+            "state": "warm-process",
+            "elapsedMs": 1034.2533749999993,
+            "prepareMs": 512.7620420000048,
+            "rasterMs": 417.5837500000034,
+            "encodeWorkMs": 2217.6150809999936,
+            "convertMs": 47.23079100000177,
+            "verifyMs": 43.27787399999943,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "baseline",
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 1034.1236250000002,
+            "prepareMs": 512.0520829999987,
+            "rasterMs": 417.4913729999953,
+            "encodeWorkMs": 2217.556913999997,
+            "convertMs": 47.29770800000006,
+            "verifyMs": 42.37649899999997,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 4,
+            "state": "warm-process",
+            "elapsedMs": 510.514541999999,
+            "prepareMs": 281.87029300000177,
+            "rasterMs": 288.6850889999987,
+            "encodeWorkMs": 55.2963740000032,
+            "convertMs": 48.88762499999939,
+            "verifyMs": 44.76645800000006,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "candidate",
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 510.0784170000006,
+            "prepareMs": 270.0473749999928,
+            "rasterMs": 290.9924549999978,
+            "encodeWorkMs": 53.54262500000186,
+            "convertMs": 46.91612499999974,
+            "verifyMs": 43.308708999999,
+            "geometryMisses": 19,
+            "geometryHits": 32,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          },
+          {
+            "variant": "baseline",
+            "repetition": 5,
+            "state": "warm-process",
+            "elapsedMs": 1033.6192499999997,
+            "prepareMs": 511.12591899999643,
+            "rasterMs": 417.78712699999414,
+            "encodeWorkMs": 2213.1387059999997,
+            "convertMs": 47.57287499999984,
+            "verifyMs": 43.246500999999625,
+            "geometryMisses": 51,
+            "geometryHits": 0,
+            "blankTiles": 27,
+            "peakPendingTiles": 8,
+            "outputSha256": "e2121a02beca35fa6691660ffb2f391f25b9e4aef7013b52a3fc25e309e828d1"
+          }
+        ],
+        "note": "Cold means first process operation; filesystem/OS caches were not purged. Archive mode uses a shared300KB cache to reproduce production eviction; exact decoded RGBA checked outside timings. Non-exclusive host; stage direction only, not a production speed claim."
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/allocation-gc-summary.json",
+      "originalSha256": "950f64c5f4f80f868dbeda07f6194328225c8291de9763ccbdb62846dc02d1e3",
+      "data": {
+        "version": 1,
+        "kind": "passive-gc-and-counted-input-allocation-qualification",
+        "baselineRoot": "<temporary>/av-foundation-baseline-1d78d1c",
+        "candidateRevision": "1d78d1c7f9af4a446d2c5d3d6585c9cde6224c85",
+        "candidateDirty": true,
+        "cases": {
+          "pack": {
+            "exactOutputSha256": "92e33881fb58a5a7c9eecdbe500a9e6bde3d2d245adce69d20f868f46256e7d6",
+            "variants": {
+              "baseline": {
+                "receipt": "pack-baseline-gc.json",
+                "node": "v22.23.4",
+                "cpu": "Apple M4 Max",
+                "coldElapsedMs": 411.34950000000003,
+                "warmElapsedMs": {
+                  "median": 381.45174999999995,
+                  "min": 373.15162499999997,
+                  "max": 396.735625
+                },
+                "warmGcEventsMedian": 65,
+                "warmGcDurationMsMedian": 8.415465950965881,
+                "processPeakRssBytes": 938688512
+              },
+              "candidate": {
+                "receipt": "pack-candidate-gc.json",
+                "node": "v22.23.4",
+                "cpu": "Apple M4 Max",
+                "coldElapsedMs": 103.80758399999999,
+                "warmElapsedMs": {
+                  "median": 94.56633299999999,
+                  "min": 91.44524999999999,
+                  "max": 96.83587499999999
+                },
+                "warmGcEventsMedian": 10,
+                "warmGcDurationMsMedian": 3.12204110622406,
+                "processPeakRssBytes": 470843392
+              }
+            },
+            "warmElapsedReduction": 0.7520883493128554,
+            "observedRangeFraction": 0.061826954523082046,
+            "decision": "adopt-direct-pack: exact bytes, retained-channel elimination, lower observed GC and process peak RSS"
+          },
+          "levels": {
+            "exactOutputSha256": "77455f9e04a786df719e2fcf04ecbdbe034ed4b75ceafcbc216b5b052161156d",
+            "variants": {
+              "baseline": {
+                "receipt": "levels-baseline-gc.json",
+                "node": "v22.23.4",
+                "cpu": "Apple M4 Max",
+                "coldElapsedMs": 93.654292,
+                "warmElapsedMs": {
+                  "median": 80.71016700000001,
+                  "min": 74.15937500000001,
+                  "max": 87.13191700000002
+                },
+                "warmGcEventsMedian": 13,
+                "warmGcDurationMsMedian": 1.3191649913787842,
+                "processPeakRssBytes": 186089472,
+                "countedInputAllocationsPerRun": {
+                  "levelObjects": 1299967,
+                  "levelArrays": 100000
+                }
+              },
+              "candidate": {
+                "receipt": "levels-candidate-gc.json",
+                "node": "v22.23.4",
+                "cpu": "Apple M4 Max",
+                "coldElapsedMs": 94.971375,
+                "warmElapsedMs": {
+                  "median": 81.37758299999996,
+                  "min": 74.16566699999998,
+                  "max": 82.438625
+                },
+                "warmGcEventsMedian": 7,
+                "warmGcDurationMsMedian": 0.8459569215774536,
+                "processPeakRssBytes": 183779328,
+                "countedInputAllocationsPerRun": {
+                  "levelObjects": 21,
+                  "levelArrays": 1
+                }
+              }
+            },
+            "warmElapsedReduction": -0.008269292764565117,
+            "observedRangeFraction": 0.160729961071695,
+            "decision": "adopt-scratch: exact outputs and counted allocation-class elimination; timing change remains within observed range"
+          }
+        },
+        "limits": [
+          "First operation is process-cold, not OS-cache-cold; no GC is forced.",
+          "GC durations count V8 events starting during measured operations, not necessarily full stop-the-world pause time.",
+          "RSS is the six-iteration process high-water, not per-iteration live memory or a complete-build bound.",
+          "Counted allocations cover only explicit input-level objects/arrays; heap snapshots and deltas do not measure total allocation.",
+          "Timing is one isolated process per case/variant with one cold operation and five warm operations; retain earlier distributions and full-build gate."
+        ],
+        "sourceSha256": {
+          "scripts/benchmark-foundations.ts": "b574e1bc6e59991c3814ffdc905a7953faa73bdf3287d8c98fc0bb0a0616eef0",
+          "apps/batch/src/sample-pack.ts": "a9d1d7abb8a89faa6f4c57fe707dcc5a06ff141496575a4d7ccd4607817f7b63",
+          "packages/forecast/src/science.ts": "194c01bf1935428a89b2455d3cea16336eacfa30f0fbd81bc9b85a36913e63e7",
+          "packages/contracts/src/methods.ts": "03d6ea19fa819861f2f546425cfae037e4d045bd57570acb3f456fc7ed15e2fb",
+          "packages/forecast/src/sample-pack.ts": "34677bc35de1e4cf5a87e6ec97a8b00551d9370b791b5081f796861aed7526b2"
+        }
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/method-parameter-equivalence.json",
+      "originalSha256": "788f1483aec836c6c989e314504c8b8d99619f76ed5924846450290d5f970c14",
+      "data": {
+        "kind": "method-parameter-move-equivalence",
+        "cycle": "2026-10-30T00:00:00Z",
+        "hour": 3,
+        "activeCells": 226187,
+        "baseline": "1d78d1c",
+        "exactFieldBytes": true,
+        "methodSnapshots": {
+          "dry-lenschow-pbl-1p2-v1": {
+            "id": "dry-lenschow-pbl-1p2-v1",
+            "requiredInputs": [
+              "terrainM",
+              "surfacePressurePa",
+              "temp2mK",
+              "specificHumidity2mKgKg",
+              "pblHeightM",
+              "sensibleHeatFluxWm2",
+              "latentHeatFluxWm2",
+              "pressureLevelsHpa",
+              "hgtM",
+              "tempK"
+            ],
+            "inputs": {
+              "terrainM": {
+                "id": "terrainM",
+                "quantity": "geopotential-height",
+                "units": "m",
+                "dimensions": "cell",
+                "verticalReference": "MSL",
+                "timeSupport": "static",
+                "missingness": "explicit-cell-mask"
+              },
+              "surfacePressurePa": {
+                "id": "surfacePressurePa",
+                "quantity": "air-pressure",
+                "units": "Pa",
+                "dimensions": "cell",
+                "verticalReference": "surface",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              },
+              "temp2mK": {
+                "id": "temp2mK",
+                "quantity": "air-temperature",
+                "units": "K",
+                "dimensions": "cell",
+                "verticalReference": "2 m model AGL",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              },
+              "specificHumidity2mKgKg": {
+                "id": "specificHumidity2mKgKg",
+                "quantity": "specific-humidity",
+                "units": "kg/kg",
+                "dimensions": "cell",
+                "verticalReference": "2 m model AGL",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              },
+              "pblHeightM": {
+                "id": "pblHeightM",
+                "quantity": "boundary-layer-depth",
+                "units": "m",
+                "dimensions": "cell",
+                "verticalReference": "model AGL",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              },
+              "sensibleHeatFluxWm2": {
+                "id": "sensibleHeatFluxWm2",
+                "quantity": "upward-sensible-heat-flux",
+                "units": "W/m2",
+                "dimensions": "cell",
+                "verticalReference": "surface",
+                "timeSupport": "interval-mean",
+                "missingness": "explicit-cell-mask"
+              },
+              "latentHeatFluxWm2": {
+                "id": "latentHeatFluxWm2",
+                "quantity": "upward-latent-heat-flux",
+                "units": "W/m2",
+                "dimensions": "cell",
+                "verticalReference": "surface",
+                "timeSupport": "interval-mean",
+                "missingness": "explicit-cell-mask"
+              },
+              "pressureLevelsHpa": {
+                "id": "pressureLevelsHpa",
+                "quantity": "air-pressure-coordinate",
+                "units": "hPa",
+                "dimensions": "level",
+                "verticalReference": "strictly decreasing isobaric levels",
+                "timeSupport": "static",
+                "missingness": "all-levels-required"
+              },
+              "hgtM": {
+                "id": "hgtM",
+                "quantity": "geopotential-height",
+                "units": "m",
+                "dimensions": "level-cell",
+                "verticalReference": "MSL at isobaric levels",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              },
+              "tempK": {
+                "id": "tempK",
+                "quantity": "air-temperature",
+                "units": "K",
+                "dimensions": "level-cell",
+                "verticalReference": "isobaric levels",
+                "timeSupport": "valid-time",
+                "missingness": "explicit-cell-mask"
+              }
+            },
+            "outputs": [
+              "usable-lift-msl",
+              "usable-lift-agl"
+            ],
+            "spatialSupport": "column",
+            "parameters": {
+              "sinkRateMps": 1.2,
+              "lenschowScale": 4,
+              "lenschowShape": 0.8,
+              "lenschowPeakZeta": 0.3125,
+              "waterDryAirMolarMassRatio": 0.622,
+              "dryAirGasConstantJkgK": 287.05,
+              "dryAirHeatCapacityJkgK": 1004,
+              "latentHeatVaporizationJkg": 2501000,
+              "gravityMps2": 9.80665,
+              "kelvinOffset": 273.15,
+              "pascalsPerHectopascal": 100,
+              "dryLapseRateKperM": 0.0098,
+              "saturationRelativeTolerance": 1e-06,
+              "saturationVaporPressureScaleHpa": 6.112,
+              "saturationExponent": 17.67,
+              "saturationTemperatureOffsetC": 243.5,
+              "minimumSurfaceTemperatureC": -100,
+              "maximumSurfaceTemperatureC": 60,
+              "minimumSurfacePressureHpa": 100,
+              "maximumSurfacePressureHpa": 1100,
+              "minimumProfileTemperatureC": -120,
+              "maximumProfileTemperatureC": 60,
+              "maximumProfileGapM": 1000,
+              "crossingEpsilonMultiplier": 8,
+              "maximumBisectionIterations": 60
+            },
+            "caveats": [
+              "Dry parcel calculation; no moist parcel or cloud treatment.",
+              "Interval-mean surface fluxes are paired with the endpoint profile and PBL.",
+              "PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.",
+              "A profile without a resolved crossing is capped at its highest usable level and flagged.",
+              "MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction."
+            ]
+          },
+          "trailing-precipitation-rate-v1": {
+            "id": "trailing-precipitation-rate-v1",
+            "requiredInputs": [
+              "precipitationMmPerHour"
+            ],
+            "inputs": {
+              "precipitationMmPerHour": {
+                "id": "precipitationMmPerHour",
+                "quantity": "liquid-water-equivalent-precipitation-rate",
+                "units": "mm/h",
+                "dimensions": "cell",
+                "verticalReference": "surface",
+                "timeSupport": "interval-mean",
+                "missingness": "explicit-cell-mask"
+              }
+            },
+            "outputs": [
+              "precip-rate"
+            ],
+            "spatialSupport": "column",
+            "parameters": {
+              "minimumRateMmPerHour": 0
+            },
+            "caveats": [
+              "The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.",
+              "Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied."
+            ]
+          }
+        },
+        "fields": [
+          {
+            "layer": "usable-lift-msl",
+            "allNativeCells": 1038240,
+            "sha256": "2c1495ee79140466c30830fbc35032bc2692cd11fcbe80369c6441243889546d"
+          },
+          {
+            "layer": "usable-lift-agl",
+            "allNativeCells": 1038240,
+            "sha256": "56422f85c981806ebb608230b591bdd938eee9bd561a7472a91bbd5edaec3a5d"
+          },
+          {
+            "layer": "precip-rate",
+            "allNativeCells": 1038240,
+            "sha256": "ff6fca197d0e0a9fa6fdf9564727697be8abfc1d33a435fd67e4dcd9f5a81ac4"
+          }
+        ]
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/api-near-cap-summary.json",
+      "originalSha256": "2b0c9482ae33c43eae80c33e2ea8fe9dc4b683ec761e898158f8775e76bdbcc1",
+      "data": {
+        "scope": "Local workerd only; response cache disabled; 1MiB synthetic valid receipt with129groups\u00d7252 unique Unicode fields; 20bursts\u00d732callers; all200responses hash checked. This samples allocated heap/backing/embedder memory; it does not fill every retained cache or prove deployed peak memory.",
+        "sourceSha256": {
+          "apps/api/src/index.ts": "4c3a010bbeb42ee4f53a1029a0599bd40999340755097103dff195ba645b6438",
+          "apps/api/src/resources.ts": "f2313b89782b38fb69b7fae4cdaee159fba7dcc831b618a7e9397b2dc64c20ec",
+          "packages/contracts/src/index.ts": "6cfe75c35e68d1ea9e825cbf403ed036c7731f9228abde21d0daa11a9e6c0105"
+        },
+        "runs": [
+          {
+            "kind": "one-key",
+            "requests": 642,
+            "statuses": {
+              "200": 82,
+              "503": 560
+            },
+            "peakObservedBytes": 94377184,
+            "samples": 288,
+            "p95Ms": 84.611792,
+            "transportOrMalformedErrors": 0,
+            "coalesced": 600,
+            "r2Reads": 48,
+            "finalRecovery": {
+              "round": 21,
+              "index": 0,
+              "status": 200,
+              "bytes": 1048576,
+              "elapsedMs": 35.439542000000074,
+              "r2Reads": 1,
+              "coalesced": 0
+            }
+          },
+          {
+            "kind": "two-key",
+            "requests": 642,
+            "statuses": {
+              "200": 82,
+              "503": 560
+            },
+            "peakObservedBytes": 96166128,
+            "samples": 288,
+            "p95Ms": 93.78354099999979,
+            "transportOrMalformedErrors": 0,
+            "coalesced": 594,
+            "r2Reads": 70,
+            "finalRecovery": {
+              "round": 21,
+              "index": 0,
+              "status": 200,
+              "bytes": 1048576,
+              "elapsedMs": 37.63600000000042,
+              "r2Reads": 1,
+              "coalesced": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sourceReceipt": "output/evidence/foundation/gfs-api-local/summary.json",
+      "originalSha256": "4150a7d8f37d258653c545bee17a85f18bc55a6399076b7311271487de2a193f",
+      "data": {
+        "capturedAt": "2026-11-01T18:39:56.322106+00:00",
+        "scope": "Local historical retained GFS on a frozen production-entrypoint bundle; prequalification only. This is not a deployed/current-source qualification or a universal memory bound.",
+        "buildId": "20261101T173548Z-185f8e36-fc4d-49f0-9ef2-cc7fa917bacc",
+        "bundleSha256": "df34e3e275e5ca01043b3a506317314378b187b127ed264e5ef8656a7d2f4b3c",
+        "benchmarkHarnessSha256": "f2a65f8b9fea5e084588cb72e6131567d82692834b265de64bf637d886428692",
+        "sourceFingerprints": "frozen-bundle.json",
+        "point": {
+          "lat": 32.9,
+          "lon": -117.25
+        },
+        "archivePressurePrelude": "One native-z7 coastal tile from each of the 24 frame/layer archives, at most 4 concurrent requests, before each run; receipts in *-archive-preload.json.",
+        "sampleGap": "More than 180 seconds elapsed between warm load completion and uncached mode startup.",
+        "modes": {
+          "warm": {
+            "capturedAt": "2026-11-01T18:29:17.228Z",
+            "responseCacheBinding": "on",
+            "requests": 3000,
+            "durationSeconds": 300,
+            "mix": {
+              "tile": 0.9,
+              "sample": 0.04,
+              "metadata": 0.06
+            },
+            "maxConcurrent": 1,
+            "dropped": 0,
+            "unexpectedErrorRate": 0,
+            "cacheEvidence": true,
+            "loadCriteriaPassed": true,
+            "routes": {
+              "tile": {
+                "requests": 2700,
+                "p95Ms": 11.19,
+                "r2Reads": 18,
+                "r2Bytes": 6282
+              },
+              "sample": {
+                "requests": 120,
+                "p95Ms": 11.32,
+                "r2Reads": 0,
+                "r2Bytes": 0
+              },
+              "metadata": {
+                "requests": 180,
+                "p95Ms": 12.04,
+                "r2Reads": 1,
+                "r2Bytes": 349
+              }
+            },
+            "peakAllocatedHeapSurrogateBytes": 49450764,
+            "memorySamples": 2989,
+            "memoryCriteriaPassed": true
+          },
+          "uncached": {
+            "capturedAt": "2026-11-01T18:37:21.881Z",
+            "responseCacheBinding": "off",
+            "requests": 3000,
+            "durationSeconds": 300,
+            "mix": {
+              "tile": 0.9,
+              "sample": 0.04,
+              "metadata": 0.06
+            },
+            "maxConcurrent": 1,
+            "dropped": 0,
+            "unexpectedErrorRate": 0,
+            "cacheEvidence": true,
+            "loadCriteriaPassed": true,
+            "routes": {
+              "tile": {
+                "requests": 2700,
+                "p95Ms": 12.02,
+                "r2Reads": 2720,
+                "r2Bytes": 3101180
+              },
+              "sample": {
+                "requests": 120,
+                "p95Ms": 14.38,
+                "r2Reads": 120,
+                "r2Bytes": 259200
+              },
+              "metadata": {
+                "requests": 180,
+                "p95Ms": 10.52,
+                "r2Reads": 0,
+                "r2Bytes": 0
+              }
+            },
+            "peakAllocatedHeapSurrogateBytes": 49355109,
+            "memorySamples": 2986,
+            "memoryCriteriaPassed": true
+          }
+        },
+        "allLocalCriteriaPassed": true,
+        "limitations": [
+          "Allocated JS heap + backing storage + embedder heap sampled every 100 ms, no forced GC; native/unsampled peaks and deployed memory are not proven.",
+          "Final source has additional module extraction/shared JSON policy/failure cleanup and pending method descriptors; it requires fresh admission and deployed acceptance.",
+          "Cache pressure preloads every archive at one point; it does not fill every possible cache entry."
+        ],
+        "metadataRefreshNote": "Warm response-cache hits still perform periodic retained-pointer refreshes: 19 small pointer reads occurred across the measured warm run."
+      }
+    }
+  ]
+}

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { GFS_PRODUCT, type Manifest } from '@av/contracts';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
 import { loadCoverage } from './validate.js';
+import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 267, 847, 2794];
 const Z7_TOTAL_TILES = 97032;
@@ -19,6 +22,18 @@ function receipt(): Manifest {
 }
 
 describe('build capacity admission and performance budgets', () => {
+  it('reports current-product memory admission separately from hypothetical growth', () => {
+    const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--frames', '48', '--layers', '8', '--models', '4'], { encoding: 'utf8' });
+    expect(result.status).toBe(1);
+    const report = JSON.parse(result.stdout);
+    expect(report).toMatchObject({ frames: 48, layers: 8, models: 4, currentProductAdmission: { frames: 8, layers: 3, rasterWorkers: rasterWorkerCount(), budgetBytes: BUILD_BUDGETS.peakRssBytes } });
+    expect(report.currentProductAdmission.estimatedPeakBytes).toBe(Object.values(report.currentProductAdmission.workingSet as Record<string, number>).reduce((sum, value) => sum + value, 0));
+    expect(report.violations.length).toBeGreaterThan(0);
+  });
+  it('rejects empty public coverage before opening a provider', async () => {
+    const mask = await loadCoverage();
+    expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) })).toThrow('before acquisition');
+  });
   it('counts the real z0-z7 product before acquisition and leaves hourly retention headroom', async () => {
     const mask = await loadCoverage(), { capacity, layout, indices } = prepareBuild(mask);
     expect(indices.active.length).toBe(226187);
@@ -32,6 +47,10 @@ describe('build capacity admission and performance budgets', () => {
     });
     expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
     expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { cadenceHours: 0.5 }).violations).toContain('retention leaves no room for a replacement build');
+    expect(capacity.rasterWorkers).toBe(rasterWorkerCount());
+    expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
+    expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? mask.grid.width * mask.grid.height * 3 * 5 + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength : 0);
+    expect(capacity.estimatedPeakBytes).toBe(Object.values(capacity.workingSet).reduce((total, bytes) => total + bytes, 0));
   });
   it('projects native tile growth and rejects it until a trusted product and budget support it', async () => {
     const mask = await loadCoverage(), { layout } = prepareBuild(mask);

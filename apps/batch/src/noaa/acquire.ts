@@ -6,7 +6,7 @@ import {
 import { NoaaError } from './errors.ts';
 import { discoverGfsRunWithTransport } from './discover.ts';
 import { prefetchFields } from './prefetch.ts';
-import { inspectGfsField, type InspectedGfsField } from './admission.ts';
+import { loadAndInspectGfsField, type AdmittedGfsField } from './load.ts';
 import {
   gfsCompanionSpecs,
   gfsCurrentSpecs,
@@ -21,7 +21,7 @@ import {
   recoverTrailingWindow,
   validAt,
 } from './intervals.ts';
-import { NoaaTransport, gfsRecordWorkingBytes, selectGfsRecord, type NoaaTransportStats } from './transport.ts';
+import { NoaaTransport, gfsRecordWorkingBytes, type NoaaTransportStats } from './transport.ts';
 import { NoaaFieldSampler } from './sampling.ts';
 import type {
   AcquireGfsFrameOptions,
@@ -33,6 +33,13 @@ import type {
 
 const TOTAL_CELLS = GFS_CONTRACT_GRID.width * GFS_CONTRACT_GRID.height;
 const CONTRACT_TO_NATIVE_COLUMN_OFFSET = GFS_CONTRACT_GRID.width / 2;
+
+/** Conservative reservation per in-flight decode, including worker state, copied source/indices and result arrays.
+ * Completed results retain this reservation until consumed; full-frame output storage is a separate build budget. */
+export function estimateDecodeWorkingBytes(compressedBytes: number, activeCells: number): number {
+  if (!Number.isSafeInteger(compressedBytes) || compressedBytes < 1 || !Number.isSafeInteger(activeCells) || activeCells < 1 || activeCells > TOTAL_CELLS) throw new RangeError('Invalid decode reservation');
+  return compressedBytes * 2 + activeCells * 17 + TOTAL_CELLS * 32 + 16 * 1024 * 1024;
+}
 
 function invalid(message: string, details?: Record<string, unknown>): never {
   throw new NoaaError('invalid-option', message, details);
@@ -83,13 +90,8 @@ export function contractIndexToNativeIndex(index: number): number {
   return row * GFS_CONTRACT_GRID.width + nativeColumn;
 }
 
-interface LoadedField {
-  inspected?: InspectedGfsField;
-  grid: InspectedGfsField['grid'];
-  packingError: number;
-  receipt: DecodedFieldReceipt;
-  indexSha256: string;
-  sampled?: SampledColumn;
+interface LoadedField extends AdmittedGfsField {
+  sampled?: SampledColumn<Float32Array | Float64Array>;
 }
 
 interface SampledColumn<T extends Float32Array | Float64Array = Float64Array> {
@@ -117,13 +119,15 @@ interface AcquisitionContext {
 
 export async function createGfsAcquisitionSession(options: GfsAcquisitionSessionOptions, transportStats?: NoaaTransportStats): Promise<GfsAcquisitionSession> {
   const activeIndices = validateActiveIndices(options.activeIndices);
-  const fetchConcurrency = options.fetchConcurrency ?? 2, prefetchBytes = options.prefetchBytes ?? 64 * 1024 * 1024;
+  const fetchConcurrency = options.fetchConcurrency ?? 2, prefetchBytes = options.prefetchBytes ?? 128 * 1024 * 1024;
   if (!Number.isInteger(fetchConcurrency) || fetchConcurrency < 1 || fetchConcurrency > 8 || !Number.isSafeInteger(prefetchBytes) || prefetchBytes < 1) invalid('Invalid acquisition prefetch budget');
+  const decodeConcurrency = options.decodeConcurrency ?? 1;
+  if (!Number.isInteger(decodeConcurrency) || decodeConcurrency < 1 || decodeConcurrency > 4) invalid('Invalid decode concurrency');
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   signal.throwIfAborted();
   const transport = new NoaaTransport({ ...options, signal, stats: transportStats });
-  const sampler = new NoaaFieldSampler();
+  const sampler = new NoaaFieldSampler(decodeConcurrency);
   const cancelDecoder = () => { void sampler.close().catch(() => {}); };
   signal.addEventListener('abort', cancelDecoder, { once: true });
   let cycle: string;
@@ -192,38 +196,17 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
     const index = spec.role === 'companion'
       ? await transport.index(`${url}.idx`, stamp)
       : spec.product === 'primary' ? primaryIndex : secondaryIndex;
-    if (gfsRecordWorkingBytes(index, spec) > context.prefetchBytes) throw new NoaaError('transport', 'GRIB record exceeds acquisition byte budget');
+    if (estimateDecodeWorkingBytes(gfsRecordWorkingBytes(index, spec), activeIndices.length) > context.prefetchBytes) throw new NoaaError('transport', 'GRIB record exceeds acquisition byte budget');
     const rawKey = `${url}\n${spec.key}`;
     const prior = spec.role === 'companion' ? context.raw.get(rawKey) : undefined;
     if (prior && prior.indexSha256 === index.asset.sha256 && prior.receipt.forecastLabel === spec.forecast && prior.grid.gridKey === expectedGridKey) {
       context.stats.rawCompanionHits++;
       return { ...prior, receipt: { ...structuredClone(prior.receipt), role: 'companion' } };
     }
-    const started = performance.now();
-    const selection = await selectGfsRecord(transport, url, index, spec);
-    const selected = selection.selected;
-    const bytes = selection.bytes ?? await transport.field(url, selected.record);
-    context.stats.loadMs += performance.now() - started;
-    const admittedAt = performance.now();
-    const inspected = inspectGfsField(bytes.bytes, {
-      cycle,
-      spec,
-      expectedStartHour: startHour,
-      expectedEndHour: endHour,
-      expectedGridKey,
+    return loadAndInspectGfsField(transport, {
+      cycle, spec, sourceHour: spec.role === 'companion' ? hour - 3 : hour, startHour, endHour,
+      expectedGridKey, index, timings: context.stats,
     });
-    context.stats.admitMs += performance.now() - admittedAt;
-    const receipt: DecodedFieldReceipt = {
-      ...inspected.receipt,
-      product: spec.product,
-      productFile: productName,
-      url,
-      idxLine: selected.line,
-      idxLineNumber: selected.indexLine,
-      asset: bytes.asset,
-      ...(selection.duplicates ? { duplicates: selection.duplicates } : {}),
-    };
-    return { inspected, grid: inspected.grid, packingError: inspected.packingError, receipt, indexSha256: index.asset.sha256 };
   };
 
   const decode = async <T extends Float32Array | Float64Array = Float64Array>(loaded: LoadedField, nativeIndices: Uint32Array, destination?: T): Promise<SampledColumn<T>> => {
@@ -238,8 +221,12 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
 
   const prefetch = (specs: readonly GfsFieldSpec[], gridKey: string) => prefetchFields(
     specs,
-    spec => gfsRecordWorkingBytes(spec.product === 'primary' ? primaryIndex : secondaryIndex, spec),
-    spec => load(spec, hour, hour, gridKey),
+    spec => estimateDecodeWorkingBytes(gfsRecordWorkingBytes(spec.product === 'primary' ? primaryIndex : secondaryIndex, spec), activeIndices.length),
+    async spec => {
+      const loaded = await load(spec, hour, hour, gridKey);
+      loaded.sampled = await instant(loaded);
+      return loaded;
+    },
     { concurrency: context.fetchConcurrency, maxBytes: context.prefetchBytes, signal: context.signal, fail: context.fail,
       peak: bytes => { context.stats.peakPrefetchBytes = Math.max(context.stats.peakPrefetchBytes, bytes); } },
   );

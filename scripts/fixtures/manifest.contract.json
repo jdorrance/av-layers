@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "model": "gfs",
   "buildId": "20261030T000000Z-00000000-0000-4000-8000-000000000000",
   "cycle": "2026-10-30T00:00:00.000Z",
@@ -11,13 +11,15 @@
   },
   "coverage": {
     "id": "soaring-land-v1",
-    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
-    "maskKey": "coverage/soaring-land-v1.json",
+    "hash": "5dc1c3a85318731564168f9819ce203bf7821a00f977f5a2a6a30da025b791ce",
+    "maskKey": "coverage/5dc1c3a85318731564168f9819ce203bf7821a00f977f5a2a6a30da025b791ce/manifest.json",
     "maxZoom": 7
   },
   "grid": {
+    "kind": "regular-latlon",
     "width": 1440,
     "height": 721,
+    "earthRadiusM": 6371229,
     "lon0": -180,
     "lat0": 90,
     "dx": 0.25,
@@ -226,7 +228,10 @@
     }
   ],
   "source": {
-    "model": "gfs"
+    "model": "gfs",
+    "provider": "NOAA",
+    "provenanceKey": "builds/gfs/20261030T000000Z-00000000-0000-4000-8000-000000000000/provenance.json",
+    "provenanceSha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "tool": {
     "pmtiles": "1.31.2"
@@ -244,5 +249,336 @@
     "bytes": 43835520,
     "key": "builds/gfs/20261030T000000Z-00000000-0000-4000-8000-000000000000/samples.bin",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "descriptors": {
+    "layers": {
+      "usable-lift-msl": {
+        "id": "usable-lift-msl",
+        "kind": "scalar",
+        "label": "Usable lift top (MSL)",
+        "quantity": "usable-lift-top",
+        "units": "m MSL",
+        "verticalReference": "MSL",
+        "timeSupport": "interval-flux-endpoint-profile",
+        "methodId": "dry-lenschow-pbl-1p2-v1",
+        "palette": "lift",
+        "supportsNoLift": true,
+        "supportsLiftFlags": true,
+        "noLiftSampleValue": null,
+        "zeroOnNoLiftInterpolation": false,
+        "hideNonPositiveValues": false
+      },
+      "usable-lift-agl": {
+        "id": "usable-lift-agl",
+        "kind": "scalar",
+        "label": "Usable lift depth (model AGL)",
+        "quantity": "usable-lift-top",
+        "units": "m AGL",
+        "verticalReference": "model-AGL",
+        "timeSupport": "interval-flux-endpoint-profile",
+        "methodId": "dry-lenschow-pbl-1p2-v1",
+        "palette": "lift",
+        "supportsNoLift": true,
+        "supportsLiftFlags": true,
+        "noLiftSampleValue": 0,
+        "zeroOnNoLiftInterpolation": true,
+        "hideNonPositiveValues": true
+      },
+      "precip-rate": {
+        "id": "precip-rate",
+        "kind": "scalar",
+        "label": "Precipitation rate",
+        "quantity": "precipitation-rate",
+        "units": "mm/h",
+        "verticalReference": "surface",
+        "timeSupport": "interval-mean",
+        "methodId": "trailing-precipitation-rate-v1",
+        "palette": "rain",
+        "supportsNoLift": false,
+        "supportsLiftFlags": false,
+        "noLiftSampleValue": null,
+        "zeroOnNoLiftInterpolation": false,
+        "hideNonPositiveValues": false
+      }
+    },
+    "palettes": [
+      {
+        "id": "lift",
+        "edges": [
+          0,
+          300,
+          600,
+          900,
+          1200,
+          1500,
+          1850,
+          2150,
+          2450,
+          2750,
+          3050,
+          3350,
+          3650,
+          3950,
+          4250,
+          4550,
+          4900,
+          5200,
+          5500,
+          5800,
+          6100,
+          6400,
+          6700
+        ],
+        "colors": [
+          "#55184d",
+          "#b93b88",
+          "#8f7fac",
+          "#62cbff",
+          "#0168ff",
+          "#00345d",
+          "#036d00",
+          "#35cd34",
+          "#9dff64",
+          "#fefa02",
+          "#cbc939",
+          "#d59b99",
+          "#d3595a",
+          "#f92d2d",
+          "#9b0900",
+          "#d87400",
+          "#ffa50b",
+          "#f1cd5d",
+          "#a6a7a9",
+          "#516565",
+          "#1c4f4f",
+          "#003333"
+        ],
+        "units": "m",
+        "noLiftColor": "#00000000"
+      },
+      {
+        "id": "rain",
+        "edges": [
+          0.1,
+          0.5,
+          1,
+          2,
+          5,
+          10,
+          20,
+          50
+        ],
+        "colors": [
+          "#b9e5ff",
+          "#66b3ff",
+          "#2d78d2",
+          "#36a657",
+          "#f0dc43",
+          "#f09b32",
+          "#dc493c",
+          "#963f9c"
+        ],
+        "units": "mm/h",
+        "transparentBelow": 0.1,
+        "provisional": true
+      }
+    ],
+    "attribution": "NOAA GFS · Aviation Forecast Layers",
+    "coverageDescription": "Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.",
+    "bounds": [
+      -180,
+      -55,
+      180,
+      65
+    ],
+    "maxSampleValues": 256,
+    "methods": {
+      "dry-lenschow-pbl-1p2-v1": {
+        "id": "dry-lenschow-pbl-1p2-v1",
+        "requiredInputs": [
+          "terrainM",
+          "surfacePressurePa",
+          "temp2mK",
+          "specificHumidity2mKgKg",
+          "pblHeightM",
+          "sensibleHeatFluxWm2",
+          "latentHeatFluxWm2",
+          "pressureLevelsHpa",
+          "hgtM",
+          "tempK"
+        ],
+        "inputs": {
+          "terrainM": {
+            "id": "terrainM",
+            "quantity": "geopotential-height",
+            "units": "m",
+            "dimensions": "cell",
+            "verticalReference": "MSL",
+            "timeSupport": "static",
+            "missingness": "explicit-cell-mask"
+          },
+          "surfacePressurePa": {
+            "id": "surfacePressurePa",
+            "quantity": "air-pressure",
+            "units": "Pa",
+            "dimensions": "cell",
+            "verticalReference": "surface",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          },
+          "temp2mK": {
+            "id": "temp2mK",
+            "quantity": "air-temperature",
+            "units": "K",
+            "dimensions": "cell",
+            "verticalReference": "2 m model AGL",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          },
+          "specificHumidity2mKgKg": {
+            "id": "specificHumidity2mKgKg",
+            "quantity": "specific-humidity",
+            "units": "kg/kg",
+            "dimensions": "cell",
+            "verticalReference": "2 m model AGL",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          },
+          "pblHeightM": {
+            "id": "pblHeightM",
+            "quantity": "boundary-layer-depth",
+            "units": "m",
+            "dimensions": "cell",
+            "verticalReference": "model AGL",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          },
+          "sensibleHeatFluxWm2": {
+            "id": "sensibleHeatFluxWm2",
+            "quantity": "upward-sensible-heat-flux",
+            "units": "W/m2",
+            "dimensions": "cell",
+            "verticalReference": "surface",
+            "timeSupport": "interval-mean",
+            "missingness": "explicit-cell-mask"
+          },
+          "latentHeatFluxWm2": {
+            "id": "latentHeatFluxWm2",
+            "quantity": "upward-latent-heat-flux",
+            "units": "W/m2",
+            "dimensions": "cell",
+            "verticalReference": "surface",
+            "timeSupport": "interval-mean",
+            "missingness": "explicit-cell-mask"
+          },
+          "pressureLevelsHpa": {
+            "id": "pressureLevelsHpa",
+            "quantity": "air-pressure-coordinate",
+            "units": "hPa",
+            "dimensions": "level",
+            "verticalReference": "strictly decreasing isobaric levels",
+            "timeSupport": "static",
+            "missingness": "all-levels-required"
+          },
+          "hgtM": {
+            "id": "hgtM",
+            "quantity": "geopotential-height",
+            "units": "m",
+            "dimensions": "level-cell",
+            "verticalReference": "MSL at isobaric levels",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          },
+          "tempK": {
+            "id": "tempK",
+            "quantity": "air-temperature",
+            "units": "K",
+            "dimensions": "level-cell",
+            "verticalReference": "isobaric levels",
+            "timeSupport": "valid-time",
+            "missingness": "explicit-cell-mask"
+          }
+        },
+        "outputs": [
+          "usable-lift-msl",
+          "usable-lift-agl"
+        ],
+        "spatialSupport": "column",
+        "parameters": {
+          "sinkRateMps": 1.2,
+          "lenschowScale": 4,
+          "lenschowShape": 0.8,
+          "lenschowPeakZeta": 0.3125,
+          "waterDryAirMolarMassRatio": 0.622,
+          "dryAirGasConstantJkgK": 287.05,
+          "dryAirHeatCapacityJkgK": 1004,
+          "latentHeatVaporizationJkg": 2501000,
+          "gravityMps2": 9.80665,
+          "kelvinOffset": 273.15,
+          "pascalsPerHectopascal": 100,
+          "dryLapseRateKperM": 0.0098,
+          "saturationRelativeTolerance": 0.000001,
+          "saturationVaporPressureScaleHpa": 6.112,
+          "saturationExponent": 17.67,
+          "saturationTemperatureOffsetC": 243.5,
+          "minimumSurfaceTemperatureC": -100,
+          "maximumSurfaceTemperatureC": 60,
+          "minimumSurfacePressureHpa": 100,
+          "maximumSurfacePressureHpa": 1100,
+          "minimumProfileTemperatureC": -120,
+          "maximumProfileTemperatureC": 60,
+          "maximumProfileGapM": 1000,
+          "crossingEpsilonMultiplier": 8,
+          "maximumBisectionIterations": 60
+        },
+        "caveats": [
+          "Dry parcel calculation; no moist parcel or cloud treatment.",
+          "Interval-mean surface fluxes are paired with the endpoint profile and PBL.",
+          "PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.",
+          "A profile without a resolved crossing is capped at its highest usable level and flagged.",
+          "MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction."
+        ]
+      },
+      "trailing-precipitation-rate-v1": {
+        "id": "trailing-precipitation-rate-v1",
+        "requiredInputs": [
+          "precipitationMmPerHour"
+        ],
+        "inputs": {
+          "precipitationMmPerHour": {
+            "id": "precipitationMmPerHour",
+            "quantity": "liquid-water-equivalent-precipitation-rate",
+            "units": "mm/h",
+            "dimensions": "cell",
+            "verticalReference": "surface",
+            "timeSupport": "interval-mean",
+            "missingness": "explicit-cell-mask"
+          }
+        },
+        "outputs": [
+          "precip-rate"
+        ],
+        "spatialSupport": "column",
+        "parameters": {
+          "minimumRateMmPerHour": 0
+        },
+        "caveats": [
+          "The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.",
+          "Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied."
+        ]
+      }
+    }
+  },
+  "recipe": {
+    "id": "gfs-soaring",
+    "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "source": {
+      "modelFamily": "gfs",
+      "configurationId": "noaa-gfs-0p25",
+      "domainId": "global"
+    },
+    "sourceRevision": "fixture",
+    "sourceDirty": false,
+    "lockHash": "0000000000000000000000000000000000000000000000000000000000000000"
   }
 }

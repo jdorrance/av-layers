@@ -10,7 +10,7 @@ import { validateArchive } from './validate.js';
 import { encodeWebp } from './webp.js';
 
 const mask: CoverageMask = {
-  grid: { width: 1, height: 1, lon0: 0, lat0: 0, dx: 1, dy: 1, wrapLongitude: false },
+  grid: { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 1, height: 1, lon0: 0, lat0: 0, dx: 1, dy: 1, wrapLongitude: false },
   output: new Uint8Array([1]), halo: new Uint8Array(1), tiles: new Uint8Array([1]), maxZoom: 0
 };
 const temporary: string[] = [];

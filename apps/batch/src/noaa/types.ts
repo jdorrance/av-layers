@@ -6,6 +6,7 @@ export interface NoaaFetchOptions {
   fetch?: typeof fetch;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
+  retry?: { maxAttempts?: number; deadlineMs?: number; attemptTimeoutMs?: number; baseDelayMs?: number; maxDelayMs?: number };
 }
 
 export interface DiscoverGfsRunOptions extends NoaaFetchOptions {
@@ -37,7 +38,9 @@ export interface GfsAcquisitionSessionOptions extends NoaaFetchOptions {
   now?: Date;
   /** At most this many records fetched ahead; defaults to 2. */
   fetchConcurrency?: number;
-  /** Hard bound on reserved compressed record buffers; defaults to 64 MiB. */
+  /** Worker jobs are independently bounded to 1..4; defaults to at most two available CPUs. */
+  decodeConcurrency?: number;
+  /** Bound on compressed/transferred/decoded buffers plus estimated worker state; defaults to 128 MiB. */
   prefetchBytes?: number;
 }
 

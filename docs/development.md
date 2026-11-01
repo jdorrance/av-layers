@@ -1,6 +1,8 @@
 # Development
 
-Use [getting started](getting-started.md) for toolchain and local API setup.
+Use [offline development](local-development.md) for a tiny deterministic fixture
+and [getting started](getting-started.md) for real GFS acquisition.
+Use [extension recipes](extensions.md) before admitting another provider, quantity or grid.
 The [workspace map](architecture.md#workspace-map) links each package's purpose
 and entry points; read those boundaries before changing implementation details.
 
@@ -50,4 +52,30 @@ and [roadmap](roadmap.md) tracks remaining work.
 
 Package READMEs provide a short usage example and links to the next layer.
 Update the owner when behavior changes; link to it elsewhere.
-Keep signatures and endpoint details with their executable definitions.
+Keep signatures and endpoint details with their executable definitions. The [generated reference](reference.md) and OpenAPI snapshot come from those definitions. After changing them, run `pnpm exec node --import tsx scripts/generate-reference.ts`; `pnpm docs:check` rejects stale output.
+
+## Verification
+
+`pnpm verify` is the single offline verification entry point used locally and
+in CI. It runs lint, type checking, fixture tests, the real local workerd test,
+documentation freshness/link checks and production bundles once each. Install
+the pinned PMTiles tool during setup before disconnecting from the network.
+Live acquisition, full-build qualification and deployed load/host checks remain
+separate, explicit operations. Superseded feature-branch and pull-request
+verification is cancelled; deployment, publication and maintenance remain
+serialized without cancellation.
+
+## Evidence and cleanup
+
+Run `pnpm docs:check` for repository Markdown file targets and
+`pnpm test:runtime` for actual workerd overlap/cancellation behavior. Browser
+receipts distinguish simulated host, desktop/mobile-layout and actual host/device
+checks. The [serving budget](serving-budgets.md) defines measured cache states,
+body-consumption latency and memory limitations.
+
+Generated forecasts, caches, emulator state and raw measurements stay under
+ignored output directories. Commit compact reproducible receipts and experiment
+scripts, never downloaded weather archives or credentials. Delete a failed local
+fixture's own persistence directory only after its Worker has stopped. Production
+cleanup uses the serialized maintenance workflow; local file cleanup grants no
+authority to delete R2 objects.

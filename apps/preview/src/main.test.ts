@@ -76,7 +76,7 @@ function latest() {
     }] },
     manifest,
     templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-    bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [], coverage: manifest.coverage,
+    bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
     freshness: computeFreshness(manifest)
   }));
 }

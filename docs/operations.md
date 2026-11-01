@@ -1,181 +1,204 @@
 # Operations
 
-The operating model is one batch CLI, one private R2 bucket per environment,
-and one read-only Worker. Start with a [validated local build](getting-started.md).
-[Status](status.md) distinguishes local evidence from remote release proof.
+The supported writer is GitHub Actions on `main`. Forecast and maintenance jobs
+share `forecast-{environment}-gfs` with cancellation disabled. That concurrency
+group provides exclusion; the in-process authority receipt is a guard against
+accidental local invocation, not a distributed lock. Keep R2 write credentials
+in the two protected GitHub environments. There are no API write routes.
 
 ## Publish a build
 
-Create the environment's bucket and disable public `r2.dev` and custom-domain
-access. Clients read through the Worker; raw acquisition caches stay local.
-Publication credentials need Object Read & Write on that bucket, without
-account-wide administration:
+Run the existing workflow from current `main`:
 
 ```sh
-export R2_ACCOUNT_ID='...'
-export R2_ACCESS_KEY_ID='...'
-export R2_SECRET_ACCESS_KEY='...'
-export R2_BUCKET='...'
-AV_MANIFEST=output/builds/gfs/BUILD_ID/manifest.json
-pnpm run publish --manifest "$AV_MANIFEST"
+gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs
 ```
 
-Replace the placeholders with your credentials and manifest path. Keep secrets
-outside the repository. The [publisher](../apps/batch/src/publication.ts) validates
-the build and uploads create-only artifacts, followed by the manifest. It then
-conditionally replaces the model's latest pointer using the ETag captured before
-upload: compare-and-swap, or CAS. A competing publisher's success causes this
-attempt to abort; it does not overwrite the winner. Failed uploads leave latest
-unchanged. Build IDs are never reused.
+Use `production` after staging qualification. Omit `cycle` to discover an
+admissible source run. A historical cycle may be built locally for comparison,
+but promotion requires a source age of at most 18 hours and at least six hours
+of useful horizon. Builds also have a six-hour publication lifetime and
+seven-day retention expiry. Forecast relevance and retention are different.
 
-Publication refuses older cycles, expired builds and builds more than six hours
-old. Use `--allow-same-cycle` only for an intentional method replacement. Retained
-membership has a bounded cap in the [shared contract](../packages/contracts/src/index.ts);
-publication refuses overflow instead of dropping live builds. `pnpm capacity`
-checks cadence against retention, including headroom for replacement builds.
+For an intentional replacement of the same source cycle, add
+`-f allow-same-cycle=true`. Older cycles cannot replace a newer retained cycle,
+even after rollback. Retained membership is bounded; capacity checks leave room
+for replacement builds. Routine production publication runs at `05:17` and
+`17:17 UTC`, then performs serialized cleanup before releasing the writer group.
 
-<details>
-<summary>What upload verification establishes</summary>
+Publication order is coverage bitsets and their content-addressed descriptor,
+forecast artifacts, provenance, manifest, then conditional latest pointer. The
+pointer uses the ETag captured before upload. A competing winner is preserved.
+A failed/ambiguous pointer response is reconciled against stored authority before
+reporting failure. An interrupted upload never admits a partial build.
 
-Local artifacts are checked with SHA-256. Uploads use single-part PUTs with
-`Content-MD5`, at most four concurrently. The publisher checks each artifact's
-file size against its per-artifact byte limit before reading it for upload.
-Up to four artifact buffers can be held at once. Readback checks size, the
-expected MD5 ETag and a 32-byte tail with matching ETag; the complete manifest
-is read back.
-Multipart or opaque ETags are rejected. This relies on R2 validating MD5 and
-faithfully reporting stored-object ETags. It is not an independent remote
-SHA-256 scrub and cannot detect corrupt bytes hidden behind dishonest or stale
-backend metadata.
+Immutable retry means **create or prove equality**, never overwrite. New files
+use Content-MD5, size/ETag checks and a 32-byte tail; this relies on R2 faithfully
+validating and reporting its ETag. Existing objects are SHA-256 checked in bounded
+ranges. Local files are read from an opened descriptor with size/change guards.
+At most four uploads run, with a separate 512 MiB reservation covering bodies
+and transport copies. One file is capped at 256 MiB. Metadata has smaller caps.
 
-The forecast workflow builds and publishes in one process. It reuses a successful
-validation result only while its manifest contents and output root are unchanged;
-it still hashes every byte actually uploaded. Standalone `publish` performs full
-validation. No receipt file, path, timestamp or caller-supplied digest can bypass
-that validation.
+### Resume a failed upload
 
-</details>
+The failed workflow retains complete `builds/` and `coverage/` artifacts. Within
+six hours, resume that exact build without regenerating tiles:
 
-## First deployment
+```sh
+gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
+  -f resume-run-id=FAILED_RUN_ID
+```
 
-Everything after setup runs in GitHub Actions; no local release commands are
-needed. Complete these one-time steps before the first release:
+The workflow verifies the source run belongs to this repository's completed
+`main` forecast workflow, then binds its revision to the clean manifest recipe.
+Re-running a job replaces that run's retained artifacts; use a complete retained
+artifact or start a fresh build.
 
-1. Enable Cloudflare billing. Create a separate **bootstrap** API token with R2
-   Admin and Pages Edit, and store it as `CLOUDFLARE_BOOTSTRAP_TOKEN` in both
-   GitHub environments. The deploy token (`CLOUDFLARE_API_TOKEN`) needs Workers
-   Scripts Edit and Pages Edit only. Keep it separate from the bootstrap token.
-   Account-owned and user-owned API tokens are both supported.
-2. In GitHub, create `staging` and `production` environments with protection
-   rules. Add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` as secrets and
-   set these variables per environment: `API_BASE_URL`, `R2_BUCKET`,
-   `PAGES_PROJECT_NAME`. `R2_BUCKET` must match the selected environment in
-   [Wrangler configuration](../apps/api/wrangler.jsonc). The staging Pages
-   project name must end in `-staging`; the production name must not, so a
-   staging deploy cannot overwrite production.
-3. Run **Bootstrap Cloudflare resources** from `main` with
-   `bootstrap-private-cloudflare`. It creates the private R2 bucket and the
-   Pages project on `main`, and refuses to continue if the bucket is public.
-   The command is idempotent and never disables a public bucket for you.
-4. Create an R2 S3 access key scoped to that bucket only with Object Read &
-   Write. Add `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` to the
-   matching GitHub environment. They are only needed after the bucket exists.
-5. Set `API_BASE_URL` to the target Worker URL. For the default `workers.dev`
-   URL it must start with the Wrangler environment name, for example
-   `https://windy-av-api-staging.<your-subdomain>.workers.dev`. The deployment
-   refuses a staging URL that names the production Worker.
-6. Run **Forecast sample** for the environment so the API has an initial
-   published build. It fails before building if any required secret or variable
-   is missing.
-7. Run **Deploy Worker and Pages** for the environment. Its mandatory smoke
-   check fails on an empty bucket with a 503 and repeats the order above.
+Resume requires one complete build, current recipe/configuration identity,
+resource budgets, full local validation and current-main verification. It
+reconciles existing remote objects by content. If the recipe changed, artifacts
+are missing, or lifetime/horizon admission fails, run a fresh build. A deliberate
+same-cycle replacement still requires its explicit input. A completed same-build
+retry succeeds without moving latest backwards or rewriting immutable files.
 
-The order is **Bootstrap → Forecast sample → Deploy Worker and Pages**. After
-the first release, pushes to `main` run CI and then deploy automatically, and
-the forecast workflow runs at `05:17` and `17:17 UTC` for production. These
-twelve-hour updates overlap the normal 24-hour forecast horizons, with room for
-the workflow timeout. Monitor horizon exhaustion for upstream or scheduling
-delays; this cadence is not an availability guarantee.
+Build and resume share one cancellation and outcome journal. `failure.json`
+reports `not-attempted`, `unconfirmed`, or `committed` publication. An
+`unconfirmed` outcome means the authoritative read could not resolve an
+ambiguous write; resume the exact artifact to reconcile it. A committed receipt
+is written before maintenance. Cancellation after commit defers maintenance or
+records its completed outcome; it never reclassifies publication as uncommitted.
 
-Each release or maintenance workflow checks for a newer `main` commit at start.
-The forecast workflow repeats the check after building, immediately before
-publication. These checks are not atomic with branch updates: `main` can advance
-after a check while the current run continues. Forecast builds are immutable and
-the pointer swap is compare-and-swap, so the result remains a complete,
-validated build rather than a partially written one.
+### Qualify publication recovery in staging
+
+Keep a complete build artifact with `-f retain-full-artifacts=true`, then run:
+
+```sh
+gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
+  -f action=qualify -f artifact-run-id=RUN_ID -f confirm=serialized-maintenance
+```
+
+This uses the real R2 adapter and publication algorithms under the same writer
+lock. Every drill object lives under a unique `qualification/` namespace;
+live catalog and build keys are untouched. The receipt records byte integrity,
+interrupted/ambiguous writes, retry, independent-writer CAS conflict, intentional
+same-cycle replacement, verified rollback and safe deletion. Cleanup age cases
+advance a declared logical clock; they are not evidence of objects aged in wall
+time. Namespace teardown is verified and any remaining scope is recorded on
+failure. The downloaded source revision must match its verified forecast run.
 
 ## Deploy and schedule
 
-The deployment job gives the Worker a commit/run/attempt marker and requires
-`API_BASE_URL` to return that exact marker from its uncached `/healthz` response.
-The smoke check retries readiness while the deployment propagates, then requires
-the exact marker before checking published forecasts. This catches an API URL
-pointing at another environment, account, or deployment before the map is built
-or published. Local runs can omit the marker.
+Each environment has one private bucket, one Worker and one Pages project.
+The mapping is checked against [Wrangler](../apps/api/wrangler.jsonc) before any
+publication/deployment. Public `r2.dev` and bucket custom domains stay disabled.
+The Worker reads via its bucket binding; clients have no provider credentials.
 
-The job then builds the map with that API URL, verifies the Pages project still
-uses `main` as its production branch, deploys, and checks the same embedded
-marker at the canonical Pages URL. Revision checks retry temporary network
-failures with a deadline covering both connection and response body. That URL comes from
-Cloudflare's project record, preserving any suffix assigned when a project name
-was already taken; the deployment summary links to the same URL. Deployment runs
-automatically on `main` and can be dispatched for either environment. The Worker
-needs no forecast-provider credentials and exposes no write, admin or job routes.
+One-time setup remains **Bootstrap → Forecast sample → Deploy Worker and Pages**:
 
-`AV_LOCAL_DEVELOPMENT=true` is reserved for local Wrangler: it allows the local
-sampling limiter to work without Cloudflare's client-IP header. Production
-fails closed when that header or the limiter is unavailable.
+1. Create protected `staging` and `production` GitHub environments. Configure
+   `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `R2_ACCOUNT_ID`,
+   `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`; set `API_BASE_URL`, `R2_BUCKET`,
+   `PAGES_PROJECT_NAME`. Scope R2 credentials to that environment's bucket.
+2. Use the separate `CLOUDFLARE_BOOTSTRAP_TOKEN` for **Bootstrap Cloudflare
+   resources** with `bootstrap-private-cloudflare`. Normal deployment needs
+   Workers Scripts Edit and Pages Edit, not the bootstrap administration token.
+3. Publish a fresh build, then deploy the matching Worker and clients:
 
-The [forecast workflow](../.github/workflows/forecast.yml) owns cadence, timeout
-and per-model serialization. It validates the environment's publisher
-credentials and bucket mapping before spending time on acquisition, then builds,
-validates, checks [resource budgets](../apps/batch/src/capacity.ts), and publishes. Missing credentials fail the run rather than reporting
-a green skipped publication. A rerun creates a fresh build. GitHub schedules can
-be delayed or disabled; recover with manual dispatch and an explicit cycle.
+```sh
+gh workflow run deploy.yml --ref main -f environment=staging \
+  -f confirm=deploy-read-only-worker
+```
 
+The deploy job runs CI, deploys the Worker with a commit/run/attempt marker,
+requires that exact `/healthz` marker and real forecast smoke checks, then builds
+and deploys Pages. Pages must report the same marker. The public
+`/windy-plugin/plugin.js` and `plugin.min.js` bundles use the same HTTPS API base
+and allow Windy-origin loading; they contain no credentials. Source maps are not
+published by this workflow. The plugin remains an optional consumer of the same
+read-only API.
+
+Pushes to `main` normally deploy production. For an incompatible alpha cutover,
+disable the deploy workflow temporarily, land the qualified revision, re-enable
+it, then dispatch staging and production in order after their matching data is
+published. Record the old/new Worker markers and retained rollback set. This is
+an explicit release operation, not a permanent compatibility branch.
+
+All workflows pin checkout to the triggering SHA. Forecast/resume checks current
+`main` immediately before publication. A later branch update can race that check;
+immutability and pointer CAS still preserve complete data. Routine forecast runs
+never depend on an operator's laptop. GitHub schedules may be delayed or disabled;
+monitor their observed run times rather than assuming the cron fired.
 
 ## Monitor and recover
 
-Check catalog availability and the latest forecast horizon (`horizonExhausted`)
-separately from retention expiry; `/healthz` proves
-only service liveness. Check frame times separately for forecast relevance, as
-explained in [time and retention](data.md#time-and-retention).
-Builds expire after seven days. Cache TTLs are bounded by
-expiry, expired requests return `404 not-retained`, and clients stop displaying
-expired builds. Worker caching is per edge location; every request still invokes
-the Worker. Consult its `/docs` and `/openapi.json` for details.
+[Forecast health](../.github/workflows/health.yml) runs hourly. It validates an
+expanded manifest, a complete sample and a WebP tile, then checks source age,
+remaining horizon and recent scheduled-writer status. The receipt is a GitHub
+Actions artifact. Healthy checks send no messages. Configure GitHub's workflow
+failure notifications for the repository's operators; failed run logs include
+these actionable findings:
 
-For a failed workflow, inspect its first failing step and commit SHA. Start a
-new run from current `main` after fixing code; rerunning an old job uses its
-original revision. A healthy Worker with no available forecast still fails the
-deployment smoke check. Run **Forecast sample** for the same environment and,
-after publication succeeds, run **Deploy Worker and Pages**. Keep that gate:
-Worker readiness alone does not establish that the map can serve forecasts.
+- `upstream-lag`: inspect NOAA input-proof and acquisition receipts; do not
+  promote stale data to hide the outage.
+- `missed-publication` / `missed-schedule`: inspect the latest scheduled run,
+  credential/environment checks, source discovery and current-main rejection.
+  Dispatch a fresh forecast from current `main` after resolving the cause.
+- `shrinking-horizon`: distinguish upstream lag from a failed writer. Six hours
+  is the warning/admission boundary; seven-day retention is not usable weather.
+- `serving-integrity`: compare Worker/data schema, immutable descriptor/hash,
+  artifact/provenance availability and the first failed smoke assertion.
+- `publisher-or-cleanup-failure`: inspect `publication.json`, `maintenance.json`
+  and `failure.json`. A cleanup failure after commit is reported explicitly;
+  do not assume publication failed or blindly replace the build.
 
-Before rollback or cleanup, pause **every** publisher and cancel or wait for
-active runs. Then use the [maintenance workflow](../.github/workflows/maintenance.yml)
-with its confirmation input, or run:
+A liveness response alone is not a release proof. Request counters expose R2
+reads/bytes, cache hits, coalescing and elapsed time without logging coordinates.
+Cloudflare observability samples production requests and records staging checks.
+[Serving budgets](serving-budgets.md) defines load, response-cache states and the
+limits of local memory estimates. `AV_RESPONSE_CACHE=off` is a deployment-only
+qualification setting; ordinary clients cannot bypass caches with a header.
+
+Use **Forecast maintenance** for rollback or cleanup; it waits for the same
+writer group. No Boolean claim that publishers are paused grants authority:
 
 ```sh
-pnpm run rollback --model gfs --build-id RETAINED_BUILD_ID --publishers-paused
-pnpm run cleanup --model gfs --publishers-paused
+gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
+  -f action=rollback -f build-id=RETAINED_BUILD_ID -f confirm=serialized-maintenance
+gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
+  -f action=cleanup -f confirm=serialized-maintenance
 ```
 
-Rollback verifies a retained, unexpired target before CAS. Cleanup rereads retained
-references and deletes only unreferenced builds whose IDs and objects are at
-least 24 hours old. Current and retained rollback targets remain protected;
-bucket lifecycle rules must not independently delete referenced data. Verify the
-selected build, then explicitly resume scheduling.
+Rollback verifies the retained, unexpired manifest, coverage descriptor and
+bitsets, provenance and every forecast object's hash before pointer CAS. Cleanup
+protects current/retained builds and removes only unreferenced builds whose IDs
+and actual objects are at least 24 hours old. It caps listing work and records
+object counts, not misleading “build counts.” Both maintenance actions write
+an atomic receipt before remote work and update it on SIGINT/SIGTERM. Rollback
+records `not-attempted`, `unconfirmed`, or `confirmed` pointer outcome; a
+cancelled command can still have a confirmed completed operation. Always inspect
+the receipt before repeating an action.
 
-Measure acquisition bytes and stage timings, peak memory/disk, artifact sizes,
-R2 operations and storage, Worker CPU/cache hits, and cold versus warm tile/sample
-latency. Include runner and Worker costs. Use recorded representative networks
-before claiming latency targets or savings; adjust scope or cadence from measured
-results. [Development](development.md) describes validation and evidence collection.
+Cleanup summaries contain `listed`, `protected`, `unreferenced`, `eligible` and
+`deleted` groups. Each has `objects`, `knownBytes`, and `unknownSizeObjects`;
+unknown phases are `null`. Known bytes are a lower bound if sizes are missing.
+A failed deletion has an unknown deleted result because S3 may partially succeed.
+These figures cover `builds/{model}/`; shared coverage and qualification
+namespaces are outside that accounting. The monitor observes recent maintenance
+failures per environment/action as backlog signals; it does not claim a live
+bucket-cost measurement. Shared coverage garbage collection
+is deferred; it must not infer safety from one model's pointer. Bucket lifecycle
+rules must not independently delete referenced data.
 
-For capacity planning, `pnpm capacity --cadence-hours 1 --frames 16 --layers 6`
-reports tile work, numeric storage, point-read size and retained builds. It exits
-unsuccessfully when a proposed workload exceeds admission limits. Retained bytes
-exclude archives, replacements and failed uploads; add their measured sizes.
-Keep cleanup serialized with publishers; lifecycle deletion and more frequent
-scheduling are not free substitutes for that protocol.
+Any credential use outside these workflows is break-glass administration:
+disable both writer workflows, wait for running jobs to exit, record the action,
+and restore the supported authority afterward. A CLI argument cannot prove
+exclusion from an unknown external writer. Never copy GitHub secrets into logs.
+
+## Qualification commands
+
+`pnpm capacity` reports admitted work and the current product’s complete working-set estimate before acquisition; hypothetical fleet/storage projections are labeled separately. Use `--help` on the
+acquisition/build comparison tools for pinned inputs and cache controls.
+`scripts/compare-builds.ts` compares every packed byte and every decoded tile
+address. `scripts/benchmark-api.ts --load` performs the declared five-minute
+paced load; short runs remain explicitly unqualified. See [execution evidence](foundation-execution.md)
+for measured decisions and outstanding release gates.

@@ -1,4 +1,5 @@
 name: Forecast maintenance
+run-name: Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.action }}
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +17,7 @@ on:
         options:
           - rollback
           - cleanup
+          - qualify
         required: true
       model:
         description: Model pointer to maintain
@@ -28,12 +30,17 @@ on:
         description: Retained build ID for rollback
         type: string
         default: ''
+      artifact-run-id:
+        description: Staging-only qualification source run with retained complete build artifacts
+        type: string
+        default: ''
       confirm:
-        description: Type publishers-paused after disabling or pausing every scheduled publisher
+        description: Type serialized-maintenance to acknowledge this action runs under the forecast writer lock
         type: string
         required: true
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: forecast-${{ inputs.environment || 'production' }}-gfs
   cancel-in-progress: false
@@ -47,6 +54,7 @@ jobs:
       TARGET_ENV: ${{ inputs.environment || 'production' }}
       ACTION: ${{ inputs.action }}
       MODEL: ${{ inputs.model }}
+      ARTIFACT_RUN_ID: ${{ inputs['artifact-run-id'] || '' }}
       BUILD_ID: ${{ inputs['build-id'] }}
       CONFIRM: ${{ inputs.confirm }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -79,23 +87,32 @@ jobs:
             *) echo 'unsupported maintenance environment' >&2; exit 1 ;;
           esac
           case "${ACTION}" in
-            rollback|cleanup) ;;
+            rollback|cleanup|qualify) ;;
             *) echo 'unsupported maintenance action' >&2; exit 1 ;;
           esac
           if [ "${MODEL}" != 'gfs' ]; then
             echo 'unsupported model' >&2
             exit 1
           fi
-          if [ "${CONFIRM}" != 'publishers-paused' ]; then
-            echo 'confirm must equal publishers-paused' >&2
+          if [ "${CONFIRM}" != 'serialized-maintenance' ]; then
+            echo 'confirm must equal serialized-maintenance' >&2
             exit 1
           fi
           if [ "${ACTION}" = 'rollback' ] && ! [[ "${BUILD_ID}" =~ ^[0-9]{8}T[0-9]{6}Z-[a-f0-9-]{36}$ ]]; then
             echo 'invalid rollback build id' >&2
             exit 1
           fi
-          if [ "${ACTION}" = 'cleanup' ] && [ -n "${BUILD_ID}" ]; then
-            echo 'cleanup does not accept a build id' >&2
+          if [ "${ACTION}" != 'rollback' ] && [ -n "${BUILD_ID}" ]; then
+            echo 'only rollback accepts a build id' >&2
+            exit 1
+          fi
+          if [ "${ACTION}" = 'qualify' ]; then
+            if [ "${TARGET_ENV}" != 'staging' ] || ! [[ "${ARTIFACT_RUN_ID:-}" =~ ^[0-9]+$ ]]; then
+              echo 'qualification requires staging and a numeric artifact-run-id' >&2
+              exit 1
+            fi
+          elif [ -n "${ARTIFACT_RUN_ID:-}" ]; then
+            echo 'artifact-run-id is only accepted for qualification' >&2
             exit 1
           fi
       - name: Validate maintenance secrets
@@ -120,7 +137,49 @@ jobs:
         run: pnpm exec tsx scripts/cloudflare-ci.ts publicationcheck --env "${TARGET_ENV}"
       - name: Rollback pointer
         if: ${{ inputs.action == 'rollback' }}
-        run: pnpm run rollback --model "${MODEL}" --build-id "${BUILD_ID}" --publishers-paused
+        run: pnpm run rollback --model "${MODEL}" --build-id "${BUILD_ID}"
       - name: Cleanup unreferenced builds
         if: ${{ inputs.action == 'cleanup' }}
-        run: pnpm run cleanup --model "${MODEL}" --publishers-paused
+        run: pnpm run cleanup --model "${MODEL}"
+      - name: Verify source artifact workflow
+        if: inputs.action == 'qualify'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ env.ARTIFACT_RUN_ID }}
+        run: pnpm exec tsx scripts/check-forecast-artifact.ts
+      - name: Download staging qualification build
+        if: inputs.action == 'qualify'
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-gfs-${{ env.ARTIFACT_RUN_ID }}
+          path: output
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Exercise isolated publication lifecycle
+        if: inputs.action == 'qualify'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          manifests=(output/builds/gfs/*/manifest.json)
+          if [ "${#manifests[@]}" -ne 1 ]; then
+            echo 'qualification requires exactly one complete downloaded build' >&2
+            exit 1
+          fi
+          pnpm exec tsx scripts/qualify-publication.ts --manifest "${manifests[0]}" --root output --receipt output/qualification.json
+      - uses: actions/upload-artifact@v4
+        if: always() && inputs.action == 'qualify'
+        with:
+          name: publication-qualification-${{ github.run_id }}
+          overwrite: true
+          path: output/qualification.json
+          retention-days: 14
+      - name: Upload maintenance outcome
+        uses: actions/upload-artifact@v4
+        if: always() && (inputs.action == 'cleanup' || inputs.action == 'rollback')
+        with:
+          name: maintenance-${{ inputs.action }}-${{ github.run_id }}
+          overwrite: true
+          path: output/maintenance.json
+          if-no-files-found: warn
+          retention-days: 14

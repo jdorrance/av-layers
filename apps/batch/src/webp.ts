@@ -19,10 +19,12 @@ export async function encodeWebp(rgba: Uint8Array, width = 256, height = 256, ef
 
 /** Fully decode the lossless format produced by this batch pipeline. */
 export async function decodeWebp(bytes: Uint8Array): Promise<WebpImage> {
-  const header = Buffer.from(bytes.subarray(0, 21));
-  if (header.toString('ascii', 0, 4) !== 'RIFF' || header.toString('ascii', 8, 16) !== 'WEBPVP8L' || header[20] !== 0x2f) {
+  const header = Buffer.from(bytes.subarray(0, 25));
+  if (header.length < 25 || header.toString('ascii', 0, 4) !== 'RIFF' || header.toString('ascii', 8, 16) !== 'WEBPVP8L' || header[20] !== 0x2f) {
     throw new Error('Expected lossless VP8L WebP');
   }
-  const { data, info } = await sharp(bytes, { failOn: 'warning' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const dimensions = header.readUInt32LE(21), width = (dimensions & 0x3fff) + 1, height = ((dimensions >>> 14) & 0x3fff) + 1;
+  if (width * height > 256 * 256) throw new Error('WebP exceeds tile pixel budget');
+  const { data, info } = await sharp(bytes, { failOn: 'warning', limitInputPixels: 256 * 256 }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return { width: info.width, height: info.height, data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
 }

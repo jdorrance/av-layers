@@ -23,12 +23,21 @@ on:
         description: Optional upstream cycle (ISO 8601 UTC); empty discovers the latest admissible run
         type: string
         default: ''
+      allow-same-cycle:
+        description: Intentionally replace the current cycle with a fresh validated build
+        type: boolean
+        default: false
+      resume-run-id:
+        description: Optional failed run ID whose complete artifact should be resumed within six hours
+        type: string
+        default: ''
       retain-full-artifacts:
         description: Upload full binary tile/sample build output to GitHub Actions artifacts even when R2 publication succeeds
         type: boolean
         default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: forecast-${{ inputs.environment || 'production' }}-gfs
   cancel-in-progress: false
@@ -42,6 +51,8 @@ jobs:
       TARGET_ENV: ${{ inputs.environment || 'production' }}
       MODEL: ${{ inputs.model || 'gfs' }}
       CYCLE: ${{ inputs.cycle || '' }}
+      ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
+      RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
       RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -80,6 +91,10 @@ jobs:
             echo 'unsupported model' >&2
             exit 1
           fi
+          if [ -n "${RESUME_RUN_ID:-}" ] && ! [[ "${RESUME_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            echo 'resume-run-id must be numeric' >&2
+            exit 1
+          fi
           for name in CLOUDFLARE_ACCOUNT_ID R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
             if [ -z "${!name:-}" ]; then
               echo "missing required forecast value ${name}" >&2
@@ -97,7 +112,27 @@ jobs:
       - name: Validate publication environment mapping
         run: pnpm exec tsx scripts/cloudflare-ci.ts publicationcheck --env "${TARGET_ENV}"
       - run: pnpm tools:pmtiles
+      - name: Verify source artifact workflow
+        if: env.RESUME_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ env.RESUME_RUN_ID }}
+        run: pnpm exec tsx scripts/check-forecast-artifact.ts
+      - name: Download complete failed-run artifact
+        if: env.RESUME_RUN_ID != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: forecast-gfs-${{ env.RESUME_RUN_ID }}
+          path: output
+          run-id: ${{ env.RESUME_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Resume verified publication
+        if: env.RESUME_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm exec tsx scripts/resume-publication.ts
       - name: Build, validate and publish
+        if: env.RESUME_RUN_ID == ''
         id: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,18 +142,26 @@ jobs:
         if: always()
         with:
           name: forecast-receipts-${{ env.MODEL }}-${{ github.run_id }}
+          overwrite: true
           path: |
             output/builds/*/*/manifest.json
             output/builds/*/*/provenance.json
             output/builds/*/*/performance.json
             output/builds/*/*/publication.json
+            output/builds/*/*/maintenance.json
+            output/failure.json
+            output/builds/*/*/progress.json
+            output/builds/*/*/failure.json
           if-no-files-found: warn
           retention-days: 7
       - name: Upload full build artifacts on failure or explicit request
         uses: actions/upload-artifact@v4
-        if: ${{ failure() || env.RETAIN_FULL_ARTIFACTS == 'true' }}
+        if: ${{ failure() || cancelled() || env.RETAIN_FULL_ARTIFACTS == 'true' }}
         with:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
-          path: output/builds/
+          overwrite: true
+          path: |
+            output/builds/
+            output/coverage/
           if-no-files-found: warn
           retention-days: 7

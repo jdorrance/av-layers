@@ -1,5 +1,6 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, GFS_PRODUCT, MAX_RETAINED_BUILDS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, GFS_PRODUCT, LAYERS, MAX_RETAINED_BUILDS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
+import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 
 /** Admission budgets, not predictions about an unknown runner or upstream service. */
 export const BUILD_BUDGETS = {
@@ -55,13 +56,36 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 }
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild(mask: CoverageMask, product: ProductDefinition = GFS_PRODUCT) {
+export function prepareBuild(mask: CoverageMask, product: ProductDefinition = GFS_PRODUCT, resources: { maxLevels: number } = { maxLevels: 37 }) {
+  if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
+  if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
+  if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
   if (mask.maxZoom !== product.maxNativeZoom || JSON.stringify(mask.grid) !== JSON.stringify(product.grid)) throw new Error('Coverage does not match the trusted product');
   if (mask.grid.width * mask.grid.height > BUILD_BUDGETS.gridCells) throw new Error('Grid-cell budget exceeded');
   const indices = coverageIndices(mask), layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
+  if (!indices.output.length || !indices.active.length) throw new Error('Coverage must contain output and active cells before acquisition');
   const capacity = estimateCapacity(mask, product, layout.storedCells);
+  if (!Number.isSafeInteger(resources.maxLevels) || resources.maxLevels < 1 || resources.maxLevels > 256) throw new Error('Invalid normalized level budget');
+  const cells = mask.grid.width * mask.grid.height, activeCells = indices.active.length;
+  const rasterWorkers = rasterWorkerCount();
+  const workingSet = {
+    samplePack: capacity.samplePackBytes,
+    derivedFields: cells * 3 * CELL_BYTES,
+    normalizedFrame: activeCells * (8 + 2 * resources.maxLevels) * CELL_BYTES,
+    rawCompanions: activeCells * 6 * 9,
+    decoderReservations: 128 * 1024 * 1024,
+    rendererAndEncoder: 64 * 1024 * 1024,
+    rasterSharedInputs: rasterWorkers ? cells * product.layers.length * CELL_BYTES + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength : 0,
+    rasterWorkerRuntimes: rasterWorkers * RASTER_WORKER_RESERVE_BYTES,
+    indicesAndLayout: indices.active.byteLength + indices.output.byteLength + layout.indexBytes,
+    archiveAndValidation: 2 * BUILD_BUDGETS.samplePackBytes + cells * 4,
+    runtimeAndNativeReserve: 256 * 1024 * 1024
+  };
+  const estimatedPeakBytes = Object.values(workingSet).reduce((total, bytes) => total + bytes, 0);
+  if (workingSet.rasterSharedInputs > MAX_RASTER_SHARED_INPUT_BYTES) throw new Error('Raster shared input byte budget exceeded');
+  if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Complete build working-set budget exceeded');
   if (capacity.violations.length) throw new Error(`Build exceeds capacity: ${capacity.violations.join('; ')}`);
-  return { indices, layout, capacity };
+  return { indices, layout, capacity: { ...capacity, rasterWorkers, workingSet, estimatedPeakBytes } };
 }
 
 /** Gate recorded build metrics against the same budgets used by build admission. */

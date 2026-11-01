@@ -1,0 +1,54 @@
+name: Forecast health
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        default: production
+        required: true
+      simulate-failure:
+        description: Exercise monitor failure reporting without changing serving
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: health-${{ inputs.environment || 'production' }}
+  cancel-in-progress: false
+jobs:
+  check:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ${{ inputs.environment || 'production' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check publication, horizon, serving and writer workflows
+        env:
+          TARGET_ENV: ${{ inputs.environment || 'production' }}
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
+          GH_TOKEN: ${{ github.token }}
+          SIMULATE_FAILURE: ${{ inputs['simulate-failure'] || false }}
+        run: pnpm exec tsx scripts/monitor-health.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: health-${{ inputs.environment || 'production' }}-${{ github.run_id }}
+          overwrite: true
+          path: output/health/
+          retention-days: 14

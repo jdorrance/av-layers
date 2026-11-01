@@ -1,0 +1,29 @@
+{
+  "purpose": "Offline native-grid infrastructure fixture; not a model or forecast product",
+  "reference": {
+    "tool": "PROJ 9.6.0",
+    "command": "proj +proj=lcc +lat_1=30 +lat_2=60 +lat_0=40 +lon_0=-100 +R=6371229 -f %.12f",
+    "coordinateUnits": "metres relative to the projection origin"
+  },
+  "grid": {
+    "kind": "lambert-conformal",
+    "width": 50,
+    "height": 40,
+    "earthRadiusM": 6371229,
+    "centralMeridianDeg": -100,
+    "latitudeOfOriginDeg": 40,
+    "standardParallel1Deg": 30,
+    "standardParallel2Deg": 60,
+    "x0M": -2000000,
+    "y0M": -1000000,
+    "dxM": 100000,
+    "dyM": 100000,
+    "wrapLongitude": false
+  },
+  "controlPoints": [
+    { "lon": -100, "lat": 40, "xM": 0, "yM": 0 },
+    { "lon": -90, "lat": 45, "xM": 757366.5627555264, "yM": 585230.9026221943 },
+    { "lon": -120, "lat": 30, "xM": -1906056.8097044516, "yM": -853642.5335652658 },
+    { "lon": -70, "lat": 60, "xM": 1629232.2649340092, "yM": 2474897.118355045 }
+  ]
+}

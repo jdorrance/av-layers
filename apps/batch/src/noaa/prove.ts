@@ -2,11 +2,11 @@ import { GFS_CONTRACT_GRID, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
 import { acquireGfsFrame, contractIndexToNativeIndex, validateActiveIndices, validateCycle, validateHour } from './acquire.ts';
 import { discoverGfsRun } from './discover.ts';
 import { NoaaError } from './errors.ts';
-import { inspectGfsField } from './admission.ts';
-import { cycleStamp, gfsCompanionSpecs, gfsCurrentSpecs, gfsFileUrl, gfsProductName, gfsWindowNeedsCompanion } from './fields.ts';
+import { loadAndInspectGfsField } from './load.ts';
+import { gfsCompanionSpecs, gfsCurrentSpecs, gfsWindowNeedsCompanion } from './fields.ts';
 import { admitNoaaWindowPair, gfsWindowStart } from './intervals.ts';
 import { NoaaFieldSampler } from './sampling.ts';
-import { NoaaTransport, selectGfsRecord, type NoaaTransportStats } from './transport.ts';
+import { NoaaTransport, type NoaaTransportStats } from './transport.ts';
 import type {
   DecodedFieldReceipt,
   DiagnoseGfsInputsOptions,
@@ -152,23 +152,13 @@ async function diagnoseGfsInputs(options: DiagnoseGfsInputsOptions): Promise<Dia
       options.signal?.throwIfAborted();
       try {
         const endHour = spec.role === 'companion' ? hour - 3 : hour;
-        const url = gfsFileUrl(cycle, endHour, gfsProductName(spec.product));
-        const index = await transport.index(`${url}.idx`, cycleStamp(cycle));
-        const selection = await selectGfsRecord(transport, url, index, spec);
-        const selected = selection.selected;
-        const bytes = selection.bytes ?? await transport.field(url, selected.record);
-        const inspected = inspectGfsField(bytes.bytes, {
-          cycle, spec, expectedStartHour: spec.statistic === 'instant' ? endHour : gfsWindowStart(hour),
-          expectedEndHour: endHour, expectedGridKey: gridKey,
+        const loaded = await loadAndInspectGfsField(transport, {
+          cycle, spec, sourceHour: endHour, startHour: spec.statistic === 'instant' ? endHour : gfsWindowStart(hour),
+          endHour, expectedGridKey: gridKey,
         });
-        gridKey ??= inspected.grid.gridKey;
-        const sampled = await sampler.sample(inspected, nativeIndices);
-        const receipt: DecodedFieldReceipt = {
-          ...inspected.receipt, product: spec.product, productFile: gfsProductName(spec.product), url,
-          idxLine: selected.line, idxLineNumber: selected.indexLine, asset: bytes.asset,
-          ...(selection.duplicates ? { duplicates: selection.duplicates } : {}),
-          decodedMissingCount: sampled.missingCount,
-        };
+        gridKey ??= loaded.grid.gridKey;
+        const sampled = await sampler.sample(loaded.inspected!, nativeIndices);
+        const receipt: DecodedFieldReceipt = { ...loaded.receipt, decodedMissingCount: sampled.missingCount };
         receipts.set(`${spec.role ?? 'current'}:${spec.key}`, receipt);
         fields.push({ spec, status: 'admitted', receipt, values: Array.from(sampled.values, (value, i) => sampled.missing[i] ? null : value), missing: Array.from(sampled.missing) });
       } catch (error) {

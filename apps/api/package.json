@@ -6,7 +6,7 @@
     "dev": "wrangler dev --local --var AV_LOCAL_DEVELOPMENT:true",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "wrangler deploy --dry-run --outdir dist"
+    "build": "wrangler deploy --dry-run --env staging --outdir dist"
   },
   "dependencies": {
     "@av/contracts": "workspace:*",

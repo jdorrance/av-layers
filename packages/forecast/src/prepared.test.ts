@@ -1,21 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { LAYER_IDS, setBit, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
+import { LAYERS, LAYER_IDS, setBit, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { prepareGridSampling, sampleCells, sampleGrid, type GridField, type Sample } from './sampler.js';
 
 function outcome<T>(fn: () => T): T | { error: string } {
   try { return fn(); } catch (error) { return { error: (error as Error).message }; }
 }
 function maskFor(grid: Grid, output = 255): CoverageMask {
-  return { grid, output: new Uint8Array(Math.ceil(grid.width * grid.height / 8)).fill(output), halo: new Uint8Array(Math.ceil(grid.width * grid.height / 8)), tiles: Uint8Array.of(1), maxZoom: 0 };
+  return { grid, bounds: [-180, -55, 180, 65], output: new Uint8Array(Math.ceil(grid.width * grid.height / 8)).fill(output), halo: new Uint8Array(Math.ceil(grid.width * grid.height / 8)), tiles: Uint8Array.of(1), maxZoom: 0 };
 }
 
 describe('prepared grid sampling parity', () => {
+  it('preserves exact four-valid-cell arithmetic across float32 exponents and support flags', () => {
+    const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+    const mask = maskFor(grid), latitudes = Float64Array.of(0.125, 0.3000000001, 0.5, 0.999999), longitudes = Float64Array.of(0.000001, 0.2712345613, 0.5, 0.999999);
+    const prepared = prepareGridSampling(mask, latitudes, longitudes);
+    let seed = 934673;
+    for (let n = 0; n < 100; n++) {
+      const bits = Uint32Array.from({ length: 4 }, () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed & 0xfeffffff; // exclude the all-ones exponent (NaN/infinity)
+      });
+      const field = { values: new Float32Array(bits.buffer), flags: Uint8Array.from(n % 2 ? [4, 8, 16, 28] : [0, 0, 0, 0]) };
+      for (const layer of LAYER_IDS) {
+        const sample = prepared.bind(field, layer), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+        for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
+          expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask)));
+        }
+      }
+    }
+  });
+
+  it('uses supplied layer semantics for mixed and all-no-lift quads without hiding non-finite cells', () => {
+    const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+    const prepared = prepareGridSampling(maskFor(grid), Float64Array.of(0.5), Float64Array.of(0.5));
+    const field = { values: Float32Array.of(100, 200, 300, 400), flags: Uint8Array.of(1, 0, 1, 0) };
+    const spec = { ...LAYERS['usable-lift-msl'], zeroOnNoLiftInterpolation: true, noLiftSampleValue: -42 };
+    const sample = prepared.bind(field, spec), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+    sample(0, 0, out);
+    expect(out).toEqual({ value: 150, status: 0, support: 0, interpolated: true });
+    field.flags.fill(1);
+    sample(0, 0, out);
+    expect(out).toEqual({ value: -42, status: 1, support: 0, interpolated: true });
+    field.values[0] = NaN;
+    expect(() => sample(0, 0, out)).toThrow('known cell has non-finite value');
+  });
+
   it('preserves scalar results and errors over irregular axes, flags, and grid boundaries', () => {
     let seed = 81471;
     const random = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
     for (let n = 0; n < 160; n++) {
       const width = 1 + Math.floor(random() * 8), height = 1 + Math.floor(random() * 8);
-      const grid: Grid = { width, height, lon0: -180, lat0: 65, dx: 360 / width, dy: -120 / height, wrapLongitude: n % 2 === 0 };
+      const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width, height, lon0: -180, lat0: 65, dx: 360 / width, dy: -120 / height, wrapLongitude: n % 2 === 0 };
       const field: GridField = {
         values: Float32Array.from({ length: width * height }, () => random() < 0.08 ? NaN : random() * 9000 - 100),
         flags: Uint8Array.from({ length: width * height }, () => [0, 1, 2, 3, 4, 5, 8, 9, 12, 13, 16, 17][Math.floor(random() * 12)])
@@ -25,7 +60,7 @@ describe('prepared grid sampling parity', () => {
       const lats = Float64Array.from([65, -55, 65 - 1e-11, 65 + 1e-9, ...Array.from({ length: 10 }, (_, i) => grid.lat0 + (i % 3 === 0 ? Math.floor(random() * height) : random() * (height + 2) - 1) * grid.dy)]);
       const lons = Float64Array.from([-180, 180, -180 + 1e-11, -180 - 1e-9, ...Array.from({ length: 10 }, (_, i) => grid.lon0 + (i % 3 === 0 ? Math.floor(random() * width) : random() * (width + 2) - 1) * grid.dx)]);
       const prepared = prepareGridSampling(mask, lats, lons);
-      expect(prepared.byteLength).toBe((lats.length + lons.length) * 24 + Math.ceil(lats.length * lons.length / 8));
+      expect(prepared.byteLength).toBe((lats.length + lons.length) * 24 + Math.ceil(lats.length * lons.length / 8) + prepared.contributors.byteLength);
       for (const layer of LAYER_IDS) {
         const sample = prepared.bind(field, layer), out: Sample = { value: 99, status: 0, support: 255, interpolated: true };
         for (let i = 0; i < lats.length * lons.length; i++) {
@@ -39,9 +74,9 @@ describe('prepared grid sampling parity', () => {
 
   it('keeps duplicate wrapped contributors, exact ties and non-wrap/latitude rejection', () => {
     for (const grid of [
-      { width: 1, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: true },
-      { width: 2, height: 2, lon0: 0, lat0: 1, dx: -1, dy: -1, wrapLongitude: false },
-      { width: 2, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false }
+      { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 1, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: true },
+      { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: -1, dy: -1, wrapLongitude: false },
+      { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false }
     ]) {
       const mask = maskFor(grid), lats = Float64Array.of(0, 0.25, 0.5, 1, 1 + 1e-11), lons = Float64Array.of(-1, -0.5, -1e-11, 0, 0.5, 1, 1.5);
       for (let combination = 0; combination < 256; combination++) {
@@ -65,7 +100,7 @@ describe('prepared grid sampling parity', () => {
     expect(fiveCellResult.value).toBeCloseTo(0, 15);
     expect(() => sampleCells(plan, [{ value: '1' as unknown as number, flags: 0 }, ...Array.from({ length: 4 }, () => ({ value: 1, flags: 0 }))], 'usable-lift-msl')).toThrow('known cell has non-finite value');
     expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: NaN, flags: 2 }, { value: 1, flags: 4 }, { value: 0, flags: 1 }, { value: 3, flags: 0 }], 'usable-lift-msl')).toThrow('valid cell has non-finite value');
-    const grid = { width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
     const prepared = prepareGridSampling(maskFor(grid), Float64Array.of(1), Float64Array.of(0));
     expect(() => prepared.bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate')).toThrow('field size differs from grid');
     expect(outcome(() => sampleCells({ ...plan, contributors: [] }, [], 'precip-rate' as LayerId))).toEqual({ error: 'cell count does not match sample plan' });

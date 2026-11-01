@@ -63,3 +63,38 @@ proof; adding a layer does not require rerunning shared column science. Use
 `pnpm capacity` to inspect the current workload and model growth before raising
 limits. Deeper display zoom uses client overzoom rather than automatically
 expanding the native tile pyramid.
+
+## Alpha contract and extension boundary
+
+Manifest v3 is the only admitted format. Each build snapshots layer labels,
+units, vertical/time support, scientific method identifiers, palette edges and
+colors, attribution and query limits. Clients and the API read that snapshot;
+a later palette/registry edit cannot reinterpret an already published build.
+There is one current layer definition and one static production recipe registry.
+
+A recipe separates model family, model configuration and native domain. Its
+content hash includes source components, lockfile, recipe configuration and the
+coverage identity; Git revision and dirty state are recorded separately. The
+provenance sidecar binds the exact build/cycle and source-frame receipts. Raw
+provider/GRIB details stop at the adapter. Normalized typed arrays have declared
+units, explicit missingness, time windows and a native grid.
+
+The build core accepts that recipe/provider and a verified coverage mask. It
+preflights the complete working set, derives related lift outputs once, writes
+each channel directly into the final admitted pack, and renders selected layers
+together with one bounded encode queue. The official PMTiles writer remains.
+No generic task graph, plugin service, format registry or live-model router is
+introduced.
+
+Coverage lives at `coverage/{descriptor-sha256}/`: descriptor plus output, halo
+and tile bitsets. The descriptor binds geometry, geographic bounds, support
+policy and sample layout. Batch writes dependencies before latest publication;
+the Worker verifies hashes and resolves/cache-keys by content identity. Regular
+latitude/longitude sampling retains its separable path; Lambert uses explicit
+projection parameters and bounded prepared mappings. Neither introduces new
+forecast physics. See [extension recipes](extensions.md) for future admission.
+
+The public client barrel exposes API, time and presentation helpers from small
+modules. MapLibre and Windy retain separate lifecycle controllers. A separate
+local-only Worker entrypoint admits the synthetic development product; it is
+not reachable through the production registry or Wrangler deployment entrypoint.

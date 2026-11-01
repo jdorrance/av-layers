@@ -23,8 +23,16 @@ Specific humidity is converted directly to mixing ratio, `r = q / (1 - q)`.
 The solver also accepts dew point through the same saturation formulation.
 Explicit pressure and humidity avoid sea-level-pressure and dry-air fallbacks.
 Below-ground levels are screened before column derivation; missing above-ground
-levels remain missing. [Acquisition](../apps/batch/src/noaa/acquire.ts) owns these
-conversions and receipts.
+levels remain missing. [Acquisition](../apps/batch/src/noaa/acquire.ts) owns source
+admission and receipts. The [provider boundary](../apps/batch/src/providers.ts)
+requires compact Float32 arrays in declared units, binary missing masks and a
+strictly descending pressure axis in hPa. Precipitation is normalized to mm/h. Nonfinite values require an explicit missing flag; invalid array
+types, shapes or active-index identity stop the build.
+
+[Batch derivation](../apps/batch/src/build.ts) performs below-ground screening and
+unit conversion, then reuses a level scratch array with an explicit active count.
+Unused tail entries never enter the solver. Reuse changes allocation behavior,
+not profile selection, physical assumptions or branch tolerances.
 
 ## Statistical windows
 
@@ -39,7 +47,8 @@ Small negative precipitation differences within the combined GRIB packing-error
 tolerance become zero; larger negatives become unavailable. Cooling flux remains
 signed. Runs, grids, windows and processing semantics are checked before
 differencing. [Interval recovery](../apps/batch/src/noaa/intervals.ts) owns the
-tolerances and validation. Lift combines interval flux with the endpoint profile
+tolerances and validation. Raw cumulative/mean companions remain Float64 until
+recovery; only the final interval field is compacted to Float32. Lift combines interval flux with the endpoint profile
 and PBL, an explicit temporal approximation recorded in the manifest. GFS
 `f000` is outside this sample product, with no prior-cycle substitution.
 
@@ -77,11 +86,17 @@ results follow [the absence contract](data.md#layers-and-missing-values).
 Support flags union only the actual contributors. Rendering samples four fixed
 quarter-pixel offsets in global Web Mercator coordinates, palettes each scalar,
 and averages premultiplied colour before encoding straight alpha.
+Each zoom is evaluated independently. Grouping a frame's layers by tile only
+shares prepared geometry; it does not average child colours into parent tiles,
+regrid a projected source or alter coverage-edge decisions.
 
 Each numeric record contains a little-endian `Float32` value followed by a
 status/support byte. The low two
 bits encode status; three further bits identify parcel crossing, profile top
 and PBL closure. [Contracts](../packages/contracts/src/index.ts) owns their
-constants. Grid axes and wrap behavior come from the manifest. The sampler plans
+constants. Grid geometry, Earth radius, bounds and wrap behavior come from the
+immutable version-3 manifest and its content-addressed coverage descriptor.
+Native Lambert-conformal grids are sampled through their declared projection;
+the available production forecast remains GFS. The sampler plans
 the contributing cells; the [numeric block layout](architecture.md#why-these-boundaries-exist)
 maps them to one bounded range, including longitude-wrap cases.

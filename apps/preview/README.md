@@ -18,3 +18,7 @@ for any consumer; this app does not acquire or derive forecast data.
 
 See [data](../../docs/data.md) for interpretation and
 [development](../../docs/development.md) for checks and test scope.
+
+Layer options, legend bins, series headings/units, attribution and scientific diagnostics come from the pinned v3 manifest descriptors. The preview shares pure presentation models and bounded API requests with the plugin; its MapLibre lifecycle, BFCache handling and expiry teardown remain independent.
+
+For a disconnected development fixture, start the fixture Worker described in getting started, then set `VITE_OFFLINE_FIXTURE=true` alongside `VITE_API_BASE`. The preview uses a neutral background with no external basemap requests and displays a synthetic-data warning. `VITE_MODEL` optionally selects an explicit fixture model; its default is `gfs`. Synthetic output is not a weather forecast or deployed-product proof.

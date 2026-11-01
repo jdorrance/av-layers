@@ -197,7 +197,7 @@ export class PluginController {
       }
       this.badge = frameBadge(first, hostFrame, hostValue).text;
       this.tileUrl = frameTileUrl(template, first.id);
-      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.maxNativeZoom, this.opacity));
+      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.maxNativeZoom, this.opacity, build.manifest.descriptors.attribution));
       this.layer = tileLayer;
       tileLayer.on?.('tileloadstart', this.onTileStart);
       tileLayer.on?.('tileerror', this.onTileError);

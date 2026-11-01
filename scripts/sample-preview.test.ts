@@ -1,86 +1,123 @@
-import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forecastObjects, manifestSchema } from '@av/contracts';
-
-const commands = vi.hoisted(() => ({ spawn: vi.fn(), spawnSync: vi.fn() }));
-vi.mock('node:child_process', () => commands);
+import { join, relative } from 'node:path';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { MODEL_IDS, getProduct, manifestSchema } from '@av/contracts';
+import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
+import { generateOfflineFixture } from './dev-fixture.js';
+import { openLocalPreviewStore, seedLocalBuild, type LocalPreviewStore } from './sample-preview.js';
 
 const temporary: string[] = [];
-const originalArgv = process.argv;
-const originalExitCode = process.exitCode;
-afterEach(async () => {
-  process.argv = originalArgv;
-  process.exitCode = originalExitCode;
-  vi.restoreAllMocks();
-  vi.resetAllMocks();
-  await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true })));
+let base: string, relativeManifest: string;
+beforeAll(async () => {
+  base = await mkdtemp(join(tmpdir(), 'av-offline-base-'));
+  relativeManifest = relative(base, await generateOfflineFixture(base));
 });
+afterAll(async () => { await rm(base, { recursive: true, force: true }); });
+afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
-async function preview(options: { receipt?: 'valid' | 'missing' | 'corrupt' | 'wrong cycle' | 'wrong schema'; seeded?: boolean }) {
-  const root = await mkdtemp(join(tmpdir(), 'av-preview-provenance-')); temporary.push(root);
-  const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
-  manifest.expiresAt = new Date(Date.now() + 86400000).toISOString();
-  const prefix = `builds/${manifest.model}/${manifest.buildId}`;
-  const provenanceKey = `${prefix}/provenance.json`;
-  const receipt = Buffer.from(JSON.stringify({ version: options.receipt === 'wrong schema' ? 2 : 1, model: manifest.model, buildId: manifest.buildId, cycle: options.receipt === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
-  const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-  if (options.receipt) manifest.source = { provenanceKey, provenanceSha256: hash(receipt) };
-  for (const { key } of forecastObjects(manifest)) {
-    await mkdir(dirname(join(root, key)), { recursive: true });
-    await writeFile(join(root, key), 'fixture artifact');
-  }
-  if (options.receipt && options.receipt !== 'missing') await writeFile(join(root, provenanceKey), options.receipt === 'corrupt' ? 'corrupt receipt' : receipt);
-  const manifestPath = join(root, prefix, 'manifest.json'), manifestBytes = Buffer.from(JSON.stringify(manifest));
-  await writeFile(manifestPath, manifestBytes);
-  const persist = join(root, 'state');
-  if (options.seeded) {
-    await mkdir(join(persist, '.sample-preview'), { recursive: true });
-    await writeFile(join(persist, '.sample-preview', `${manifest.buildId}-${hash(manifestBytes).slice(0, 16)}.json`), '{}');
-  }
-  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-  vi.spyOn(console, 'log').mockImplementation(() => {});
-  commands.spawnSync.mockReturnValue({ status: 0 });
-  commands.spawn.mockImplementation(() => {
-    const child = Object.assign(new EventEmitter(), { exitCode: null, kill: vi.fn() });
-    queueMicrotask(() => child.emit('close', 0, null));
-    return child;
-  });
-  process.argv = ['node', fileURLToPath(new URL('./sample-preview.ts', import.meta.url)), '--manifest', manifestPath, '--persist-to', persist];
-  vi.resetModules();
-  await import('./sample-preview.ts');
-  await vi.waitFor(() => expect(commands.spawn.mock.calls.length + errors.mock.calls.length).toBeGreaterThan(0));
-  return { manifest, provenanceKey, errors, objectKeys: commands.spawnSync.mock.calls.map(call => (call[1] as string[])[4]) };
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'av-local-preview-')); temporary.push(root);
+  await cp(base, root, { recursive: true });
+  const manifestPath = join(root, relativeManifest), persistTo = join(root, 'state');
+  const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
+  return { root, manifest, manifestPath, persistTo };
 }
 
-describe('local preview provenance', () => {
-  it('seeds verified provenance before exposing the manifest and latest pointer', async () => {
-    const { manifest, provenanceKey, objectKeys } = await preview({ receipt: 'valid' });
-    expect(objectKeys[0]).toMatch(new RegExp(`${provenanceKey}$`));
-    expect(objectKeys.at(-2)).toMatch(new RegExp(`builds/gfs/${manifest.buildId}/manifest.json$`));
-    expect(objectKeys.at(-1)).toMatch(/catalog\/gfs\/latest\.json$/);
-    expect(commands.spawn).toHaveBeenCalledOnce();
+function memoryStore() {
+  const objects = new Map<string, { bytes: Uint8Array; customMetadata: Record<string, string> }>(), writes: string[] = [];
+  const dispose = vi.fn(async () => {});
+  const store: LocalPreviewStore = {
+    async head(key) { const item = objects.get(key); return item ? { size: item.bytes.byteLength, customMetadata: item.customMetadata } : null; },
+    async put(key, bytes, options) { writes.push(key); objects.set(key, { bytes: new Uint8Array(bytes), customMetadata: options.customMetadata }); },
+    dispose
+  };
+  return { store, objects, writes, dispose, open: vi.fn(async () => store) };
+}
+
+describe('offline fixture and local seeding', () => {
+  it('builds current timestamps, deterministic fields and a clearly labeled unregistered recipe', async () => {
+    const { manifest } = await fixture();
+    expect(manifest.descriptors.attribution).toBe(OFFLINE_PRODUCT.attribution);
+    expect(manifest.grid.width * manifest.grid.height).toBe(40);
+    expect(manifest.frames).toHaveLength(2);
+    expect(manifest.layers).toHaveLength(3);
+    expect(manifest.metrics.acquisition).toEqual({ fixture: true, networkRequests: 0 });
+    expect(Date.parse(manifest.expiresAt)).toBeGreaterThan(Date.now());
+    expect(Math.abs(Date.parse(manifest.cycle) - Date.now())).toBeLessThan(3600000);
+    expect(MODEL_IDS).toEqual(['gfs']);
+    expect(getProduct('gfs')!.id).not.toBe(OFFLINE_PRODUCT.id);
   });
-  it('repairs receipt seeding for a build already marked as seeded', async () => {
-    const { provenanceKey, objectKeys } = await preview({ receipt: 'valid', seeded: true });
-    expect(objectKeys).toHaveLength(2);
-    expect(objectKeys[0]).toMatch(new RegExp(`${provenanceKey}$`));
-    expect(objectKeys[1]).toMatch(/catalog\/gfs\/latest\.json$/);
+
+  it('seeds coverage and provenance before the immutable manifest and latest pointer in one session', async () => {
+    const local = await fixture(), memory = memoryStore();
+    const result = await seedLocalBuild(local, memory.open);
+    expect(memory.open).toHaveBeenCalledOnce();
+    expect(memory.dispose).toHaveBeenCalledOnce();
+    expect(result.uploadedObjects).toBe(14);
+    expect(memory.writes.slice(0, 4)).toEqual(['output.bin', 'halo.bin', 'tiles.bin', 'manifest.json'].map(name => `coverage/${local.manifest.coverage.hash}/${name}`));
+    expect(memory.writes[4]).toBe(local.manifest.source.provenanceKey);
+    expect(memory.writes.at(-2)).toBe(relativeManifest);
+    expect(memory.writes.at(-1)).toBe('catalog/gfs/latest.json');
+    expect(JSON.parse(Buffer.from(memory.objects.get('catalog/gfs/latest.json')!.bytes).toString()).latestBuildId).toBe(local.manifest.buildId);
   });
-  it.each(['missing', 'corrupt', 'wrong cycle', 'wrong schema'] as const)('rejects %s provenance before seeding any objects or starting Wrangler', async receipt => {
-    const { errors } = await preview({ receipt });
-    expect(errors).toHaveBeenCalledWith(expect.stringMatching(/provenance|version/i));
-    expect(commands.spawnSync).not.toHaveBeenCalled();
-    expect(commands.spawn).not.toHaveBeenCalled();
+
+  it('reuses verified objects, repairs missing dependencies even with a marker, and rewrites the pointer', async () => {
+    const local = await fixture(), memory = memoryStore();
+    await seedLocalBuild(local, memory.open);
+    memory.writes.length = 0;
+    expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 1, reusedObjects: 13 });
+    expect(memory.writes).toEqual(['catalog/gfs/latest.json']);
+    const missingKey = `coverage/${local.manifest.coverage.hash}/output.bin`;
+    memory.objects.delete(missingKey); memory.writes.length = 0;
+    expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 2, reusedObjects: 12 });
+    expect(memory.writes).toEqual([missingKey, 'catalog/gfs/latest.json']);
+    memory.objects.clear();
+    expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 14, reusedObjects: 0 });
+    expect(await seedLocalBuild({ ...local, reseed: true }, memory.open)).toMatchObject({ uploadedObjects: 14, reusedObjects: 0 });
   });
-  it('seeds numeric v2 builds with inline provenance', async () => {
-    const { objectKeys } = await preview({});
-    expect(objectKeys).toHaveLength(27);
-    expect(objectKeys.some(key => key.endsWith('/provenance.json'))).toBe(false);
-    expect(commands.spawn).toHaveBeenCalledOnce();
+
+  it('closes an interrupted store without exposing a new manifest, pointer or completion marker; a rerun completes', async () => {
+    const local = await fixture(), memory = memoryStore(), originalPut = memory.store.put;
+    memory.store.put = async (key, bytes, options) => { if (key === local.manifest.samples.key) throw new Error('interrupted upload'); return originalPut(key, bytes, options); };
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow('interrupted upload');
+    expect(memory.dispose).toHaveBeenCalledOnce();
+    expect(memory.objects.has(relativeManifest)).toBe(false);
+    expect(memory.objects.has('catalog/gfs/latest.json')).toBe(false);
+    await expect(readdir(join(local.persistTo, '.sample-preview'))).rejects.toThrow();
+    memory.store.put = originalPut;
+    expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 14 });
+    expect(memory.dispose).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['missing provenance', 'corrupt provenance', 'wrong provenance cycle', 'corrupt coverage', 'corrupt artifact', 'expired manifest'] as const)('rejects %s before opening local R2', async problem => {
+    const local = await fixture(), memory = memoryStore();
+    const provenancePath = join(local.root, local.manifest.source.provenanceKey as string);
+    if (problem === 'missing provenance') await rm(provenancePath);
+    if (problem === 'corrupt provenance') await writeFile(provenancePath, 'corrupt');
+    if (problem === 'wrong provenance cycle') {
+      const receipt = JSON.parse(await readFile(provenancePath, 'utf8'));
+      receipt.cycle = new Date(Date.parse(local.manifest.cycle) - 3600000).toISOString();
+      const bytes = Buffer.from(JSON.stringify(receipt)); await writeFile(provenancePath, bytes);
+      local.manifest.source.provenanceSha256 = createHash('sha256').update(bytes).digest('hex');
+      await writeFile(local.manifestPath, JSON.stringify(local.manifest));
+    }
+    if (problem === 'corrupt coverage') await writeFile(join(local.root, `coverage/${local.manifest.coverage.hash}/output.bin`), Uint8Array.of(0));
+    if (problem === 'corrupt artifact') await writeFile(join(local.root, local.manifest.samples.key), 'corrupt');
+    if (problem === 'expired manifest') { local.manifest.expiresAt = new Date(Date.now() - 1000).toISOString(); await writeFile(local.manifestPath, JSON.stringify(local.manifest)); }
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow();
+    expect(memory.open).not.toHaveBeenCalled();
+  });
+
+  it('persists through real local workerd teardown and reopens with no repeated immutable uploads', async () => {
+    const local = await fixture();
+    expect(await seedLocalBuild(local)).toMatchObject({ uploadedObjects: 14 });
+    expect(await seedLocalBuild(local)).toMatchObject({ uploadedObjects: 1, reusedObjects: 13 });
+    const reopened = await openLocalPreviewStore(local.persistTo);
+    try {
+      expect(await reopened.head('catalog/gfs/latest.json')).not.toBeNull();
+      expect((await reopened.head(local.manifest.samples.key))?.size).toBe(local.manifest.samples.bytes);
+    } finally { await reopened.dispose(); }
   });
 });

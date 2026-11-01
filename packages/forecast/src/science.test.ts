@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP } from '@av/contracts';
-import { deriveColumn, dewPointMixingRatioKgKg, LENSCHOW_F_MAX, usableLiftDepthM, type ColumnInput } from './science.js';
+import { deriveColumn as deriveCountedColumn, dewPointMixingRatioKgKg, LENSCHOW_F_MAX, precipitationRateStatus, usableLiftDepthM, type ColumnInput } from './science.js';
 
 const base: ColumnInput = { terrainM: 0, surfaceTemperatureC: 20, surfacePressureHpa: 1000, humidity: { specificHumidityKgKg: 0.008 }, sensibleHeatFluxWm2: 250, latentHeatFluxWm2: 100, pblHeightM: 300, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 9 }, { heightM: 1500, temperatureC: 8 }] };
+const deriveColumn = (input: ColumnInput) => deriveCountedColumn(input, input.levels.length);
+
 describe('dry column science', () => {
+  it('admits zero and positive normalized rain and marks negative or non-finite rates unavailable', () => {
+    for (const rate of [0, -0, 0.001, 27.5]) expect(precipitationRateStatus(rate)).toBe(STATUS_VALID);
+    for (const rate of [-0.001, -1, NaN, Infinity, -Infinity]) expect(precipitationRateStatus(rate)).toBe(STATUS_UNAVAILABLE);
+  });
+  it('uses only the explicit active level count and rejects invalid scratch counts', () => {
+    const levels = [...base.levels.map(level => ({ ...level })), { heightM: NaN, temperatureC: NaN }];
+    for (const count of [3, 1, 2, 0, 3]) {
+      expect(deriveCountedColumn({ ...base, levels }, count)).toEqual(deriveColumn({ ...base, levels: base.levels.slice(0, count) }));
+    }
+    for (const count of [-1, 0.5, 5, NaN, Infinity]) expect(() => deriveCountedColumn({ ...base, levels }, count)).toThrow('level count');
+  });
   it('preserves the fixed-iteration lift-depth result at thresholds and across seeded brackets', () => {
     // Frozen algorithm before the stagnation optimization; exact doubles matter.
     const reference = (depth: number, velocity: number): number | null => {

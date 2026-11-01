@@ -1,6 +1,7 @@
 # Getting started
 
-Build a real GFS forecast, then inspect it through the local API and map preview.
+For fast application work, start with [offline development](local-development.md).
+This guide builds a real GFS forecast, then inspects it through the local API and map preview.
 Run these commands from the repository root. Acquisition needs internet access;
 local preview needs no Cloudflare account. See [status](status.md) for the latest
 validated build and remaining release work.
@@ -102,6 +103,6 @@ install `uv` and run `pnpm masks:build` once. The
 [generator](../scripts/masks/build_masks.py) downloads the pinned Natural Earth
 source and checks the required native GIS libraries. This is a preparation step,
 not part of scheduled forecasts. See [development](development.md) before changing
-coverage; the batch build and Worker must use matching assets.
+coverage; each build publishes its immutable descriptor and bitsets; the Worker resolves and verifies that exact content identity.
 
 </details>

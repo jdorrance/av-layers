@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { acquireGfsFrame, createGfsAcquisitionSession } from './acquire.ts';
+import { acquireGfsFrame, createGfsAcquisitionSession, estimateDecodeWorkingBytes } from './acquire.ts';
 import * as admission from './admission.ts';
 import { gfsCurrentSpecs } from './fields.ts';
 import { validAt } from './intervals.ts';
@@ -47,6 +47,37 @@ function source() {
 }
 const withoutClock = (frame: GfsFrameAcquisition) => ({ ...frame, capturedAt: '', receipt: { ...frame.receipt, capturedAt: '' } });
 
+it('overlaps independent instantaneous decodes while preserving output and receipt order', async () => {
+  const { fetchImpl, sample } = source();
+  const original = sample.getMockImplementation()!;
+  let active = 0, peak = 0;
+  sample.mockImplementation(async (...args) => {
+    active++; peak = Math.max(peak, active);
+    try { await new Promise(resolve => setTimeout(resolve, 1)); return await original(...args); }
+    finally { active--; }
+  });
+  const options = { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl };
+  const serial = await createGfsAcquisitionSession({ ...options, fetchConcurrency: 1, decodeConcurrency: 1 });
+  const expected = await serial.acquire(3); await serial.close();
+  expect(peak).toBe(1); peak = 0;
+  const parallel = await createGfsAcquisitionSession({ ...options, fetchConcurrency: 2, decodeConcurrency: 2 });
+  try {
+    expect(withoutClock(await parallel.acquire(3))).toEqual(withoutClock(expected));
+    expect(peak).toBe(2);
+    expect(parallel.stats.peakPrefetchBytes).toBe(2 * estimateDecodeWorkingBytes(32, 2));
+  } finally { await parallel.close(); }
+  expect(active).toBe(0);
+});
+
+it('rejects a job whose decoded working set cannot fit before fetching its field', async () => {
+  const { fetchImpl, sample } = source();
+  const session = await createGfsAcquisitionSession({ cycle, activeIndices: Uint32Array.of(0), fetchImpl, prefetchBytes: 1024 });
+  await expect(session.acquire(3)).rejects.toThrow('byte budget');
+  expect(sample).not.toHaveBeenCalled();
+  expect(fetchImpl.mock.calls.every(([url]) => String(url).endsWith('.idx'))).toBe(true);
+  await session.close();
+});
+
 it('reuses raw companion precision and immutable inventory/index state with identical frame outputs', async () => {
   const { fetchImpl, sample } = source();
   const options = { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl };
@@ -67,7 +98,7 @@ it('reuses raw companion precision and immutable inventory/index state with iden
     expect(frame6.missing.precipitation).toEqual(Uint8Array.of(0, 1));
     expect(sample).toHaveBeenCalledTimes(100);
     expect(session.stats.rawCompanionHits).toBe(3);
-    expect(session.stats.peakPrefetchBytes).toBeLessThanOrEqual(64 * 1024 * 1024);
+    expect(session.stats.peakPrefetchBytes).toBeLessThanOrEqual(128 * 1024 * 1024);
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(4);
     const companion = frame6.receipt.fields.find(field => field.key === 'precipitation' && field.role === 'companion')!;
     expect(companion.asset.sha256).not.toBe('caller-mutated');

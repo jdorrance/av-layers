@@ -215,27 +215,16 @@ export function admitNoaaWindowPair(
 
 export type TrailingStatistic = 'mean' | 'accumulation';
 
-export interface TrailingWindowInput {
-  currentValues: readonly (number | null)[];
-  companionValues: readonly (number | null)[] | null;
+export interface CompactTrailingWindowInput {
+  currentValues: Float64Array;
+  currentMissing: Uint8Array;
+  companionValues: Float64Array | null;
+  companionMissing: Uint8Array | null;
   currentHours: number;
   previousHours: number;
   statistic: TrailingStatistic;
   packingErrorCurrent: number;
   packingErrorPrevious: number;
-}
-
-export interface TrailingWindowResult {
-  values: (number | null)[];
-  derivedHours: number;
-  quantizationTolerance: number;
-}
-
-export interface CompactTrailingWindowInput extends Omit<TrailingWindowInput, 'currentValues' | 'companionValues'> {
-  currentValues: Float64Array;
-  currentMissing: Uint8Array;
-  companionValues: Float64Array | null;
-  companionMissing: Uint8Array | null;
 }
 
 export interface CompactTrailingWindowResult {
@@ -246,9 +235,7 @@ export interface CompactTrailingWindowResult {
   quantizationTolerance: number;
 }
 
-export function recoverTrailingWindow(input: CompactTrailingWindowInput): CompactTrailingWindowResult;
-export function recoverTrailingWindow(input: TrailingWindowInput): TrailingWindowResult;
-export function recoverTrailingWindow(input: CompactTrailingWindowInput | TrailingWindowInput): CompactTrailingWindowResult | TrailingWindowResult {
+export function recoverTrailingWindow(input: CompactTrailingWindowInput): CompactTrailingWindowResult {
   const {
     currentValues,
     companionValues,
@@ -267,9 +254,9 @@ export function recoverTrailingWindow(input: CompactTrailingWindowInput | Traili
   if (companionValues && companionValues.length !== currentValues.length) {
     throw new NoaaError('source-conflict', 'Companion window has a different active-cell count');
   }
-  const compact = 'currentMissing' in input;
-  if (compact && (input.currentMissing.length !== currentValues.length ||
-      (companionValues ? !input.companionMissing || input.companionMissing.length !== currentValues.length : input.companionMissing !== null))) {
+  if (!(currentValues instanceof Float64Array) || (companionValues !== null && !(companionValues instanceof Float64Array))) throw new NoaaError('source-conflict', 'Window recovery requires Float64 source values');
+  if (!(input.currentMissing instanceof Uint8Array) || input.currentMissing.length !== currentValues.length ||
+      (companionValues ? !input.companionMissing || input.companionMissing.length !== currentValues.length : input.companionMissing !== null)) {
     throw new NoaaError('source-conflict', 'Window missing mask has a different active-cell count');
   }
   if (
@@ -282,15 +269,15 @@ export function recoverTrailingWindow(input: CompactTrailingWindowInput | Traili
   }
   const derivedHours = companionValues ? currentHours - previousHours : currentHours;
   const quantizationTolerance = packingErrorCurrent + packingErrorPrevious + 1e-9;
-  const values = compact ? new Float32Array(currentValues.length) : new Array<number | null>(currentValues.length);
-  const missing = compact ? new Uint8Array(currentValues.length) : null;
+  const values = new Float32Array(currentValues.length);
+  const missing = new Uint8Array(currentValues.length);
   let missingCount = 0;
   for (let i = 0; i < currentValues.length; i++) {
     const value = currentValues[i];
     const previous = companionValues?.[i];
     let result = Number.NaN;
-    if (value !== null && value !== undefined && Number.isFinite(value) && (!compact || !input.currentMissing[i]) &&
-        (!companionValues || (previous !== null && previous !== undefined && Number.isFinite(previous) && (!compact || !input.companionMissing![i])))) {
+    if (value !== null && value !== undefined && Number.isFinite(value) && !input.currentMissing[i] &&
+        (!companionValues || (previous !== null && previous !== undefined && Number.isFinite(previous) && !input.companionMissing![i]))) {
       if (statistic === 'mean') {
         result = companionValues ? (currentHours * value - previousHours * previous!) / derivedHours : value;
       } else {
@@ -298,20 +285,14 @@ export function recoverTrailingWindow(input: CompactTrailingWindowInput | Traili
         if (Number.isFinite(amount) && amount >= -quantizationTolerance) result = (amount < 0 ? 0 : amount) / derivedHours;
       }
     }
-    if (missing && Number.isFinite(result)) result = Math.fround(result);
+    if (Number.isFinite(result)) result = Math.fround(result);
     if (!Number.isFinite(result)) {
-      if (missing) {
-        missing[i] = 1;
-        missingCount++;
-        (values as Float32Array)[i] = Number.NaN;
-      } else {
-        (values as (number | null)[])[i] = null;
-      }
+      missing[i] = 1;
+      missingCount++;
+      values[i] = Number.NaN;
     } else {
       values[i] = result;
     }
   }
-  return missing
-    ? { values: values as Float32Array, missing, missingCount, derivedHours, quantizationTolerance }
-    : { values: values as (number | null)[], derivedHours, quantizationTolerance };
+  return { values, missing, missingCount, derivedHours, quantizationTolerance };
 }

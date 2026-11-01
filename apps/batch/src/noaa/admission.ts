@@ -207,17 +207,8 @@ export function inspectGfsField(bytes: Uint8Array, options: InspectGfsFieldOptio
     level: spec.level,
     levelHpa: spec.levelHpa ?? null,
     forecastLabel: spec.forecast,
-    metadataSha256: sha256(
-      Buffer.concat([
-        field.section1,
-        ...(field.section2 ? [field.section2] : []),
-        field.section3,
-        field.section4,
-      ]),
-    ),
-    encodingSha256: sha256(
-      Buffer.concat([field.section5, ...(field.section6 ? [field.section6] : [])]),
-    ),
+    metadataSha256: sha256([field.section1, ...(field.section2 ? [field.section2] : []), field.section3, field.section4]),
+    encodingSha256: sha256([field.section5, ...(field.section6 ? [field.section6] : [])]),
     identification: {
       centre: id.centre,
       subCentre: id.subCentre,

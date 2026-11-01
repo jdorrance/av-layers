@@ -1,45 +1,36 @@
 # Roadmap
 
-These steps build on the local GFS pipeline. Completed evidence and limits live
-in [status](status.md).
+The current milestone is the [foundation plan](foundation-plan.md), executed in
+[the foundation record](foundation-execution.md). [Status](status.md) separates
+implemented behavior from qualification still awaiting evidence. No new live
+forecast product or model is included in this milestone.
 
-## Feature sequence
+## Deferred expansion
 
-Keep one batch CLI, one private R2 bucket per environment, and one read-only
-Worker while evolving the platform into two product shapes sharing a single
-model run: **spatial map fields** and **vertical/time point profiles**.
+Keep one monorepo, one batch CLI, one private R2 bucket per environment and one
+read-only Worker. Expand only after the foundation qualification closes, using
+the [extension recipes](extensions.md).
 
-1. **Prove the deployed path and forecast-horizon monitoring.** Publish a real
-   build to staging and exercise deployed R2 range reads, cache behavior,
-   concurrent publication, rollback, cleanup, and expiry. Monitor `cycleAgeSeconds`,
-   `latestValidTime`, and `horizonExhausted` separately from seven-day artifact
-   retention (`expiresAt`).
-2. **Verify consumer integrations in use.** Exercise the standalone preview and
-   downstream consumers (including the optional Windy plugin host) against
-   published data, covering point selection, wrapped longitudes, tile failures,
-   deep zoom, timestamp synchronization, cancellation, and page/plugin lifecycle.
-3. **Add atmospheric point profiles and Skew-T / windgram charts.** Retain
-   pressure, height, temperature, moisture, and U/V wind across levels and times
-   in bounded spatial profile products so a point query reads a single
-   column/time bundle rather than one object per variable × level × hour. Share
-   build identity and UTC valid time with map layers, starting with nearest
-   native cell selection and explicit method labels. The numeric block pack
-   described in [architecture](architecture.md#why-these-boundaries-exist) provides
-   the storage foundation; compression, frame grouping and profile semantics
-   need their own measured product contract.
-4. **Lossless WebP tiles (implemented across build, archive, and API).**
-   All map layers render through `renderTileRgba` + `encodeWebp` into PMTiles
-   archives (`TileType.Webp`) served as `image/webp` at `.../{z}/{x}/{y}.webp`.
-5. **Add native-grid convergence, then one regional model (HRRR CONUS or ICON patch).**
-   Reuse geometry-aware kinematics with GFS spherical derivatives (`s⁻¹`,
-   distinct from vertical climb rate in `m/s`) and below-ground pressure-level
-   masking, validated against analytic vector fields and saved cases before
-   onboarding the first higher-resolution regional model.
-6. **Treat ridge exposure and mountain wave as explicit research work.**
-   Start ridge products with DEM slope/aspect and windward exposure rather than
-   uncalibrated climb rates. Start wave products with stability, cross-barrier
-   flow, shear, and critical-level diagnostics; wave-band position and strength
-   require resolved vertical motion or a verified wave solver.
-7. **Resolve distribution questions.** Confirm rights for adapted private-source
-   code and maintain [third-party notices](../THIRD_PARTY_NOTICES.txt) before
-   making open-source licensing claims or distributing a release.
+1. **One regional provider and its native coverage.** Choose the actual domain,
+   required fields, source rights, update cadence and operational envelope before
+   adding HRRR, ICON-Armenia or a WRF configuration. The synthetic Lambert proof
+   demonstrates geometry, not an operational adapter or forecast skill.
+2. **Atmospheric point profiles.** Define vertical coordinates, units,
+   staggering/rotation, missingness, time selection and an admitted response
+   shape. Measure native-cell bundles and frame grouping before choosing a
+   `profiles.bin` format, profile API, Skew-T or windgram UI. Do not force large
+   profiles into the scalar pack's all-channel point query.
+3. **Native-grid convergence.** Establish independent vector/metric tests,
+   stencil support and saved meteorological cases before admission. Horizontal
+   convergence in inverse seconds is not a vertical climb-rate forecast.
+4. **Ridge exposure and mountain wave research.** Separate DEM/wind exposure
+   from claimed climb rates. Wave strength and position require validated
+   stability, shear, critical-level and resolved/solved vertical-motion evidence.
+5. **Enhanced WRF operation.** Treat nesting, hybrid coordinates, source wind
+   rotation, terrain references and moving domains as explicit future contracts.
+   A model family is not a complete configuration/domain identity.
+
+No dates or benefits are promised for these features. First-party adaptation
+provenance and genuine dependency/data notices are maintained in
+[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt); no new public license grant
+is implied by the foundation work.
