@@ -21,3 +21,7 @@ devtools. Host `@windy/*` modules remain external.
 Built-module tests use a simulated host. Actual host installation and
 behavior remain unverified; see [status](../../docs/status.md) and
 [development](../../docs/development.md).
+
+The v3 manifest owns layer labels, units, vertical/time support, palette/status semantics, coverage and attribution. Shared pure legend/series models and strict API validation live in the focused contracts client modules; Windy timestamp matching, cancellation, listener ownership and teardown stay in this host controller. Model options include only admitted production IDs.
+
+Set `AV_API_BASE` explicitly for every hosted plugin build; a hosted asset using the localhost default cannot reach the deployed API. Hosting the built JavaScript proves asset availability only. Installation, host module resolution, map overlays, timestamp matching, point requests and close/reopen behavior must also pass on the actual Windy host.

@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
-import { manifestSchema, LAYER_IDS, type Manifest } from '@av/contracts';
+import { type LayerId } from '@av/contracts';
+import { ApiClient } from '@av/contracts/client';
 
 export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
 export type SampleStatus = typeof SAMPLE_STATUSES[number];
@@ -119,31 +120,29 @@ async function main(): Promise<void> {
   const entry = catalogBody.models.find(item => item.model === model);
   invariant(entry?.available === true, `/v1/catalog reports no available publication for ${model}. Publish a forecast for this environment first. In GitHub Actions, start Forecast sample on current main, then Deploy Worker and Pages.`);
 
-  const latestResponse = await get(`${baseUrl}/v1/models/${model}/latest?expand=manifest`, 'application/json');
-  const latest = await latestResponse.json() as { pointer?: unknown; manifest?: unknown; templates?: Record<string, string>; freshness?: unknown };
-  invariant(latest.pointer && latest.manifest, '/latest?expand=manifest omitted pointer or manifest');
-  const manifest: Manifest = manifestSchema.parse(latest.manifest);
-  invariant(manifest.layers.every(layer => layer in (latest.templates ?? {})), '/latest templates omit a published layer');
-  invariant(latest.freshness && typeof latest.freshness === 'object', '/latest omitted freshness');
+  const client = new ApiClient({ baseUrl, requestTimeoutMs: 30_000 });
+  const build = await client.latest(model);
+  const { manifest } = build;
 
   const runs = await get(`${baseUrl}/v1/models/${model}/runs`, 'application/json');
   const runBody = await runs.json() as { retained?: Array<{ buildId?: string }> };
   invariant(Array.isArray(runBody.retained) && runBody.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
 
   const frame = arg('frame') ?? manifest.frames[0]!.id;
-  const requestedLayers = (arg('layers') ?? LAYER_IDS.join(',')).split(',').filter(Boolean);
+  const requestedLayers = (arg('layers') ?? manifest.layers.join(',')).split(',').filter(Boolean);
   invariant(manifest.frames.some(item => item.id === frame), `unknown frame ${frame}`);
   invariant(requestedLayers.every(layer => (manifest.layers as string[]).includes(layer)), 'requested layer not published');
 
-  const sampleUrl = `${baseUrl}/v1/models/${model}/runs/${manifest.buildId}/sample?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&frame=${encodeURIComponent(frame)}&layers=${encodeURIComponent(requestedLayers.join(','))}`;
-  const sampleResponse = await get(sampleUrl, 'application/json');
-  validateSampleContract(await sampleResponse.json() as SampleContract, model, manifest.buildId, frame, requestedLayers);
+  await client.sample(build, { lat: Number(lat), lon: Number(lon), frames: [frame], layers: requestedLayers as LayerId[] });
 
   const tileUrl = `${baseUrl}/tiles/${model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`;
   const tile = await get(tileUrl, 'image/webp');
   invariant(tile.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
   invariant(tile.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
   invariant(tile.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
+  const bytes = new Uint8Array(await tile.arrayBuffer());
+  const decoder = new TextDecoder();
+  invariant(decoder.decode(bytes.subarray(0, 4)) === 'RIFF' && decoder.decode(bytes.subarray(8, 12)) === 'WEBP', 'tile body is not WebP');
 
   console.log(`smoke-api: ok ${baseUrl} ${model} ${manifest.buildId} frame ${frame}`);
 }

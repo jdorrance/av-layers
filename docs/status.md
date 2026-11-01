@@ -1,83 +1,48 @@
 # Project status
 
-[Home](../README.md) · [Roadmap](roadmap.md)
+[Home](../README.md) · [Roadmap](roadmap.md) · [Execution record](foundation-execution.md)
 
-The GFS pipeline has completed real builds, exact output comparisons, local
-Worker checks, and desktop/mobile-emulated preview checks. Cloudflare publication,
-physical devices and live consumer hosts remain release work.
+The foundation implementation is undergoing final qualification. GFS remains
+the only production-admitted model, with the existing lift and precipitation
+quantities. Lambert and varied-capability products are explicitly synthetic
+fixtures; no regional model, profile product or new physics is enabled.
 
-## Current evidence
+## Verified local evidence
 
-The complete packed build (`cell-major-blocks-v1`, 43.84 MB numeric pack and
-2,280-byte all-frame point range) and prepared renderer match the baseline
-implementation (87.2 s vs 648.1 s on cached local GFS inputs). Resource
-admission and CI budget checks are implemented in
-[`apps/batch/src/capacity.ts`](../apps/batch/src/capacity.ts).
+The refreshed baseline is `1d78d1c7f9af4a446d2c5d3d6585c9cde6224c85`, including
+native zoom 7. Against pinned real GFS inputs from `2026-10-30T00:00:00Z`, the
+first complete candidate preserves every one of 43,835,520 numeric sample bytes,
+all eight source-frame receipts (excluding capture time), and every decoded and
+encoded tile payload at all 97,032 addresses. Archive hashes also match.
 
-On 2026-11-01, [production deployment](https://github.com/jdorrance/av-layers/actions/runs/41326596966)
-passed CI and deployed the Worker with the expected revision marker. Its smoke
-check correctly rejected the empty forecast catalog. The earlier
-[forecast publication](https://github.com/jdorrance/av-layers/actions/runs/41303666341)
-failed because the SDK sent conflicting upload checksums. The current client
-configuration removes the extra checksum; a test exercises the SDK's generated
-requests. A fresh successful R2 publication and full deployment smoke check
-remain unverified.
+That initial run took 18.81 minutes versus 29.21 minutes for the frozen baseline;
+peak RSS was 1,167,376,384 versus 1,265,385,472 bytes. This is one observed pair,
+not the final controlled repeated-run qualification. Larger theoretical buffer
+savings are not presented as measured RSS reductions.
 
-Local preview checks cover frame/layer switching, legend identity, forecast
-requests and point tables. Emulation establishes those observed behaviors, not
-physical-device speed or deployed cache performance.
+Other local evidence includes regular/Lambert full-pipeline fixtures, interrupted
+and ambiguous publication tests, actual workerd overlapping-read cancellation,
+repeatable offline seeding, desktop/mobile-layout preview checks, keyboard
+controls, request aborts, tile-error recovery and expiry behavior. A mobile
+viewport does not establish physical-device behavior. See the
+[execution record](foundation-execution.md) for methods and limits.
 
-<details>
-<summary>Earlier local checkpoints</summary>
+## Release gates still open
 
-## Local GFS validation
+The matching v3 Worker/data/client set, remote lifecycle drills, controlled
+warm/uncached load, actual Windy host and two consecutive
+scheduled production publications require their final receipts. Until those
+exist, F11–F13 are not marked complete. Physical-device validation was explicitly deferred by the user on 2026-11-01. An earlier healthy Worker or a smoke
+failure against an unavailable catalog does not establish this release.
 
-On 2026-10-30, the 00Z GFS cycle completed acquisition, derivation, tile and
-sample generation, build validation, and archive smoke checks. The build was
-then loaded into Wrangler's local R2 emulator and served through workerd.
+## Historical evidence
 
-The [validation receipt](evidence/gfs-local-2026-10-30.json) preserves the build
-identity, tool versions, artifact counts, validation results, and observed
-measurements. It was copied from the local evidence record; the forecast
-archives and emulator state are generated outputs and are not included in the
-repository.
+The [2026-10-30 local receipt](evidence/gfs-local-2026-10-30.json) describes an
+older zoom-5/PNG-era checkpoint. Its timings, file formats and counts are
+historical and are not current platform limits. Current artifacts use manifest
+v3, one cell-major numeric pack and lossless WebP PMTiles.
 
-Local API checks covered full-day samples at Torrey Pines, Armenia, and New
-Zealand; excluded Russian coverage; PNG delivery; CORS; conditional requests;
-HEAD requests; and unknown-build errors. The Armenia sample used GFS, not the
-regional ICON adapter.
-
-The receipt's request timings are individual local observations. They do not
-establish production latency, cache performance, operating cost, or an SLA.
-Its test results describe that checkpoint; use the
-[development checks](../README.md#development-checks) for the current checkout.
-
-## Transparent no-lift tiles
-
-A fresh build, `20261030T093641Z-44e759df-18bf-4795-9678-87598bdd91e4`,
-validated all 24 archives and 24 numeric arrays with rendering style
-`transparent-no-lift-v2`. Local API PNG checks confirmed alpha zero in both lift
-layers at a no-usable-lift location in Armenia, while positive lift at Torrey
-Pines remained colored. Each PNG check was matched against the four actual
-quarter-pixel numeric samples. Point values remain MSL `null` and AGL `0` for
-physical no-lift.
-
-The local receipt is `output/evidence/no-lift-transparency-proof.json` (generated,
-not checked in). These PNG and flat-array artifacts are historical evidence.
-Current production serving uses the packed contract and lossless WebP.
-
-</details>
-
-## Release boundaries
-
-Successful R2 publication and its integrity checks against Cloudflare remain
-unverified. The production Worker is reachable, but the complete forecast-serving
-path still needs a published build. Plugin loader tests use fixtures; actual
-host behavior for external consumers still needs validation.
-
-HRRR and ICON-Armenia products are deferred. The current build path supports GFS;
-the clients expose the reserved regional model IDs as unavailable.
-
-Adapted private-source code also has unresolved distribution rights, recorded
-in [third-party notices](../THIRD_PARTY_NOTICES.txt). The
-[roadmap](roadmap.md) describes the next milestones.
+The supplied plan identifies windgrams and skyjuice as first-party sources;
+referenced authorship was checked and [notices](../THIRD_PARTY_NOTICES.txt) retain
+that provenance and applicable third-party/data obligations. Live HRRR, ICON,
+WRF, profiles, convergence, ridge and wave work remains [deferred](roadmap.md).

@@ -57,7 +57,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
     try {
       const { renderTile: renderPartial } = await import('./render.js');
       const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
-      const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+      const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
       for (let i = 0; i < 4; i++) setBit(mask.output, i);
       const field: GridField = { values: new Float32Array([0.2, 1, 0.2, 1]), flags: new Uint8Array(4) };
       expect(pixel(await decodeWebp(await renderPartial(field, mask, 'precip-rate', 5, 16, 16)), 30, 30)).toEqual([170, 0, 85, 96]);
@@ -73,7 +73,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
     try {
       const { createRenderer: createPartial } = await import('./render.js');
       const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
-      const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+      const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
       setBit(mask.output, 0);
       const field = { values: new Float32Array(4).fill(1), flags: new Uint8Array(4) }, renderer = createPartial(mask);
       const image = await decodeWebp(await renderer.renderTile(field, 'precip-rate', 5, 16, 16));
@@ -87,7 +87,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
 
   it('renders no-lift transparent independently of the stored MSL terrain value', async () => {
     const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
-    const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (let i = 0; i < 4; i++) setBit(mask.output, i);
     const field: GridField = { values: new Float32Array(4).fill(5500), flags: new Uint8Array(4).fill(STATUS_NO_LIFT) };
     expect(sampleGrid(grid, field, a.lat, a.lon, 'usable-lift-msl', mask)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
@@ -98,7 +98,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
 
   it('premultiplies valid and no-lift quarter-pixels without a dark fringe', async () => {
     const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
-    const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (let i = 0; i < 4; i++) setBit(mask.output, i);
     const field: GridField = { values: new Float32Array([300, 0, 300, 0]), flags: new Uint8Array([STATUS_VALID, STATUS_NO_LIFT, STATUS_VALID, STATUS_NO_LIFT]) };
     expect(pixel(await decodeWebp(await renderTile(field, mask, 'usable-lift-agl', 5, 16, 16)), 30, 30)).toEqual([185, 59, 136, 128]);
@@ -106,7 +106,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
 
   it('averages mixed quarter-point colors in premultiplied alpha without per-pixel parsing', async () => {
     const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
-    const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (const i of [0, 1, 2]) setBit(mask.output, i);
     setBit(mask.halo, 3);
     const field: GridField = { values: new Float32Array([0.2, 1, 2, 5]), flags: new Uint8Array(4) };
@@ -120,7 +120,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
 
   it('maps interpolated scalar values to bins before averaging quarter-point colors', async () => {
     const a = mercatorPoint(5, 16, 16, 40, 40), b = mercatorPoint(5, 16, 16, 41, 41);
-    const grid = { width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (let i = 0; i < 4; i++) setBit(mask.output, i);
     const field: GridField = { values: new Float32Array([0, 4, 0, 4]), flags: new Uint8Array(4) };
     for (const py of [40.25, 40.75]) {
@@ -132,7 +132,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
   });
 
   it('separates center scalar coverage from quarter-pixel premultiplied color', async () => {
-    const grid = { width: 3, height: 3, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }, mask = maskFor(grid, 5);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 3, height: 3, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }, mask = maskFor(grid, 5);
     const field: GridField = { values: new Float32Array(9).fill(2), flags: new Uint8Array(9).fill(STATUS_OUTSIDE) };
     for (let i = 0; i < 9; i++) if (i % 3 < 2) { setBit(mask.output, i); field.flags[i] = STATUS_VALID; }
     const center = mercatorPoint(5, 16, 16, 11.5, 0.5), inside = mercatorPoint(5, 16, 16, 11.25, 0.25), outside = mercatorPoint(5, 16, 16, 11.75, 0.25);
@@ -143,7 +143,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
   });
 
   it('preserves XYZ north/south orientation and rejects an absent expected tile', async () => {
-    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
     for (const bit of [0, 1, 3]) setBit(mask.tiles, bit);
     const field: GridField = { values: new Float32Array([1,1,1,1, 1,1,1,1, 20,20,20,20]), flags: new Uint8Array(12) };
@@ -165,7 +165,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
   }, 30000);
 
   it('retains every transparent no-lift tile address at each zoom', async () => {
-    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 2);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 2);
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
     for (let bit = 0; bit < 21; bit++) setBit(mask.tiles, bit);
     const field: GridField = { values: new Float32Array(12), flags: new Uint8Array(12).fill(STATUS_NO_LIFT) };
@@ -189,10 +189,34 @@ describe('rendered WebP and PMTiles fixtures', () => {
 });
 
 describe('build-owned prepared renderer', () => {
+  it('groups layers under one queue and preserves every address and decoded pixel', async () => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    for (let i = 0; i < 12; i++) setBit(mask.output, i);
+    for (let i = 0; i < 5; i++) setBit(mask.tiles, i);
+    const dir = await mkdtemp(join(tmpdir(), 'av-grouped-')); temporary.push(dir);
+    const layers: LayerId[] = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'];
+    const targets = layers.map((layer, i) => ({ layer, path: join(dir, `${layer}.pmtiles`), field: { values: Float32Array.from({ length: 12 }, (_, cell) => (cell + 1) * (i ? 0.5 : 100)), flags: Uint8Array.from({ length: 12 }, (_, cell) => cell === 4 && i < 2 ? STATUS_NO_LIFT : STATUS_VALID) } }));
+    const renderer = createRenderer(mask, { encodeConcurrency: 2, geometryCacheBytes: 60_000, rasterWorkers: 0 });
+    await renderer.renderArchives(targets);
+    expect(renderer.metrics()).toMatchObject({ geometryMisses: 5, geometryHits: 10, peakPendingTiles: 2, peakPendingTileBytes: 2 * (256 * 256 * 4 + 1024 * 1024) });
+    for (const target of targets) {
+      const source = await reader(target.path);
+      try {
+        expect((await source.archive.getHeader()).numAddressedTiles).toBe(5);
+        for (const tile of [...expectedTiles(mask, 0), ...expectedTiles(mask, 1)]) {
+          const encoded = await source.archive.getZxy(tile.z, tile.x, tile.y);
+          expect(encoded).toBeDefined();
+          expect((await decodeWebp(new Uint8Array(encoded!.data))).data).toEqual(renderTileRgba(target.field, mask, target.layer, tile.z, tile.x, tile.y));
+        }
+      } finally { await source.close(); }
+    }
+  });
+
   it('matches sampleGrid + paletteColor and reuses only bounded geometry across fields', () => {
-    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
     for (let i = 0; i < 12; i++) if (i !== 5) setBit(mask.output, i);
-    const renderer = createRenderer(mask, { geometryCacheBytes: 2 * 57344 });
+    const geometryBudget = 2 * (57344 + 12 * Uint32Array.BYTES_PER_ELEMENT);
+    const renderer = createRenderer(mask, { geometryCacheBytes: geometryBudget });
     const field = { values: Float32Array.from([0.1, 0.5, 1, 2, 300, 600, 1500, 2750, 0, -10, 50, 100]), flags: Uint8Array.from([0, 1, 0, 2, 0, 0, 1, 0, 3, 0, 0, 0]) };
     for (const layer of ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const) {
       if (layer === 'precip-rate') field.flags.fill(0);
@@ -200,11 +224,12 @@ describe('build-owned prepared renderer', () => {
       expect(renderer.renderTileRgba(field, layer, 1, 0, 0)).toEqual(expected);
       expect(renderTileRgba(field, mask, layer, 1, 0, 0)).toEqual(expected);
     }
-    expect(renderer.metrics()).toMatchObject({ geometryHits: 2, geometryMisses: 1, geometryBytes: 57344 });
+    expect(renderer.metrics()).toMatchObject({ geometryHits: 2, geometryMisses: 1, geometryBytes: 57368 });
     renderer.renderTileRgba(field, 'precip-rate', 1, 0, 1);
     renderer.renderTileRgba(field, 'precip-rate', 1, 1, 1);
-    expect(renderer.metrics().geometryBytes).toBe(2 * 57344);
-    expect(renderer.metrics().peakGeometryBytes).toBe(2 * 57344);
+    expect(renderer.metrics().geometryBytes).toBeGreaterThan(57368);
+    expect(renderer.metrics().geometryBytes).toBeLessThanOrEqual(geometryBudget);
+    expect(renderer.metrics().peakGeometryBytes).toBeLessThanOrEqual(geometryBudget);
     renderer.renderTileRgba(field, 'precip-rate', 1, 0, 0);
     expect(renderer.metrics().geometryMisses).toBe(4);
     const uncached = createRenderer(mask, { geometryCacheBytes: 0 });
@@ -213,11 +238,11 @@ describe('build-owned prepared renderer', () => {
   });
 
   it('shares an exactly blank payload and keeps the archive writer bounded', async () => {
-    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 2);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 2);
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
     for (let i = 0; i < 21; i++) setBit(mask.tiles, i);
     const field = { values: new Float32Array(12), flags: new Uint8Array(12).fill(STATUS_NO_LIFT) };
-    const renderer = createRenderer(mask, { encodeConcurrency: 2 });
+    const renderer = createRenderer(mask, { encodeConcurrency: 2, rasterWorkers: 0 });
     const spy = vi.spyOn(codec, 'encodeWebp');
     const dir = await mkdtemp(join(tmpdir(), 'av-render-')); temporary.push(dir);
     try {
@@ -231,12 +256,12 @@ describe('build-owned prepared renderer', () => {
     } finally { spy.mockRestore(); }
   });
 
-  it('drains already-started encodes before rejecting a failed archive', async () => {
-    const grid = { width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+  it.each([0, 2])('drains already-started encodes before rejecting a failed archive (%i raster workers)', async rasterWorkers => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
     for (let i = 0; i < 5; i++) setBit(mask.tiles, i);
     const field = { values: new Float32Array(12).fill(2), flags: new Uint8Array(12) };
-    const renderer = createRenderer(mask, { encodeConcurrency: 2 });
+    const renderer = createRenderer(mask, { encodeConcurrency: 2, rasterWorkers });
     const original = codec.encodeWebp;
     let fail!: () => void, finish!: () => void, drained = false, settled = false;
     const failure = new Promise<void>(resolve => { fail = resolve; }), completion = new Promise<void>(resolve => { finish = resolve; });

@@ -1,28 +1,30 @@
 THIRD-PARTY NOTICES
 
-This file records provenance and third-party license obligations for material
-reused by this repository. It is not a grant of rights for private upstream
-repositories. No LICENSE file was found in the windgrams or skyjuice source
-checkouts; their code is not distributed under an asserted MIT or other public
-license here. Revisions, adaptation scope, and attribution are recorded below.
+This file records first-party adaptation provenance and third-party license
+obligations. It does not assign a new public license to this repository or its
+first-party sources. Genuine dependency and data notices remain below.
 
-1. Provenance and rights status
+1. First-party adaptation provenance
+
+The supplied foundation plan identifies windgrams and skyjuice as first-party
+sibling repositories under John Dorrance's ownership. Execution of that plan was
+authorized on 2026-11-01. The local source audit confirms John Dorrance as author
+of the referenced revisions; windgrams' origin is jdorrance/windgrams and the
+skyjuice checkout has no origin remote. No external distribution-rights blocker
+is asserted for these first-party adaptations. This does not remove any notices
+for independently sourced code or data in either repository.
 
 windgrams
   Repository revision: 32fdd75db7a4a1a302ae901b969b0f6625712368
   Reused scope: selected soaring parcel-depth/convective-lift and meteorology
   helpers, NOAA GFS acquisition patterns, publication/R2 patterns.
-  License status: no LICENSE file identified in the source checkout. No public
-  license grant is asserted. Rights and any applicable notices require
-  confirmation before distribution.
+  No LICENSE file identified; no MIT or other public license grant is asserted.
 
 skyjuice
   Repository revision: 043e5bf18dc9b60f4586622d1b8d631af88d9235
   Reused scope: GFS thermal-input proof/admission patterns, PDT 4.8
   statistical-interval and duplicate-record guards, planning references.
-  License status: no LICENSE file identified in the source checkout. No public
-  license grant is asserted. Rights and any applicable notices require
-  confirmation before distribution.
+  No LICENSE file identified; no MIT or other public license grant is asserted.
 
 @azohra/meteo.grib and @azohra/meteo.j2k
   Repository revision: 0296c1fb54aa9c8415e7962d7a4580b496e7ebf8
@@ -131,5 +133,5 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 Natural Earth 1:50m admin-0 data is public domain. The pinned release,
 checksum and attribute mapping are recorded by packages/contracts/coverage.
-GFS, HRRR and ICON-EU source data remain subject to their providers' terms;
+GFS source data remain subject to the provider's terms;
 this repository does not relicense source data.

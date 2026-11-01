@@ -20,7 +20,7 @@ it('indexes output and halo blocks deterministically without retaining mutable m
 });
 
 it.each([{ width: 3, height: 3, wrapLongitude: true }, { width: 1, height: 2, wrapLongitude: true }, { width: 5, height: 3, wrapLongitude: false }])('preserves exact scalar results across subsets, missing/tied cells and edge blocks: %j', dimensions => {
-  const grid: Grid = { ...dimensions, lon0: 0, lat0: dimensions.height - 1, dx: 1, dy: -1 };
+  const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, ...dimensions, lon0: 0, lat0: dimensions.height - 1, dx: 1, dy: -1 };
   const count = grid.width * grid.height, output = new Uint8Array(Math.ceil(count / 8)), halo = new Uint8Array(output.length);
   for (let i = 0; i < count; i++) if (i !== 2 && i !== 5) setBit(output, i);
   if (count > 2) setBit(halo, 2);
@@ -58,7 +58,7 @@ it.each([{ width: 3, height: 3, wrapLongitude: true }, { width: 1, height: 2, wr
 });
 
 it('keeps halo-only owner blocks and chooses the first contributor before longitude wrap', () => {
-  const grid: Grid = { width: 4, height: 4, lon0: 0, lat0: 3, dx: 1, dy: -1, wrapLongitude: true };
+  const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 4, height: 4, lon0: 0, lat0: 3, dx: 1, dy: -1, wrapLongitude: true };
   const output = new Uint8Array(2), halo = new Uint8Array(2);
   setBit(output, 6); setBit(halo, 5); setBit(halo, 7);
   const layout = prepareSamplePackLayout(grid, output, halo, 2);
@@ -69,7 +69,7 @@ it('keeps halo-only owner blocks and chooses the first contributor before longit
 });
 
 it('rejects malformed selections, absent owner blocks and incorrect range bodies', () => {
-  const grid: Grid = { width: 2, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: true };
+  const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: true };
   const layout = prepareSamplePackLayout(grid, Uint8Array.of(1), Uint8Array.of(0), 1), sample = planSample(grid, 0, 0)!;
   const plan = planPackedSample(layout, sample, 3, [0, 2]);
   for (const channels of [[], [3], [0, 0], [-1]]) expect(() => planPackedSample(layout, sample, 3, channels)).toThrow('channels');

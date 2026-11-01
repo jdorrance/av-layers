@@ -1,14 +1,12 @@
-import { paletteBinLabel, type LayerId } from '@av/contracts';
+import { type LayerId } from '@av/contracts';
 import {
   activePalettes,
   buildDiagnosticRows,
   coverageSummaryText,
-  formatSampleStatus,
   formatSeriesSummary,
-  formatSupportFlags,
-  noLiftLabel,
   normalizePoint,
-  paletteNoteText,
+  paletteLegend,
+  seriesTable,
   populateModelOptions,
   type FrameSample,
   type GeoPoint,
@@ -82,7 +80,7 @@ export class PluginPanel {
   private readonly horizonNotice = node('p', 'av-warning');
   private readonly seriesStatus = node('p', 'av-muted');
   private readonly series = node('div', 'av-series');
-  private readonly seriesButton = node('button', 'av-button', 'Sample clicked point (8 × 3)');
+  private readonly seriesButton = node('button', 'av-button', 'Sample clicked point');
   private renderedBuildId: string | null = null;
   private renderedLegend: { buildId: string; layer: string | null; palettes: PinnedBuild['palettes'] } | null = null;
   private currentBuild: PinnedBuild | null = null;
@@ -179,10 +177,10 @@ export class PluginPanel {
     }
     this.renderedBuildId = key;
     this.modelSelect.value = build.model;
-    this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(layer, layer)));
+    this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(build.manifest.descriptors.layers[layer].label, layer)));
     this.layerSelect.value = build.manifest.layers[0] ?? '';
     this.frameSelect.replaceChildren(...build.manifest.frames.map(frame => new Option(`${frame.id} · ${frame.validTime}`, frame.id)));
-    this.coverage.textContent = Array.isArray(build.bounds) ? coverageSummaryText(build) : `Coverage ${build.coverage.id} · excludes RUS, ATA, GRL`;
+    this.coverage.textContent = coverageSummaryText(build);
     const rows = Array.isArray(build.bounds) && build.manifest.grid && build.manifest.method?.hash
       ? buildDiagnosticRows(build)
       : [
@@ -206,7 +204,7 @@ export class PluginPanel {
 
   private renderLegend(build: PinnedBuild, activeLayer: string | null): void {
     const buildId = `${build.model}:${build.manifest.buildId}`;
-    const palettes = activePalettes(build.palettes, activeLayer);
+    const palettes = activePalettes(build.palettes, activeLayer, build.manifest.descriptors.layers);
     const previous = this.renderedLegend;
     if (previous?.buildId === buildId && previous.layer === activeLayer &&
       previous.palettes.length === palettes.length && previous.palettes.every((palette, index) => palette === palettes[index])) return;
@@ -214,22 +212,16 @@ export class PluginPanel {
     this.legend.replaceChildren();
     for (const palette of palettes) {
       const section = node('section');
-      section.append(node('h2', undefined, `${palette.id} · ${palette.units}`));
-      palette.colors.forEach((color, index) => {
+      const model = paletteLegend(palette);
+      section.append(node('h2', undefined, model.title));
+      model.rows.forEach(({ color, label }) => {
         const row = node('div', 'av-legend-row');
         const swatch = node('span', 'av-swatch');
         swatch.style.background = color;
-        row.append(swatch, node('span', undefined, paletteBinLabel(palette.edges, palette.colors.length, index)));
+        row.append(swatch, node('span', undefined, label));
         section.append(row);
       });
-      if (palette.noLiftColor) {
-        const row = node('div', 'av-legend-row');
-        const swatch = node('span', 'av-swatch');
-        swatch.style.background = palette.noLiftColor;
-        row.append(swatch, node('span', undefined, noLiftLabel(palette.noLiftColor)));
-        section.append(row);
-      }
-      const noteText = paletteNoteText(palette);
+      const noteText = model.note;
       if (noteText) section.append(node('p', 'av-muted', noteText));
       this.legend.append(section);
     }
@@ -265,20 +257,13 @@ export class PluginPanel {
   ): void {
     const table = node('table');
     const head = node('tr');
-    for (const label of ['Frame', 'Valid', ...layers.map(layer => `${layer}`), ...layers.map(layer => `${layer} status`)]) {
+    const model = seriesTable(payload, layers, this.currentBuild?.manifest.descriptors.layers);
+    for (const label of model.headings) {
       head.append(node('th', undefined, label));
     }
     table.append(head);
-    for (const frame of payload.frames) {
+    for (const cells of model.rows) {
       const row = node('tr');
-      const cells = [frame.id, frame.validTime];
-      for (const layer of layers) {
-        cells.push(formatSampleStatus(frame.layers[layer]));
-      }
-      for (const layer of layers) {
-        const sample = frame.layers[layer];
-        cells.push(`${sample.status} / ${formatSupportFlags(sample.support)}${sample.interpolated ? ' / interp' : ''}`);
-      }
       for (const text of cells) row.append(node('td', undefined, text));
       table.append(row);
     }

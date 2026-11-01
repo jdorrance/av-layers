@@ -1,17 +1,14 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { readLocalManifest, validateLocalBuild } from './local-build.js';
 import { parseArgs } from 'node:util';
+import { workflowAuthority } from './authority.js';
 import { getProduct, modelIdSchema } from '@av/contracts';
+import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
 
 async function main(): Promise<void> {
   const command = process.argv[2];
-  const { values } = parseArgs({ args: process.argv.slice(3), strict: true, options: {
-    model: { type: 'string' }, out: { type: 'string' }, cycle: { type: 'string' }, 'cache-dir': { type: 'string' }, manifest: { type: 'string' }, 'build-id': { type: 'string' }, 'allow-same-cycle': { type: 'boolean' }, 'publishers-paused': { type: 'boolean' }, frames: { type: 'string' }, layers: { type: 'string' }, models: { type: 'string' }, 'native-zoom': { type: 'string' }, 'cadence-hours': { type: 'string' }, 'retention-days': { type: 'string' }
-  } });
-  const allowed: Record<string, string[]> = {
-    'build:sample': ['model', 'out', 'cycle', 'cache-dir'], capacity: ['model', 'frames', 'layers', 'models', 'native-zoom', 'cadence-hours', 'retention-days'], 'input-proof': ['cycle', 'cache-dir'], validate: ['manifest'], publish: ['manifest', 'allow-same-cycle'], rollback: ['model', 'build-id', 'publishers-paused'], cleanup: ['model', 'publishers-paused']
-  };
-  if (!command || !allowed[command] || Object.keys(values).some(key => !allowed[command].includes(key))) throw new Error('Usage: build:sample, capacity, input-proof, validate, publish, rollback, or cleanup with command-specific options');
+  const { values } = parseArgs({ args: process.argv.slice(3), strict: true, options: CLI_OPTIONS });
+  const allowed: readonly string[] | undefined = CLI_COMMANDS[command];
+  if (!command || !allowed || Object.keys(values).some(key => !allowed.includes(key))) throw new Error(`Usage: ${Object.keys(CLI_COMMANDS).join(', ')} with command-specific options`);
   if (command === 'build:sample') {
     if (values.model !== 'gfs') throw new Error('build:sample requires --model gfs');
     const { buildSample } = await import('./build.js');
@@ -20,35 +17,31 @@ async function main(): Promise<void> {
     const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
     if (!product) throw new Error('No admitted product for this model');
     const [{ loadCoverage }, { estimateCapacity, prepareBuild }] = await Promise.all([import('./validate.js'), import('./capacity.js')]);
-    const mask = await loadCoverage(), { layout } = prepareBuild(mask, product);
+    const mask = await loadCoverage(), { layout, capacity } = prepareBuild(mask, product);
     const number = (value: string | undefined) => value === undefined ? undefined : Number(value);
     const report = estimateCapacity(mask, product, layout.storedCells, { frames: number(values.frames), layers: number(values.layers), models: number(values.models), nativeZoom: number(values['native-zoom']), cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']) });
-    console.log(JSON.stringify(report, null, 2));
+    console.log(JSON.stringify({ ...report, currentProductAdmission: { model: product.source.modelFamily, frames: product.frameHours.length, layers: product.layers.length, nativeZoom: product.maxNativeZoom, rasterWorkers: capacity.rasterWorkers, workingSet: capacity.workingSet, estimatedPeakBytes: capacity.estimatedPeakBytes, budgetBytes: capacity.budgets.peakRssBytes, scope: 'Complete current-product estimate with conservative reserves; hypothetical scenario growth above is not admitted by this memory estimate.' } }, null, 2));
     if (report.violations.length) process.exitCode = 1;
   } else if (command === 'input-proof') {
     const { proveGfsInputs } = await import('./noaa/index.js');
     console.log(JSON.stringify(await proveGfsInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));
   } else if (command === 'validate' || command === 'publish') {
     if (!values.manifest) throw new Error('--manifest is required');
-    const path = resolve(values.manifest), root = resolve(dirname(path), '../../..');
-    const manifest = JSON.parse(await readFile(path, 'utf8'));
     if (command === 'validate') {
-      const { loadCoverage, validateBuild } = await import('./validate.js');
-      await validateBuild(root, manifest, await loadCoverage());
+      await validateLocalBuild(values.manifest);
       console.log('Validated');
     } else {
+      const { root, manifest } = await readLocalManifest(values.manifest);
       const [{ r2Storage }, { publish }] = await Promise.all([import('./storage.js'), import('./publication.js')]);
-      await publish(r2Storage(), root, manifest, { allowSameCycle: values['allow-same-cycle'] });
+      await publish(r2Storage(), root, manifest, { authority: workflowAuthority(), allowSameCycle: values['allow-same-cycle'] });
       console.log('Published');
     }
   } else {
     const model = modelIdSchema.parse(values.model);
-    const [{ r2Storage }, { rollback, cleanup }] = await Promise.all([import('./storage.js'), import('./publication.js')]);
-    if (command === 'rollback') {
-      if (!values['build-id']) throw new Error('--build-id is required');
-      await rollback(r2Storage(), model, values['build-id'], !!values['publishers-paused']);
-      console.log('Rolled back');
-    } else console.log(`Deleted ${await cleanup(r2Storage(), model, !!values['publishers-paused'])} objects`);
+    if (command === 'rollback' && !values['build-id']) throw new Error('--build-id is required');
+    const [{ r2Storage }, { maintenanceWorkflow }] = await Promise.all([import('./storage.js'), import('./maintenance.js')]);
+    const receipt = await maintenanceWorkflow({ action: command as 'rollback' | 'cleanup', model, buildId: values['build-id'], authority: workflowAuthority(), store: r2Storage() });
+    console.log(JSON.stringify(receipt));
   }
 }
 

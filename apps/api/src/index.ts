@@ -1,20 +1,15 @@
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
-  GFS_PRODUCT,
   getProduct,
+  type ProductDefinition,
   LAYER_IDS,
-  MAX_SAMPLE_VALUES,
   MAX_SAMPLE_RANGE_BYTES,
-  LIFT_COLORS,
-  LIFT_RENDER_STYLE,
   MODEL_IDS,
   PALETTES,
   SAMPLE_STATUSES,
   STATUS_OUTSIDE,
-  compactSource,
   computeFreshness,
-  getProvenanceReference,
   isCovered,
   isPaletteId,
   isTileCovered,
@@ -23,22 +18,18 @@ import {
   modelPointerSchema,
   paletteBinLabel,
   paletteSchema,
-  parseProvenance,
   provenanceSchema,
   sampleResponseSchema,
-  validateArtifactRecords,
-  type CoverageMask,
   type LayerId,
   type Manifest,
-  type ModelId,
-  type ModelPointer
+  type ModelId
 } from '@av/contracts';
-import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, type Sample, type SamplePackLayout } from '@av/forecast';
-import output from '../../../packages/contracts/coverage/output.bin';
-import halo from '../../../packages/contracts/coverage/halo.bin';
-import tiles from '../../../packages/contracts/coverage/tiles.bin';
-import witnessData from '../../../packages/contracts/coverage/manifest.json';
+import { packedCellsFromRange, planPackedSample, planSample, sampleCells, type Sample } from '@av/forecast';
 import { readTile } from './pmtiles';
+import { resolveCoverage } from './coverage';
+import { binaryRead, countRead, type RequestMetrics, readObjectBytes, boundResponse, type WaitContext } from './resources';
+import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
+import { Problem, fail, ensureLive, query, response, json, finish, cached, validIp, handleError } from './http';
 
 type Env = {
   Bindings: {
@@ -46,300 +37,34 @@ type Env = {
     SAMPLE_RATE_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> };
     AV_LOCAL_DEVELOPMENT?: string;
     AV_DEPLOYMENT_ID?: string;
+    AV_REQUEST_METRICS?: string;
+    AV_RESPONSE_CACHE?: string;
   };
 };
-type WaitContext = { waitUntil(promise: Promise<unknown>): void };
 
-const mask: CoverageMask = {
-  grid: GFS_PRODUCT.grid,
-  output: new Uint8Array(output),
-  halo: new Uint8Array(halo),
-  tiles: new Uint8Array(tiles),
-  maxZoom: GFS_PRODUCT.maxNativeZoom
-};
-let sampleLayout: SamplePackLayout | undefined;
-const pointerCache = new WeakMap<R2Bucket, Map<ModelId, { pointer: ModelPointer; until: number }>>();
-const manifestCache = new WeakMap<R2Bucket, Map<string, Manifest>>();
-const artifactIndexes = new WeakMap<Manifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
-const MAX_CACHED_MANIFESTS = 64;
-const IMMUTABLE_TTL = 86400;
 // Transparent 256 × 256 lossless tile, generated with the batch WebP encoder.
 const blank = Uint8Array.from(atob('UklGRiIAAABXRUJQVlA4TBUAAAAv/8A/EAcQEREAUKT//ymi/6n//QcA'), c => c.charCodeAt(0));
-
-class Problem extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    detail: string
-  ) {
-    super(detail);
-  }
-}
-
-function fail(status: number, code: string, detail: string): never {
-  throw new Problem(status, code, detail);
-}
-
-const idPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-function validateId(value: string): string {
-  if (!idPattern.test(value)) fail(400, 'invalid-parameter', 'Invalid resource identifier');
-  return value;
-}
-
-function modelId(value: string): ModelId {
-  if (!(MODEL_IDS as readonly string[]).includes(value)) fail(404, 'unknown-model', 'Unknown model');
-  return value as ModelId;
-}
 
 function layerId(value: string): LayerId {
   if (!(LAYER_IDS as readonly string[]).includes(value)) fail(404, 'unknown-layer', 'Unknown layer');
   return value as LayerId;
 }
 
-function ttl(expiresAt: string): number {
-  return Math.max(0, Math.min(IMMUTABLE_TTL, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)));
-}
-
-function ensureLive(expiresAt: string): void {
-  if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) {
-    fail(404, 'not-retained', 'Build is expired or not retained');
-  }
-}
-
-const fileWitness = z.object({ bytes: z.number().int().positive(), sha256: z.string().regex(/^[a-f0-9]{64}$/) });
-const witnessSchema = z.object({ id: z.literal(GFS_PRODUCT.coverageId), output: fileWitness, halo: fileWitness, tiles: fileWitness });
-const witnessPromise: Promise<string | null> = (async () => {
-  const bytes = witnessData as unknown as ArrayBuffer;
-  if (!(bytes instanceof ArrayBuffer)) fail(503, 'coverage-unavailable', 'Invalid bundled coverage witness');
-  const witness = witnessSchema.safeParse(JSON.parse(new TextDecoder().decode(bytes)));
-  if (!witness.success) fail(503, 'coverage-unavailable', 'Invalid bundled coverage witness');
-  const digest = async (data: ArrayBuffer) =>
-    Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', data)), b => b.toString(16).padStart(2, '0')).join('');
-  for (const [data, expected] of [
-    [output, witness.data.output],
-    [halo, witness.data.halo],
-    [tiles, witness.data.tiles]
-  ] as const) {
-    if (data.byteLength !== expected.bytes || (await digest(data)) !== expected.sha256) {
-      fail(503, 'coverage-unavailable', 'Bundled coverage does not match witness');
-    }
-  }
-  return digest(bytes);
-})().catch(() => null);
-
-async function pointer(bucket: R2Bucket, model: ModelId, refresh = false): Promise<ModelPointer> {
-  let entries = pointerCache.get(bucket);
-  if (!entries) {
-    entries = new Map();
-    pointerCache.set(bucket, entries);
-  }
-  const cached = entries.get(model);
-  if (!refresh && cached && cached.until > Date.now()) return cached.pointer;
-  const object = await bucket.get(`catalog/${model}/latest.json`);
-  if (!object) fail(503, 'publication-unavailable', `No publication available for ${model}`);
-  let raw: unknown;
-  try {
-    raw = await object.json();
-  } catch {
-    return fail(503, 'publication-invalid', 'Invalid model pointer');
-  }
-  const result = modelPointerSchema.safeParse(raw);
-  if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
-  entries.set(model, { pointer: result.data, until: Date.now() + 15_000 });
-  return result.data;
-}
-
-async function admit(bucket: R2Bucket, model: ModelId, build: string) {
-  validateId(build);
-  let current = await pointer(bucket, model);
-  let entry = current.retained.find(item => item.buildId === build);
-  if (!entry) {
-    current = await pointer(bucket, model, true);
-    entry = current.retained.find(item => item.buildId === build);
-  }
-  if (!entry) return fail(404, 'not-retained', 'Build is expired or not retained');
-  ensureLive(entry.expiresAt);
-  if (entry.manifestKey !== `builds/${model}/${build}/manifest.json`) fail(503, 'publication-invalid', 'Invalid manifest key');
-  return entry;
-}
-
-async function manifest(
-  bucket: R2Bucket,
-  model: ModelId,
-  build: string,
-  entry: Awaited<ReturnType<typeof admit>>
-): Promise<Manifest> {
-  let entries = manifestCache.get(bucket);
-  if (!entries) {
-    entries = new Map();
-    manifestCache.set(bucket, entries);
-  }
-  const cacheKey = `${model}/${build}`;
-  let m = entries.get(cacheKey);
-  if (!m) {
-    const object = await bucket.get(entry.manifestKey);
-    if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
-    let raw: unknown;
-    try {
-      raw = await object.json();
-    } catch {
-      return fail(503, 'publication-invalid', 'Invalid manifest');
-    }
-    const parsed = manifestSchema.safeParse(raw);
-    if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
-    m = parsed.data;
-  }
-  if (m.model !== model || m.buildId !== build || m.expiresAt !== entry.expiresAt || m.cycle !== entry.cycle) {
-    entries.delete(cacheKey);
-    fail(503, 'publication-invalid', 'Manifest does not match retained entry');
-  }
-  ensureLive(m.expiresAt);
-  const product = getProduct(model);
-  if (
-    !product || product !== GFS_PRODUCT ||
-    m.coverage.id !== product.coverageId ||
-    m.coverage.hash !== (await witnessPromise) ||
-    m.coverage.maxZoom > mask.maxZoom ||
-    (Object.keys(product.grid) as (keyof typeof product.grid)[]).some(key => m.grid[key] !== product.grid[key])
-  ) {
-    entries.delete(cacheKey);
-    fail(503, 'coverage-unavailable', 'Coverage for this publication is unavailable');
-  }
-  sampleLayout ??= prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
-  if (!artifactIndexes.has(m)) {
-    try { validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
-    if (m.samples.storedCells !== sampleLayout.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
-    const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
-    const layers = new Map(m.layers.map((layer, i) => [layer, i]));
-    const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
-    for (const item of m.artifacts) {
-      index.set(`${item.layer}/${item.frame}`, { ...item, channel: frames.get(item.frame)! * m.layers.length + layers.get(item.layer)! });
-    }
-    artifactIndexes.set(m, index);
-  }
-  if (!entries.has(cacheKey)) {
-    if (entries.size >= MAX_CACHED_MANIFESTS) {
-      const oldest = entries.keys().next().value;
-      if (oldest !== undefined) entries.delete(oldest);
-    }
-    entries.set(cacheKey, m);
-  }
-  return m;
-}
-
-function provenanceReference(m: Manifest) {
-  try {
-    return getProvenanceReference(m);
-  } catch {
-    return fail(503, 'publication-invalid', 'Invalid provenance reference');
-  }
-}
-
-function servedSource(m: Manifest, origin: string, compact = true): Record<string, unknown> {
-  const reference = provenanceReference(m);
-  const source = compact ? compactSource(m.source) : m.source;
-  return reference || Array.isArray(m.source.frames)
-    ? { ...source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` }
-    : source;
-}
-
-function artifact(m: Manifest, layer: LayerId, frame: string) {
-  validateId(frame);
-  if (!m.layers.includes(layer) || !m.frames.some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
-  const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
-  if (!item) fail(503, 'publication-incomplete', 'Artifact missing from manifest');
-  const prefix = `builds/${m.model}/${m.buildId}`;
-  if (item.tilesKey !== `${prefix}/${layer}/${frame}.pmtiles`) {
-    fail(503, 'publication-invalid', 'Invalid artifact key');
-  }
-  return item;
-}
-
-function query(url: URL, allowed: string[]): void {
-  const seen = new Set<string>();
-  for (const key of url.searchParams.keys()) {
-    if (!allowed.includes(key) || seen.has(key)) fail(400, 'invalid-query', 'Unknown or duplicate query parameter');
-    seen.add(key);
-  }
-}
-
-function response(body: BodyInit | null, type: string, expiresAt?: string, etag?: string): Response {
-  if (expiresAt) ensureLive(expiresAt);
-  const headers = new Headers({
-    'content-type': type,
-    'cache-control': expiresAt ? `public, max-age=${ttl(expiresAt)}` : 'no-store'
-  });
-  if (etag) headers.set('etag', `"${etag}"`);
-  return new Response(body, { headers });
-}
-
-function json(value: unknown, expiresAt?: string, etag?: string): Response {
-  return response(JSON.stringify(value), 'application/json; charset=utf-8', expiresAt, etag);
-}
-
-function finish(request: Request, res: Response, expiresAt?: string): Response {
-  if (expiresAt) ensureLive(expiresAt);
-  const headers = new Headers(res.headers);
-  if (expiresAt) headers.set('cache-control', `public, max-age=${ttl(expiresAt)}`);
-  headers.set('access-control-allow-origin', '*');
-  headers.set('access-control-expose-headers', 'ETag, Cache-Control');
-  if (
-    res.status === 200 &&
-    headers.has('etag') &&
-    request.headers
-      .get('if-none-match')
-      ?.split(',')
-      .map(x => x.trim())
-      .includes(headers.get('etag')!)
-  ) {
-    return new Response(null, { status: 304, headers });
-  }
-  return new Response(request.method === 'HEAD' ? null : res.body, { status: res.status, headers });
-}
-
-async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>, representation?: string): Promise<Response> {
-  ensureLive(expiresAt);
-  const cache = typeof caches !== 'undefined' ? (caches as CacheStorage & { default?: Cache }).default : undefined;
-  const cacheUrl = new URL(request.url);
-  if (representation) cacheUrl.searchParams.set('__representation', representation);
-  const key = new Request(cacheUrl, { method: 'GET' });
-  const hit = await cache?.match(key);
-  if (hit) return finish(request, hit, expiresAt);
-  const result = await build();
-  ensureLive(expiresAt);
-  if (cache && result.status === 200 && ttl(expiresAt) > 0) ctx.waitUntil(cache.put(key, result.clone()));
-  return finish(request, result, expiresAt);
-}
-
-function view(m: Manifest, origin: string) {
+async function view(m: Manifest, origin: string, bucket: R2Bucket, ctx: WaitContext) {
+  const { mask } = await resolveCoverage(bucket, m, ctx);
   return {
     manifest: m,
-    templates: Object.fromEntries(
-      m.layers.map(layer => [layer, `${origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])
-    ),
-    bounds: [-180, -55, 180, 65],
-    maxNativeZoom: m.coverage.maxZoom,
-    palettes: m.palettes.filter(isPaletteId).map(id => id === 'lift' && m.tool.liftRenderStyle !== LIFT_RENDER_STYLE ? { ...PALETTES.lift, noLiftColor: LIFT_COLORS[0] } : PALETTES[id]),
+    templates: Object.fromEntries(m.layers.map(layer => [layer, `${origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
+    bounds: m.descriptors.bounds, maxNativeZoom: m.coverage.maxZoom, palettes: m.descriptors.palettes,
     coverage: { ...m.coverage, tileBits: Array.from(mask.tiles) }
   };
 }
 
-function validIp(ip: string): boolean {
-  const ipv4 = (value: string) => {
-    const parts = value.split('.');
-    return parts.length === 4 && parts.every(part => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
-  };
-  if (!ip.includes(':')) return ipv4(ip);
-  if (ip.length > 45 || !/^[0-9a-f:.]+$/i.test(ip)) return false;
-  if (ip.includes('.') && !ipv4(ip.slice(ip.lastIndexOf(':') + 1))) return false;
-  try {
-    new URL(`http://[${ip}]/`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+export function createApp({ products = Object.fromEntries(MODEL_IDS.map(id => [id, getProduct(id)!])) }: { products?: Record<string, ProductDefinition> } = {}) {
+const modelId = (value: string): ModelId => {
+  if (!Object.hasOwn(products, value)) fail(404, 'unknown-model', 'Unknown model');
+  return value;
+};
 const app = new OpenAPIHono<Env>({
   defaultHook: result => {
     if (!result.success) {
@@ -429,14 +154,15 @@ registerJsonRoute(
   z.object({ models: z.array(z.object({ model: z.string(), available: z.boolean() }).passthrough()) }),
   async c => {
     const models = await Promise.all(
-      MODEL_IDS.map(async model => {
+      Object.keys(products).map(async model => {
         try {
-          const ptr = await pointer(c.env.BUCKET, model);
-          const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId);
-          const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry);
+          const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
+          const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx);
+          const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
           const freshness = computeFreshness(m);
           return {
             model,
+            label: products[model].label,
             available: true,
             latest: `/v1/models/${model}/latest`,
             cycle: m.cycle,
@@ -446,7 +172,7 @@ registerJsonRoute(
             freshness
           };
         } catch (e) {
-          return { model, available: false, error: e instanceof Problem ? e.code : 'publication-unavailable' };
+          return { model, label: products[model].label, available: false, error: e instanceof Problem ? e.code : 'publication-unavailable' };
         }
       })
     );
@@ -465,13 +191,13 @@ registerJsonRoute(
       fail(400, 'invalid-query', 'Invalid expand');
     }
     const model = modelId(requiredParam(c, 'model'));
-    const ptr = await pointer(c.env.BUCKET, model);
-    const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId);
-    const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry);
-    const compactManifest = { ...m, source: servedSource(m, url.origin) };
+    const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
+    const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx);
+    const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
+    const servedManifest = { ...m, source: servedSource(m, url.origin) };
     return json({
       pointer: ptr,
-      ...(url.searchParams.has('expand') ? view(compactManifest, url.origin) : {}),
+      ...(url.searchParams.has('expand') ? await view(servedManifest, url.origin, c.env.BUCKET, c.executionCtx) : {}),
       freshness: computeFreshness(m)
     });
   }
@@ -485,7 +211,7 @@ registerJsonRoute(
   z.object({ model: z.string(), retained: modelPointerSchema.shape.retained }),
   async c => {
     const model = modelId(requiredParam(c, 'model'));
-    const ptr = await pointer(c.env.BUCKET, model);
+    const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
     return json({ model, retained: ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now()) });
   }
 );
@@ -499,9 +225,9 @@ registerJsonRoute(
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
-    const entry = await admit(c.env.BUCKET, model, buildId);
-    const m = await manifest(c.env.BUCKET, model, buildId, entry);
-    const served = { ...m, source: servedSource(m, url.origin, false) };
+    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
+    const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
+    const served = { ...m, source: servedSource(m, url.origin) };
     return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-v2`), 'source-v2');
   }
 );
@@ -515,33 +241,12 @@ registerJsonRoute(
   async c => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
-    const entry = await admit(c.env.BUCKET, model, buildId);
-    const m = await manifest(c.env.BUCKET, model, buildId, entry);
+    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
+    const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
     const reference = provenanceReference(m);
-    if (!reference && !Array.isArray(m.source.frames)) fail(404, 'unknown-resource', 'Provenance is unavailable for this build');
     return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
-      let bytes: ArrayBuffer;
-      if (reference) {
-        const object = await c.env.BUCKET.get(reference.key);
-        if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
-        bytes = await object.arrayBuffer();
-      } else {
-        bytes = new TextEncoder().encode(JSON.stringify({ ...m.source, version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle })).buffer as ArrayBuffer;
-      }
-      const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
-      if (reference && digest !== reference.sha256) fail(503, 'publication-invalid', 'Provenance hash mismatch');
-      let raw: unknown;
-      try {
-        raw = JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        return fail(503, 'publication-invalid', 'Invalid provenance JSON');
-      }
-      try {
-        parseProvenance(raw, m);
-      } catch {
-        return fail(503, 'publication-invalid', 'Provenance does not match manifest');
-      }
-      return response(bytes, 'application/json; charset=utf-8', m.expiresAt, digest);
+      const bytes = await readProvenance(c.env.BUCKET, m, reference, c.executionCtx);
+      return response(bytes.buffer as ArrayBuffer, 'application/json; charset=utf-8', m.expiresAt, reference.sha256);
     });
   }
 );
@@ -564,8 +269,8 @@ registerJsonRoute(
     const buildId = requiredParam(c, 'buildId');
     const layer = layerId(requiredParam(c, 'layer'));
     const frame = requiredParam(c, 'frame');
-    const entry = await admit(c.env.BUCKET, model, buildId);
-    const m = await manifest(c.env.BUCKET, model, buildId, entry);
+    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
+    const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
     artifact(m, layer, frame);
     return cached(c.req.raw, m.expiresAt, c.executionCtx, async () =>
       json(
@@ -575,7 +280,7 @@ registerJsonRoute(
           tiles: [`${url.origin}/tiles/${model}/${m.buildId}/${layer}/${frame}/{z}/{x}/{y}.webp`],
           minzoom: 0,
           maxzoom: m.coverage.maxZoom,
-          bounds: [-180, -55, 180, 65]
+          bounds: m.descriptors.bounds
         },
         m.expiresAt,
         `tilejson-${m.buildId}-${layer}-${frame}`
@@ -593,8 +298,8 @@ registerJsonRoute(
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
-    const entry = await admit(c.env.BUCKET, model, buildId);
-    const m = await manifest(c.env.BUCKET, model, buildId, entry);
+    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
+    const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
     return sample(c.req.raw, c.env.BUCKET, c.executionCtx, m, url);
   }
 );
@@ -663,8 +368,8 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
   const p = { ...c.req.param(), y: match[1] };
   if (!tileParamSchema.safeParse(p).success) fail(400, 'invalid-parameter', 'Invalid request parameters');
   const model = modelId(p.model);
-  const entry = await admit(c.env.BUCKET, model, p.buildId);
-  const m = await manifest(c.env.BUCKET, model, p.buildId, entry);
+  const entry = await admit(c.env.BUCKET, model, p.buildId, c.executionCtx);
+  const m = await manifest(c.env.BUCKET, model, p.buildId, entry, c.executionCtx, products[model]);
   const layer = layerId(p.layer);
   const a = artifact(m, layer, p.frame);
   if (![p.z, p.x, p.y].every(v => /^(0|[1-9][0-9]*)$/.test(v))) fail(400, 'invalid-tile', 'Invalid tile coordinates');
@@ -675,7 +380,8 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
     fail(400, 'invalid-tile', 'Tile address out of range');
   }
   return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
-    const data = isTileCovered(mask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y) : blank;
+    const { mask } = await resolveCoverage(c.env.BUCKET, m, c.executionCtx);
+    const data = isTileCovered(mask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx) : blank;
     return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
   });
 });
@@ -695,7 +401,7 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
   const requested = url.searchParams.get('frame');
   const frameIds = requested === 'all' ? m.frames.map(f => f.id) : requested === null ? [m.frames[0].id] : requested.split(',');
   const layers = url.searchParams.get('layers')?.split(',') ?? [...m.layers];
-  if (frameIds.length * layers.length > MAX_SAMPLE_VALUES) fail(429, 'sample-limit', `Select at most ${MAX_SAMPLE_VALUES} frame/layer values`);
+  if (frameIds.length * layers.length > m.descriptors.maxSampleValues) fail(429, 'sample-limit', `Select at most ${m.descriptors.maxSampleValues} frame/layer values`);
   if (!frameIds.length || !layers.length || new Set(frameIds).size !== frameIds.length || new Set(layers).size !== layers.length) {
     fail(400, 'invalid-query', 'Select distinct frames and layers');
   }
@@ -715,9 +421,10 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
   canonical.searchParams.set('layers', selectedLayers.join(','));
   const canonicalRequest = new Request(canonical, { headers: request.headers });
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
+    const { mask, layout: sampleLayout } = await resolveCoverage(bucket, m, ctx);
     const outside = !isCovered(mask, lat, lon);
     const plan = outside ? null : planSample(m.grid, lat, lon);
-    const packed = plan ? planPackedSample(sampleLayout!, plan, m.samples.channelCount, jobs.map(job => job.channel)) : null;
+    const packed = plan ? planPackedSample(sampleLayout, plan, m.samples.channelCount, jobs.map(job => job.channel)) : null;
     if (packed) {
       const { offset, length } = packed.byteRange;
       if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > m.samples.bytes) {
@@ -728,16 +435,19 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
     const source = servedSource(m, url.origin);
     let bytes: Uint8Array = new Uint8Array();
     if (packed) {
-      const object = await bucket.get(m.samples.key, { range: packed.byteRange });
-      if (!object || !('body' in object) || object.size !== m.samples.bytes) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
-      bytes = new Uint8Array(await object.arrayBuffer());
+      bytes = await binaryRead(bucket, `${m.samples.key}:${packed.byteRange.offset}:${packed.byteRange.length}`, async signal => {
+        countRead(ctx);
+        const object = await bucket.get(m.samples.key, { range: packed.byteRange });
+        if (!object || !('body' in object) || object.size !== m.samples.bytes) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
+        return readObjectBytes(object, packed.byteRange.length, true, ctx, signal);
+      }, ctx);
       ensureLive(m.expiresAt);
       if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
     }
     const values = new Map<string, Sample>();
     for (const job of jobs) {
       values.set(`${job.frame.id}/${job.layer}`, plan && packed
-        ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), job.layer)
+        ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), m.descriptors.layers[job.layer])
         : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false });
     }
     const result = {
@@ -767,32 +477,18 @@ async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: M
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });
 app.openAPIRegistry.registerPath({ method: 'get', path: '/docs', responses: { 200: { description: 'Interactive API documentation' } } });
-app.doc('/openapi.json', { openapi: '3.1.0', info: { title: 'Aviation Forecast Layers API', version: '1.0.0' } });
-app.get('/docs', c =>
-  c.html(
-    '<!doctype html><html><head><title>Aviation Forecast Layers API</title></head><body><h1>Aviation Forecast Layers API</h1><p><a href="/openapi.json">OpenAPI document</a></p><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><div id="swagger-ui"></div><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>'
+app.get('/openapi.json', () => json(app.getOpenAPIDocument({ openapi: '3.1.0', info: { title: 'Aviation Forecast Layers API', version: '1.0.0' } })));
+app.get('/docs', () =>
+  response(
+    '<!doctype html><html><head><title>Aviation Forecast Layers API</title></head><body><h1>Aviation Forecast Layers API</h1><p><a href="/openapi.json">OpenAPI document</a></p><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><div id="swagger-ui"></div><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>', 'text/html; charset=utf-8'
   )
 );
 app.notFound(() => {
   throw new Problem(404, 'not-found', 'Route not found');
 });
-app.onError((error, c) => {
-  if (!(error instanceof Problem)) {
-    console.error('Unhandled API error', {
-      method: c.req.method,
-      path: c.req.path,
-      params: c.req.param(),
-      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error)
-    });
-  }
-  const problem = error instanceof Problem ? error : new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
-  return new Response(
-    JSON.stringify({ type: `urn:windy-av:${problem.code}`, title: problem.code, status: problem.status, detail: problem.message }),
-    { status: problem.status, headers: { 'content-type': 'application/problem+json; charset=utf-8', 'cache-control': 'no-store' } }
-  );
-});
+app.onError(handleError);
 
-export default {
+return {
   async fetch(request: Request, env: Env['Bindings'], ctx: WaitContext): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
@@ -820,7 +516,7 @@ export default {
       );
     }
     const url = new URL(request.url);
-    if (url.pathname.includes('%')) {
+    if (request.url.length > 16 * 1024 || url.pathname.includes('%')) {
       return finish(
         request,
         new Response(
@@ -828,7 +524,7 @@ export default {
             type: 'urn:windy-av:invalid-parameter',
             title: 'invalid-parameter',
             status: 400,
-            detail: 'Encoded path segments are not canonical'
+            detail: 'Request URL exceeds its budget or uses noncanonical path encoding'
           }),
           { status: 400, headers: { 'content-type': 'application/problem+json', 'cache-control': 'no-store' } }
         )
@@ -844,6 +540,22 @@ export default {
       );
     }
     const req = request.method === 'HEAD' ? new Request(request, { method: 'GET' }) : request;
-    return finish(request, await app.fetch(req, env, ctx as Parameters<typeof app.fetch>[2]));
+    const start = performance.now();
+    const metrics: RequestMetrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
+    const observed = { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise), metrics, responseCacheEnabled: env.AV_RESPONSE_CACHE !== 'off' };
+    let result: Response;
+    try { result = boundResponse(finish(request, await app.fetch(req, env, observed as unknown as Parameters<typeof app.fetch>[2]))); }
+    catch (error) {
+      result = finish(request, new Response(JSON.stringify({ type: 'urn:windy-av:resource-limit', title: 'resource-limit', status: 503, detail: error instanceof Error ? error.message : 'Serving resource budget exceeded' }), { status: 503, headers: { 'content-type': 'application/problem+json', 'cache-control': 'no-store' } }));
+    }
+    const elapsed = performance.now() - start;
+    result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');
+    result.headers.set('server-timing', `worker;dur=${elapsed.toFixed(2)}`);
+    for (const [name, value] of Object.entries({ 'r2-reads': metrics.r2Reads, 'r2-bytes': metrics.r2Bytes, 'cache-hits': metrics.cacheHits, coalesced: metrics.coalesced })) result.headers.set(`x-av-${name}`, String(value));
+    if (env.AV_REQUEST_METRICS === 'true') console.log(JSON.stringify({ event: 'api-request', deploymentId: env.AV_DEPLOYMENT_ID, route: url.pathname.startsWith('/tiles/') ? 'tile' : url.pathname.endsWith('/sample') ? 'sample' : 'metadata', status: result.status, elapsedMs: Math.round(elapsed * 100) / 100, ...metrics }));
+    return result;
   }
 };
+
+}
+export default createApp();

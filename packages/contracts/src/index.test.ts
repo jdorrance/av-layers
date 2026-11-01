@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, compactSource, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
+import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, GFS_PRODUCT, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
     const bits = new Uint8Array(2); setBit(bits, 0); setBit(bits, 9);
     expect([...bits]).toEqual([1, 2]); expect(getBit(bits, 9)).toBe(true); setBit(bits, 9, false); expect(getBit(bits, 9)).toBe(false); expect(() => setBit(bits, 16)).toThrow();
-    const mask: CoverageMask = { grid: { width: 2, height: 2, lon0: -180, lat0: 0, dx: 180, dy: -1, wrapLongitude: true }, output: Uint8Array.of(1), halo: Uint8Array.of(2), tiles: Uint8Array.of(5), maxZoom: 1 };
+    const mask: CoverageMask = { grid: { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: -180, lat0: 0, dx: 180, dy: -1, wrapLongitude: true }, output: Uint8Array.of(1), halo: Uint8Array.of(2), tiles: Uint8Array.of(5), maxZoom: 1 };
     expect(isCovered(mask, 0, 180)).toBe(true); expect(isCovered(mask, 0, 0)).toBe(false); expect(isCovered(mask, 66, -180)).toBe(false);
     expect(isCovered(mask, 0, -90)).toBe(true); expect(isCovered(mask, -0.5, -180)).toBe(true);
     const haloLeft: CoverageMask = { ...mask, output: Uint8Array.of(2), halo: Uint8Array.of(1) };
     expect(isCovered(haloLeft, 0, -90)).toBe(false);
     expect(isTileCovered(mask, 0, 0, 0)).toBe(true); expect(isTileCovered(mask, 1, 1, 0)).toBe(true); expect(expectedTiles(mask, 1)).toEqual([{ z: 1, x: 1, y: 0 }]);
-    const unionMask: CoverageMask = { grid: { width: 33, height: 2, lat0: 1, lon0: 0, dx: 1, dy: -1, wrapLongitude: false }, output: new Uint8Array(9), halo: new Uint8Array(9), tiles: new Uint8Array(1), maxZoom: 0 };
+    const unionMask: CoverageMask = { grid: { kind: 'regular-latlon', earthRadiusM: 6371229, width: 33, height: 2, lat0: 1, lon0: 0, dx: 1, dy: -1, wrapLongitude: false }, output: new Uint8Array(9), halo: new Uint8Array(9), tiles: new Uint8Array(1), maxZoom: 0 };
     for (const index of [0, 31, 32, 65]) setBit(unionMask.output, index);
     for (const index of [1, 31, 64, 71]) setBit(unionMask.halo, index);
     const indices = coverageIndices(unionMask);
@@ -57,8 +57,7 @@ describe('contracts', () => {
     expect(normalizeLon(180)).toBe(180);
     expect(normalizeLon(0)).toBe(0);
   });
-  it('compacts inline frame receipts and separates forecast horizon freshness from retention expiry', () => {
-    expect(compactSource({ provider: 'NOAA', frames: [{ hour: 3 }, { hour: 6 }] })).toEqual({ provider: 'NOAA', frameCount: 2 });
+  it('separates forecast horizon freshness from retention expiry', () => {
     const freshness = computeFreshness(
       {
         createdAt: '2026-10-30T06:00:00.000Z',
@@ -79,6 +78,8 @@ describe('contracts', () => {
     const hash = 'a'.repeat(64);
     const twoFrameManifest = {
       model: 'gfs',
+      descriptors: createProductDescriptors({ ...GFS_PRODUCT, layers: ['precip-rate'] }),
+      recipe: createRecipeIdentity(GFS_PRODUCT, hash),
       buildId: 'b1',
       frames: [
         { id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z' },

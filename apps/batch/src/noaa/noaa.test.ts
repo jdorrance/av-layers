@@ -41,22 +41,22 @@ describe('GFS interval reset and companion differencing', () => {
 
   it('recovers 3-6 h mean 200 from 0-3 = 100 and 0-6 = 150', () => {
     const result = recoverTrailingWindow({
-      currentValues: [150],
-      companionValues: [100],
+      currentValues: Float64Array.of(150), currentMissing: Uint8Array.of(0),
+      companionValues: Float64Array.of(100), companionMissing: Uint8Array.of(0),
       currentHours: 6,
       previousHours: 3,
       statistic: 'mean',
       packingErrorCurrent: 0,
       packingErrorPrevious: 0,
     });
-    expect(result.values).toEqual([200]);
+    expect(result.values).toEqual(Float32Array.of(200));
     expect(result.derivedHours).toBe(3);
   });
 
   it('retains a physically negative cooling flux', () => {
     const result = recoverTrailingWindow({
-      currentValues: [-80],
-      companionValues: [-20],
+      currentValues: Float64Array.of(-80), currentMissing: Uint8Array.of(0),
+      companionValues: Float64Array.of(-20), companionMissing: Uint8Array.of(0),
       currentHours: 6,
       previousHours: 3,
       statistic: 'mean',
@@ -68,34 +68,34 @@ describe('GFS interval reset and companion differencing', () => {
 
   it('clamps only tiny negative accumulation quantization noise', () => {
     const tiny = recoverTrailingWindow({
-      currentValues: [5e-11],
-      companionValues: [8e-11],
+      currentValues: Float64Array.of(5e-11), currentMissing: Uint8Array.of(0),
+      companionValues: Float64Array.of(8e-11), companionMissing: Uint8Array.of(0),
       currentHours: 6,
       previousHours: 3,
       statistic: 'accumulation',
       packingErrorCurrent: 1e-10,
       packingErrorPrevious: 1e-10,
     });
-    expect(tiny.values).toEqual([0]);
+    expect(tiny.values).toEqual(Float32Array.of(0));
     const large = recoverTrailingWindow({
-      currentValues: [0.000001],
-      companionValues: [0.000002],
+      currentValues: Float64Array.of(0.000001), currentMissing: Uint8Array.of(0),
+      companionValues: Float64Array.of(0.000002), companionMissing: Uint8Array.of(0),
       currentHours: 6,
       previousHours: 3,
       statistic: 'accumulation',
       packingErrorCurrent: 1e-10,
       packingErrorPrevious: 1e-10,
     });
-    expect(large.values).toEqual([null]);
+    expect(large.values).toEqual(Float32Array.of(NaN));
   });
 
   it('preserves missing cells independently while differencing', () => {
     const result = recoverTrailingWindow({
-      currentValues: [10, null, 8], companionValues: [4, 2, null],
+      currentValues: Float64Array.of(10, NaN, 8), currentMissing: Uint8Array.of(0,1,0), companionValues: Float64Array.of(4, 2, NaN), companionMissing: Uint8Array.of(0,0,1),
       currentHours: 6, previousHours: 3, statistic: 'accumulation',
       packingErrorCurrent: 0, packingErrorPrevious: 0,
     });
-    expect(result.values).toEqual([2, null, null]);
+    expect(result.values).toEqual(Float32Array.of(2, NaN, NaN));
   });
 
   it('keeps float64 precision and treats the mask as authoritative before differencing', () => {
@@ -180,7 +180,7 @@ describe('GFS interval reset and companion differencing', () => {
     expect(rain.values[2]).toBeCloseTo(5 / 3);
   });
 
-  it('marks Float32 overflow missing without changing finite boundaries or legacy numbers', () => {
+  it('marks Float32 overflow missing without changing finite boundaries', () => {
     const maxFloat32 = (2 - 2 ** -23) * 2 ** 127;
     const values = [1e39, -1e39, maxFloat32, -maxFloat32, 7, -0, 0];
     const base = { companionValues: null, currentHours: 3, previousHours: 0, statistic: 'mean' as const, packingErrorCurrent: 0, packingErrorPrevious: 0 };
@@ -195,9 +195,6 @@ describe('GFS interval reset and companion differencing', () => {
     expect(compact.values[3]).toBe(-maxFloat32);
     expect(Object.is(compact.values[5], -0)).toBe(true);
     expect(compact.values[6]).toBe(0);
-    const legacy = recoverTrailingWindow({ ...base, currentValues: values });
-    expect(legacy.values[0]).toBe(1e39);
-    expect(legacy.values[1]).toBe(-1e39);
     const rain = recoverTrailingWindow({
       ...base, statistic: 'accumulation', currentValues: Float64Array.of(3e39), currentMissing: Uint8Array.of(0), companionMissing: null,
     });
@@ -286,7 +283,7 @@ describe('diagnostic proof and transport accounting', () => {
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'current')).toBe(true);
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'companion')).toBe(true);
     for (const mode of ['conflict-3', 'conflict-6'] as const) {
-      await expect(discoverGfsRun({ ...options, fetchImpl: inventoryFetch(mode) })).rejects.toMatchObject({ code: 'run-unavailable' });
+      await expect(discoverGfsRun({ ...options, fetchImpl: inventoryFetch(mode) })).rejects.toMatchObject({ code: 'record-ambiguous' });
     }
   });
 

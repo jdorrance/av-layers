@@ -1,6 +1,6 @@
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { paletteBinLabel, type LayerId, type ModelId } from '@av/contracts';
+import { type LayerId, type ModelId } from '@av/contracts';
 import {
   ApiClient,
   DEFAULT_OPACITY,
@@ -13,12 +13,11 @@ import {
   coverageSummaryText,
   formatDuration,
   forecastHorizonNotice,
-  formatSampleStatus,
   formatSeriesSummary,
-  formatSupportFlags,
-  noLiftLabel,
   normalizePoint,
-  paletteNoteText,
+  paletteLegend,
+  seriesTable,
+  sampleRequestText,
   populateModelOptions,
   previewRasterLayer,
   previewRasterSource,
@@ -53,16 +52,25 @@ const seriesButton = element<HTMLButtonElement>('series-button');
 const seriesStatus = element<HTMLParagraphElement>('series-status');
 const seriesPanel = element<HTMLDivElement>('series');
 
+const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
+const initialModel = import.meta.env.VITE_MODEL ?? 'gfs';
+if (offlineFixture) {
+  const warning = document.createElement('p');
+  warning.className = 'notice';
+  warning.textContent = 'SYNTHETIC FIXTURE — development data, not a forecast';
+  document.getElementById('panel')?.prepend(warning);
+}
 const api = new ApiClient({ baseUrl: import.meta.env.VITE_API_BASE ?? 'http://localhost:8787' });
 
-populateModelOptions(modelSelect);
+if (offlineFixture) modelSelect.add(new Option('Synthetic fixture', initialModel));
+else populateModelOptions(modelSelect);
 opacityInput.value = String(DEFAULT_OPACITY);
 
 const map = new maplibregl.Map({
   container: 'map',
   center: [-30, 25],
   zoom: 2,
-  style: {
+  style: offlineFixture ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#17242c' } }] } : {
     version: 8,
     sources: {
       basemap: {
@@ -161,7 +169,7 @@ function renderMeta(buildValue: PinnedBuild): void {
 
 function renderLegend(palettes: readonly PaletteSummary[], activeLayer: string | null): void {
   legend.replaceChildren();
-  const visible = activePalettes(palettes, activeLayer);
+  const visible = activePalettes(palettes, activeLayer, build!.manifest.descriptors.layers);
   if (visible.length === 0) {
     const note = document.createElement('p');
     note.className = 'muted';
@@ -172,31 +180,21 @@ function renderLegend(palettes: readonly PaletteSummary[], activeLayer: string |
   for (const palette of visible) {
     const section = document.createElement('section');
     const title = document.createElement('h2');
-    title.textContent = `${palette.id} · ${palette.units}`;
+    const model = paletteLegend(palette);
+    title.textContent = model.title;
     section.append(title);
-    palette.colors.forEach((color, index) => {
+    model.rows.forEach(({ color, label: text }) => {
       const row = document.createElement('div');
       row.className = 'legend-row';
       const swatch = document.createElement('span');
       swatch.className = 'swatch';
       swatch.style.background = color;
       const label = document.createElement('span');
-      label.textContent = paletteBinLabel(palette.edges, palette.colors.length, index);
+      label.textContent = text;
       row.append(swatch, label);
       section.append(row);
     });
-    if (palette.noLiftColor) {
-      const row = document.createElement('div');
-      row.className = 'legend-row';
-      const swatch = document.createElement('span');
-      swatch.className = 'swatch';
-      swatch.style.background = palette.noLiftColor;
-      const label = document.createElement('span');
-      label.textContent = noLiftLabel(palette.noLiftColor);
-      row.append(swatch, label);
-      section.append(row);
-    }
-    const noteText = paletteNoteText(palette);
+    const noteText = model.note;
     if (noteText) {
       const note = document.createElement('p');
       note.className = 'muted';
@@ -280,7 +278,7 @@ function updateOverlay(): void {
   resetTileErrors();
   // Give late events from an earlier frame a distinct source identity.
   overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
-  map.addSource(overlaySourceId, previewRasterSource(template, selectedFrame, build.maxNativeZoom));
+  map.addSource(overlaySourceId, previewRasterSource(template, selectedFrame, build.maxNativeZoom, build.manifest.descriptors.attribution));
   map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
   const frame = build.manifest.frames.find(item => item.id === selectedFrame);
   timestampBadge.textContent = frame
@@ -296,7 +294,7 @@ function populateFrames(buildValue: PinnedBuild): void {
 }
 
 function populateLayers(buildValue: PinnedBuild): void {
-  layerSelect.replaceChildren(...buildValue.manifest.layers.map(layer => new Option(layer, layer)));
+  layerSelect.replaceChildren(...buildValue.manifest.layers.map(layer => new Option(buildValue.manifest.descriptors.layers[layer].label, layer)));
   layerSelect.value = buildValue.manifest.layers[0] ?? '';
   layerSelect.disabled = false;
 }
@@ -368,20 +366,15 @@ function renderSeries(
 ): void {
   const table = document.createElement('table');
   const head = document.createElement('tr');
-  for (const text of ['Frame', 'Valid', ...layers.map(layer => `${layer} value`), ...layers.map(layer => `${layer} status/support`)]) {
+  const model = seriesTable(payload, layers, build?.manifest.descriptors.layers);
+  for (const text of model.headings) {
     const th = document.createElement('th');
     th.textContent = text;
     head.append(th);
   }
   table.append(head);
-  for (const frame of payload.frames) {
+  for (const cells of model.rows) {
     const row = document.createElement('tr');
-    const cells = [frame.id, frame.validTime];
-    for (const layer of layers) cells.push(formatSampleStatus(frame.layers[layer]));
-    for (const layer of layers) {
-      const sample = frame.layers[layer];
-      cells.push(`${sample.status} / ${formatSupportFlags(sample.support)}${sample.interpolated ? ' / interpolated' : ''}`);
-    }
     for (const text of cells) {
       const td = document.createElement('td');
       td.textContent = text;
@@ -414,7 +407,7 @@ seriesButton.addEventListener('click', async () => {
   const requestedBuild = build;
   const requestedPoint = { ...clicked };
   seriesButton.disabled = true;
-  seriesStatus.textContent = `Requesting all 8 frames × 3 layers at ${requestedPoint.lat.toFixed(4)}, ${requestedPoint.lon.toFixed(4)}…`;
+  seriesStatus.textContent = sampleRequestText(requestedBuild, requestedPoint);
   try {
     const layers = [...requestedBuild.manifest.layers];
     const payload = await api.sample(requestedBuild, {
@@ -440,7 +433,7 @@ seriesButton.addEventListener('click', async () => {
 });
 
 map.on('load', () => {
-  void loadModel('gfs');
+  void loadModel(initialModel);
 });
 
 window.addEventListener('pagehide', (event: PageTransitionEvent) => {

@@ -62,10 +62,10 @@ it.each([
   const expiresAtMs = now + 60_000;
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
-  const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: '2026-10-30T09:00:00.000Z' }));
+  const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: `2026-10-30T${hour}:00:00.000Z` }));
   const fixture = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
   const manifest = manifestSchema.parse({
-    ...fixture, buildId: 'b1', expiresAt, frames, layers: ['precip-rate'],
+    ...fixture, buildId: 'b1', source: { ...fixture.source, provenanceKey: 'builds/gfs/b1/provenance.json' }, expiresAt, frames, layers: ['precip-rate'],
     samples: { ...fixture.samples, key: 'builds/gfs/b1/samples.bin', channelCount: frames.length, bytes: fixture.samples.storedCells * frames.length * 5 },
     artifacts: frames.map(frame => ({
       layer: 'precip-rate', frame: frame.id,
@@ -79,7 +79,7 @@ it.each([
       buildId: 'b1', manifestKey: 'builds/gfs/b1/manifest.json', cycle: manifest.cycle, expiresAt
     }] },
     manifest, templates: { 'precip-rate': `${base}/f/{frame}/{z}/{x}/{y}.webp` },
-    bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [], coverage: manifest.coverage,
+    bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
     freshness: computeFreshness(manifest, now)
   });
   let resolveSample!: (response: Response) => void;
@@ -133,22 +133,18 @@ it.each([
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
-  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([
-    ['gfs', false, 'gfs'],
-    ['hrrr', true, 'hrrr (unavailable: regional coverage not implemented)'],
-    ['icon-armenia', true, 'icon-armenia (unavailable: regional coverage not implemented)']
-  ]);
+  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([['gfs', false, 'GFS']]);
   expect(selects[2].value).toBe('f006');
   selects[2].value = 'f003';
   selects[2].dispatch('change');
   expect(store.set).toHaveBeenCalledWith('timestamp', Date.parse('2026-10-30T03:00:00.000Z'));
 
   click?.({ latlng: { lat: 1, lng: 190 } });
-  const button = elements.find(element => element.textContent === 'Sample clicked point (8 × 3)')!;
+  const button = elements.find(element => element.textContent === 'Sample clicked point')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
   expect(fetchImpl.mock.calls[1][0]).toContain('lon=-170');
-  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
+  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
   const series = elements.find(element => element.className === 'av-series')!;
   await vi.waitFor(() => expect(series.children).toHaveLength(1));
 

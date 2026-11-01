@@ -30,6 +30,10 @@ export class NoaaFieldSampler {
   private closing?: Promise<void>;
   readonly stats: Record<string, FieldSamplingStats> = {};
 
+  constructor(private readonly workerCount = 1) {
+    if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 4) throw new RangeError('Invalid decode worker count');
+  }
+
   async sample<T extends Float32Array | Float64Array = Float64Array>(inspected: InspectedGfsField, indices: Uint32Array, destination?: T) {
     if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
     const stats = this.stats[String(inspected.packing)] ??= { records: 0, failures: 0, decodeMs: 0, compactMs: 0, sampledValues: 0 };
@@ -37,7 +41,7 @@ export class NoaaFieldSampler {
     let decodedAt = started;
     try {
       // Store the promise before awaiting: concurrent first-use shares one pool.
-      const pool = inspected.packing === 40 ? await (this.pool ??= createNodeJ2kDecoderPool({ size: 2 })) : undefined;
+      const pool = inspected.packing === 40 ? await (this.pool ??= createNodeJ2kDecoderPool({ size: this.workerCount })) : undefined;
       if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
       const sampled = await sampleFieldValuesAsync(inspected.field, indices, {
         missingValue: Number.NaN,

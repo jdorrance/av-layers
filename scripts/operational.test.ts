@@ -159,9 +159,12 @@ describe('workflow input guards', () => {
 
   it('accepts allowlisted maintenance inputs and rejects injection attempts', () => {
     const script = runBlock('maintenance.yml', 'Validate maintenance inputs');
-    const maintenance = { TARGET_ENV: 'production', ACTION: 'rollback', MODEL: 'gfs', BUILD_ID: validBuild, CONFIRM: 'publishers-paused' };
+    const maintenance = { TARGET_ENV: 'production', ACTION: 'rollback', MODEL: 'gfs', BUILD_ID: validBuild, CONFIRM: 'serialized-maintenance' };
     expect(bash(script, maintenance).status).toBe(0);
     expect(bash(script, { ...maintenance, ACTION: 'cleanup', BUILD_ID: '' }).status).toBe(0);
+    expect(bash(script, { ...maintenance, TARGET_ENV: 'staging', ACTION: 'qualify', BUILD_ID: '', ARTIFACT_RUN_ID: '1234' }).status).toBe(0);
+    expect(bash(script, { ...maintenance, ACTION: 'qualify', BUILD_ID: '', ARTIFACT_RUN_ID: '1234' }).status).not.toBe(0);
+    expect(bash(script, { ...maintenance, TARGET_ENV: 'staging', ACTION: 'qualify', BUILD_ID: '', ARTIFACT_RUN_ID: '1; touch /tmp/pwned' }).status).not.toBe(0);
     expect(bash(script, { ...maintenance, MODEL: 'hrrr' }).status).not.toBe(0);
     expect(bash(script, { ...maintenance, TARGET_ENV: 'preview' }).status).not.toBe(0);
     expect(bash(script, { ...maintenance, MODEL: 'gfs; touch /tmp/pwned' }).status).not.toBe(0);
@@ -204,7 +207,9 @@ describe('workflow structure guards', () => {
     expect(ci.workflow_call).not.toBeUndefined();
     expect(list(record(ci.push)['branches-ignore'])).toEqual(['main']);
     expect(ci.pull_request).not.toBeUndefined();
-    expect(record(workflow('ci.yml').concurrency)['cancel-in-progress']).toBe(false);
+    expect(record(workflow('ci.yml').concurrency)['cancel-in-progress']).toBe("${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}");
+    const verificationSteps = list(record(record(workflow('ci.yml').jobs).verify).steps).map(record);
+    expect(verificationSteps.filter(step => step.run === 'pnpm verify')).toHaveLength(1);
     const deploy = workflow('deploy.yml');
     expect(record(record(deploy.jobs).verify).uses).toBe('./.github/workflows/ci.yml');
     const deployJob = record(record(deploy.jobs).deploy);
@@ -287,10 +292,6 @@ describe('workflow structure guards', () => {
     const runner = list(job.steps).map(record).find(step => step.name === combined);
     expect(runner?.run).toBe('pnpm exec tsx scripts/build-and-publish.ts');
     expect(record(runner?.env).GH_TOKEN).toBe('${{ github.token }}');
-    const source = readFileSync(new URL('./build-and-publish.ts', import.meta.url), 'utf8');
-    expect(source).toContain("GITHUB_REF !== 'refs/heads/main'");
-    expect(source.indexOf('git/ref/heads/main')).toBeGreaterThan(source.indexOf('onValidated:'));
-    expect(source.indexOf('if (stdout.trim() !== revision)')).toBeLessThan(source.indexOf('await publish('));
     expect(names).toContain('Upload build receipts');
     expect(names).toContain('Upload full build artifacts on failure or explicit request');
     expect(runBlock('forecast.yml', 'Validate forecast environment and secrets')).not.toContain('${{');

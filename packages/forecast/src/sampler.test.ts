@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type Grid } from '@av/contracts';
-import { cellsFromRange, packCells, planSample, sampleCells, sampleGrid, unpackCells } from './sampler.js';
-const grid: Grid = { width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+import { GFS_GRID, LAYERS, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type Grid } from '@av/contracts';
+import { cellsFromRange, packCells, planSample, prepareGridSampling, sampleCells, sampleGrid, unpackCells } from './sampler.js';
+const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
 describe('scalar sampling', () => {
   it('interpolates physical no-lift with terrain as MSL reference', () => {
     const flags = Uint8Array.of(SUPPORT_PARCEL_CROSSING, STATUS_NO_LIFT | SUPPORT_PROFILE_TOP, STATUS_NO_LIFT, STATUS_NO_LIFT);
@@ -14,6 +14,18 @@ describe('scalar sampling', () => {
   it('ignores zero-weight neighbors and snaps close to nodes', () => {
     const field = { values: Float32Array.of(4, NaN, NaN, NaN), flags: Uint8Array.of(0, 2, 2, 2) };
     expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'precip-rate')).toMatchObject({ value: 4, interpolated: false });
+  });
+  it('uses immutable supplied layer semantics instead of the current global registry', () => {
+    const field = { values: Float32Array.of(100, 300, 100, 300), flags: Uint8Array.of(STATUS_NO_LIFT, 0, STATUS_NO_LIFT, 0) };
+    const spec = { ...LAYERS['usable-lift-msl'], noLiftSampleValue: 17, zeroOnNoLiftInterpolation: true };
+    expect(sampleGrid(grid, field, 1, 0, spec).value).toBe(17);
+    expect(sampleGrid(grid, field, 1, 0.5, spec).value).toBe(150);
+    expect(sampleGrid(grid, field, 1, 0.5, 'usable-lift-msl').value).toBe(200);
+    const mask = { grid, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
+    const prepared = prepareGridSampling(mask, Float64Array.of(1), Float64Array.of(0.5));
+    const result = { value: null as number | null, status: 3, support: 0, interpolated: false };
+    prepared.bind(field, spec)(0, 0, result);
+    expect(result).toEqual(sampleGrid(grid, field, 1, 0.5, spec));
   });
   it('falls back to nearest contributor without renormalizing, row then column on ties', () => {
     const field = { values: Float32Array.of(10, 20, 30, 40), flags: Uint8Array.of(0, STATUS_UNAVAILABLE, 0, 0) };

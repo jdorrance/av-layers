@@ -1,0 +1,3914 @@
+{
+  "components": {
+    "parameters": {},
+    "schemas": {}
+  },
+  "info": {
+    "title": "Aviation Forecast Layers API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/docs": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Interactive API documentation"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "deploymentId": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document"
+          }
+        }
+      }
+    },
+    "/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "layer",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "frame",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Rendered lossless WebP tile"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/catalog": {
+      "get": {
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "models": {
+                      "items": {
+                        "additionalProperties": {
+                          "nullable": true
+                        },
+                        "properties": {
+                          "available": {
+                            "type": "boolean"
+                          },
+                          "model": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "model",
+                          "available"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "models"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/latest": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expand",
+            "required": false,
+            "schema": {
+              "enum": [
+                "manifest"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "bounds": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "coverage": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maskKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxZoom": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "tileBits": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "maskKey",
+                        "maxZoom"
+                      ],
+                      "type": "object"
+                    },
+                    "freshness": {
+                      "properties": {
+                        "ageSeconds": {
+                          "type": "number"
+                        },
+                        "cycle": {
+                          "type": "string"
+                        },
+                        "cycleAgeSeconds": {
+                          "type": "number"
+                        },
+                        "earliestValidTime": {
+                          "type": "string"
+                        },
+                        "expiresAt": {
+                          "type": "string"
+                        },
+                        "horizonExhausted": {
+                          "type": "boolean"
+                        },
+                        "horizonRemainingSeconds": {
+                          "type": "number"
+                        },
+                        "latestValidTime": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ageSeconds",
+                        "expiresAt"
+                      ],
+                      "type": "object"
+                    },
+                    "manifest": {
+                      "properties": {
+                        "artifacts": {
+                          "items": {
+                            "properties": {
+                              "frame": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "layer": {
+                                "enum": [
+                                  "usable-lift-msl",
+                                  "usable-lift-agl",
+                                  "precip-rate"
+                                ],
+                                "type": "string"
+                              },
+                              "tilesKey": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "tilesSha256": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "layer",
+                              "frame",
+                              "tilesKey",
+                              "tilesSha256"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "buildId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "coverage": {
+                          "properties": {
+                            "hash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maskKey": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxZoom": {
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "hash",
+                            "maskKey",
+                            "maxZoom"
+                          ],
+                          "type": "object"
+                        },
+                        "createdAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "cycle": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "descriptors": {
+                          "properties": {
+                            "attribution": {
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "bounds": {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "maximum": 90,
+                                    "minimum": -90,
+                                    "type": "number"
+                                  }
+                                ]
+                              },
+                              "maxItems": 4,
+                              "minItems": 4,
+                              "type": "array"
+                            },
+                            "coverageDescription": {
+                              "maxLength": 2048,
+                              "type": "string"
+                            },
+                            "layers": {
+                              "additionalProperties": {
+                                "properties": {
+                                  "hideNonPositiveValues": {
+                                    "type": "boolean"
+                                  },
+                                  "id": {
+                                    "enum": [
+                                      "usable-lift-msl",
+                                      "usable-lift-agl",
+                                      "precip-rate"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "enum": [
+                                      "scalar"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "label": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "methodId": {
+                                    "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "noLiftSampleValue": {
+                                    "nullable": true,
+                                    "type": "number"
+                                  },
+                                  "palette": {
+                                    "enum": [
+                                      "lift",
+                                      "rain"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "quantity": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "supportsLiftFlags": {
+                                    "type": "boolean"
+                                  },
+                                  "supportsNoLift": {
+                                    "type": "boolean"
+                                  },
+                                  "timeSupport": {
+                                    "enum": [
+                                      "interval-mean",
+                                      "interval-flux-endpoint-profile"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "units": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "verticalReference": {
+                                    "enum": [
+                                      "MSL",
+                                      "model-AGL",
+                                      "surface"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "zeroOnNoLiftInterpolation": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "kind",
+                                  "label",
+                                  "quantity",
+                                  "units",
+                                  "verticalReference",
+                                  "timeSupport",
+                                  "methodId",
+                                  "palette",
+                                  "supportsNoLift",
+                                  "supportsLiftFlags",
+                                  "noLiftSampleValue",
+                                  "zeroOnNoLiftInterpolation",
+                                  "hideNonPositiveValues"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "object"
+                            },
+                            "maxSampleValues": {
+                              "exclusiveMinimum": true,
+                              "maximum": 256,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "methods": {
+                              "additionalProperties": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "caveats": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 8,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "id": {
+                                    "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                                    "type": "string"
+                                  },
+                                  "inputs": {
+                                    "additionalProperties": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "dimensions": {
+                                          "enum": [
+                                            "cell",
+                                            "level",
+                                            "level-cell"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "id": {
+                                          "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                                          "type": "string"
+                                        },
+                                        "missingness": {
+                                          "enum": [
+                                            "explicit-cell-mask",
+                                            "all-levels-required"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "quantity": {
+                                          "maxLength": 80,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "timeSupport": {
+                                          "enum": [
+                                            "static",
+                                            "valid-time",
+                                            "interval-mean"
+                                          ],
+                                          "type": "string"
+                                        },
+                                        "units": {
+                                          "maxLength": 24,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "verticalReference": {
+                                          "maxLength": 80,
+                                          "minLength": 1,
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "quantity",
+                                        "units",
+                                        "dimensions",
+                                        "verticalReference",
+                                        "timeSupport",
+                                        "missingness"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "outputs": {
+                                    "items": {
+                                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 16,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "parameters": {
+                                    "additionalProperties": {
+                                      "type": "number"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "requiredInputs": {
+                                    "items": {
+                                      "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 16,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "spatialSupport": {
+                                    "enum": [
+                                      "column"
+                                    ],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "requiredInputs",
+                                  "inputs",
+                                  "outputs",
+                                  "spatialSupport",
+                                  "parameters",
+                                  "caveats"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "object"
+                            },
+                            "palettes": {
+                              "items": {
+                                "properties": {
+                                  "colors": {
+                                    "items": {
+                                      "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
+                                      "type": "string"
+                                    },
+                                    "maxItems": 256,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "edges": {
+                                    "items": {
+                                      "type": "number"
+                                    },
+                                    "maxItems": 256,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "id": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "noLiftColor": {
+                                    "type": "string"
+                                  },
+                                  "provisional": {
+                                    "type": "boolean"
+                                  },
+                                  "transparentBelow": {
+                                    "type": "number"
+                                  },
+                                  "units": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "edges",
+                                  "colors",
+                                  "units"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 16,
+                              "minItems": 1,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "layers",
+                            "palettes",
+                            "methods",
+                            "attribution",
+                            "coverageDescription",
+                            "bounds",
+                            "maxSampleValues"
+                          ],
+                          "type": "object"
+                        },
+                        "expiresAt": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "frames": {
+                          "items": {
+                            "properties": {
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "intervalEnd": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "intervalStart": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "validTime": {
+                                "format": "date-time",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "validTime",
+                              "intervalStart",
+                              "intervalEnd"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "grid": {
+                          "oneOf": [
+                            {
+                              "properties": {
+                                "dx": {
+                                  "type": "number"
+                                },
+                                "dy": {
+                                  "type": "number"
+                                },
+                                "earthRadiusM": {
+                                  "exclusiveMinimum": true,
+                                  "minimum": 0,
+                                  "type": "number"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 2147483647,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "regular-latlon"
+                                  ],
+                                  "type": "string"
+                                },
+                                "lat0": {
+                                  "maximum": 90,
+                                  "minimum": -90,
+                                  "type": "number"
+                                },
+                                "lon0": {
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 2147483647,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "wrapLongitude": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "width",
+                                "height",
+                                "earthRadiusM",
+                                "lon0",
+                                "lat0",
+                                "dx",
+                                "dy",
+                                "wrapLongitude"
+                              ],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "centralMeridianDeg": {
+                                  "maximum": 180,
+                                  "minimum": -180,
+                                  "type": "number"
+                                },
+                                "dxM": {
+                                  "type": "number"
+                                },
+                                "dyM": {
+                                  "type": "number"
+                                },
+                                "earthRadiusM": {
+                                  "exclusiveMinimum": true,
+                                  "minimum": 0,
+                                  "type": "number"
+                                },
+                                "height": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 2147483647,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "lambert-conformal"
+                                  ],
+                                  "type": "string"
+                                },
+                                "latitudeOfOriginDeg": {
+                                  "exclusiveMaximum": true,
+                                  "exclusiveMinimum": true,
+                                  "maximum": 90,
+                                  "minimum": -90,
+                                  "type": "number"
+                                },
+                                "standardParallel1Deg": {
+                                  "exclusiveMaximum": true,
+                                  "exclusiveMinimum": true,
+                                  "maximum": 90,
+                                  "minimum": -90,
+                                  "type": "number"
+                                },
+                                "standardParallel2Deg": {
+                                  "exclusiveMaximum": true,
+                                  "exclusiveMinimum": true,
+                                  "maximum": 90,
+                                  "minimum": -90,
+                                  "type": "number"
+                                },
+                                "width": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 2147483647,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "wrapLongitude": {
+                                  "enum": [
+                                    false
+                                  ],
+                                  "type": "boolean"
+                                },
+                                "x0M": {
+                                  "type": "number"
+                                },
+                                "y0M": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "width",
+                                "height",
+                                "earthRadiusM",
+                                "centralMeridianDeg",
+                                "latitudeOfOriginDeg",
+                                "standardParallel1Deg",
+                                "standardParallel2Deg",
+                                "x0M",
+                                "y0M",
+                                "dxM",
+                                "dyM",
+                                "wrapLongitude"
+                              ],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "layers": {
+                          "items": {
+                            "enum": [
+                              "usable-lift-msl",
+                              "usable-lift-agl",
+                              "precip-rate"
+                            ],
+                            "type": "string"
+                          },
+                          "maxItems": 3,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "method": {
+                          "properties": {
+                            "hash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "hash"
+                          ],
+                          "type": "object"
+                        },
+                        "metrics": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "model": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "palettes": {
+                          "items": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "recipe": {
+                          "properties": {
+                            "hash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "id": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "lockHash": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "source": {
+                              "properties": {
+                                "configurationId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "domainId": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "modelFamily": {
+                                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "modelFamily",
+                                "configurationId",
+                                "domainId"
+                              ],
+                              "type": "object"
+                            },
+                            "sourceDirty": {
+                              "type": "boolean"
+                            },
+                            "sourceRevision": {
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "hash",
+                            "source",
+                            "sourceRevision",
+                            "sourceDirty",
+                            "lockHash"
+                          ],
+                          "type": "object"
+                        },
+                        "samples": {
+                          "properties": {
+                            "blockSize": {
+                              "enum": [
+                                16
+                              ],
+                              "type": "number"
+                            },
+                            "bytes": {
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "channelCount": {
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "format": {
+                              "enum": [
+                                "cell-major-blocks-v1"
+                              ],
+                              "type": "string"
+                            },
+                            "key": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "sha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "storedCells": {
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "format",
+                            "blockSize",
+                            "storedCells",
+                            "channelCount",
+                            "bytes",
+                            "key",
+                            "sha256"
+                          ],
+                          "type": "object"
+                        },
+                        "source": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "properties": {
+                            "provenanceKey": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "provenanceSha256": {
+                              "pattern": "^[a-f0-9]{64}$",
+                              "type": "string"
+                            },
+                            "provider": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "provider",
+                            "provenanceKey",
+                            "provenanceSha256"
+                          ],
+                          "type": "object"
+                        },
+                        "tool": {
+                          "additionalProperties": {
+                            "nullable": true
+                          },
+                          "type": "object"
+                        },
+                        "version": {
+                          "enum": [
+                            3
+                          ],
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "descriptors",
+                        "recipe",
+                        "model",
+                        "buildId",
+                        "cycle",
+                        "createdAt",
+                        "expiresAt",
+                        "method",
+                        "coverage",
+                        "grid",
+                        "frames",
+                        "layers",
+                        "artifacts",
+                        "samples",
+                        "source",
+                        "tool",
+                        "palettes",
+                        "metrics"
+                      ],
+                      "type": "object"
+                    },
+                    "maxNativeZoom": {
+                      "type": "number"
+                    },
+                    "palettes": {
+                      "items": {
+                        "properties": {
+                          "colors": {
+                            "items": {
+                              "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "edges": {
+                            "items": {
+                              "type": "number"
+                            },
+                            "maxItems": 256,
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "noLiftColor": {
+                            "type": "string"
+                          },
+                          "provisional": {
+                            "type": "boolean"
+                          },
+                          "transparentBelow": {
+                            "type": "number"
+                          },
+                          "units": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "edges",
+                          "colors",
+                          "units"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "pointer": {
+                      "properties": {
+                        "latestBuildId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "model": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "retained": {
+                          "items": {
+                            "properties": {
+                              "buildId": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "cycle": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "expiresAt": {
+                                "format": "date-time",
+                                "type": "string"
+                              },
+                              "manifestKey": {
+                                "minLength": 1,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "buildId",
+                              "manifestKey",
+                              "cycle",
+                              "expiresAt"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "version": {
+                          "enum": [
+                            1
+                          ],
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "model",
+                        "latestBuildId",
+                        "retained"
+                      ],
+                      "type": "object"
+                    },
+                    "templates": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "pointer",
+                    "freshness"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "model": {
+                      "type": "string"
+                    },
+                    "retained": {
+                      "items": {
+                        "properties": {
+                          "buildId": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "cycle": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "manifestKey": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "buildId",
+                          "manifestKey",
+                          "cycle",
+                          "expiresAt"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "model",
+                    "retained"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "artifacts": {
+                      "items": {
+                        "properties": {
+                          "frame": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "layer": {
+                            "enum": [
+                              "usable-lift-msl",
+                              "usable-lift-agl",
+                              "precip-rate"
+                            ],
+                            "type": "string"
+                          },
+                          "tilesKey": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tilesSha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "layer",
+                          "frame",
+                          "tilesKey",
+                          "tilesSha256"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "buildId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "coverage": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maskKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxZoom": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "maskKey",
+                        "maxZoom"
+                      ],
+                      "type": "object"
+                    },
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "cycle": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "descriptors": {
+                      "properties": {
+                        "attribution": {
+                          "maxLength": 2048,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "bounds": {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "maximum": 90,
+                                "minimum": -90,
+                                "type": "number"
+                              }
+                            ]
+                          },
+                          "maxItems": 4,
+                          "minItems": 4,
+                          "type": "array"
+                        },
+                        "coverageDescription": {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        "layers": {
+                          "additionalProperties": {
+                            "properties": {
+                              "hideNonPositiveValues": {
+                                "type": "boolean"
+                              },
+                              "id": {
+                                "enum": [
+                                  "usable-lift-msl",
+                                  "usable-lift-agl",
+                                  "precip-rate"
+                                ],
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "scalar"
+                                ],
+                                "type": "string"
+                              },
+                              "label": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "methodId": {
+                                "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "noLiftSampleValue": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "palette": {
+                                "enum": [
+                                  "lift",
+                                  "rain"
+                                ],
+                                "type": "string"
+                              },
+                              "quantity": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "supportsLiftFlags": {
+                                "type": "boolean"
+                              },
+                              "supportsNoLift": {
+                                "type": "boolean"
+                              },
+                              "timeSupport": {
+                                "enum": [
+                                  "interval-mean",
+                                  "interval-flux-endpoint-profile"
+                                ],
+                                "type": "string"
+                              },
+                              "units": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "verticalReference": {
+                                "enum": [
+                                  "MSL",
+                                  "model-AGL",
+                                  "surface"
+                                ],
+                                "type": "string"
+                              },
+                              "zeroOnNoLiftInterpolation": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "label",
+                              "quantity",
+                              "units",
+                              "verticalReference",
+                              "timeSupport",
+                              "methodId",
+                              "palette",
+                              "supportsNoLift",
+                              "supportsLiftFlags",
+                              "noLiftSampleValue",
+                              "zeroOnNoLiftInterpolation",
+                              "hideNonPositiveValues"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "object"
+                        },
+                        "maxSampleValues": {
+                          "exclusiveMinimum": true,
+                          "maximum": 256,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "methods": {
+                          "additionalProperties": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "caveats": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 8,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "id": {
+                                "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                                "type": "string"
+                              },
+                              "inputs": {
+                                "additionalProperties": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "dimensions": {
+                                      "enum": [
+                                        "cell",
+                                        "level",
+                                        "level-cell"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "id": {
+                                      "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                                      "type": "string"
+                                    },
+                                    "missingness": {
+                                      "enum": [
+                                        "explicit-cell-mask",
+                                        "all-levels-required"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "quantity": {
+                                      "maxLength": 80,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "timeSupport": {
+                                      "enum": [
+                                        "static",
+                                        "valid-time",
+                                        "interval-mean"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "units": {
+                                      "maxLength": 24,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "verticalReference": {
+                                      "maxLength": 80,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "quantity",
+                                    "units",
+                                    "dimensions",
+                                    "verticalReference",
+                                    "timeSupport",
+                                    "missingness"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "object"
+                              },
+                              "outputs": {
+                                "items": {
+                                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "parameters": {
+                                "additionalProperties": {
+                                  "type": "number"
+                                },
+                                "type": "object"
+                              },
+                              "requiredInputs": {
+                                "items": {
+                                  "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "spatialSupport": {
+                                "enum": [
+                                  "column"
+                                ],
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "requiredInputs",
+                              "inputs",
+                              "outputs",
+                              "spatialSupport",
+                              "parameters",
+                              "caveats"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "object"
+                        },
+                        "palettes": {
+                          "items": {
+                            "properties": {
+                              "colors": {
+                                "items": {
+                                  "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
+                                  "type": "string"
+                                },
+                                "maxItems": 256,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "edges": {
+                                "items": {
+                                  "type": "number"
+                                },
+                                "maxItems": 256,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "noLiftColor": {
+                                "type": "string"
+                              },
+                              "provisional": {
+                                "type": "boolean"
+                              },
+                              "transparentBelow": {
+                                "type": "number"
+                              },
+                              "units": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "edges",
+                              "colors",
+                              "units"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 16,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "layers",
+                        "palettes",
+                        "methods",
+                        "attribution",
+                        "coverageDescription",
+                        "bounds",
+                        "maxSampleValues"
+                      ],
+                      "type": "object"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "frames": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "intervalEnd": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "intervalStart": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "validTime": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "validTime",
+                          "intervalStart",
+                          "intervalEnd"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "grid": {
+                      "oneOf": [
+                        {
+                          "properties": {
+                            "dx": {
+                              "type": "number"
+                            },
+                            "dy": {
+                              "type": "number"
+                            },
+                            "earthRadiusM": {
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "height": {
+                              "exclusiveMinimum": true,
+                              "maximum": 2147483647,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "enum": [
+                                "regular-latlon"
+                              ],
+                              "type": "string"
+                            },
+                            "lat0": {
+                              "maximum": 90,
+                              "minimum": -90,
+                              "type": "number"
+                            },
+                            "lon0": {
+                              "type": "number"
+                            },
+                            "width": {
+                              "exclusiveMinimum": true,
+                              "maximum": 2147483647,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "wrapLongitude": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "width",
+                            "height",
+                            "earthRadiusM",
+                            "lon0",
+                            "lat0",
+                            "dx",
+                            "dy",
+                            "wrapLongitude"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "properties": {
+                            "centralMeridianDeg": {
+                              "maximum": 180,
+                              "minimum": -180,
+                              "type": "number"
+                            },
+                            "dxM": {
+                              "type": "number"
+                            },
+                            "dyM": {
+                              "type": "number"
+                            },
+                            "earthRadiusM": {
+                              "exclusiveMinimum": true,
+                              "minimum": 0,
+                              "type": "number"
+                            },
+                            "height": {
+                              "exclusiveMinimum": true,
+                              "maximum": 2147483647,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "kind": {
+                              "enum": [
+                                "lambert-conformal"
+                              ],
+                              "type": "string"
+                            },
+                            "latitudeOfOriginDeg": {
+                              "exclusiveMaximum": true,
+                              "exclusiveMinimum": true,
+                              "maximum": 90,
+                              "minimum": -90,
+                              "type": "number"
+                            },
+                            "standardParallel1Deg": {
+                              "exclusiveMaximum": true,
+                              "exclusiveMinimum": true,
+                              "maximum": 90,
+                              "minimum": -90,
+                              "type": "number"
+                            },
+                            "standardParallel2Deg": {
+                              "exclusiveMaximum": true,
+                              "exclusiveMinimum": true,
+                              "maximum": 90,
+                              "minimum": -90,
+                              "type": "number"
+                            },
+                            "width": {
+                              "exclusiveMinimum": true,
+                              "maximum": 2147483647,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "wrapLongitude": {
+                              "enum": [
+                                false
+                              ],
+                              "type": "boolean"
+                            },
+                            "x0M": {
+                              "type": "number"
+                            },
+                            "y0M": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "width",
+                            "height",
+                            "earthRadiusM",
+                            "centralMeridianDeg",
+                            "latitudeOfOriginDeg",
+                            "standardParallel1Deg",
+                            "standardParallel2Deg",
+                            "x0M",
+                            "y0M",
+                            "dxM",
+                            "dyM",
+                            "wrapLongitude"
+                          ],
+                          "type": "object"
+                        }
+                      ]
+                    },
+                    "layers": {
+                      "items": {
+                        "enum": [
+                          "usable-lift-msl",
+                          "usable-lift-agl",
+                          "precip-rate"
+                        ],
+                        "type": "string"
+                      },
+                      "maxItems": 3,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "method": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "metrics": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "type": "object"
+                    },
+                    "model": {
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                      "type": "string"
+                    },
+                    "palettes": {
+                      "items": {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "recipe": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "lockHash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "source": {
+                          "properties": {
+                            "configurationId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "domainId": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "modelFamily": {
+                              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "modelFamily",
+                            "configurationId",
+                            "domainId"
+                          ],
+                          "type": "object"
+                        },
+                        "sourceDirty": {
+                          "type": "boolean"
+                        },
+                        "sourceRevision": {
+                          "maxLength": 128,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "source",
+                        "sourceRevision",
+                        "sourceDirty",
+                        "lockHash"
+                      ],
+                      "type": "object"
+                    },
+                    "samples": {
+                      "properties": {
+                        "blockSize": {
+                          "enum": [
+                            16
+                          ],
+                          "type": "number"
+                        },
+                        "bytes": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "channelCount": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "format": {
+                          "enum": [
+                            "cell-major-blocks-v1"
+                          ],
+                          "type": "string"
+                        },
+                        "key": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "sha256": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "storedCells": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "format",
+                        "blockSize",
+                        "storedCells",
+                        "channelCount",
+                        "bytes",
+                        "key",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "source": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "properties": {
+                        "provenanceKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "provenanceSha256": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "provenanceKey",
+                        "provenanceSha256"
+                      ],
+                      "type": "object"
+                    },
+                    "tool": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "type": "object"
+                    },
+                    "version": {
+                      "enum": [
+                        3
+                      ],
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "descriptors",
+                    "recipe",
+                    "model",
+                    "buildId",
+                    "cycle",
+                    "createdAt",
+                    "expiresAt",
+                    "method",
+                    "coverage",
+                    "grid",
+                    "frames",
+                    "layers",
+                    "artifacts",
+                    "samples",
+                    "source",
+                    "tool",
+                    "palettes",
+                    "metrics"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}/layers/{layer}/{frame}/tilejson.json": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "layer",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "frame",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "bounds": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "maxzoom": {
+                      "type": "number"
+                    },
+                    "minzoom": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "tilejson": {
+                      "enum": [
+                        "3.0.0"
+                      ],
+                      "type": "string"
+                    },
+                    "tiles": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "tilejson",
+                    "name",
+                    "tiles",
+                    "minzoom",
+                    "maxzoom",
+                    "bounds"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}/provenance": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "buildId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "cycle": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "frames": {
+                      "items": {
+                        "nullable": true
+                      },
+                      "maxItems": 256,
+                      "type": "array"
+                    },
+                    "model": {
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                      "type": "string"
+                    },
+                    "provider": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "temporalApproximation": {
+                      "maxLength": 2048,
+                      "type": "string"
+                    },
+                    "version": {
+                      "enum": [
+                        1
+                      ],
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "model",
+                    "buildId",
+                    "cycle",
+                    "frames"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}/sample": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frame",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "layers",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "buildId": {
+                      "type": "string"
+                    },
+                    "coverage": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maskKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxZoom": {
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash",
+                        "maskKey",
+                        "maxZoom"
+                      ],
+                      "type": "object"
+                    },
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "frames": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "intervalEnd": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "intervalStart": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "layers": {
+                            "additionalProperties": {
+                              "properties": {
+                                "interpolated": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "enum": [
+                                    "valid",
+                                    "no-usable-lift",
+                                    "unavailable",
+                                    "outside-domain"
+                                  ],
+                                  "type": "string"
+                                },
+                                "support": {
+                                  "type": "integer"
+                                },
+                                "value": {
+                                  "nullable": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "status",
+                                "support",
+                                "interpolated"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "object"
+                          },
+                          "validTime": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "validTime",
+                          "intervalStart",
+                          "intervalEnd",
+                          "layers"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "lat": {
+                      "type": "number"
+                    },
+                    "lon": {
+                      "type": "number"
+                    },
+                    "method": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "properties": {
+                        "provenanceKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "provenanceSha256": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "provenanceKey",
+                        "provenanceSha256"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "model",
+                    "buildId",
+                    "lat",
+                    "lon",
+                    "method",
+                    "source",
+                    "coverage",
+                    "expiresAt",
+                    "frames"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/palettes/{id}.json": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "colors": {
+                      "items": {
+                        "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "edges": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "noLiftColor": {
+                      "type": "string"
+                    },
+                    "provisional": {
+                      "type": "boolean"
+                    },
+                    "transparentBelow": {
+                      "type": "number"
+                    },
+                    "units": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "edges",
+                    "colors",
+                    "units"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Palette metadata"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/palettes/{id}.svg": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/svg+xml": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Palette legend SVG"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    }
+  }
+}

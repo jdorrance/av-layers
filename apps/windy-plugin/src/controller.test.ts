@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SAMPLE_BLOCK_SIZE, type Manifest } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, SAMPLE_BLOCK_SIZE, type Manifest } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { Lifecycle } from './lifecycle';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
@@ -21,7 +21,7 @@ function frames() {
 function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof frames> } = {}): PinnedBuild {
   const frameList = overrides.frames ?? frames();
   const manifest: Manifest = {
-    version: 2,
+    version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)),
     model: 'gfs',
     buildId: 'build-1',
     cycle: created,
@@ -29,7 +29,7 @@ function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof fram
     expiresAt: overrides.expiresAt ?? expiresAt,
     method: { id: 'dry-lenschow-pbl-1p2-v1', hash: 'a'.repeat(64) },
     coverage: { id: 'soaring-land-v1', hash: 'b'.repeat(64), maskKey: 'masks/soaring-land-v1', maxZoom: 5 },
-    grid: { width: 1440, height: 721, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true },
+    grid: GFS_GRID,
     frames: frameList,
     layers: [...layerIds],
     artifacts: layerIds.flatMap(layer => frameList.map(frame => ({
@@ -39,7 +39,7 @@ function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof fram
       tilesSha256: 'c'.repeat(64)
     }))),
     samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: 1, channelCount: frameList.length * layerIds.length, bytes: frameList.length * layerIds.length * 5, key: 'builds/gfs/build-1/samples.bin', sha256: 'd'.repeat(64) },
-    source: {},
+    source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
     tool: {},
     palettes: ['lift', 'rain'],
     metrics: {}

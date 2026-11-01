@@ -1,71 +1,81 @@
 {
-	"name": "windy-av-api",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-10-01",
-	"r2_buckets": [
-		{
-			"binding": "BUCKET",
-			"bucket_name": "windy-av-layer"
-		}
-	],
-	"rules": [
-		{
-			"type": "Data",
-			"globs": [
-				"**/*.bin",
-				"**/coverage/manifest.json"
-			],
-			"fallthrough": true
-		}
-	],
-	"ratelimits": [
-		{
-			"name": "SAMPLE_RATE_LIMITER",
-			"namespace_id": "78190301",
-			"simple": {
-				"limit": 30,
-				"period": 60
-			}
-		}
-	],
-	"env": {
-		"staging": {
-			"name": "windy-av-api-staging",
-			"r2_buckets": [
-				{
-					"binding": "BUCKET",
-					"bucket_name": "windy-av-layer-staging"
-				}
-			],
-			"ratelimits": [
-				{
-					"name": "SAMPLE_RATE_LIMITER",
-					"namespace_id": "78190302",
-					"simple": {
-						"limit": 30,
-						"period": 60
-					}
-				}
-			]
-		},
-		"production": {
-			"name": "windy-av-api-production",
-			"r2_buckets": [
-				{
-					"binding": "BUCKET",
-					"bucket_name": "windy-av-layer"
-				}
-			],
-			"ratelimits": [
-				{
-					"name": "SAMPLE_RATE_LIMITER",
-					"namespace_id": "78190303",
-					"simple": {
-						"limit": 30,
-						"period": 60
-					}
-				}
-			]
-		}
-	}
+  "name": "windy-av-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "windy-av-layer"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "SAMPLE_RATE_LIMITER",
+      "namespace_id": "78190301",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "windy-av-api-staging",
+      "r2_buckets": [
+        {
+          "binding": "BUCKET",
+          "bucket_name": "windy-av-layer-staging"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "SAMPLE_RATE_LIMITER",
+          "namespace_id": "78190302",
+          "simple": {
+            "limit": 30,
+            "period": 60
+          }
+        }
+      ],
+      "vars": {
+        "AV_REQUEST_METRICS": "true",
+        "AV_RESPONSE_CACHE": "on"
+      },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      }
+    },
+    "production": {
+      "name": "windy-av-api-production",
+      "r2_buckets": [
+        {
+          "binding": "BUCKET",
+          "bucket_name": "windy-av-layer"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "SAMPLE_RATE_LIMITER",
+          "namespace_id": "78190303",
+          "simple": {
+            "limit": 30,
+            "period": 60
+          }
+        }
+      ],
+      "vars": {
+        "AV_REQUEST_METRICS": "true",
+        "AV_RESPONSE_CACHE": "on"
+      },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 0.1
+      }
+    }
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  }
 }

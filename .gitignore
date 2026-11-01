@@ -15,3 +15,5 @@ __pycache__/
 /coverage/
 *.tsbuildinfo
 apps/api/apps/
+
+.playwright-mcp/

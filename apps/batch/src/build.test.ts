@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, GFS_GRID, setBit, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
 import type { GfsFrameAcquisition } from './noaa/types.js';
+import type { NormalizedFrame } from './providers.js';
 
 const CYCLE = '2026-10-30T00:00:00.000Z';
 
@@ -19,11 +20,10 @@ vi.mock('./render.js', async () => {
   const { mkdir, writeFile } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   const renderArchive = vi.fn(async (path: string, _field?: GridField, _mask?: CoverageMask, _layer?: Manifest['layers'][number]) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, new Uint8Array(1)); });
-  return { renderArchive, createRenderer: vi.fn((mask: CoverageMask) => ({ renderArchive: (path: string, field: GridField, layer: Manifest['layers'][number]) => renderArchive(path, field, mask, layer), metrics: () => ({}) })) };
+  return { renderArchive, createRenderer: vi.fn((mask: CoverageMask) => ({ renderArchive: (path: string, field: GridField, layer: Manifest['layers'][number]) => renderArchive(path, field, mask, layer), renderArchives: async (targets: { path: string; field: GridField; layer: Manifest['layers'][number] }[]) => { for (const { path, field, layer } of targets) await renderArchive(path, field, mask, layer); }, metrics: () => ({}) })) };
 });
+vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('./coverage.js')>(), writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
-vi.mock('@av/forecast', async importOriginal => ({ ...await importOriginal<typeof import('@av/forecast')>(), packCells: vi.fn(() => new Uint8Array(1)) }));
-vi.mock('./sample-pack.js', () => ({ writeSamplePack: vi.fn(async (_path: string, inputs: string[], layout: { storedCells: number }) => ({ bytes: layout.storedCells * inputs.length * 5, sha256: 'c'.repeat(64) })) }));
 vi.mock('./noaa/index.js', () => {
   const acquireGfsFrame = vi.fn(), discoverGfsRun = vi.fn();
   return { acquireGfsFrame, discoverGfsRun, createGfsAcquisitionSession: vi.fn(async (options: { cycle?: string; cacheDir?: string; activeIndices: Uint32Array }) => {
@@ -32,19 +32,18 @@ vi.mock('./noaa/index.js', () => {
   }) };
 });
 
-import * as forecastModule from '@av/forecast';
 import { acquireGfsFrame, createGfsAcquisitionSession, discoverGfsRun } from './noaa/index.js';
-import { writeSamplePack } from './sample-pack.js';
 import { buildSample, deriveFrame } from './build.js';
 import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
 import * as validateModule from './validate.js';
+import * as coverageModule from './coverage.js';
 
 const ms = (hour: number): string => new Date(Date.parse(CYCLE) + hour * 3600000).toISOString();
 const noMs = (hour: number): string => ms(hour).replace('.000Z', 'Z');
 
-function frame(hour: number): GfsFrameAcquisition {
-  const empty = () => new Float32Array(0);
+function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
+  const empty = () => new Float32Array(1);
   return {
     schemaVersion: 1,
     model: 'gfs',
@@ -52,8 +51,8 @@ function frame(hour: number): GfsFrameAcquisition {
     hour,
     validAt: noMs(hour),
     capturedAt: '2026-10-30T08:25:13.148Z',
-    grid: { width: GFS_GRID.width, height: GFS_GRID.height, lon0: -180, lat0: 90, dx: 0.25, dy: -0.25, wrapLongitude: true },
-    activeIndices: new Uint32Array(0),
+    grid: GFS_GRID,
+    activeIndices: Uint32Array.of(0),
     terrainM: empty(),
     surfacePressurePa: empty(),
     temp2mK: empty(),
@@ -62,20 +61,20 @@ function frame(hour: number): GfsFrameAcquisition {
     sensibleHeatFluxWm2: empty(),
     latentHeatFluxWm2: empty(),
     precipitationMmPerHour: empty(),
-    pressureLevelsHpa: [],
-    hgtM: [],
-    tempK: [],
+    pressureLevelsHpa: [900],
+    hgtM: [empty()],
+    tempK: [empty()],
     missing: {
-      terrain: new Uint8Array(0),
-      surfacePressure: new Uint8Array(0),
-      temp2m: new Uint8Array(0),
-      humidity2m: new Uint8Array(0),
-      pbl: new Uint8Array(0),
-      sensibleHeatFlux: new Uint8Array(0),
-      latentHeatFlux: new Uint8Array(0),
-      precipitation: new Uint8Array(0),
-      hgt: [],
-      temp: [],
+      terrain: new Uint8Array(1),
+      surfacePressure: new Uint8Array(1),
+      temp2m: new Uint8Array(1),
+      humidity2m: new Uint8Array(1),
+      pbl: new Uint8Array(1),
+      sensibleHeatFlux: new Uint8Array(1),
+      latentHeatFlux: new Uint8Array(1),
+      precipitation: new Uint8Array(1),
+      hgt: [new Uint8Array(1)],
+      temp: [new Uint8Array(1)],
     },
     intervals: {
       profileTime: noMs(hour),
@@ -86,7 +85,7 @@ function frame(hour: number): GfsFrameAcquisition {
       usedCompanion: hour > 3,
     },
     receipt: { schemaVersion: 1, cycle: noMs(0), hour, validAt: noMs(hour), capturedAt: '2026-10-30T08:25:13.148Z' },
-  } as unknown as GfsFrameAcquisition;
+  } as unknown as GfsFrameAcquisition & NormalizedFrame;
 }
 
 const temp: string[] = [];
@@ -103,6 +102,16 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
 }
 
 describe('build sample acquisition intervals', () => {
+  it.each(['acquire', 'render'])('records a structured %s failure and only completely rendered frames', async phase => {
+    const failure = Object.assign(new Error('Injected field failure'), { code: 'fixture-failure', details: { reason: 'fixture', hour: 6 } });
+    if (phase === 'render') {
+      const render = vi.mocked(renderModule.renderArchive), original = render.getMockImplementation()!;
+      render.mockImplementationOnce(original).mockImplementationOnce(original).mockImplementationOnce(original).mockRejectedValueOnce(failure);
+    }
+    await expect(run(hour => { if (phase === 'acquire' && hour === 6) throw failure; return frame(hour); })).rejects.toThrow('Injected field failure');
+    const directory = join(temp.at(-1)!, 'builds/gfs'), [buildId] = await readdir(directory);
+    expect(JSON.parse(await readFile(join(directory, buildId, 'failure.json'), 'utf8'))).toMatchObject({ state: 'failed', phase, completedFrames: 1, failedFrameHour: 6, cancelled: false, error: { name: 'Error', code: 'fixture-failure', message: 'Injected field failure', details: { reason: 'fixture', hour: 6 } } });
+  });
   it('forwards the cache directory to discovery and acquisition', async () => {
     const out = await mkdtemp(join(tmpdir(), 'av-build-cache-')); temp.push(out);
     const cacheDir = join(out, 'cache');
@@ -120,8 +129,7 @@ describe('build sample acquisition intervals', () => {
     expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(3), intervalEnd: ms(6) });
     expect(manifest.source).toMatchObject({
       provider: 'NOAA',
-      model: 'GFS',
-      nativeResolutionDeg: 0.25,
+      model: 'gfs',
       frameCount: 8,
       provenanceKey: `builds/gfs/${manifest.buildId}/provenance.json`
     });
@@ -162,7 +170,7 @@ describe('build sample acquisition intervals', () => {
 });
 
 describe('frame derivation', () => {
-  function fixture(): { input: GfsFrameAcquisition; mask: CoverageMask; index: number } {
+  function fixture(): { input: GfsFrameAcquisition & NormalizedFrame; mask: CoverageMask; index: number } {
     const index = 360 * GFS_GRID.width + 720;
     const bits = Math.ceil(GFS_GRID.width * GFS_GRID.height / 8);
     const mask: CoverageMask = { grid: GFS_GRID, output: new Uint8Array(bits), halo: new Uint8Array(bits), tiles: new Uint8Array(1), maxZoom: 0 };
@@ -195,12 +203,10 @@ describe('frame derivation', () => {
 });
 
 describe('bounded end-to-end build pipeline integration', () => {
-  it('runs real packCells, summarizeFields, renderArchive and validateBuild across 8 frames × 3 layers', async () => {
+  it('runs incremental packing, summarizeFields, renderArchive and validateBuild across 8 frames × 3 layers', async () => {
     const actualValidate = await vi.importActual<typeof import('./validate.js')>('./validate.js');
     const actualRender = await vi.importActual<typeof import('./render.js')>('./render.js');
     const actualSummary = await vi.importActual<typeof import('./summary.js')>('./summary.js');
-    const actualForecast = await vi.importActual<typeof import('@av/forecast')>('@av/forecast');
-    const actualPack = await vi.importActual<typeof import('./sample-pack.js')>('./sample-pack.js');
 
     const index = 360 * GFS_GRID.width + 720;
     const boundedMask: CoverageMask = {
@@ -214,18 +220,17 @@ describe('bounded end-to-end build pipeline integration', () => {
     setBit(boundedMask.halo, index + 1);
     setBit(boundedMask.tiles, 0);
     setBit(boundedMask.tiles, (4 ** 7 - 1) / 3 + 64 * 128 + 64);
-    const coverageHash = 'b'.repeat(64);
+    const coverageHash = coverageModule.describeCoverage(boundedMask, GFS_PRODUCT).hash;
 
     vi.mocked(validateModule.loadCoverage).mockResolvedValueOnce(boundedMask);
     vi.mocked(validateModule.verifyCoverage).mockResolvedValueOnce(coverageHash);
+    vi.mocked(coverageModule.writeCoverage).mockResolvedValueOnce(coverageHash);
     vi.mocked(validateModule.validateBuild).mockImplementationOnce(async (root, raw, mask) =>
       actualValidate.validateBuild(root, raw, mask, coverageHash)
     );
     vi.mocked(validateModule.finalizeValidatedMetrics).mockImplementationOnce(actualValidate.finalizeValidatedMetrics);
     vi.mocked(renderModule.renderArchive).mockImplementation(actualRender.renderArchive);
     vi.mocked(summaryModule.summarizeFields).mockImplementation(actualSummary.summarizeFields);
-    vi.mocked(forecastModule.packCells).mockImplementation(actualForecast.packCells);
-    vi.mocked(writeSamplePack).mockImplementationOnce(actualPack.writeSamplePack);
 
     try {
       const values = (v: number) => new Float32Array([v, v]);
@@ -281,7 +286,6 @@ describe('bounded end-to-end build pipeline integration', () => {
         await writeFile(path, new Uint8Array(1));
       });
       vi.mocked(summaryModule.summarizeFields).mockImplementation(() => ({}) as ReturnType<typeof actualSummary.summarizeFields>);
-      vi.mocked(forecastModule.packCells).mockImplementation(() => new Uint8Array(1));
     }
   }, 60_000);
 });

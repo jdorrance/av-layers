@@ -37,13 +37,13 @@ async function checkSpecList(
   }
 }
 
-async function checkRun(cycle: string, transport: NoaaTransport): Promise<DiscoveredGfsRun> {
+async function checkRun(cycle: string, transport: NoaaTransport, refresh = false): Promise<DiscoveredGfsRun> {
   const stamp = cycleStamp(cycle);
   const indexes = new Map<string, IndexResult>();
   const duplicates: DiscoveredGfsRun['duplicates'] = [];
   const inventoryJobs = GFS_FORECAST_HOURS.flatMap(hour => (['primary', 'secondary'] as const).map(product => ({ hour, product })));
   for (const { hour, product } of inventoryJobs) {
-    const index = await transport.index(`${gfsFileUrl(cycle, hour, GFS_PRODUCTS[product])}.idx`, stamp);
+    const index = await transport.index(`${gfsFileUrl(cycle, hour, GFS_PRODUCTS[product])}.idx`, stamp, refresh);
     indexes.set(`${product}:${hour}`, index);
   }
   for (const hour of GFS_FORECAST_HOURS) {
@@ -75,9 +75,16 @@ export async function discoverGfsRunWithTransport(options: DiscoverGfsRunOptions
   for (const cycle of candidateCycles(now)) {
     options.signal?.throwIfAborted();
     try {
-      return await checkRun(cycle, transport);
+      try { return await checkRun(cycle, transport); }
+      catch (error) {
+        // A cached inventory can have been captured while the provider was still writing it.
+        // Refresh once only for missing records; scientific conflicts and corrupt bytes stay terminal.
+        if (!(error instanceof NoaaError) || error.code !== 'record-missing') throw error;
+        return await checkRun(cycle, transport, true);
+      }
     } catch (error) {
       if (options.signal?.aborted) throw error;
+      if (!(error instanceof NoaaError) || (error.code !== 'record-missing' && !(error.code === 'transport' && error.details?.reason === 'upstream-not-ready'))) throw error;
       failures.push(`${cycle}: ${(error as Error).message}`);
     }
   }

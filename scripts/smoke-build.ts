@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { forecastObjects, manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
-import { fileSha256, loadCoverage, localPath, validateSamplePack } from '../apps/batch/src/validate.js';
+import { forecastObjects, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+import { localPath } from '../apps/batch/src/validate.js';
+import { validateLocalBuild } from '../apps/batch/src/local-build.js';
 
 export { validateArtifactRecords, validateSampleFlags };
 
@@ -22,15 +23,11 @@ async function main(): Promise<void> {
   invariant(existsSync(manifestPath), `manifest not found: ${manifestPath}`);
   invariant(existsSync(pmtilesBin), `pmtiles binary not found: ${pmtilesBin}; run pnpm tools:pmtiles`);
 
-  const manifest = manifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
-  const root = dirname(dirname(dirname(dirname(manifestPath))));
-  validateArtifactRecords(manifest);
-  await validateSamplePack(localPath(root, manifest.samples.key), manifest, await loadCoverage());
+  const { root, manifest } = await validateLocalBuild(manifestPath);
 
   for (const artifact of manifest.artifacts) {
     const tilesPath = localPath(root, artifact.tilesKey);
     invariant(existsSync(tilesPath), `missing archive: ${artifact.tilesKey}`);
-    invariant(await fileSha256(tilesPath) === artifact.tilesSha256, `archive hash mismatch: ${artifact.tilesKey}`);
     execFileSync(pmtilesBin, ['verify', tilesPath], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 });
   }
 

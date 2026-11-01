@@ -9,7 +9,7 @@ describe('tile template and options', () => {
   });
 
   it('builds a MapLibre 256px raster source limited to the native max zoom', () => {
-    const source = previewRasterSource('https://api.test/{frame}/{z}/{x}/{y}.webp', 'f003', 5);
+    const source = previewRasterSource('https://api.test/{frame}/{z}/{x}/{y}.webp', 'f003', 5, 'Test attribution');
     expect(source).toMatchObject({ type: 'raster', tileSize: 256, minzoom: 0, maxzoom: 5 });
     expect(source.tiles).toEqual(['https://api.test/f003/{z}/{x}/{y}.webp']);
     expect(previewRasterLayer()).not.toHaveProperty('maxzoom');
@@ -22,7 +22,7 @@ describe('tile template and options', () => {
   });
 
   it('pins supported LeafletGL tile options and disables retina requests', () => {
-    const options = windyTileOptions(5, 0.5);
+    const options = windyTileOptions(5, 0.5, 'Test attribution');
     expect(options).toMatchObject({
       tileSize: 256,
       detectRetina: false,
@@ -38,6 +38,6 @@ describe('tile template and options', () => {
     expect(clampOpacity(2)).toBe(1);
     expect(clampOpacity(-1)).toBe(0);
     expect(clampOpacity(Number.NaN)).toBe(0.5);
-    expect(() => windyTileOptions(5.5)).toThrow(RangeError);
+    expect(() => windyTileOptions(5.5, 0.5, 'Test attribution')).toThrow(RangeError);
   });
 });

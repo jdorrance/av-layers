@@ -1,152 +1,137 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createReadStream } from 'node:fs';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { coverageDescriptorSchema, forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { readCoverage } from '../apps/batch/src/coverage.js';
 
 export { validateArtifactRecords };
-
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
 const wranglerJs = join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
-
-function invariant(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
-
-function arg(name: string): string | undefined {
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex');
-}
+const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+function invariant(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 
 export function buildLocalPointer(manifest: Manifest, manifestKey: string): ModelPointer {
-  return modelPointerSchema.parse({
-    version: 1,
-    model: manifest.model,
-    latestBuildId: manifest.buildId,
-    retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt }]
-  });
+  return modelPointerSchema.parse({ version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt }] });
+}
+export function shouldSeedAssets(markerExists: boolean, reseed: boolean): boolean { return reseed || !markerExists; }
+
+export interface LocalPreviewStore {
+  head(key: string): Promise<{ size: number; customMetadata?: Record<string, string> } | null>;
+  put(key: string, bytes: Uint8Array, options: { httpMetadata: { contentType: string }; customMetadata: { sha256: string } }): Promise<unknown>;
+  dispose(): Promise<void>;
 }
 
-export function shouldSeedAssets(markerExists: boolean, reseed: boolean): boolean {
-  return reseed || !markerExists;
+/** One supported Wrangler proxy session, with remote bindings explicitly disabled. */
+export async function openLocalPreviewStore(persistTo: string): Promise<LocalPreviewStore> {
+  const { getPlatformProxy } = await import('wrangler');
+  // Wrangler CLI adds /v3 to --persist-to; the public proxy API accepts that final path.
+  const proxy = await getPlatformProxy<{ BUCKET: Omit<LocalPreviewStore, 'dispose'> }>({ configPath: join(apiDir, 'wrangler.jsonc'), persist: { path: join(persistTo, 'v3') }, remoteBindings: false, envFiles: [] });
+  return { head: key => proxy.env.BUCKET.head(key), put: (key, bytes, options) => proxy.env.BUCKET.put(key, bytes, options), dispose: proxy.dispose };
 }
 
-function node22(): string {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (major >= 22) return process.execPath;
-  const result = spawnSync('npx', ['--yes', '--package=node@22.23.4', 'node', '-p', 'process.execPath'], { encoding: 'utf8' });
-  invariant(result.status === 0 && result.stdout.trim(), 'Node 22 is required; npx could not resolve node@22.23.4');
-  return result.stdout.trim();
+async function fileHash(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
 }
 
-function putObject(node: string, bucket: string, key: string, file: string, contentType: string, persistTo: string): void {
-  const result = spawnSync(node, [wranglerJs, 'r2', 'object', 'put', `${bucket}/${key}`, '--file', file, '--content-type', contentType, '--local', '--persist-to', persistTo], { cwd: apiDir, stdio: 'inherit', timeout: 120_000 });
-  if (result.error) throw result.error;
-  invariant(result.status === 0, `local R2 upload failed for ${key}`);
+export interface PreviewOptions {
+  manifestPath: string; persistTo?: string; port?: number; reseed?: boolean; fixture?: boolean; seedOnly?: boolean;
 }
 
-async function main(): Promise<void> {
-  const manifestPath = resolve(arg('manifest') ?? (() => { throw new Error('--manifest is required'); })());
-  const port = Number(arg('port') ?? '8787');
-  const persistTo = resolve(arg('persist-to') ?? join(root, '.wrangler', 'state'));
-  const reseed = process.argv.includes('--reseed');
-
-  invariant(Number.isInteger(port) && port >= 1 && port <= 65535, '--port must be an integer between 1 and 65535');
-  invariant(existsSync(manifestPath), `manifest not found: ${manifestPath}`);
-  invariant(existsSync(wranglerJs), 'wrangler is not installed; run pnpm install');
-
-  const manifestBytes = readFileSync(manifestPath);
-  const manifest = manifestSchema.parse(JSON.parse(manifestBytes.toString('utf8')));
-  invariant(Date.parse(manifest.expiresAt) > Date.now(), 'the real build has expired; rebuild it before previewing');
+/** Validate every dependency before opening R2; publish the local pointer last. */
+export async function seedLocalBuild(options: PreviewOptions, openStore = openLocalPreviewStore): Promise<{ manifest: Manifest; manifestPath: string; persistTo: string; uploadedObjects: number; reusedObjects: number }> {
+  const manifestPath = resolve(options.manifestPath), persistTo = resolve(options.persistTo ?? join(root, '.wrangler', options.fixture ? 'fixture-state' : 'state'));
+  const manifestBytes = await readFile(manifestPath), manifest = manifestSchema.parse(JSON.parse(manifestBytes.toString('utf8')));
+  invariant(Date.parse(manifest.expiresAt) > Date.now(), 'Build has expired; regenerate it before previewing');
   validateArtifactRecords(manifest);
-
-  const parts = manifestPath.split(/[\\/]/);
-  const buildsIndex = parts.lastIndexOf('builds');
-  invariant(buildsIndex >= 0 && parts[buildsIndex + 1] === manifest.model && parts[buildsIndex + 2] === manifest.buildId, 'manifest path must match output/builds/{model}/{buildId}/manifest.json');
-  const outputRoot = parts.slice(0, buildsIndex).join('/') || '/';
+  const outputRoot = dirname(dirname(dirname(dirname(manifestPath))));
   const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
-  const pointerKey = `catalog/${manifest.model}/latest.json`;
-  const manifestSha = sha256(manifestBytes);
-  const provenance = getProvenanceReference(manifest);
-  if (provenance) {
-    const bytes = readFileSync(join(outputRoot, provenance.key));
-    invariant(sha256(bytes) === provenance.sha256, `provenance hash mismatch: ${provenance.key}`);
-    parseProvenance(JSON.parse(bytes.toString('utf8')), manifest);
+  invariant(join(outputRoot, manifestKey) === manifestPath, 'Manifest path must match output/builds/{model}/{buildId}/manifest.json');
+  const manifestSha = sha256(manifestBytes), coverageDir = `coverage/${manifest.coverage.hash}`;
+  const mask = await readCoverage(outputRoot, manifest.coverage.hash);
+  const coverageBytes = await readFile(join(outputRoot, manifest.coverage.maskKey));
+  const coverage = coverageDescriptorSchema.parse(JSON.parse(coverageBytes.toString('utf8')));
+  invariant(coverage.id === manifest.coverage.id && coverage.maxZoom === manifest.coverage.maxZoom && JSON.stringify(mask.grid) === JSON.stringify(manifest.grid), 'Coverage descriptor does not match manifest');
+  const provenance = getProvenanceReference(manifest), provenanceBytes = await readFile(join(outputRoot, provenance.key));
+  invariant(sha256(provenanceBytes) === provenance.sha256, `Provenance hash mismatch: ${provenance.key}`);
+  parseProvenance(JSON.parse(provenanceBytes.toString('utf8')), manifest);
+  const dependencies = [
+    ...(['output', 'halo', 'tiles'] as const).map(name => ({ key: `${coverageDir}/${name}.bin`, sha256: coverage.files[name].sha256, contentType: 'application/octet-stream' })),
+    { key: manifest.coverage.maskKey, sha256: manifest.coverage.hash, contentType: 'application/json' },
+    { ...provenance, contentType: 'application/json' },
+    ...forecastObjects(manifest)
+  ];
+  const objects = [];
+  for (const object of dependencies) {
+    const file = join(outputRoot, object.key), info = await stat(file);
+    invariant(info.isFile() && info.size > 0, `Missing local artifact: ${object.key}`);
+    invariant(await fileHash(file) === object.sha256, `Artifact hash mismatch: ${object.key}`);
+    objects.push({ ...object, file, size: info.size });
   }
-
-  const config = JSON.parse(readFileSync(join(apiDir, 'wrangler.jsonc'), 'utf8'));
-  const bucket = config.r2_buckets?.[0]?.bucket_name;
-  invariant(typeof bucket === 'string' && bucket, 'apps/api/wrangler.jsonc must bind one private R2 bucket');
-
-  for (const { key } of forecastObjects(manifest)) {
-    const file = join(outputRoot, key);
-    invariant(existsSync(file) && statSync(file).size > 0, `missing real artifact: ${key}`);
-  }
-
-  const node = node22();
-  const markerDir = join(persistTo, '.sample-preview');
-  const marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
-  mkdirSync(markerDir, { recursive: true });
-
-  // Seed provenance independently of the immutable forecast payloads.
-  if (provenance) putObject(node, bucket, provenance.key, join(outputRoot, provenance.key), 'application/json', persistTo);
-  if (shouldSeedAssets(existsSync(marker), reseed)) {
-    for (const { key, contentType } of forecastObjects(manifest)) {
-      putObject(node, bucket, key, join(outputRoot, key), contentType, persistTo);
+  const markerDir = join(persistTo, '.sample-preview'), marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
+  const markerExists = await stat(marker).then(() => true, () => false);
+  const force = shouldSeedAssets(markerExists, options.reseed ?? false);
+  let uploadedObjects = 0, reusedObjects = 0;
+  const store = await openStore(persistTo);
+  try {
+    const put = async (key: string, bytes: Uint8Array, contentType: string, hash: string): Promise<void> => {
+      invariant(sha256(bytes) === hash, `Local object changed after verification: ${key}`);
+      await store.put(key, bytes, { httpMetadata: { contentType }, customMetadata: { sha256: hash } }); uploadedObjects++;
+    };
+    for (const object of objects) {
+      const existing = force ? null : await store.head(object.key);
+      if (existing?.size === object.size && existing.customMetadata?.sha256 === object.sha256) { reusedObjects++; continue; }
+      // Sequential uploads keep memory to one local artifact plus the runtime transport.
+      await put(object.key, await readFile(object.file), object.contentType, object.sha256);
     }
-    putObject(node, bucket, manifestKey, manifestPath, 'application/json', persistTo);
-    writeFileSync(marker, JSON.stringify({ bucket, buildId: manifest.buildId, manifestSha, artifacts: manifest.artifacts.length }));
-    console.log(`sample-preview: seeded real build ${manifest.buildId} into ${persistTo}`);
-  } else {
-    console.log(`sample-preview: real build ${manifest.buildId} assets already seeded`);
-  }
+    const existingManifest = force ? null : await store.head(manifestKey);
+    if (existingManifest?.size === manifestBytes.length && existingManifest.customMetadata?.sha256 === manifestSha) reusedObjects++;
+    else await put(manifestKey, manifestBytes, 'application/json', manifestSha);
+    const pointerBytes = Buffer.from(JSON.stringify(buildLocalPointer(manifest, manifestKey)));
+    await put(`catalog/${manifest.model}/latest.json`, pointerBytes, 'application/json', sha256(pointerBytes));
+    await mkdir(markerDir, { recursive: true });
+    await writeFile(marker, JSON.stringify({ buildId: manifest.buildId, manifestSha, objects: objects.length }));
+  } finally { await store.dispose(); }
+  return { manifest, manifestPath, persistTo, uploadedObjects, reusedObjects };
+}
 
-  const pointer = buildLocalPointer(manifest, manifestKey);
-  const pointerPath = join(markerDir, `pointer-${manifest.buildId}.json`);
-  writeFileSync(pointerPath, JSON.stringify(pointer));
-  putObject(node, bucket, pointerKey, pointerPath, 'application/json', persistTo);
-  console.log(`sample-preview: local latest pointer now selects ${manifest.buildId}`);
-
-  const args = [wranglerJs, 'dev', '--local', '--var', 'AV_LOCAL_DEVELOPMENT:true', '--ip', '127.0.0.1', '--port', String(port), '--persist-to', persistTo, '--log-level', 'info', '--show-interactive-dev-session=false'];
-  console.log(`sample-preview: serving http://127.0.0.1:${port} from ${persistTo}`);
-  const child = spawn(node, args, { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
-
+export async function previewBuild(options: PreviewOptions): Promise<void> {
+  const expectedNode = (JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { engines: { node: string } }).engines.node;
+  invariant(process.versions.node === expectedNode, `Use the pinned workspace runtime: pnpm sample-preview (expected Node ${expectedNode})`);
+  const port = options.port ?? 8787;
+  invariant(Number.isInteger(port) && port >= 1 && port <= 65535, '--port must be an integer between 1 and 65535');
+  const seeded = await seedLocalBuild(options);
+  console.log(`sample-preview: ${seeded.uploadedObjects} local objects written, ${seeded.reusedObjects} reused; selected ${seeded.manifest.buildId}`);
+  if (options.seedOnly) return;
+  const args = [wranglerJs, 'dev', ...(options.fixture ? [join(apiDir, 'test', 'fixture-worker.ts')] : []), '--local', '--var', 'AV_LOCAL_DEVELOPMENT:true', '--ip', '127.0.0.1', '--port', String(port), '--persist-to', seeded.persistTo, '--log-level', 'info', '--show-interactive-dev-session=false'];
+  console.log(`sample-preview: serving http://127.0.0.1:${port} from ${seeded.persistTo}`);
+  const child = spawn(process.execPath, args, { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
   const forward = (signal: NodeJS.Signals): void => {
     if (child.exitCode === null) {
-      try {
-        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
-        else child.kill(signal);
-      } catch {
-        child.kill(signal);
-      }
+      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); }
+      catch { child.kill(signal); }
     }
   };
-  const onInt = (): void => forward('SIGINT');
-  const onTerm = (): void => forward('SIGTERM');
-  process.on('SIGINT', onInt);
-  process.on('SIGTERM', onTerm);
-
-  await new Promise<void>((resolveExit, rejectExit) => {
-    child.on('error', rejectExit);
-    child.on('close', (code, signal) => {
-      process.off('SIGINT', onInt);
-      process.off('SIGTERM', onTerm);
-      if (signal) console.error(`sample-preview: wrangler stopped by ${signal}`);
-      process.exitCode = code ?? (signal ? 1 : 0);
-      resolveExit();
+  const onInt = (): void => forward('SIGINT'), onTerm = (): void => forward('SIGTERM');
+  process.on('SIGINT', onInt); process.on('SIGTERM', onTerm);
+  try {
+    await new Promise<void>((done, reject) => {
+      child.once('error', reject);
+      child.once('close', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); done(); });
     });
-  });
+  } finally { process.off('SIGINT', onInt); process.off('SIGTERM', onTerm); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => {
-    console.error(`sample-preview: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
+  const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
+  const manifestPath = arg('manifest');
+  (async () => {
+    invariant(manifestPath, '--manifest is required');
+    await previewBuild({ manifestPath, port: Number(arg('port') ?? 8787), persistTo: arg('persist-to'), reseed: process.argv.includes('--reseed'), fixture: process.argv.includes('--fixture'), seedOnly: process.argv.includes('--seed-only') });
+  })().catch(error => { console.error(`sample-preview: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
 }

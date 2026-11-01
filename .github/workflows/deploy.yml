@@ -95,12 +95,21 @@ jobs:
           pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs --expected-deployment-id "${DEPLOYMENT_ID}"
       - name: Build preview
         env:
+          AV_API_BASE: ${{ vars.API_BASE_URL }}
           VITE_API_BASE: ${{ vars.API_BASE_URL }}
           VITE_BUILD_REVISION: ${{ env.DEPLOYMENT_ID }}
         shell: bash
         run: |
           set -euo pipefail
           pnpm --filter @av/preview build
+          pnpm --filter @av/windy-plugin build
+          mkdir -p apps/preview/dist/windy-plugin
+          cp apps/windy-plugin/dist/plugin.js apps/windy-plugin/dist/plugin.min.js apps/windy-plugin/dist/package.json apps/preview/dist/windy-plugin/
+          cat > apps/preview/dist/_headers <<'HEADERS'
+          /windy-plugin/*
+            Access-Control-Allow-Origin: https://www.windy.com
+            Cache-Control: public, max-age=300
+          HEADERS
       - name: Verify Pages production branch
         id: pages
         run: pnpm exec tsx scripts/cloudflare-ci.ts pagescheck --env "${TARGET_ENV}"

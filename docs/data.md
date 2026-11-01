@@ -38,7 +38,10 @@ the public domain. Source geometry, hashes and lookup metadata live
 in the [coverage manifest](../packages/contracts/coverage/manifest.json).
 
 The build manifest owns grid spacing and display limits. GFS uses its native
-quarter-degree sampling; higher display zoom does not imply finer forecasts.
+quarter-degree sampling and native tile zoom 7; higher display zoom does not imply
+finer forecasts. Version-3 manifests bind the exact grid, Earth radius, bounds,
+coverage policy and three coverage bitsets through a content hash. Retained builds
+keep their own descriptors rather than depending on the current registry.
 Current model availability and integration evidence are in [status](status.md).
 
 ## Time and retention
@@ -57,14 +60,14 @@ expires. [Operations](operations.md) explains publication and expiry.
 
 ## Colour and interpolation
 
-The [palette registry](../packages/contracts/src/index.ts) owns thresholds,
-colours and legend labels. Lift uses observed XC MSL colours; reusing those
+The [palette registry](../packages/contracts/src/index.ts) supplies thresholds,
+colours and legend labels when a build is created. The immutable manifest then
+owns those descriptors for its samples, legend and clients. Lift uses observed XC MSL colours; reusing those
 colours for AGL is a product choice. Rain's palette remains provisional.
 
-Newly rendered tiles make physical no-lift transparent on both lift layers;
+Tiles make physical no-lift transparent on both lift layers;
 nonpositive AGL values are also transparent. The manifest's `tool.liftRenderStyle`
-identifies the rendering style. Previously built immutable tiles retain their
-original rendering, and the expanded API legend reflects that build's style.
+identifies the rendering style, and the API legend reflects that build's descriptors.
 These display choices do not change the numeric statuses or values described above.
 
 Known neighbours interpolate continuously, including physical no-lift cells.

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, type CoverageMask } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, type CoverageMask } from '@av/contracts';
 import { loadCoverage, validateBuild, verifyCoverage } from './validate.js';
 
 function manifest(hash: string) {
   const timestamp = '2026-10-30T00:00:00.000Z', digest = '0'.repeat(64);
-  return { version: 2, model: 'gfs', buildId: 'test', cycle: timestamp, createdAt: timestamp, expiresAt: '2026-10-31T00:00:00.000Z', method: { id: 'test', hash: digest }, coverage: { id: 'soaring-land-v1', hash, maskKey: 'mask', maxZoom: 7 }, grid: GFS_GRID, frames: [{ id: 'f003', validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp }], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'tile', tilesSha256: digest }], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 1, bytes: 5, key: 'builds/gfs/test/samples.bin', sha256: digest }, source: {}, tool: {}, palettes: ['rain'], metrics: {} };
+  return { version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, digest), model: 'gfs', buildId: 'test', cycle: timestamp, createdAt: timestamp, expiresAt: '2026-10-31T00:00:00.000Z', method: { id: 'test', hash: digest }, coverage: { id: 'soaring-land-v1', hash, maskKey: `coverage/${hash}/manifest.json`, maxZoom: 7 }, grid: GFS_GRID, frames: [{ id: 'f003', validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp }], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'tile', tilesSha256: digest }], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 1, bytes: 5, key: 'builds/gfs/test/samples.bin', sha256: digest }, source: { provider: 'NOAA', provenanceKey: 'builds/gfs/test/provenance.json', provenanceSha256: digest }, tool: {}, palettes: ['rain'], metrics: {} };
 }
 
 describe('coverage integrity', () => {

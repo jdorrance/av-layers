@@ -1,12 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { byteRange, parseIdx, type IdxRecord } from '@azohra/meteo.grib';
 import { NoaaError } from './errors.ts';
-import type { GfsDuplicateVerification, SelectedIdxRecord, SourceAssetReceipt } from './types.ts';
+import type { GfsDuplicateVerification, SelectedIdxRecord, SourceAssetReceipt, NoaaFetchOptions } from './types.ts';
 
-export function sha256(bytes: Uint8Array | string): string {
-  return createHash('sha256').update(bytes).digest('hex');
+export function sha256(bytes: Uint8Array | string | readonly Uint8Array[]): string {
+  const hash = createHash('sha256');
+  if (Array.isArray(bytes)) for (const chunk of bytes) hash.update(chunk);
+  else hash.update(bytes as Uint8Array | string);
+  return hash.digest('hex');
 }
 
 async function atomicWrite(path: string, bytes: Uint8Array | string): Promise<void> {
@@ -19,43 +23,51 @@ async function atomicWrite(path: string, bytes: Uint8Array | string): Promise<vo
   }
 }
 
+export const MAX_NOAA_INDEX_BYTES = 1024 * 1024;
+const MAX_NOAA_RECORD_BYTES = 128 * 1024 * 1024;
+
 async function readCachedFile(path: string, expectedSize?: number): Promise<Buffer> {
-  const bytes = await readFile(path);
-  const size = bytes.byteLength;
-  if (!Number.isSafeInteger(size) || size <= 0 || (expectedSize === undefined ? size > 65_536 : size !== expectedSize)) {
-    throw new NoaaError('transport', `Wrong NOAA cache file size ${path}`);
-  }
-  return bytes;
-}
-
-function timeoutSignal(): AbortSignal {
-  return AbortSignal.timeout(90_000);
-}
-
-function combinedSignal(signal?: AbortSignal): AbortSignal {
-  return signal ? AbortSignal.any([signal, timeoutSignal()]) : timeoutSignal();
-}
-
-async function readRangeStream(response: Response, url: string, expectedLength: number, signal?: AbortSignal): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new NoaaError('transport', `Missing NOAA byte range body for ${url}`);
-  const bytes = Buffer.allocUnsafe(expectedLength);
-  let position = 0;
+  const file = await open(path, 'r');
   try {
+    const { size } = await file.stat();
+    const limit = expectedSize ?? 65_536;
+    if (!Number.isSafeInteger(size) || size <= 0 || size > limit || (expectedSize !== undefined && size !== expectedSize)) throw new NoaaError('transport', `Wrong NOAA cache file size ${path}`);
+    const bytes = Buffer.alloc(size);
+    const { bytesRead } = await file.read(bytes, 0, size, 0);
+    if (bytesRead !== size || (await file.stat()).size !== size) throw new NoaaError('transport', `Changed NOAA cache file size ${path}`);
+    return bytes;
+  } finally { await file.close(); }
+}
+
+class RetryableTransportError extends Error {
+  constructor(message: string, readonly retryAfterMs = 0) { super(message); }
+}
+
+/** Bounds both inventory and range bodies independently of untrusted Content-Length. */
+async function readBody(response: Response, url: string, limit: number, signal: AbortSignal, exactLength?: number): Promise<Buffer> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new NoaaError('transport', `Missing NOAA response body for ${url}`);
+  const chunks: Uint8Array[] = [], bytes = exactLength === undefined ? undefined : Buffer.allocUnsafe(exactLength);
+  let position = 0;
+  const abort = () => { void reader.cancel(signal.reason).catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    signal.throwIfAborted();
     for (let result = await reader.read(); !result.done; result = await reader.read()) {
-      if (result.value.byteLength > bytes.length - position) {
-        throw new NoaaError('transport', `Oversized NOAA byte range for ${url}`);
-      }
-      bytes.set(result.value, position);
+      signal.throwIfAborted();
+      if (result.value.byteLength > limit - position) throw new NoaaError('transport', `Oversized NOAA ${bytes ? 'byte range' : 'index'} for ${url}`);
+      if (bytes) bytes.set(result.value, position); else chunks.push(result.value);
       position += result.value.byteLength;
     }
-    if (position !== bytes.length) throw new NoaaError('transport', `Truncated NOAA byte range for ${url}`);
-    return bytes;
+    signal.throwIfAborted();
+    if (exactLength !== undefined && position !== exactLength) throw new NoaaError('transport', `Truncated NOAA byte range for ${url}`);
+    return bytes ?? Buffer.concat(chunks, position);
   } catch (error) {
     await reader.cancel().catch(() => {});
-    if (error instanceof NoaaError || signal?.aborted) throw error;
-    throw new NoaaError('transport', `NOAA byte range read failed for ${url}: ${(error as Error).message}`);
+    if (error instanceof NoaaError || signal.aborted) throw error;
+    throw new RetryableTransportError(`NOAA response read failed for ${url}: ${(error as Error).message}`);
   } finally {
+    signal.removeEventListener('abort', abort);
     reader.releaseLock();
   }
 }
@@ -70,6 +82,7 @@ export interface NoaaTransportStats {
   networkRequests: number;
   cacheReads: number;
   memoryIndexHits: number;
+  retries?: number;
 }
 
 export class NoaaTransport {
@@ -79,21 +92,26 @@ export class NoaaTransport {
   private readonly indexes = new Map<string, IndexResult>();
   private readonly pendingIndexes = new Map<string, Promise<IndexResult>>();
   readonly stats: NoaaTransportStats;
+  private readonly retry: Required<NonNullable<NoaaFetchOptions['retry']>>;
 
-  constructor(options: { fetch?: typeof fetch; fetchImpl?: typeof fetch; signal?: AbortSignal; cacheDir?: string; stats?: NoaaTransportStats }) {
+  constructor(options: NoaaFetchOptions & { cacheDir?: string; stats?: NoaaTransportStats }) {
     this.fetchImpl = options.fetch ?? options.fetchImpl ?? globalThis.fetch;
     this.cacheDir = options.cacheDir;
     this.signal = options.signal;
     this.stats = options.stats ?? { networkRequests: 0, cacheReads: 0, memoryIndexHits: 0 };
+    this.retry = { maxAttempts: 3, deadlineMs: 120_000, attemptTimeoutMs: 90_000, baseDelayMs: 250, maxDelayMs: 5_000, ...options.retry };
+    const r = this.retry;
+    if (Object.values(r).some(n => !Number.isSafeInteger(n) || n < 0) || r.maxAttempts < 1 || r.maxAttempts > 5 || r.deadlineMs < 1 || r.deadlineMs > 300_000 || r.attemptTimeoutMs < 1 || r.attemptTimeoutMs > r.deadlineMs || r.maxDelayMs > r.deadlineMs || r.baseDelayMs > r.maxDelayMs) throw new RangeError('Invalid NOAA retry policy');
   }
 
   abort(): void {
     this.signal?.throwIfAborted();
   }
 
-  async index(url: string, expectedStamp: string): Promise<IndexResult> {
+  async index(url: string, expectedStamp: string, refresh = false): Promise<IndexResult> {
     this.abort();
     const cacheKey = `${url}\n${expectedStamp}`;
+    if (refresh) this.indexes.delete(cacheKey);
     const prior = this.indexes.get(cacheKey);
     if (prior) {
       this.stats.memoryIndexHits++;
@@ -104,7 +122,7 @@ export class NoaaTransport {
       this.stats.memoryIndexHits++;
       return pending;
     }
-    const promise = this.readIndex(url, expectedStamp);
+    const promise = this.readIndex(url, expectedStamp, refresh);
     this.pendingIndexes.set(cacheKey, promise);
     try {
       const result = await promise;
@@ -115,7 +133,7 @@ export class NoaaTransport {
     }
   }
 
-  private async readIndex(url: string, expectedStamp: string): Promise<IndexResult> {
+  private async readIndex(url: string, expectedStamp: string, refresh: boolean): Promise<IndexResult> {
     const bytes = await this.read(url, null, buffer => {
       const lines = buffer.toString('utf8').trim().split('\n').filter(Boolean);
       if (!lines.length) throw new NoaaError('transport', `Empty NOAA index: ${url}`);
@@ -124,7 +142,7 @@ export class NoaaTransport {
           throw new NoaaError('source-conflict', `NOAA index run mismatch in ${url}`, { line });
         }
       }
-    });
+    }, refresh);
     const text = bytes.bytes.toString('utf8');
     const result = { records: parseIdx(text), text, asset: bytes.asset };
     prepareIndex(result);
@@ -135,7 +153,7 @@ export class NoaaTransport {
     if (!Number.isSafeInteger(record.offset) || record.offset < 0) {
       throw new NoaaError('record-missing', `Invalid NOAA record offset for ${url}`);
     }
-    if (!Number.isSafeInteger(record.length) || record.length === undefined || record.length <= 0 || !Number.isSafeInteger(record.offset + record.length - 1)) {
+    if (!Number.isSafeInteger(record.length) || record.length === undefined || record.length <= 0 || record.length > MAX_NOAA_RECORD_BYTES || !Number.isSafeInteger(record.offset + record.length - 1)) {
       throw new NoaaError('record-missing', `NOAA record has no bounded byte range for ${url}`);
     }
     return this.read(url, record, buffer => {
@@ -158,6 +176,7 @@ export class NoaaTransport {
       !/^[0-9a-f]{64}$/.test(receipt.sha256) ||
       !Number.isSafeInteger(receipt.size) ||
       receipt.size <= 0 ||
+      receipt.size > (record ? MAX_NOAA_RECORD_BYTES : MAX_NOAA_INDEX_BYTES) ||
       !receipt.file ||
       receipt.file !== `${receipt.sha256}.bin`
     ) {
@@ -175,12 +194,13 @@ export class NoaaTransport {
     url: string,
     record: IdxRecord | null,
     validate: (bytes: Buffer) => void,
+    refresh = false,
   ): Promise<{ bytes: Buffer; asset: SourceAssetReceipt }> {
     this.abort();
     const rangeHeader = record ? byteRange(record) : null;
     const key = sha256(`${url}\n${rangeHeader}`);
     const receiptPath = this.cacheDir ? join(this.cacheDir, `${key}.json`) : null;
-    if (receiptPath) {
+    if (receiptPath && !refresh) {
       const cached = await this.readFromCache(url, rangeHeader, record, receiptPath);
       if (cached) {
         validate(cached.bytes);
@@ -188,36 +208,47 @@ export class NoaaTransport {
         return cached;
       }
     }
-    this.abort();
-    this.stats.networkRequests++;
-    const response = await this.fetchImpl(url, {
-      headers: rangeHeader ? { Range: rangeHeader } : {},
-      redirect: 'error',
-      signal: combinedSignal(this.signal),
-    }).catch(error => {
-      if (this.signal?.aborted) throw error;
-      throw new NoaaError('transport', `NOAA fetch failed for ${url}: ${(error as Error).message}`);
-    });
-    const expectedStatus = record ? 206 : 200;
-    if (response.status !== expectedStatus) {
-      throw new NoaaError('transport', `HTTP ${response.status} for ${url}; expected ${expectedStatus}`);
-    }
-    if (record) {
-      const contentRange = response.headers.get('content-range');
-      const parsed = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? '');
-      if (
-        !parsed ||
-        Number(parsed[1]) !== record.offset ||
-        Number(parsed[2]) !== record.offset + record.length! - 1 ||
-        !Number.isSafeInteger(Number(parsed[3])) ||
-        Number(parsed[3]) <= Number(parsed[2])
-      ) {
-        throw new NoaaError('transport', `Wrong NOAA Content-Range for ${url}: ${contentRange ?? 'missing'}`);
+    const deadline = Date.now() + this.retry.deadlineMs;
+    let bytes: Buffer | undefined;
+    for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt++) {
+      this.abort();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new NoaaError('transport', `NOAA request deadline exceeded for ${url}`, { reason: 'deadline', attempt });
+      const timeout = AbortSignal.timeout(Math.min(remaining, this.retry.attemptTimeoutMs));
+      const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
+      let response: Response | undefined;
+      try {
+        this.stats.networkRequests++;
+        response = await this.fetchImpl(url, { headers: rangeHeader ? { Range: rangeHeader } : {}, redirect: 'error', signal });
+        const expectedStatus = record ? 206 : 200;
+        if (response.status !== expectedStatus) {
+          if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+            const after = response.headers.get('retry-after');
+            const retryAfterMs = after === null ? 0 : /^\d+$/.test(after) ? Number(after) * 1000 : Math.max(0, Date.parse(after) - Date.now());
+            throw new RetryableTransportError(`HTTP ${response.status} for ${url}; expected ${expectedStatus}`, Number.isFinite(retryAfterMs) ? retryAfterMs : 0);
+          }
+          throw new NoaaError('transport', `HTTP ${response.status} for ${url}; expected ${expectedStatus}`, { reason: response.status === 404 ? 'upstream-not-ready' : 'http-status', status: response.status });
+        }
+        if (record) {
+          const contentRange = response.headers.get('content-range'), parsed = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? '');
+          if (!parsed || Number(parsed[1]) !== record.offset || Number(parsed[2]) !== record.offset + record.length! - 1 || !Number.isSafeInteger(Number(parsed[3])) || Number(parsed[3]) <= Number(parsed[2])) throw new NoaaError('transport', `Wrong NOAA Content-Range for ${url}: ${contentRange ?? 'missing'}`);
+        }
+        bytes = await readBody(response, url, record?.length ?? MAX_NOAA_INDEX_BYTES, signal, record?.length);
+        break;
+      } catch (error) {
+        await response?.body?.cancel().catch(() => {});
+        this.abort();
+        if (error instanceof NoaaError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        if (attempt === this.retry.maxAttempts || Date.now() >= deadline) throw new NoaaError('transport', `NOAA fetch failed after ${attempt} attempts for ${url}: ${message}`, { reason: timeout.aborted ? 'timeout' : 'transient-exhausted', attempts: attempt });
+        this.stats.retries = (this.stats.retries ?? 0) + 1;
+        const jitter = this.retry.baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random());
+        const requestedDelay = error instanceof RetryableTransportError ? Math.max(jitter, error.retryAfterMs) : jitter;
+        const wait = Math.min(this.retry.maxDelayMs, Math.ceil(requestedDelay), Math.max(0, deadline - Date.now()));
+        if (wait > 0) await delay(wait, undefined, { signal: this.signal });
       }
     }
-    const bytes = record
-      ? await readRangeStream(response, url, record.length!, this.signal)
-      : Buffer.from(await response.arrayBuffer());
+    if (!bytes) throw new NoaaError('transport', `NOAA request produced no bytes for ${url}`);
     validate(bytes);
     const digest = sha256(bytes);
     const asset: SourceAssetReceipt = {
