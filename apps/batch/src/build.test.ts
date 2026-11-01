@@ -23,7 +23,7 @@ vi.mock('./render.js', async () => {
 });
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
 vi.mock('@av/forecast', async importOriginal => ({ ...await importOriginal<typeof import('@av/forecast')>(), packCells: vi.fn(() => new Uint8Array(1)) }));
-vi.mock('./sample-pack.js', () => ({ writeSamplePack: vi.fn(async (_path: string, inputs: string[], layout: { storedCells: number }) => ({ bytes: layout.storedCells * inputs.length * 5, sha256: 'c'.repeat(64), bufferBytes: 1 })) }));
+vi.mock('./sample-pack.js', () => ({ writeSamplePack: vi.fn(async (_path: string, inputs: string[], layout: { storedCells: number }) => ({ bytes: layout.storedCells * inputs.length * 5, sha256: 'c'.repeat(64) })) }));
 vi.mock('./noaa/index.js', () => {
   const acquireGfsFrame = vi.fn(), discoverGfsRun = vi.fn();
   return { acquireGfsFrame, discoverGfsRun, createGfsAcquisitionSession: vi.fn(async (options: { cycle?: string; cacheDir?: string; activeIndices: Uint32Array }) => {

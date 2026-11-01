@@ -146,7 +146,7 @@ export async function buildSample(options: { out: string; cycle?: string; cacheD
       renderer: renderer.metrics(),
       acquisition: acquisition.stats,
       capacity,
-      packing: { bufferBytes: packed.bufferBytes, indexBytes: layout.indexBytes },
+      packing: { indexBytes: layout.indexBytes },
       elapsedMs: Date.now() - started,
       peakRssBytes: process.resourceUsage().maxRSS * 1024
     });

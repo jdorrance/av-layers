@@ -6,7 +6,7 @@ import { expect, it } from 'vitest';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { writeSamplePack } from './sample-pack.js';
 
-it('transposes bounded chunks in caller channel order, preserves raw bytes, and hashes the exact output', async () => {
+it('transposes channels in caller order, preserves raw bytes, and hashes the exact output', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-sample-pack-'));
   try {
     const layout = prepareSamplePackLayout({ width: 5, height: 2, wrapLongitude: true }, Uint8Array.of(0b10010011, 1), Uint8Array.of(0b01000000, 2), 2);
@@ -14,7 +14,7 @@ it('transposes bounded chunks in caller channel order, preserves raw bytes, and 
     const inputs = flats.map((_, i) => join(root, `${i}.bin`));
     for (let i = 0; i < inputs.length; i++) await writeFile(inputs[i], flats[i]);
     const output = join(root, 'pack.bin');
-    const result = await writeSamplePack(output, inputs, layout, 140);
+    const result = await writeSamplePack(output, inputs, layout);
     const chunks: Buffer[] = [];
     for (let slot = 0; slot < layout.blockSlots; slot++) {
       const block = layout.block(slot);
@@ -27,12 +27,11 @@ it('transposes bounded chunks in caller channel order, preserves raw bytes, and 
     }
     const expected = Buffer.concat(chunks);
     expect(await readFile(output)).toEqual(expected);
-    expect(result).toEqual({ bytes: expected.length, sha256: createHash('sha256').update(expected).digest('hex'), bufferBytes: 140 });
-    await expect(writeSamplePack(output, inputs, layout, 140)).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(result).toEqual({ bytes: expected.length, sha256: createHash('sha256').update(expected).digest('hex') });
+    await expect(writeSamplePack(output, inputs, layout)).rejects.toMatchObject({ code: 'EEXIST' });
     expect(await readFile(output)).toEqual(expected);
     await writeFile(inputs[0], Buffer.alloc(1));
-    await expect(writeSamplePack(join(root, 'bad.bin'), inputs, layout, 140)).rejects.toThrow('Invalid flat sample size');
+    await expect(writeSamplePack(join(root, 'bad.bin'), inputs, layout)).rejects.toThrow('Invalid flat sample size');
     await expect(readFile(join(root, 'bad.bin'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(writeSamplePack(join(root, 'small.bin'), inputs, layout, 1)).rejects.toThrow('buffer budget');
   } finally { await rm(root, { recursive: true, force: true }); }
 });

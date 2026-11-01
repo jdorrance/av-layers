@@ -38,9 +38,11 @@ checks cadence against retention, including headroom for replacement builds.
 <summary>What upload verification establishes</summary>
 
 Local artifacts are checked with SHA-256. Uploads use single-part PUTs with
-`Content-MD5`, at most four concurrently and within the publisher's byte budget.
-Oversized artifacts fail before allocation or upload. Readback checks size, the expected MD5
-ETag and a 32-byte tail with matching ETag; the complete manifest is read back.
+`Content-MD5`, at most four concurrently. The publisher checks each artifact's
+file size against its per-artifact byte limit before reading it for upload.
+Up to four artifact buffers can be held at once. Readback checks size, the
+expected MD5 ETag and a 32-byte tail with matching ETag; the complete manifest
+is read back.
 Multipart or opaque ETags are rejected. This relies on R2 validating MD5 and
 faithfully reporting stored-object ETags. It is not an independent remote
 SHA-256 scrub and cannot detect corrupt bytes hidden behind dishonest or stale

@@ -28,22 +28,14 @@ function copyBlockChannel(
 export async function writeSamplePack(
   output: string,
   inputs: readonly (string | Uint8Array)[],
-  layout: SamplePackLayout,
-  bufferBytes = 8 * 1024 * 1024
-): Promise<{ sha256: string; bytes: number; bufferBytes: number }> {
+  layout: SamplePackLayout
+): Promise<{ sha256: string; bytes: number }> {
   if (!inputs.length) throw new RangeError('Pack requires at least one channel');
   const stringInputs = inputs.filter((item): item is string => typeof item === 'string');
   if (new Set(stringInputs).size !== stringInputs.length) throw new RangeError('Pack channels must have distinct input files');
   const stride = inputs.length * CELL_BYTES, totalBytes = layout.storedCells * stride;
   if (!Number.isSafeInteger(totalBytes)) throw new RangeError('Pack size exceeds safe offsets');
-  const { width, height, wrapLongitude } = layout.grid;
-  const stripeRows = Math.min(layout.blockSize + 1, height), sourceBytes = stripeRows * width * CELL_BYTES;
-  const maxBlockCells = (wrapLongitude ? Math.min(layout.blockSize, width) + 1 : Math.min(layout.blockSize + 1, width)) * stripeRows;
-  if (!Number.isSafeInteger(bufferBytes) || bufferBytes < sourceBytes + maxBlockCells * stride) {
-    throw new RangeError('Pack buffer budget cannot hold one source stripe and block');
-  }
-  const blockColumns = Math.ceil(width / layout.blockSize);
-  const batchSize = Math.min(blockColumns, Math.floor((bufferBytes - sourceBytes) / (maxBlockCells * stride)));
+  const { width, wrapLongitude } = layout.grid;
   const expectedChannelBytes = layout.cellCount * CELL_BYTES;
   const channels = await Promise.all(inputs.map(async item => {
     const bytes = typeof item === 'string' ? await readFile(item) : item;
@@ -62,7 +54,6 @@ export async function writeSamplePack(
   await writeFile(output, packed, { flag: 'wx' });
   return {
     sha256: createHash('sha256').update(packed).digest('hex'),
-    bytes: packed.byteLength,
-    bufferBytes: sourceBytes + batchSize * maxBlockCells * stride
+    bytes: packed.byteLength
   };
 }

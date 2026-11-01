@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { forecastObjects, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
@@ -10,7 +10,7 @@ const decode = (value: Uint8Array): unknown => JSON.parse(Buffer.from(value).toS
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
 const manifestKey = (model: ModelId, id: string): string => `builds/${model}/${id}/manifest.json`;
 const safeId = (id: string): boolean => /^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(id);
-export const UPLOAD_BUFFER_BYTES = BUILD_BUDGETS.samplePackBytes;
+export const MAX_UPLOAD_ARTIFACT_BYTES = BUILD_BUDGETS.samplePackBytes;
 
 export function buildIdTime(id: string): number {
   if (!safeId(id)) throw new Error('Invalid build ID');
@@ -60,8 +60,9 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
   await runConcurrent(files, 4, async file => {
     assertLifetime(manifest, now());
-    const bytes = await readFile(localPath(root, file.key));
-    if (!bytes.length || bytes.length > UPLOAD_BUFFER_BYTES) throw new Error(`Artifact exceeds upload buffer budget: ${file.key}`);
+    const path = localPath(root, file.key), { size } = await stat(path);
+    if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
+    const bytes = await readFile(path);
     if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
     const length = Math.min(bytes.length, 32);
     const md5 = createHash('md5').update(bytes).digest();

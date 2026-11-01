@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,12 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GFS_GRID, LAYER_IDS, type Manifest, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
 
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
+
 vi.mock('./validate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./validate.js')>();
   return { ...actual, wasValidatedInProcess: vi.fn(actual.wasValidatedInProcess), loadCoverage: vi.fn(async () => ({})), validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest) };
 });
 
-import { buildIdTime, cleanup, publish, rollback } from './publication.js';
+import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback } from './publication.js';
 import { localPath, sha256, validateBuild, wasValidatedInProcess } from './validate.js';
 
 class MemoryStore implements ObjectStorage {
@@ -68,6 +73,14 @@ async function fixture(externalProvenance = false): Promise<{ root: string; mani
 }
 
 describe('immutable publication', () => {
+  it.each([0, MAX_UPLOAD_ARTIFACT_BYTES + 1])('rejects a %i-byte artifact before reading it for upload', async size => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    const path = localPath(root, manifest.artifacts[0].tilesKey);
+    await truncate(path, size);
+    await expect(publish(store, root, manifest, { now: () => now })).rejects.toThrow('per-file upload limit');
+    expect(vi.mocked(readFile).mock.calls.some(([file]) => file === path)).toBe(false);
+    expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
+  });
   it('reuses a process-local validation result but still checks the actual uploaded bytes', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     const checks = vi.mocked(validateBuild).mock.calls.length;
