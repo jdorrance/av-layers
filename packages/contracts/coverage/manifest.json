@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "soaring-land-v1",
   "kind": "coverage-mask",
-  "maxZoom": 5,
+  "maxZoom": 7,
   "crs": "EPSG:4326",
   "source": {
     "dataset": "Natural Earth 1:50m Admin 0 Countries",
@@ -89,20 +89,20 @@
   },
   "policy": {
     "id": "soaring-land-v1",
-    "latMin": -55.0,
-    "latMax": 65.0,
-    "seaBufferMeters": 50000.0,
+    "latMin": -55,
+    "latMax": 65,
+    "seaBufferMeters": 50000,
     "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core; antimeridian shifted and split at +/-180. No global LAEA or degree buffer.",
     "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
     "cellFootprint": "GFS regular-grid nearest-cell rectangle: longitude center +/-0.125deg (periodic at +/-180), latitude center +/-0.125deg, clipped to -55..65. A cell is output-active when this rectangle intersects the admitted buffered geometry and does not intersect an excluded footprint.",
-    "tileRule": "A z0-5 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
+    "tileRule": "A z0-7 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
     "outputDomain": "union of admitted nearest-cell footprints clipped to the latitude band"
   },
   "grid": {
     "name": "gfs-0p25-global",
-    "lon0": -180.0,
-    "lat0": 90.0,
+    "lon0": -180,
+    "lat0": 90,
     "width": 1440,
     "height": 721,
     "dx": 0.25,
@@ -153,7 +153,9 @@
       2,
       3,
       4,
-      5
+      5,
+      6,
+      7
     ],
     "offsets": {
       "0": 0,
@@ -161,7 +163,9 @@
       "2": 5,
       "3": 21,
       "4": 85,
-      "5": 341
+      "5": 341,
+      "6": 1365,
+      "7": 5461
     },
     "tileCounts": {
       "0": 1,
@@ -169,17 +173,21 @@
       "2": 16,
       "3": 64,
       "4": 256,
-      "5": 1024
+      "5": 1024,
+      "6": 4096,
+      "7": 16384
     },
-    "totalBits": 1365,
-    "bytes": 171,
+    "totalBits": 21845,
+    "bytes": 2731,
     "countsByZoom": {
       "0": 1,
       "1": 4,
       "2": 8,
       "3": 30,
       "4": 92,
-      "5": 267
+      "5": 267,
+      "6": 847,
+      "7": 2794
     },
     "activeZ5Tiles": [
       "5/0/8",
@@ -450,7 +458,7 @@
       "5/31/20",
       "5/31/21"
     ],
-    "sha256": "1c8ff15249f29430c7261a0cddf545d9f7076305ca91c0f6b97039140d7b8f3d"
+    "sha256": "1a61ce891485c9bbe015b21acefca7511743a2d24d233c1166d7b2a1b26a1544"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.353553,
@@ -480,7 +488,7 @@
         "nearestCell": {
           "row": 228,
           "col": 251,
-          "centerLat": 33.0,
+          "centerLat": 33,
           "centerLon": -117.25
         }
       },
@@ -600,7 +608,7 @@
         "nearestCell": {
           "row": 148,
           "col": 1413,
-          "centerLat": 53.0,
+          "centerLat": 53,
           "centerLon": 173.25
         }
       },
@@ -616,7 +624,7 @@
           "row": 427,
           "col": 0,
           "centerLat": -16.75,
-          "centerLon": -180.0
+          "centerLon": -180
         }
       },
       {
@@ -666,8 +674,8 @@
       },
       {
         "name": "outside_band_north",
-        "lat": 66.0,
-        "lon": 20.0,
+        "lat": 66,
+        "lon": 20,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -675,14 +683,14 @@
         "nearestCell": {
           "row": 96,
           "col": 800,
-          "centerLat": 66.0,
-          "centerLon": 20.0
+          "centerLat": 66,
+          "centerLon": 20
         }
       },
       {
         "name": "outside_band_south",
-        "lat": -56.0,
-        "lon": 10.0,
+        "lat": -56,
+        "lon": 10,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -690,14 +698,14 @@
         "nearestCell": {
           "row": 584,
           "col": 760,
-          "centerLat": -56.0,
-          "centerLon": 10.0
+          "centerLat": -56,
+          "centerLon": 10
         }
       },
       {
         "name": "open_ocean_atlantic",
-        "lat": 30.0,
-        "lon": -40.0,
+        "lat": 30,
+        "lon": -40,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -705,8 +713,8 @@
         "nearestCell": {
           "row": 240,
           "col": 560,
-          "centerLat": 30.0,
-          "centerLon": -40.0
+          "centerLat": 30,
+          "centerLon": -40
         }
       }
     ],
@@ -718,8 +726,8 @@
           179.95000000000002
         ],
         "tileCoreLon": [
-          -180.0,
-          -170.0
+          -180,
+          -170
         ],
         "probeLon": -179.8,
         "expected": true,
@@ -732,8 +740,8 @@
           -179.89999999999998
         ],
         "tileCoreLon": [
-          170.0,
-          180.0
+          170,
+          180
         ],
         "probeLon": 179.8,
         "expected": true,
@@ -749,7 +757,7 @@
   "regional": {},
   "regeneration": {
     "tooling": "scripts/masks/build_masks.py",
-    "toolingSha256": "6f2f892eb85522a973186a7bdfa9d82cb3de6a548a8e792e675a2d73e5acbce3",
+    "toolingSha256": "8dfb4a1eb50257978bbdd2e890950b5339726850cfd9a1bf853a43ee95f0af55",
     "python": "3.14.7",
     "pythonVersion": "3.14.7",
     "pythonImplementation": "CPython",

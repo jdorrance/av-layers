@@ -70,8 +70,13 @@ function samplePixel(
 }
 
 function raster(field: GridField, prepared: PreparedGridSampling, layer: LayerId): { rgba: Uint8Array; blank: boolean } {
-  const rgba = new Uint8Array(256 * 256 * 4), sample: Sample = { value: null, status: 3, support: 0, interpolated: false };
+  const rgba = new Uint8Array(256 * 256 * 4);
   const sampleInto = prepared.bind(field, layer), colors = palettes[LAYERS[layer].palette];
+  const colorCount = colors.length / 4;
+  if (!prepared.contributors.some(idx => paletteBinIndex(layer, field.values[idx], field.flags[idx], colorCount) >= 0)) {
+    return { rgba, blank: true };
+  }
+  const sample: Sample = { value: null, status: 3, support: 0, interpolated: false };
   let blank = true;
   for (let i = 0; i < 256 * 256; i++) {
     if (samplePixel(sampleInto, sample, layer, colors, i & 255, i >> 8, rgba, i * 4)) blank = false;

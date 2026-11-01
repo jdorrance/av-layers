@@ -122,6 +122,7 @@ export interface PreparedGridSampling {
   readonly byteLength: number;
   readonly width: number;
   readonly height: number;
+  readonly contributors: Uint32Array;
   bind(field: GridField, layer: LayerId): (x: number, y: number, out: Sample) => void;
 }
 
@@ -144,17 +145,27 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
   const rows = prepareAxis(latitudes, grid.lat0, grid.dy, grid.height, false, false);
   const columns = prepareAxis(longitudes, grid.lon0, grid.dx, grid.width, grid.wrapLongitude, true);
   const covered = new Uint8Array(Math.ceil(total / 8));
+  const contributorSet = new Set<number>();
   let hasCoverage = false;
   for (let index = 0; index < total; index++) {
     const x = index % width, y = (index - x) / width;
     if (!Number.isFinite(rows.lower[y]) || latitudes[y] < -55 || latitudes[y] > 65 || !Number.isFinite(columns.lower[x]) || longitudes[x] < -180 || longitudes[x] > 180) continue;
-    const row = rows.fraction[y] <= 0.5 ? rows.lower[y] : Math.min(grid.height - 1, rows.upper[y]);
-    const fx = columns.fraction[x], c0 = columns.lower[x], c1 = columns.upper[x];
+    const fy = rows.fraction[y], fx = columns.fraction[x];
+    const row = fy <= 0.5 ? rows.lower[y] : Math.min(grid.height - 1, rows.upper[y]);
+    const c0 = columns.lower[x], c1 = columns.upper[x];
     const col = fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
-    if (getBit(mask.output, row * grid.width + col)) { covered[index >> 3] |= 1 << (index & 7); hasCoverage = true; }
+    if (getBit(mask.output, row * grid.width + col)) {
+      covered[index >> 3] |= 1 << (index & 7);
+      hasCoverage = true;
+      for (const [dx, dy] of QUAD_OFFSETS) {
+        if ((dx && fx === 0) || (dy && fy === 0)) continue;
+        contributorSet.add((dy === 0 ? rows.lower[y] : rows.upper[y]) * grid.width + (dx === 0 ? c0 : c1));
+      }
+    }
   }
+  const contributors = Uint32Array.from(contributorSet);
   return {
-    width, height, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength,
+    width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength,
     bind(field, layer) {
       if (hasCoverage && (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length)) throw new RangeError('field size differs from grid');
       const scratch = reductionBuffer(4), spec = LAYERS[layer];

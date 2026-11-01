@@ -71,7 +71,8 @@ export async function verifyCoverage(mask: CoverageMask): Promise<string> {
   if (record.schemaVersion !== 1 || record.id !== GFS_PRODUCT.coverageId || mask.maxZoom !== GFS_PRODUCT.maxNativeZoom || JSON.stringify(mask.grid) !== JSON.stringify(GFS_PRODUCT.grid)) {
     throw new Error('Coverage identity mismatch');
   }
-  for (const [name, data, length] of [['output', mask.output, 129780], ['halo', mask.halo, 129780], ['tiles', mask.tiles, 171]] as const) {
+  const expectedTileBytes = Math.ceil(((4 ** (GFS_PRODUCT.maxNativeZoom + 1) - 1) / 3) / 8);
+  for (const [name, data, length] of [['output', mask.output, 129780], ['halo', mask.halo, 129780], ['tiles', mask.tiles, expectedTileBytes]] as const) {
     const item = record[name];
     if (!item || typeof item !== 'object' || data.length !== length || (item as Record<string, unknown>).bytes !== length || (item as Record<string, unknown>).sha256 !== sha256(data)) {
       throw new Error(`Coverage ${name} bitset hash mismatch`);
@@ -80,13 +81,16 @@ export async function verifyCoverage(mask: CoverageMask): Promise<string> {
   return sha256(bytes);
 }
 
-async function verifyArchiveTile(archive: PMTiles, path: string, tile: { z: number; x: number; y: number }): Promise<void> {
+async function verifyArchiveTile(archive: PMTiles, path: string, tile: { z: number; x: number; y: number }, verified: Set<string>): Promise<void> {
   const result = await archive.getZxy(tile.z, tile.x, tile.y);
   if (!result || result.data.byteLength < 25) throw new Error(`Missing or invalid active tile ${path} ${tile.z}/${tile.x}/${tile.y}`);
-  const dims = await decodeWebp(new Uint8Array(result.data)).catch(() => {
+  const bytes = new Uint8Array(result.data), key = sha256(bytes);
+  if (verified.has(key)) return;
+  const dims = await decodeWebp(bytes).catch(() => {
     throw new Error(`Missing or invalid active tile ${path} ${tile.z}/${tile.x}/${tile.y}`);
   });
   if (dims.width !== 256 || dims.height !== 256) throw new Error(`Invalid tile dimensions ${path} ${tile.z}/${tile.x}/${tile.y}`);
+  verified.add(key);
 }
 
 export async function validateArchive(path: string, mask: CoverageMask): Promise<void> {
@@ -109,8 +113,8 @@ export async function validateArchive(path: string, mask: CoverageMask): Promise
     if (header.tileType !== TileType.Webp || header.tileCompression !== Compression.None || ![Compression.None, Compression.Gzip].includes(header.internalCompression) || header.minZoom !== 0 || header.maxZoom !== mask.maxZoom) {
       throw new Error(`Unsupported archive ${path}: ${JSON.stringify({ type: header.tileType, tileCompression: header.tileCompression, internalCompression: header.internalCompression, minZoom: header.minZoom, maxZoom: header.maxZoom })}`);
     }
-    const tiles = Array.from({ length: mask.maxZoom + 1 }, (_, z) => expectedTiles(mask, z)).flat();
-    await runConcurrent(tiles, 8, tile => verifyArchiveTile(archive, path, tile));
+    const tiles = Array.from({ length: mask.maxZoom + 1 }, (_, z) => expectedTiles(mask, z)).flat(), verified = new Set<string>();
+    await runConcurrent(tiles, 8, tile => verifyArchiveTile(archive, path, tile, verified));
   } finally {
     await file.close();
   }

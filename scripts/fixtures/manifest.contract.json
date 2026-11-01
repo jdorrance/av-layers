@@ -13,7 +13,7 @@
     "id": "soaring-land-v1",
     "hash": "0000000000000000000000000000000000000000000000000000000000000000",
     "maskKey": "coverage/soaring-land-v1.json",
-    "maxZoom": 5
+    "maxZoom": 7
   },
   "grid": {
     "width": 1440,

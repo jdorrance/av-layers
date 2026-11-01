@@ -144,7 +144,7 @@ export interface ProductDefinition {
   readonly layers: readonly LayerId[];
 }
 export const GFS_PRODUCT: ProductDefinition = {
-  grid: GFS_GRID, coverageId: 'soaring-land-v1', maxNativeZoom: 5,
+  grid: GFS_GRID, coverageId: 'soaring-land-v1', maxNativeZoom: 7,
   frameHours: [3, 6, 9, 12, 15, 18, 21, 24], intervalHours: 3, layers: LAYER_IDS
 };
 const products: Partial<Record<ModelId, ProductDefinition>> = { gfs: GFS_PRODUCT };

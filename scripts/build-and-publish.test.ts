@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', GITHUB_ENV: '/tmp/ci-env', CYCLE: '' })) vi.stubEnv(key, value);
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
-  manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267] };
+  manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   fake.build.mockImplementation(async ({ onValidated }) => { await onValidated(manifest, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.gh.mockResolvedValue({ stdout: revision + '\n' });
   fake.publish.mockResolvedValue(undefined);

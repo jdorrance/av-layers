@@ -59,7 +59,7 @@ CELL_HALF = 0.125
 CELL_COUNT = WIDTH * HEIGHT
 CELL_BYTES = (CELL_COUNT + 7) // 8
 
-TILE_ZOOMS = (0, 1, 2, 3, 4, 5)
+TILE_ZOOMS = (0, 1, 2, 3, 4, 5, 6, 7)
 TILE_OFFSETS = {}
 _running = 0
 for _z in TILE_ZOOMS:
@@ -428,7 +428,7 @@ def build_tiles(active: bytearray):
                 if len(tree.query(probe)) > 0:
                     bits[offset + y * n + x] = 1
                     count += 1
-                    if z == TILE_ZOOMS[-1]:
+                    if z == 5:
                         active_tiles.append(f"{z}/{x}/{y}")
         counts[str(z)] = count
     return pack_bits(bits), counts, active_tiles
@@ -597,7 +597,7 @@ def main() -> None:
                     "admitted buffered geometry and does not intersect an excluded footprint."
                 ),
                 "tileRule": (
-                    "A z0-5 XYZ bit is set iff the tile's exact EPSG:4326 "
+                    "A z0-7 XYZ bit is set iff the tile's exact EPSG:4326 "
                     "Web-Mercator lon/lat bounding box intersects at least one active "
                     "cell footprint; tile centers are not tested."
                 ),

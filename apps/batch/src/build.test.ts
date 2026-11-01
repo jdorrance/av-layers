@@ -10,7 +10,7 @@ const CYCLE = '2026-10-30T00:00:00.000Z';
 
 vi.mock('./validate.js', async importOriginal => ({
   ...await importOriginal<typeof import('./validate.js')>(),
-  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(171), maxZoom: 5 }; }),
+  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
   verifyCoverage: vi.fn(async () => 'a'.repeat(64)),
   validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest),
   finalizeValidatedMetrics: vi.fn((_root: string, manifest: Manifest, metrics: Manifest['metrics']) => ({ ...manifest, metrics })),
@@ -207,13 +207,13 @@ describe('bounded end-to-end build pipeline integration', () => {
       grid: GFS_GRID,
       output: new Uint8Array(129780),
       halo: new Uint8Array(129780),
-      tiles: new Uint8Array(171),
-      maxZoom: 5,
+      tiles: new Uint8Array(2731),
+      maxZoom: 7,
     };
     setBit(boundedMask.output, index);
     setBit(boundedMask.halo, index + 1);
     setBit(boundedMask.tiles, 0);
-    setBit(boundedMask.tiles, (4 ** 5 - 1) / 3 + 16 * 32 + 16);
+    setBit(boundedMask.tiles, (4 ** 7 - 1) / 3 + 64 * 128 + 64);
     const coverageHash = 'b'.repeat(64);
 
     vi.mocked(validateModule.loadCoverage).mockResolvedValueOnce(boundedMask);
