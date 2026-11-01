@@ -1,6 +1,7 @@
 import { mkdtemp, open, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
 import { expectedTiles, paletteColor, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
@@ -18,6 +19,10 @@ function maskFor(grid: Grid, maxZoom: number): CoverageMask {
 }
 
 function pixel(image: { data: Uint8Array }, x: number, y: number): number[] { return [...image.data.subarray((y * 256 + x) * 4, (y * 256 + x) * 4 + 4)]; }
+
+function expectRgbaEqual(actual: Uint8Array, expected: Uint8Array, context: string): void {
+  expect(Buffer.from(actual.buffer, actual.byteOffset, actual.byteLength).equals(expected), `${context}: complete RGBA equality`).toBe(true);
+}
 
 async function reader(path: string): Promise<{ archive: PMTiles; close: () => Promise<void> }> {
   const file = await open(path, 'r');
@@ -206,7 +211,7 @@ describe('build-owned prepared renderer', () => {
         for (const tile of [...expectedTiles(mask, 0), ...expectedTiles(mask, 1)]) {
           const encoded = await source.archive.getZxy(tile.z, tile.x, tile.y);
           expect(encoded).toBeDefined();
-          expect((await decodeWebp(new Uint8Array(encoded!.data))).data).toEqual(renderTileRgba(target.field, mask, target.layer, tile.z, tile.x, tile.y));
+          expectRgbaEqual((await decodeWebp(new Uint8Array(encoded!.data))).data, renderTileRgba(target.field, mask, target.layer, tile.z, tile.x, tile.y), `${target.layer}/${tile.z}/${tile.x}/${tile.y}`);
         }
       } finally { await source.close(); }
     }
@@ -221,8 +226,8 @@ describe('build-owned prepared renderer', () => {
     for (const layer of ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const) {
       if (layer === 'precip-rate') field.flags.fill(0);
       const expected = referenceTileRgba(field, mask, layer, 1, 0, 0);
-      expect(renderer.renderTileRgba(field, layer, 1, 0, 0)).toEqual(expected);
-      expect(renderTileRgba(field, mask, layer, 1, 0, 0)).toEqual(expected);
+      expectRgbaEqual(renderer.renderTileRgba(field, layer, 1, 0, 0), expected, `prepared ${layer}/1/0/0`);
+      expectRgbaEqual(renderTileRgba(field, mask, layer, 1, 0, 0), expected, `uncached ${layer}/1/0/0`);
     }
     expect(renderer.metrics()).toMatchObject({ geometryHits: 2, geometryMisses: 1, geometryBytes: 57368 });
     renderer.renderTileRgba(field, 'precip-rate', 1, 0, 1);
@@ -261,22 +266,33 @@ describe('build-owned prepared renderer', () => {
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
     for (let i = 0; i < 5; i++) setBit(mask.tiles, i);
     const field = { values: new Float32Array(12).fill(2), flags: new Uint8Array(12) };
-    const renderer = createRenderer(mask, { encodeConcurrency: 2, rasterWorkers });
+    const controller = new AbortController(), renderer = createRenderer(mask, { encodeConcurrency: 2, rasterWorkers, signal: controller.signal });
     const original = codec.encodeWebp;
-    let fail!: () => void, finish!: () => void, drained = false, settled = false;
-    const failure = new Promise<void>(resolve => { fail = resolve; }), completion = new Promise<void>(resolve => { finish = resolve; });
+    let fail!: () => void, finish!: () => void, bothStarted!: () => void, started = 0, drained = false, settled = false;
+    const failure = new Promise<void>(resolve => { fail = resolve; }), completion = new Promise<void>(resolve => { finish = resolve; }), encodesStarted = new Promise<void>(resolve => { bothStarted = resolve; });
+    const startedEncode = () => { if (++started === 2) bothStarted(); };
     const spy = vi.spyOn(codec, 'encodeWebp')
-      .mockImplementationOnce(async () => { await failure; throw new Error('encode failed'); })
-      .mockImplementationOnce(async (...args) => { await completion; const result = await original(...args); drained = true; return result; });
+      .mockImplementationOnce(async () => { startedEncode(); await failure; throw new Error('encode failed'); })
+      .mockImplementationOnce(async (...args) => { startedEncode(); await completion; const result = await original(...args); drained = true; return result; });
     const dir = await mkdtemp(join(tmpdir(), 'av-render-')); temporary.push(dir);
+    const work = renderer.renderArchive(join(dir, 'failed.pmtiles'), field, 'precip-rate').then(() => { settled = true; }, error => { settled = true; return error; });
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const work = renderer.renderArchive(join(dir, 'failed.pmtiles'), field, 'precip-rate').catch(error => { settled = true; return error; });
-      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
-      fail(); await Promise.resolve(); await Promise.resolve();
+      await Promise.race([
+        encodesStarted,
+        work.then(error => { throw new Error('Archive settled before both encodes started', { cause: error }); }),
+        new Promise<never>((_, reject) => { startupTimer = setTimeout(() => reject(new Error('Both encodes did not start within 10 seconds')), 10_000); })
+      ]);
+      clearTimeout(startupTimer);
+      expect(spy).toHaveBeenCalledTimes(2);
+      fail(); await nextTurn();
       expect(settled).toBe(false); finish();
       expect(await work).toMatchObject({ message: 'encode failed' });
       expect(drained).toBe(true); expect(spy).toHaveBeenCalledTimes(2);
       await expect(stat(join(dir, 'failed.pmtiles'))).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally { fail(); finish(); spy.mockRestore(); }
+    } finally {
+      clearTimeout(startupTimer); fail(); finish(); controller.abort(new Error('Test cleanup'));
+      try { await work; } finally { spy.mockRestore(); }
+    }
   });
 });
