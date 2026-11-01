@@ -246,7 +246,8 @@ describe('workflow structure guards', () => {
     expect(runBlock('deploy.yml', 'Deploy Pages')).toContain('--project-name "${PAGES_PROJECT_NAME}"');
     expect(runBlock('deploy.yml', 'Deploy Pages')).toContain('--branch main');
     expect(runBlock('deploy.yml', 'Build preview')).not.toContain('${{');
-    expect(runBlock('deploy.yml', 'Smoke API')).toContain('Bootstrap Cloudflare resources, Forecast sample, then Deploy Worker and Pages');
+    expect(runBlock('deploy.yml', 'Smoke API')).toContain('set -euo pipefail');
+    expect(runBlock('deploy.yml', 'Smoke API')).toContain('pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}"');
     expect(runBlock('deploy.yml', 'Build preview')).toContain('pnpm --filter @av/preview build');
     expect(runBlock('deploy.yml', 'Verify live Pages revision')).toContain('scripts/verify-pages-revision.ts');
     const steps = list(deployJob.steps).map(record);

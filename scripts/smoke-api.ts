@@ -50,6 +50,40 @@ export function validateHealthContract(health: unknown, expectedDeploymentId?: s
   }
 }
 
+export interface WorkerReadinessOptions {
+  url: string;
+  expectedDeploymentId?: string;
+  fetchImpl?: typeof fetch;
+  retries?: number;
+  delayMs?: number;
+  timeoutMs?: number;
+}
+
+export async function verifyWorkerReadiness(options: WorkerReadinessOptions): Promise<void> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const retries = options.retries ?? 3;
+  const delay = options.delayMs ?? 5000;
+  let last = '';
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    try {
+      const response = await fetchImpl(options.url, {
+        headers: { accept: 'application/json' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
+      });
+      if (!response.ok) {
+        last = `status ${response.status}`;
+        await response.body?.cancel();
+        continue;
+      }
+      validateHealthContract(await response.json(), options.expectedDeploymentId);
+      return;
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
+    }
+  }
+  throw new Error(`Worker readiness verification failed: ${last} (${options.url})`);
+}
+
 export function validateSampleContract(sample: SampleContract, model: string, buildId: string, frame: string, requestedLayers: string[]): void {
   invariant(sample.model === model, '/sample did not echo model');
   invariant(sample.buildId === buildId, '/sample did not echo build');
@@ -77,14 +111,13 @@ async function main(): Promise<void> {
   const lon = arg('lon') ?? '-117.25';
   const expectedDeploymentId = arg('expected-deployment-id');
 
-  const health = await get(`${baseUrl}/healthz`, 'application/json');
-  validateHealthContract(await health.json(), expectedDeploymentId);
+  await verifyWorkerReadiness({ url: `${baseUrl}/healthz`, expectedDeploymentId });
 
   const catalog = await get(`${baseUrl}/v1/catalog`, 'application/json');
   const catalogBody = await catalog.json() as { models?: Array<{ model?: string; available?: boolean }> };
   invariant(Array.isArray(catalogBody.models), '/v1/catalog did not return models');
   const entry = catalogBody.models.find(item => item.model === model);
-  invariant(entry?.available === true, `/v1/catalog reports no available publication for ${model}`);
+  invariant(entry?.available === true, `/v1/catalog reports no available publication for ${model}. Publish a forecast for this environment first. In GitHub Actions, start Forecast sample on current main, then Deploy Worker and Pages.`);
 
   const latestResponse = await get(`${baseUrl}/v1/models/${model}/latest?expand=manifest`, 'application/json');
   const latest = await latestResponse.json() as { pointer?: unknown; manifest?: unknown; templates?: Record<string, string>; freshness?: unknown };

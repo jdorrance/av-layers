@@ -108,8 +108,10 @@ validated build rather than a partially written one.
 
 The deployment job gives the Worker a commit/run/attempt marker and requires
 `API_BASE_URL` to return that exact marker from its uncached `/healthz` response.
-This catches an API URL pointing at another environment, account, or deployment
-before the map is built or published. Local runs can omit the marker.
+The smoke check retries readiness while the deployment propagates, then requires
+the exact marker before checking published forecasts. This catches an API URL
+pointing at another environment, account, or deployment before the map is built
+or published. Local runs can omit the marker.
 
 The job then builds the map with that API URL, verifies the Pages project still
 uses `main` as its production branch, deploys, and checks the same embedded
@@ -142,6 +144,13 @@ Builds expire after seven days. Cache TTLs are bounded by
 expiry, expired requests return `404 not-retained`, and clients stop displaying
 expired builds. Worker caching is per edge location; every request still invokes
 the Worker. Consult its `/docs` and `/openapi.json` for details.
+
+For a failed workflow, inspect its first failing step and commit SHA. Start a
+new run from current `main` after fixing code; rerunning an old job uses its
+original revision. A healthy Worker with no available forecast still fails the
+deployment smoke check. Run **Forecast sample** for the same environment and,
+after publication succeeds, run **Deploy Worker and Pages**. Keep that gate:
+Worker readiness alone does not establish that the map can serve forecasts.
 
 Before rollback or cleanup, pause **every** publisher and cancel or wait for
 active runs. Then use the [maintenance workflow](../.github/workflows/maintenance.yml)

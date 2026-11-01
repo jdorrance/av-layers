@@ -14,6 +14,15 @@ implementation (87.2 s vs 648.1 s on cached local GFS inputs). Resource
 admission and CI budget checks are implemented in
 [`apps/batch/src/capacity.ts`](../apps/batch/src/capacity.ts).
 
+On 2026-11-01, [production deployment](https://github.com/jdorrance/av-layers/actions/runs/41326596966)
+passed CI and deployed the Worker with the expected revision marker. Its smoke
+check correctly rejected the empty forecast catalog. The earlier
+[forecast publication](https://github.com/jdorrance/av-layers/actions/runs/41303666341)
+failed because the SDK sent conflicting upload checksums. The current client
+configuration removes the extra checksum; a test exercises the SDK's generated
+requests. A fresh successful R2 publication and full deployment smoke check
+remain unverified.
+
 Local preview checks cover frame/layer switching, legend identity, forecast
 requests and point tables. Emulation establishes those observed behaviors, not
 physical-device speed or deployed cache performance.
@@ -61,10 +70,10 @@ Current production serving uses the packed contract and lossless WebP.
 
 ## Release boundaries
 
-Remote R2 uploads, publication integrity checks against Cloudflare, and a
-deployed Worker have not yet been demonstrated by this evidence. Plugin loader
-tests use fixtures; actual host behavior for external consumers still needs
-validation. No deployment or publication was performed during this performance work.
+Successful R2 publication and its integrity checks against Cloudflare remain
+unverified. The production Worker is reachable, but the complete forecast-serving
+path still needs a published build. Plugin loader tests use fixtures; actual
+host behavior for external consumers still needs validation.
 
 HRRR and ICON-Armenia products are deferred. The current build path supports GFS;
 the clients expose the reserved regional model IDs as unavailable.

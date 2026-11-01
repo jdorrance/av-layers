@@ -92,13 +92,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! output="$(pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs --expected-deployment-id "${DEPLOYMENT_ID}" 2>&1)"; then
-            printf '%s\n' "${output}"
-            echo 'smoke API failed.' >&2
-            echo 'A first deployment with no published forecast returns 503. Run the workflows in this order: Bootstrap Cloudflare resources, Forecast sample, then Deploy Worker and Pages.' >&2
-            exit 1
-          fi
-          printf '%s\n' "${output}"
+          pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs --expected-deployment-id "${DEPLOYMENT_ID}"
       - name: Build preview
         env:
           VITE_API_BASE: ${{ vars.API_BASE_URL }}
