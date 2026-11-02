@@ -82,8 +82,14 @@ describe('declarative workflows', () => {
     expect(String(publisher.if)).toContain("inputs['resume-run-id']");
     expect(record(publisher.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
     const steps = list(publisher.steps).map(record);
-    expect(steps.some(step => step.name === 'Resume completed forecast' && step.run === 'pnpm operations forecast')).toBe(true);
-    expect(steps.some(step => step.uses === 'actions/download-artifact@v4' && record(step.with).pattern)).toBe(false);
+    expect(steps.find(step => step.run === 'pnpm operations forecast')?.if).toBeUndefined();
+    const download = steps.find(step => step.name === 'Download forecast shards')!;
+    expect(download.uses).toBe('actions/download-artifact@v4');
+    expect(download.if).toBe("${{ !inputs['resume-run-id'] }}");
+    expect(record(download.with)).toEqual({ pattern: '${{ needs.prepare.outputs.artifact }}-shard-*', 'merge-multiple': true, path: 'output' });
+    for (const [job, command] of [[record(jobs.prepare), 'forecast-plan'], [shard, 'forecast-shard']] as const) {
+      expect(list(job.steps).map(record).some(step => step.run === `pnpm operations ${command}`)).toBe(true);
+    }
   });
 
   it('finishes the next scheduled job before the previous forecast horizon ends', () => {

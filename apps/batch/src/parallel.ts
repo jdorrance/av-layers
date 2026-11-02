@@ -1,10 +1,11 @@
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { CELL_BYTES, encodeBoundedJson, getProduct, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, manifestSchema, parseBoundedJson, type Manifest } from '@av/contracts';
+import z from 'zod';
+import { CELL_BYTES, encodeBoundedJson, getProduct, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson } from '@av/contracts';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
 import { createBuildStamp, finishForecast } from './build.js';
 import { describeCoverage, loadCoverage, writeCoverage } from './coverage.js';
-import { buildFrames, forecastFrame, type BuildOptions, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
+import { buildFrames, forecastFrame, matchesFrameIntervals, type BuildOptions, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
 import { buildIdentity } from './identity.js';
 import { readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
@@ -13,20 +14,30 @@ import { localPath, sha256 } from './validate.js';
 import { failureReason } from './failure.js';
 
 export const MAX_FORECAST_SHARDS = 4;
-export interface BuildPlan {
-  version: 1;
-  model: string;
-  buildId: string;
-  createdAt: string;
-  cycle: string;
-  coverageHash: string;
-  providerId: string;
-  recipe: Manifest['recipe'];
-  groups: number[][];
-}
-interface PlanOptions { out: string; cycle?: string; shards?: number; signal?: AbortSignal }
-interface ShardReceipt { version: 1; buildId: string; planHash: string; shard: number; result: FrameBuildResult }
-const digest = /^[a-f0-9]{64}$/;
+const digestSchema = manifestSchema.shape.samples.shape.sha256;
+const timestampSchema = manifestSchema.shape.createdAt.refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
+const planSchema = z.strictObject({
+  version: z.literal(1), model: manifestSchema.shape.model,
+  buildId: z.string().regex(/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/),
+  createdAt: timestampSchema, cycle: timestampSchema, coverageHash: digestSchema,
+  providerId: z.string().min(1),
+  recipe: manifestSchema.shape.recipe.strict().extend({ source: manifestSchema.shape.recipe.shape.source.strict() }),
+  groups: z.array(z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES)).min(1).max(MAX_FORECAST_SHARDS)
+});
+export type BuildPlan = z.infer<typeof planSchema>;
+interface PlanOptions { out: string; cycle: string; shards?: number; signal?: AbortSignal }
+const nonnegativeNumber = z.number().nonnegative();
+const receiptSchema = z.strictObject({
+  version: z.literal(1), planHash: digestSchema, shard: z.number().int().min(0).max(MAX_FORECAST_SHARDS - 1),
+  sampleSha256: digestSchema, tileSha256: z.array(digestSchema).min(1).max(MAX_SAMPLE_VALUES),
+  provenance: z.array(z.strictObject({ hour: z.number().int().positive(), intervals: z.unknown(), receipt: z.unknown() })).min(1).max(MAX_SAMPLE_VALUES),
+  metrics: z.strictObject({
+    frames: z.record(z.string(), z.record(z.string(), z.unknown())),
+    phasesMs: z.strictObject({ acquireMs: nonnegativeNumber, deriveMs: nonnegativeNumber, packMs: nonnegativeNumber, renderMs: nonnegativeNumber }),
+    renderer: z.record(z.string(), z.unknown()), acquisition: z.record(z.string(), z.unknown()),
+    elapsedMs: nonnegativeNumber.max(BUILD_BUDGETS.elapsedMs), peakRssBytes: nonnegativeNumber.max(BUILD_BUDGETS.peakRssBytes)
+  })
+});
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const planHash = (plan: BuildPlan) => sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES));
 
@@ -36,17 +47,16 @@ function partition(hours: readonly number[], count: number): number[][] {
   return Array.from({ length: n }, (_, i) => hours.slice(Math.floor(i * hours.length / n), Math.floor((i + 1) * hours.length / n)));
 }
 
-/** Freeze discovery and complete-product admission once. No provider data is acquired here. */
+/** Freeze the resolved cycle and complete-product admission. No provider data is acquired here. */
 export async function createBuildPlan(options: PlanOptions & ForecastInputs): Promise<BuildPlan> {
   options.signal?.throwIfAborted();
   const { product, provider, mask } = options, root = resolve(options.out);
   prepareBuild(mask, product, { maxLevels: provider.maxLevels });
   const groups = partition(product.frameHours, options.shards ?? MAX_FORECAST_SHARDS);
-  const resolvedCycle = options.cycle ?? await provider.resolveCycle?.({ cacheDir: localPath(root, '.cache'), signal: options.signal });
-  if (!resolvedCycle || !Number.isFinite(Date.parse(resolvedCycle))) throw new Error('A resolved forecast cycle is required');
+  if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
   const stamp = createBuildStamp(), coverageHash = await writeCoverage(root, mask, product);
   const identity = await buildIdentity(product, coverageHash);
-  const plan: BuildPlan = { version: 1, model: product.modelId, ...stamp, cycle: new Date(resolvedCycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups };
+  const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups });
   options.signal?.throwIfAborted();
   await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
   return plan;
@@ -55,14 +65,12 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
 /** Every process rechecks the plan against its checked-out code, product and coverage. */
 async function admitPlan(plan: BuildPlan, inputs: ForecastInputs) {
   const { product, provider, mask } = inputs;
-  if (!plan || !same(Object.keys(plan).sort(), ['version', 'model', 'buildId', 'createdAt', 'cycle', 'coverageHash', 'providerId', 'recipe', 'groups'].sort())
-      || plan.version !== 1 || plan.model !== product.modelId || plan.providerId !== provider.id
-      || typeof plan.buildId !== 'string' || !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(plan.buildId)
-      || typeof plan.createdAt !== 'string' || !Number.isFinite(Date.parse(plan.createdAt))
-      || typeof plan.cycle !== 'string' || !Number.isFinite(Date.parse(plan.cycle))
-      || new Date(plan.cycle).toISOString() !== plan.cycle || new Date(plan.createdAt).toISOString() !== plan.createdAt
+  const parsed = planSchema.safeParse(plan);
+  if (!parsed.success) throw new Error('Invalid forecast plan', { cause: parsed.error });
+  plan = parsed.data;
+  if (plan.model !== product.modelId || plan.providerId !== provider.id
       || !plan.buildId.startsWith(plan.createdAt.replace(/[-:]/g, '').slice(0, 15) + 'Z-')
-      || !Array.isArray(plan.groups) || !plan.groups.length || !same(plan.groups, partition(product.frameHours, plan.groups.length))) {
+      || !same(plan.groups, partition(product.frameHours, plan.groups.length))) {
     throw new Error('Invalid forecast plan identity or frame groups');
   }
   const age = Date.now() - Date.parse(plan.createdAt);
@@ -72,23 +80,24 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs) {
   if (plan.coverageHash !== describeCoverage(mask, product).hash) throw new Error('Forecast plan coverage changed');
   const identity = await buildIdentity(product, plan.coverageHash);
   if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
-  return { ...prepared, identity };
+  return { plan, prepared, identity };
 }
 
 /** One job owns one group; completion is recorded only after its pack and archives finish. */
 export async function buildShard(options: ForecastInputs & { plan: BuildPlan; shard: number; out: string; cacheDir?: string; signal?: AbortSignal }): Promise<string> {
-  const { plan, shard } = options, root = resolve(options.out);
+  const { shard } = options, root = resolve(options.out);
   options.signal?.throwIfAborted();
-  await admitPlan(plan, options);
+  const { plan, prepared } = await admitPlan(options.plan, options);
   if (!Number.isSafeInteger(shard) || shard < 0 || shard >= plan.groups.length) throw new Error('Invalid forecast shard');
   await mkdir(localPath(root, 'shards'), { recursive: true });
   const prefix = `shards/${shard}`;
   // A retry starts in a fresh worker directory; existing files never imply completion.
   await mkdir(localPath(root, prefix));
   try {
-    const result = await buildFrames({ ...options, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle, hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
-    if (result.metrics.elapsedMs > BUILD_BUDGETS.elapsedMs || result.metrics.peakRssBytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Forecast shard exceeded its runtime or memory budget');
-    const receipt: ShardReceipt = { version: 1, buildId: plan.buildId, planHash: planHash(plan), shard, result };
+    const result = await buildFrames({ ...options, prepared, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle, hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
+    const receipt = receiptSchema.parse({ version: 1, planHash: planHash(plan), shard,
+      sampleSha256: result.samples.sha256, tileSha256: result.artifacts.map(artifact => artifact.tilesSha256),
+      provenance: result.receipts, metrics: result.metrics });
     options.signal?.throwIfAborted();
     const path = localPath(root, `${prefix}/receipt.json`);
     await writeFile(path + '.tmp', encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
@@ -101,42 +110,25 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
 }
 
 function readResult(raw: unknown, plan: BuildPlan, shard: number, options: ForecastInputs, storedCells: number): FrameBuildResult {
-  const receipt = raw as ShardReceipt;
-  if (!receipt || receipt.version !== 1 || receipt.buildId !== plan.buildId || receipt.planHash !== planHash(plan) || receipt.shard !== shard || !receipt.result) throw new Error('Forecast shard receipt identity mismatch');
-  const result = receipt.result, hours = plan.groups[shard], layers = options.product.layers;
-  const expectedFrames = hours.map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours));
-  const frames = manifestSchema.shape.frames.parse(result.frames), artifacts = manifestSchema.shape.artifacts.parse(result.artifacts);
-  if (result.cycle !== plan.cycle || !same(frames, expectedFrames) || artifacts.length !== hours.length * layers.length) throw new Error('Forecast shard frames mismatch');
-  for (let i = 0; i < artifacts.length; i++) {
-    const artifact = artifacts[i], frame = expectedFrames[Math.floor(i / layers.length)].id, layer = layers[i % layers.length];
-    if (artifact.layer !== layer || artifact.frame !== frame || artifact.tilesKey !== `builds/${plan.model}/${plan.buildId}/${layer}/${frame}.pmtiles`) throw new Error('Forecast shard artifact membership mismatch');
-  }
-  if (!Array.isArray(result.receipts) || result.receipts.length !== hours.length || result.receipts.some((entry, i) => !entry || entry.hour !== hours[i])) throw new Error('Forecast shard provenance mismatch');
-  for (let i = 0; i < result.receipts.length; i++) {
-    const intervals = result.receipts[i].intervals as { profileTime?: unknown; fluxWindow?: { start?: unknown; end?: unknown }; precipitationWindow?: { start?: unknown; end?: unknown } } | null;
-    const frame = expectedFrames[i];
-    const instant = (actual: unknown, expected: string) => typeof actual === 'string' && Date.parse(actual) === Date.parse(expected);
-    if (!intervals || !instant(intervals.profileTime, frame.validTime)
-        || !instant(intervals.fluxWindow?.start, frame.intervalStart) || !instant(intervals.fluxWindow?.end, frame.intervalEnd)
-        || !instant(intervals.precipitationWindow?.start, frame.intervalStart) || !instant(intervals.precipitationWindow?.end, frame.intervalEnd)) throw new Error('Forecast shard provenance interval mismatch');
-  }
-  const samples = result.samples, channelCount = hours.length * layers.length;
-  if (!samples || samples.key !== `shards/${shard}/samples.bin` || samples.channelCount !== channelCount || samples.bytes !== storedCells * channelCount * CELL_BYTES || typeof samples.sha256 !== 'string' || !digest.test(samples.sha256)) throw new Error('Forecast shard sample layout mismatch');
-  const metrics = result.metrics;
-  const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  const object = (value: unknown) => value !== null && typeof value === 'object' && !Array.isArray(value);
-  if (!metrics || !metrics.phasesMs || !['acquireMs', 'deriveMs', 'packMs', 'renderMs'].every(key => finite(metrics.phasesMs[key as keyof typeof metrics.phasesMs]))
-      || !finite(metrics.elapsedMs) || !finite(metrics.peakRssBytes) || metrics.elapsedMs > BUILD_BUDGETS.elapsedMs || metrics.peakRssBytes > BUILD_BUDGETS.peakRssBytes
-      || !object(metrics.renderer) || !object(metrics.acquisition)
-      || !metrics.frames || !same(Object.keys(metrics.frames), expectedFrames.map(frame => frame.id))) throw new Error('Invalid forecast shard metrics');
-  return { ...result, frames, artifacts };
+  const receipt = receiptSchema.parse(raw), hours = plan.groups[shard], layers = options.product.layers;
+  if (receipt.planHash !== planHash(plan) || receipt.shard !== shard) throw new Error('Forecast shard receipt identity mismatch');
+  const frames = hours.map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours)), channelCount = hours.length * layers.length;
+  if (receipt.tileSha256.length !== channelCount) throw new Error('Forecast shard artifact count mismatch');
+  if (receipt.provenance.length !== hours.length || receipt.provenance.some((entry, i) => entry.hour !== hours[i] || !matchesFrameIntervals(entry.intervals, frames[i]))) throw new Error('Forecast shard provenance interval mismatch');
+  if (!same(Object.keys(receipt.metrics.frames), frames.map(frame => frame.id))) throw new Error('Forecast shard metric frames mismatch');
+  const artifacts = frames.flatMap((frame, i) => layers.map((layer, j) => ({
+    layer, frame: frame.id, tilesKey: `builds/${plan.model}/${plan.buildId}/${layer}/${frame.id}.pmtiles`,
+    tilesSha256: receipt.tileSha256[i * layers.length + j]
+  })));
+  return { cycle: plan.cycle, frames, artifacts, receipts: receipt.provenance, metrics: receipt.metrics,
+    samples: { key: `shards/${shard}/samples.bin`, channelCount, bytes: storedCells * channelCount * CELL_BYTES, sha256: receipt.sampleSha256 } };
 }
 
 /** Interleave only complete matching groups, then use the ordinary full-build validator/publisher. */
 export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan } & Pick<BuildOptions, 'out' | 'signal' | 'onValidated'>): Promise<string> {
-  const { plan } = options, root = resolve(options.out);
+  const root = resolve(options.out);
   options.signal?.throwIfAborted();
-  const { layout, identity } = await admitPlan(plan, options);
+  const { plan, prepared, identity } = await admitPlan(options.plan, options), { layout } = prepared;
   const entries = await readdir(localPath(root, 'shards'), { withFileTypes: true });
   const expected = plan.groups.map((_, i) => String(i));
   if (entries.some(entry => !entry.isDirectory()) || !same(entries.map(entry => entry.name).sort(), expected.sort())) throw new Error('Missing or extra forecast shard directories');
@@ -161,7 +153,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan 
     }
   };
   options.signal?.throwIfAborted();
-  return finishForecast({ ...options, buildId: plan.buildId, createdAt: plan.createdAt, coverageHash: plan.coverageHash, identity, result: merged, execution: {
+  return finishForecast({ ...options, prepared, buildId: plan.buildId, createdAt: plan.createdAt, coverageHash: plan.coverageHash, identity, result: merged, execution: {
     mode: 'parallel', shardCount: plan.groups.length, totalWorkerElapsedMs,
     // Phase sums describe work; elapsedMs measures plan-to-validation latency including job handoffs.
     workers: results.map((result, shard) => ({ shard, hours: plan.groups[shard], elapsedMs: result.metrics.elapsedMs, peakRssBytes: result.metrics.peakRssBytes }))
@@ -174,7 +166,7 @@ async function inputsFor(modelId: string): Promise<ForecastInputs> {
   return { product, provider: getForecastProvider(modelId), mask: await loadCoverage(product) };
 }
 async function readPlan(path: string): Promise<BuildPlan> {
-  return parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)) as BuildPlan;
+  return planSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
 }
 export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<{ planPath: string; shards: number[] }> {
   const plan = await createBuildPlan({ ...options, ...await inputsFor(modelId) });

@@ -12,6 +12,7 @@ export const BUILD_BUDGETS = {
 } as const;
 
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
+export type PreparedBuild = ReturnType<typeof prepareBuild>;
 
 export interface CapacityScenario {
   frames?: number;

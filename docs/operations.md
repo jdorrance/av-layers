@@ -43,9 +43,11 @@ add `-f cycle=YYYY-MM-DDTHH:00:00Z` using a 00, 06, 12 or 18 UTC cycle.
 Production also runs automatically at **05:17 and 17:17 UTC**. Scheduled runs
 skip a cycle already published; successful publication is followed by cleanup.
 
-A preparation job selects one cycle and freezes the build plan. Up to four compute
-jobs process separate groups of forecast hours, then one job assembles and validates
-the complete forecast before publishing. Workers have no R2 publication credentials.
+The workflow runs `forecast-plan` once, `forecast-shard` on up to four workers,
+then `forecast` to assemble and publish. Planning pins one cycle and each worker
+processes a separate group of forecast hours. GitHub collects only artifacts in
+that plan’s namespace; the finalizer rejects missing or extra groups and checks
+their identities and hashes before publication. Workers have no R2 publication credentials.
 The workflow keeps the same environment/model exclusion through planning, computation,
 publication and cleanup. Its limits are 15 minutes for planning, 60 minutes per
 concurrent worker, and 60 minutes for assembly and publication.

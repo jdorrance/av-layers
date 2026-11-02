@@ -14,7 +14,6 @@ export interface ForecastProvider {
   id: string;
   provider: string;
   maxLevels: number;
-  resolveCycle?(options: { cycle?: string; cacheDir: string; signal?: AbortSignal }): Promise<string>;
   open(options: { cycle?: string; activeIndices: Uint32Array; cacheDir: string; signal?: AbortSignal }): Promise<ForecastSession>;
 }
 

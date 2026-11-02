@@ -40,7 +40,7 @@ for (let index = 0; index < cellCount - 1; index++) setBit(mask.output, index);
 setBit(mask.halo, cellCount - 1);
 
 function fixtureProvider(options: { failHour?: number; abort?: AbortController; returnedCycle?: string; beforeAcquire?: (hour: number) => Promise<void> } = {}) {
-  const observed = { cycles: [] as (string | undefined)[], resolved: 0, closed: 0, sessions: 0, peakSessions: 0 };
+  const observed = { cycles: [] as (string | undefined)[], closed: 0, sessions: 0, peakSessions: 0 };
   const close = vi.fn(async () => { observed.closed++; observed.sessions--; });
   const acquire = vi.fn();
   const open = vi.fn<ForecastProvider['open']>(async ({ cycle, activeIndices }) => {
@@ -70,9 +70,9 @@ function fixtureProvider(options: { failHour?: number; abort?: AbortController; 
     close
   };
   });
-  const provider: ForecastProvider & { resolveCycle: () => Promise<string> } = {
+  const provider: ForecastProvider = {
     id: product.source.configurationId, provider: 'Synthetic fixture', maxLevels: 3,
-    resolveCycle: vi.fn(async () => { observed.resolved++; return CYCLE; }), open
+    open
   };
   return { provider, open, close, acquire, observed };
 }
@@ -117,7 +117,7 @@ describe('forecast hour-group builds', () => {
     serialRoot = join(fixtureRoot, 'serial');
     shardRoot = join(fixtureRoot, 'shards');
     serial = await readManifest(await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask, provider: source.provider }));
-    plan = await createBuildPlan({ out: shardRoot, product, mask, provider: source.provider, shards: 2 });
+    plan = await createBuildPlan({ out: shardRoot, cycle: CYCLE, product, mask, provider: source.provider, shards: 2 });
     receipts = [];
     // Both sessions overlap; deliberately finish later hours before releasing the earlier group.
     holdEarlier = true;
@@ -170,7 +170,6 @@ describe('forecast hour-group builds', () => {
     expect(onValidated).toHaveBeenCalledExactlyOnceWith(expect.any(Object), path);
     expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();
     expect(source.observed.cycles).toEqual([CYCLE, CYCLE, CYCLE]);
-    expect(source.observed.resolved).toBe(1);
     expect(source.observed.closed).toBe(3);
     expect(source.observed.peakSessions).toBe(2);
     expect(source.observed.sessions).toBe(0);
@@ -180,10 +179,10 @@ describe('forecast hour-group builds', () => {
   it('records summed worker effort separately from elapsed time and peak memory', async () => {
     const out = await copyCompleted();
     for (const shard of [0, 1]) await mutateReceipt(out, shard, receipt => {
-      const result = receipt.result as { metrics: { peakRssBytes: number } };
-      result.metrics.peakRssBytes = (shard === 0 ? 1 : 1.5) * 1024 ** 3;
+      const metrics = receipt.metrics as { peakRssBytes: number };
+      metrics.peakRssBytes = (shard === 0 ? 1 : 1.5) * 1024 ** 3;
     });
-    const workerMetrics = await Promise.all(receipts.map(path => readFile(path, 'utf8').then(bytes => JSON.parse(bytes).result.metrics as { elapsedMs: number; phasesMs: Record<string, number> })));
+    const workerMetrics = await Promise.all(receipts.map(path => readFile(path, 'utf8').then(bytes => JSON.parse(bytes).metrics as { elapsedMs: number; phasesMs: Record<string, number> })));
     const manifest = await readManifest(await finalize(out));
     expect(manifest.metrics.execution).toMatchObject({ mode: 'parallel', shardCount: 2, totalWorkerElapsedMs: workerMetrics.reduce((sum, worker) => sum + worker.elapsedMs, 0) });
     expect(manifest.metrics.peakRssBytes).toBe(1.5 * 1024 ** 3);
@@ -206,8 +205,29 @@ describe('forecast hour-group builds', () => {
 
   it('rejects a completed receipt from another build', async () => {
     const out = await copyCompleted();
-    await mutateReceipt(out, 0, receipt => { receipt.buildId = 'foreign-build'; });
+    await mutateReceipt(out, 0, receipt => { receipt.planHash = '0'.repeat(64); });
     await expect(finalize(out)).rejects.toThrow();
+    await expect(readFile(manifestPath(out))).rejects.toThrow();
+  });
+
+  it.each(['missing', 'extra'])('rejects %s artifact hashes instead of changing channel membership', async count => {
+    const out = await copyCompleted();
+    await mutateReceipt(out, 0, receipt => {
+      const hashes = receipt.tileSha256 as string[];
+      if (count === 'missing') hashes.pop();
+      else hashes.push(hashes[0]);
+    });
+    await expect(finalize(out)).rejects.toThrow(/artifact count/);
+    await expect(readFile(manifestPath(out))).rejects.toThrow();
+  });
+
+  it.each(['samples', 'tiles'])('verifies the compact receipt %s hash against the actual bytes', async kind => {
+    const out = await copyCompleted();
+    await mutateReceipt(out, 0, receipt => {
+      if (kind === 'samples') receipt.sampleSha256 = '0'.repeat(64);
+      else (receipt.tileSha256 as string[])[0] = '0'.repeat(64);
+    });
+    await expect(finalize(out)).rejects.toThrow(/hash/i);
     await expect(readFile(manifestPath(out))).rejects.toThrow();
   });
 
@@ -221,8 +241,8 @@ describe('forecast hour-group builds', () => {
   it('rejects a shard provenance window that differs from its forecast frame', async () => {
     const out = await copyCompleted();
     await mutateReceipt(out, 0, receipt => {
-      const result = receipt.result as { receipts: { intervals: { fluxWindow: { end: string } } }[] };
-      result.receipts[0].intervals.fluxWindow.end = CYCLE;
+      const provenance = receipt.provenance as { intervals: { fluxWindow: { end: string } } }[];
+      provenance[0].intervals.fluxWindow.end = CYCLE;
     });
     await expect(finalize(out)).rejects.toThrow();
     await expect(readFile(manifestPath(out))).rejects.toThrow();
@@ -324,6 +344,13 @@ describe('forecast hour-group builds', () => {
     const out = await temporaryRoot(), provider = fixtureProvider();
     await expect(createBuildPlan({ out, cycle: CYCLE, product, mask, provider: provider.provider, shards })).rejects.toThrow();
     expect(provider.open).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, '', 'invalid-cycle'])('requires an explicit resolved cycle (%s)', async cycle => {
+    const out = await temporaryRoot(), provider = fixtureProvider();
+    await expect(createBuildPlan({ out, cycle: cycle as string, product, mask, provider: provider.provider })).rejects.toThrow(/resolved forecast cycle/);
+    expect(provider.open).not.toHaveBeenCalled();
+    expect(await readdir(out)).toEqual([]);
   });
 
 });

@@ -59,7 +59,6 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       artifact: ${{ steps.plan.outputs.artifact }}
     env:
-      FORECAST_PHASE: plan
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -71,7 +70,7 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Admit cycle and plan forecast
         id: plan
-        run: pnpm operations forecast
+        run: pnpm operations forecast-plan
       - name: Share immutable build plan
         uses: actions/upload-artifact@v4
         if: steps.plan.outputs.ready == 'true'
@@ -101,7 +100,6 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
     env:
-      FORECAST_PHASE: shard
       SHARD_ID: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +112,7 @@ jobs:
           name: ${{ needs.prepare.outputs.artifact }}
           path: output
       - name: Build forecast shard
-        run: pnpm operations forecast
+        run: pnpm operations forecast-shard
       - name: Upload completed shard
         uses: actions/upload-artifact@v4
         with:
@@ -158,15 +156,14 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: output
-      - name: Finalize and publish forecast
+      - name: Download forecast shards
+        uses: actions/download-artifact@v4
         if: ${{ !inputs['resume-run-id'] }}
-        env:
-          FORECAST_PHASE: finalize
-          FORECAST_PLAN_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
-          FORECAST_SHARDS: ${{ needs.prepare.outputs.shards }}
-        run: pnpm operations forecast
-      - name: Resume completed forecast
-        if: inputs['resume-run-id']
+        with:
+          pattern: ${{ needs.prepare.outputs.artifact }}-shard-*
+          merge-multiple: true
+          path: output
+      - name: Publish forecast
         run: pnpm operations forecast
       - name: Upload build records
         uses: actions/upload-artifact@v4

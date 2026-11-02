@@ -22,12 +22,11 @@ it('accepts explicit operations without ceremonial confirmation and rejects ambi
   expect(() => validateOperationInputs('bootstrap', base)).toThrow('Usage');
 });
 
-it('admits bounded forecast phases without allowing resume to masquerade as a shard run', () => {
-  for (const phase of ['plan', 'finalize']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: phase })).not.toThrow();
-  for (const SHARD_ID of ['0', '1', '2', '3']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'shard', SHARD_ID })).not.toThrow();
-  for (const SHARD_ID of ['', '-1', '4', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'shard', SHARD_ID })).toThrow('SHARD_ID');
-  expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'other' })).toThrow('phase');
-  expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'finalize', RESUME_RUN_ID: '123' })).toThrow('Resume');
+it('admits explicit forecast commands and bounded worker identities', () => {
+  for (const command of ['forecast-plan', 'forecast']) expect(() => validateOperationInputs(command, base)).not.toThrow();
+  for (const SHARD_ID of ['0', '1', '2', '3']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).not.toThrow();
+  for (const SHARD_ID of ['', '-1', '4', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).toThrow('SHARD_ID');
+  for (const command of ['forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
 });
 
 it('derives publication bucket from the selected Wrangler environment and needs one account ID', () => {

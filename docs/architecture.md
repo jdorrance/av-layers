@@ -59,7 +59,8 @@ encoding uses bounded concurrency and shares geometry between a frame's layers.
 The hosted workflow plans one source cycle and divides the product's frame list
 among at most four independent workers. Each uses the same frame pipeline as a
 local sequential build. Private completion receipts bind worker outputs to the
-plan, source revision, recipe and coverage. The finalizer checks every group,
+plan, source revision, recipe and coverage. Receipts carry hashes, observed source
+intervals and metrics; frame names, paths and sizes come from the plan. The finalizer checks every group,
 interleaves its numeric channels, and validates the complete product before
 publication. Whole-product limits apply before partitioning; worker memory
 limits apply separately. Elapsed build time includes worker startup and transfers,

@@ -1,11 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
-import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
+import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
 import { type ForecastProvider, type ForecastSession } from './providers.js';
 import { createRenderer } from './render.js';
 import { summarizeFields } from './summary.js';
-import { MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
+import { MAX_BUILD_LIFETIME_MS, type PreparedBuild } from './capacity.js';
 import { createSamplePackBuilder } from './sample-pack.js';
 import { failureReason } from './failure.js';
 import { fileSha256, localPath, type ValidatedBuild } from './validate.js';
@@ -20,7 +20,8 @@ export interface FrameBuildResult {
   receipts: { hour: number; intervals: unknown; receipt: unknown }[];
   samples: { key: string; sha256: string; bytes: number; channelCount: number };
   metrics: {
-    frames: Record<string, ReturnType<typeof summarizeFields>>;
+    /** Summary observations are metadata, never inputs to the forecast calculation. */
+    frames: Record<string, Record<string, unknown>>;
     phasesMs: { acquireMs: number; deriveMs: number; packMs: number; renderMs: number };
     renderer: Record<string, unknown>;
     acquisition: Record<string, unknown>;
@@ -35,12 +36,23 @@ export function forecastFrame(cycle: string, hour: number, intervalHours: number
   return { id: `f${String(hour).padStart(3, '0')}`, validTime: end, intervalStart: start, intervalEnd: end };
 }
 
+const sameInstant = (actual: unknown, expected: string): boolean => typeof actual === 'string' && Date.parse(actual) === Date.parse(expected);
+
+/** Source intervals retain their observed times; every execution path checks the same support. */
+export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frames'][number]): boolean {
+  if (!intervals || typeof intervals !== 'object') return false;
+  const value = intervals as Partial<NormalizedFrame['intervals']>;
+  return sameInstant(value.profileTime, frame.validTime)
+    && sameInstant(value.fluxWindow?.start, frame.intervalStart) && sameInstant(value.fluxWindow?.end, frame.intervalEnd)
+    && sameInstant(value.precipitationWindow?.start, frame.intervalStart) && sameInstant(value.precipitationWindow?.end, frame.intervalEnd);
+}
+
 /** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
-export async function buildFrames(options: BuildOptions & ForecastInputs & BuildStamp & { hours: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
+export async function buildFrames(options: BuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
   const { product, mask, provider, buildId, hours, samplesKey, journalPrefix } = options;
   const root = resolve(options.out), started = Date.now(), prefix = `builds/${product.modelId}/${buildId}`;
   const cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);
-  const { indices, layout, capacity } = prepareBuild(mask, product, { maxLevels: provider.maxLevels }), active = indices.active;
+  const { indices, layout, capacity } = options.prepared, active = indices.active;
   const channelCount = hours.length * product.layers.length;
   let channel = 0;
   const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: FrameBuildResult['receipts'] = [], summaries: FrameBuildResult['metrics']['frames'] = {};
@@ -65,9 +77,8 @@ export async function buildFrames(options: BuildOptions & ForecastInputs & Build
       const frame = await acquisition.acquire(hour);
       validateNormalizedFrame(frame, active, mask.grid, provider.maxLevels);
       acquireMs += Date.now() - tAcquire;
-      const descriptor = forecastFrame(cycle, hour, product.intervalHours), { id, intervalStart: start, intervalEnd: end } = descriptor;
-      const sameInstant = (actual: string, expected: string): boolean => Date.parse(actual) === Date.parse(expected);
-      if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, end) || !sameInstant(frame.intervals.profileTime, end) || !sameInstant(frame.intervals.fluxWindow.start, start) || !sameInstant(frame.intervals.fluxWindow.end, end) || !sameInstant(frame.intervals.precipitationWindow.start, start) || !sameInstant(frame.intervals.precipitationWindow.end, end)) {
+      const descriptor = forecastFrame(cycle, hour, product.intervalHours), { id } = descriptor;
+      if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, descriptor.validTime) || !matchesFrameIntervals(frame.intervals, descriptor)) {
         throw new Error(`Acquisition interval mismatch f${hour}`);
       }
       frames.push(descriptor);
