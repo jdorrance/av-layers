@@ -100,6 +100,7 @@ function ensurePanel(): PluginPanel {
       void requestSeries();
     },
     onBack: () => {
+      bcast.emit('rqstClose', __pluginConfig.name);
       bcast.emit('rqstOpen', 'menu');
     }
   });
