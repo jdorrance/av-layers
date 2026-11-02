@@ -157,7 +157,7 @@ export function readProvenance(bucket: R2Bucket, m: Manifest, reference: ReturnT
     if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
     if (signal.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
     let release: () => void;
-    try { release = reserveAllocation(12 * MAX_PROVENANCE_BYTES); }
+    try { release = reserveAllocation(3 * MAX_PROVENANCE_BYTES); }
     catch (error) { void object.body?.cancel?.(error); throw error; }
     try {
       const value = await readObjectBytes(object, MAX_PROVENANCE_BYTES, false, ctx, signal);

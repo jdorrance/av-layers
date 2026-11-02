@@ -13,7 +13,27 @@ export async function readProducerSourceState(root = ROOT): Promise<{ revision: 
   const git = promisify(execFile);
   const [{ stdout: revision }, { stdout: dirty }] = await Promise.all([
     git('git', ['rev-parse', 'HEAD'], { cwd: root }),
-    git('git', ['status', '--porcelain', '--untracked-files=normal', '--', 'apps/batch', 'packages/forecast', 'packages/contracts', 'scripts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json'], { cwd: root })
+    git(
+      'git',
+      [
+        'status',
+        '--porcelain',
+        '--untracked-files=normal',
+        '--',
+        'apps/batch',
+        'packages/forecast',
+        'packages/soaring',
+        'packages/solar',
+        'packages/thermodynamics',
+        'packages/contracts',
+        'scripts',
+        'package.json',
+        'pnpm-lock.yaml',
+        'pnpm-workspace.yaml',
+        'tsconfig.json'
+      ],
+      { cwd: root }
+    )
   ]);
   return { revision: revision.trim(), dirty: !!dirty.trim() };
 }
@@ -26,7 +46,15 @@ async function sourceFiles(directory: string): Promise<string[]> {
 export async function buildIdentity(product: ProductDefinition, coverageHash: string) {
   const groups = {
     adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
-    science: { directories: ['packages/forecast/src'], settings: [] },
+    science: {
+      directories: [
+        'packages/forecast/src',
+        'packages/soaring/src',
+        'packages/solar/src',
+        'packages/thermodynamics/src'
+      ],
+      settings: []
+    },
     contracts: { directories: ['packages/contracts/src'], settings: ['packages/contracts/config/gfs.json'] }
   };
   const components: Record<string, string> = {};

@@ -1,12 +1,23 @@
 {
   "name": "@av/forecast",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./science": "./src/science.ts",
+    "./frame": "./src/frame.ts",
+    "./sampler": "./src/sampler.ts",
+    "./sample-pack": "./src/sample-pack.ts",
+    "./support": "./src/support.ts",
+    "./inputs": "./src/inputs.ts",
+    "./provenance.json": "./provenance.json"
   },
   "dependencies": {
-    "@av/contracts": "workspace:*"
+    "@av/contracts": "workspace:*",
+    "@av/soaring": "workspace:*",
+    "@av/solar": "workspace:*",
+    "@av/thermodynamics": "workspace:*"
   }
 }

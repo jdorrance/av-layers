@@ -41,6 +41,15 @@ importers:
       '@av/forecast':
         specifier: workspace:*
         version: link:packages/forecast
+      '@av/soaring':
+        specifier: workspace:*
+        version: link:packages/soaring
+      '@av/solar':
+        specifier: workspace:*
+        version: link:packages/solar
+      '@av/thermodynamics':
+        specifier: workspace:*
+        version: link:packages/thermodynamics
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20261030.1
@@ -167,6 +176,28 @@ importers:
       '@av/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@av/soaring':
+        specifier: workspace:*
+        version: link:../soaring
+      '@av/solar':
+        specifier: workspace:*
+        version: link:../solar
+      '@av/thermodynamics':
+        specifier: workspace:*
+        version: link:../thermodynamics
+
+  packages/soaring:
+    dependencies:
+      '@av/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@av/thermodynamics':
+        specifier: workspace:*
+        version: link:../thermodynamics
+
+  packages/solar: {}
+
+  packages/thermodynamics: {}
 
 packages:
 

@@ -1,4 +1,4 @@
-import { parseBoundedJson, ResourceLimitError } from '@av/contracts';
+import { MAX_PROVENANCE_BYTES, parseBoundedJson, ResourceLimitError } from '@av/contracts';
 export { parseBoundedJson, ResourceLimitError } from '@av/contracts';
 
 /** Cache limits account retained typed arrays and estimated decoded object storage. */
@@ -148,7 +148,7 @@ export function transferBodyLease(from: ReadableStream<Uint8Array> | null, to: R
 }
 function reserveResponse(size: number): BodyLease {
   const reserved = Math.max(1, size) * 4;
-  if (!Number.isSafeInteger(size) || size < 0 || size > 1024 * 1024 || responseBytes + reserved > MAX_RESPONSE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_PROVENANCE_BYTES || responseBytes + reserved > MAX_RESPONSE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
   responseBytes += reserved;
   let refs = 1;
   return { size, retain() { refs++; }, release() { if (--refs === 0) responseBytes -= reserved; } };

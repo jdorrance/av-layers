@@ -150,6 +150,27 @@ describe('read-only worker', () => {
     expect((await call('/healthz')).status).toBe(200);
   });
 
+  it('serves a multi-megabyte 24-frame provenance sidecar within MAX_PROVENANCE_BYTES', async () => {
+    const pub = publication('build-1', new Date(now + 60_000).toISOString(), 24);
+    const payload = {
+      version: 1,
+      model: 'gfs',
+      buildId: 'build-1',
+      cycle,
+      frames: Array.from({ length: 24 }, (_, index) => ({
+        hour: index + 1,
+        pad: 'x'.repeat(64 * 1024)
+      }))
+    };
+    const receipt = sidecar(pub, payload);
+    expect(receipt.bytes.byteLength).toBeGreaterThan(1024 * 1024);
+    bucket.install(pub);
+    bucket.objects.set(receipt.key, receipt.bytes);
+    const response = await call('/v1/models/gfs/runs/build-1/provenance');
+    expect(response.status).toBe(200);
+    expect((await response.arrayBuffer()).byteLength).toBe(receipt.bytes.byteLength);
+  });
+
   it('reports the current deployment marker without storage reads or caching, while supporting local runs', async () => {
     const local = await call('/healthz');
     expect(local.status).toBe(200);

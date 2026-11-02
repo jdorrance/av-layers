@@ -36,6 +36,9 @@
   "devDependencies": {
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
+    "@av/soaring": "workspace:*",
+    "@av/solar": "workspace:*",
+    "@av/thermodynamics": "workspace:*",
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "22.19.15",
     "eslint": "10.14.0",

@@ -1,4 +1,4 @@
-import { GFS_GRID, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
+import { GFS_GRID, GFS_INTERVAL_HOURS, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
 import { acquireGfsFrame, contractIndexToNativeIndex, validateActiveIndices, validateCycle, validateHour } from './acquire.ts';
 import { discoverGfsRun } from './discover.ts';
 import { NoaaError } from './errors.ts';
@@ -67,7 +67,9 @@ function checkFrame(frame: GfsFrameAcquisition): void {
   }
   for (const window of [frame.intervals.fluxWindow, frame.intervals.precipitationWindow]) {
     const hours = (Date.parse(window.end) - Date.parse(window.start)) / 3_600_000;
-    if (hours !== 3) throw new NoaaError('source-conflict', `Proof window ${window.start}..${window.end} is not three hours`);
+    if (hours !== GFS_INTERVAL_HOURS) {
+      throw new NoaaError('source-conflict', `Proof window ${window.start}..${window.end} is not ${GFS_INTERVAL_HOURS} hour(s)`);
+    }
   }
 }
 
@@ -149,7 +151,7 @@ async function diagnoseGfsInputs(options: DiagnoseGfsInputsOptions): Promise<Dia
     for (const spec of [...gfsCurrentSpecs(hour), ...companions]) {
       options.signal?.throwIfAborted();
       try {
-        const endHour = spec.role === 'companion' ? hour - 3 : hour;
+        const endHour = spec.role === 'companion' ? hour - GFS_INTERVAL_HOURS : hour;
         const loaded = await loadAndInspectGfsField(transport, {
           cycle, spec, sourceHour: endHour, startHour: spec.statistic === 'instant' ? endHour : gfsWindowStart(hour),
           endHour, expectedGridKey: gridKey,

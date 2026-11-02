@@ -24,7 +24,7 @@ export async function generateOfflineFixture(out: string, now = Date.now()): Pro
       };
     }
   };
-  return buildForecast({ out, product, mask, provider });
+  return buildForecast({ out, product, mask, provider, deriveOptions: { daylightOnly: false } });
 }
 
 async function main(): Promise<void> {

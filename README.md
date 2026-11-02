@@ -38,7 +38,10 @@ server options.
 - [apps/preview](apps/preview/README.md): standalone map.
 - [apps/windy-plugin](apps/windy-plugin/README.md): Windy integration.
 - [packages/contracts](packages/contracts/README.md): shared types and API helpers.
-- [packages/forecast](packages/forecast/README.md): calculations and grid sampling.
+- [packages/forecast](packages/forecast/README.md): frame derivation, grid sampling, and sample-pack layout.
+- [packages/solar](packages/solar/README.md): NOAA solar ephemeris, sunrise/sunset, and separable grid daylight checks.
+- [packages/thermodynamics](packages/thermodynamics/README.md): dry-air thermodynamics and parcel equations.
+- [packages/soaring](packages/soaring/README.md): dry convective depth, Deardorff $w_*$ (`m/s`), Lenschow updraft profile, and configurable sink-rate thresholds (`m/s`).
 
 ## More information
 

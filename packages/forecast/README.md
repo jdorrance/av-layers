@@ -14,11 +14,11 @@ pnpm verify
 
 This package exports TypeScript directly; the apps build it with their own code.
 
-Useful files:
+Useful files and scientific packages:
 
-- [src/science.ts](src/science.ts): lift and precipitation calculations.
+- [src/science.ts](src/science.ts): re-exports [`@av/solar`](../solar/README.md), [`@av/thermodynamics`](../thermodynamics/README.md), and [`@av/soaring`](../soaring/README.md).
 - [src/inputs.ts](src/inputs.ts): normalized input arrays and their checks.
-- [src/frame.ts](src/frame.ts): unit conversion and whole-frame calculations.
+- [src/frame.ts](src/frame.ts): daylight gating, unit conversion, and whole-frame calculations.
 - [src/sampler.ts](src/sampler.ts): samples at geographic coordinates.
 - [src/sample-pack.ts](src/sample-pack.ts): numeric file layout and encoding.
 - [src/support.ts](src/support.ts): neighboring cells needed by calculations.
