@@ -8,7 +8,7 @@ import { CLI_COMMANDS, CLI_OPTIONS } from '../apps/batch/src/commands.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_RESERVE_BYTES } from '../apps/batch/src/raster-pool.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
-const regenerate = 'pnpm exec node --import tsx scripts/generate-reference.ts';
+const regenerate = 'pnpm docs:generate';
 const code = (value: unknown) => `\`${typeof value === 'string' ? value : JSON.stringify(value)}\``;
 const entries = (value: object) => Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
 function stable(value: unknown): unknown {
@@ -35,24 +35,24 @@ async function openApiDocument(): Promise<{ openapi: string; paths: Record<strin
 export async function referenceArtifacts(): Promise<Record<string, string>> {
   const api = await openApiDocument();
   const lines = [
-    '# Generated platform reference', '',
-    'This file is generated from executable definitions. Edit their owning source, then run:', '',
+    '# Generated reference', '',
+    'Generated from the source files linked below. After editing them, run:', '',
     '```sh', regenerate, '```', '',
     '`pnpm docs:check` rejects stale generated references. No live forecast, storage credentials or network access is required to generate them.', '',
-    'This describes the current producer. Retained builds keep their own immutable descriptors; readers do not compare historical parameters or legends with this reference.', '',
+    'These are the current settings. Published builds include their own methods, units, and legends.', '',
     '## Batch CLI', '',
     'Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.', '',
-    'Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI admission](../apps/batch/src/cli.ts).', ''
+    'Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).', ''
   ];
   for (const [command, options] of entries(CLI_COMMANDS)) {
     lines.push(`- ${code(command)}: ${options.map((option: keyof typeof CLI_OPTIONS) => code(`--${option}${CLI_OPTIONS[option].type === 'string' ? ' <string>' : ''}`)).join(', ')}.`);
   }
-  lines.push('', '## Admitted production capabilities', '', 'Source: [product registry](../packages/contracts/src/index.ts). Test-only fixtures are excluded.', '');
+  lines.push('', '## Live models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
-    if (!product) throw new Error(`Model ${model} has no admitted product`);
+    if (!product) throw new Error(`Model ${model} has no product`);
     lines.push(`### ${product.label} (${product.id})`, '',
-      `- Model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
+      `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,
       `- Grid: ${code(product.grid.kind)}; ${product.grid.width} columns × ${product.grid.height} rows; spherical Earth radius ${product.grid.earthRadiusM} m; periodic longitude: ${product.grid.wrapLongitude}.`,
       `- Bounds [west, south, east, north]: ${code(product.bounds)}.`,
@@ -60,9 +60,9 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
       `- Forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours.`,
       `- Layers: ${product.layers.map(code).join(', ')}.`,
-      `- Latest promotion: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
+      `- Publishing freshness: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
   }
-  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/index.ts). Interpret values and absence using [the data guide](data.md).', '');
+  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {
     lines.push(`### ${layer.label} (${id})`, '',
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,
@@ -73,10 +73,10 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   }
   lines.push('## Status and support encodings', '',
     `Public sample statuses: ${contracts.SAMPLE_STATUSES.map(code).join(', ')}.`, '',
-    'The packed status and support constants below come from the same [contract exports](../packages/contracts/src/index.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.', '');
+    'The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.', '');
   for (const [name, value] of entries(contracts).filter(([name]) => /^(STATUS_|SUPPORT_)/.test(name))) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Methods and normalized inputs', '',
-    'Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension recipes](extensions.md) for assumptions and future admission.', '');
+    'Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.', '');
   for (const [id, method] of entries(contracts.METHODS)) {
     lines.push(`### ${id}`, '',
       `- Outputs: ${method.outputs.map(code).join(', ')}.`,
@@ -91,13 +91,13 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [id, input] of entries(contracts.NORMALIZED_INPUTS)) {
     lines.push(`- ${code(id)}: ${code(input.quantity)}; units ${code(input.units)}; dimensions ${code(input.dimensions)}; vertical reference ${code(input.verticalReference)}; time support ${code(input.timeSupport)}; missingness ${code(input.missingness)}.`);
   }
-  lines.push('', '## Admission budgets', '',
-    'These are admission limits, not measured latency or memory claims. [Capacity admission](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) records the API resource model and qualification limits.', '',
+  lines.push('', '## Resource limits', '',
+    'These are configured limits. [Capacity checks](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) describes API memory and load checks.', '',
     'Complete-build limits:', '');
   for (const [name, value] of entries(BUILD_BUDGETS)) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', 'Shared producer/consumer contract limits and storage constants:', '');
   for (const [name, value] of entries(contracts).filter(([name, value]) => typeof value === 'number' && /^(MAX_|CELL_BYTES$|SAMPLE_BLOCK_SIZE$|RETENTION_DAYS$)/.test(name))) lines.push(`- ${code(name)}: ${code(value)}.`);
-  lines.push('', 'Raster pool admission ([source](../apps/batch/src/raster-pool.ts)):', '',
+  lines.push('', 'Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):', '',
     `- ${code('MAX_RASTER_WORKERS')}: ${MAX_RASTER_WORKERS}.`,
     `- ${code('MAX_RASTER_SHARED_INPUT_BYTES')}: ${MAX_RASTER_SHARED_INPUT_BYTES}.`,
     `- ${code('RASTER_WORKER_RESERVE_BYTES')}: ${RASTER_WORKER_RESERVE_BYTES}; admission estimate per worker, not an operating-system memory limit.`, '',

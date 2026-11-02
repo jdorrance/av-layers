@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './client';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
+import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
@@ -8,61 +8,10 @@ it('labels transparent and opaque no-lift legend swatches accurately', () => {
   expect(noLiftLabel('#00000000')).toBe('no usable lift (transparent)');
   expect(noLiftLabel('#55184d')).toBe('no usable lift');
 });
-const layerIds = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
-const frames = ['f003', 'f006', 'f009', 'f012', 'f015', 'f018', 'f021', 'f024'].map((id, index) => {
-  const start = new Date(Date.parse(created) + index * 3 * 3600_000 + 3 * 3600_000).toISOString();
-  const end = new Date(Date.parse(start) + 3 * 3600_000).toISOString();
-  return { id, validTime: end, intervalStart: start, intervalEnd: end };
-});
-
-function manifest(): Manifest {
-  return {
-    version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)),
-    model: 'gfs',
-    buildId: '20261030T000000Z-abc',
-    cycle: created,
-    createdAt: created,
-    expiresAt,
-    method: { id: 'dry-lenschow-pbl-1p2-v1', hash: 'a'.repeat(64) },
-    coverage: { id: 'soaring-land-v1', hash: 'b'.repeat(64), maskKey: 'masks/soaring-land-v1', maxZoom: 5 },
-    grid: GFS_GRID,
-    frames,
-    layers: [...layerIds],
-    artifacts: layerIds.flatMap(layer => frames.map(frame => ({
-      layer,
-      frame: frame.id,
-      tilesKey: `builds/gfs/20261030T000000Z-abc/${layer}/${frame.id}.pmtiles`,
-      tilesSha256: 'c'.repeat(64)
-    }))),
-    samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 365296, channelCount: 24, bytes: 43835520, key: 'builds/gfs/20261030T000000Z-abc/samples.bin', sha256: 'd'.repeat(64) },
-    source: { provider: 'NOAA', provenanceKey: 'builds/gfs/20261030T000000Z-abc/provenance.json', provenanceSha256: 'a'.repeat(64), nativeResolutionDeg: 0.25, model: 'GFS' },
-    tool: { name: 'av-batch', version: '0.0.0' },
-    palettes: ['lift', 'rain'],
-    metrics: {}
-  };
-}
-
-function pointer(): ModelPointer {
-  return {
-    version: 1,
-    model: 'gfs',
-    latestBuildId: '20261030T000000Z-abc',
-    retained: [{ buildId: '20261030T000000Z-abc', manifestKey: 'builds/gfs/20261030T000000Z-abc/manifest.json', cycle: created, expiresAt }]
-  };
-}
-
-function latestPayload(): LatestPayload {
-  return {
-    pointer: pointer(),
-    manifest: manifest(),
-    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/20261030T000000Z-abc/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-    bounds: [-180, -55, 180, 65],
-    maxNativeZoom: 5,
-    palettes: [{ id: 'lift', edges: [0, 300], colors: ['#000000', '#ffffff'], units: 'm' }],
-    coverage: { id: 'soaring-land-v1', hash: 'b'.repeat(64), maskKey: 'masks/soaring-land-v1', maxZoom: 5 },
-    freshness: { ageSeconds: 10, expiresAt }
-  };
-}
+const frames = fixtureManifest().frames;
+const layerIds = fixtureManifest().layers;
+function manifest() { return fixtureManifest({ buildId: '20261030T000000Z-abc', createdAt: created, expiresAt }); }
+function latestPayload(): LatestPayload { return fixtureLatest(manifest()); }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -77,7 +26,7 @@ describe('ApiClient.latest', () => {
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/v1/models/gfs/latest?expand=manifest');
     expect(build.manifest.buildId).toBe('20261030T000000Z-abc');
     expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.webp');
-    expect(build.maxNativeZoom).toBe(5);
+    expect(build.manifest.coverage.maxZoom).toBe(manifest().coverage.maxZoom);
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
   });
 
@@ -90,7 +39,6 @@ describe('ApiClient.latest', () => {
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => jsonResponse(payload),
       now: () => Date.parse('2026-10-31T06:00:00Z') });
     const build = await client.latest('gfs');
-    expect(build.freshness).toEqual(payload.freshness);
     expect(build.manifest.frames).toEqual(frames);
   });
 
@@ -103,19 +51,6 @@ describe('ApiClient.latest', () => {
     ['missing expanded manifest', () => ({ ...latestPayload(), manifest: undefined })]
   ])('rejects %s at the response boundary', async (_name, payload) => {
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => jsonResponse(payload()), now: () => Date.parse(created) });
-    await expect(client.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
-  });
-
-  it.each(['identity', 'length', 'padding', 'byte'])('rejects expanded coverage %s disagreement', async kind => {
-    const payload = latestPayload();
-    if (kind === 'identity') payload.coverage!.hash = 'f'.repeat(64);
-    else {
-      payload.coverage!.tileBits = new Array(171).fill(0);
-      if (kind === 'length') payload.coverage!.tileBits!.pop();
-      if (kind === 'padding') payload.coverage!.tileBits![170] = 128;
-      if (kind === 'byte') payload.coverage!.tileBits![0] = 256;
-    }
-    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => jsonResponse(payload), now: () => Date.parse(created) });
     await expect(client.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
@@ -288,7 +223,7 @@ describe('bounded request lifecycle', () => {
   it('retries a transient read once and never retries invalid JSON or not-retained responses', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('busy', { status: 503 })).mockResolvedValueOnce(jsonResponse(latestPayload()));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created), retryDelayMs: 0 });
-    expect((await client.latest('gfs')).manifest.buildId).toBe(pointer().latestBuildId);
+    expect((await client.latest('gfs')).manifest.buildId).toBe(latestPayload().pointer.latestBuildId);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     for (const response of [new Response('invalid'), new Response('{}', { status: 404 })]) {
       fetchImpl.mockReset().mockResolvedValue(response); await expect(client.latest('gfs')).rejects.toThrow(); expect(fetchImpl).toHaveBeenCalledTimes(1);

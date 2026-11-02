@@ -1,4 +1,4 @@
-import { coverageDescriptorSchema, coveragePrefix, type CoverageMask, type Manifest } from '@av/contracts';
+import { MAX_COVERAGE_DESCRIPTOR_BYTES, coverageDescriptorSchema, coveragePrefix, type CoverageMask, type Manifest } from '@av/contracts';
 import { prepareSamplePackLayout, type SamplePackLayout } from '@av/forecast';
 import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, parseBoundedJson, type WaitContext } from './resources';
 
@@ -26,12 +26,12 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: Manifest, ctx?
       countRead(ctx);
       const object = await bucket.get(maskKey);
       if (!object) throw new CoverageError('Coverage descriptor missing');
-      const bytes = await readObjectBytes(object, 32 * 1024, false, ctx, signal);
+      const bytes = await readObjectBytes(object, MAX_COVERAGE_DESCRIPTOR_BYTES, false, ctx, signal);
       if (await sha256(bytes) !== hash) throw new CoverageError('Coverage descriptor hash mismatch');
       let descriptor;
       try { descriptor = coverageDescriptorSchema.parse(parseBoundedJson(bytes)); }
       catch { throw new CoverageError('Invalid coverage descriptor'); }
-      const values = await Promise.all((['output', 'halo', 'tiles'] as const).map(async name => {
+      const reads = await Promise.allSettled((['output', 'halo', 'tiles'] as const).map(async name => {
         const file = descriptor.files[name];
         countRead(ctx);
         const blob = await bucket.get(`${prefix}/${name}.bin`);
@@ -40,6 +40,12 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: Manifest, ctx?
         if (data.length !== file.bytes || await sha256(data) !== file.sha256) throw new CoverageError(`Coverage ${name} hash mismatch`);
         return data;
       }));
+      // Keep the owner admitted until every R2 operation settles, even if one
+      // sibling failed. Native R2 get() does not accept an abort signal.
+      const values = reads.map(result => {
+        if (result.status === 'rejected') throw result.reason;
+        return result.value;
+      });
       const [output, halo, tiles] = values;
       const mask: CoverageMask = { grid: descriptor.grid, output, halo, tiles, maxZoom: descriptor.maxZoom, bounds: descriptor.bounds };
       const layout = prepareSamplePackLayout(mask.grid, output, halo);

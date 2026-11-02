@@ -1,10 +1,10 @@
 THIRD-PARTY NOTICES
 
-This file records first-party adaptation provenance and third-party license
+This file records source adaptations and third-party license
 obligations. It does not assign a new public license to this repository or its
 first-party sources. Genuine dependency and data notices remain below.
 
-1. First-party adaptation provenance
+1. Source adaptations
 
 The supplied foundation plan identifies windgrams and skyjuice as first-party
 sibling repositories under John Dorrance's ownership. Execution of that plan was
@@ -53,7 +53,7 @@ pmtiles 4.5.0 (npm) and go-pmtiles v1.31.2 are BSD-3-Clause.
 The Cloudflare R2Source/reader adaptation in apps/api is derived from
 https://github.com/protomaps/PMTiles/blob/main/serverless/cloudflare/src/index.ts
 
-Release assets and SHA-256 checksums are maintained in scripts/setup-pmtiles.mjs.
+The PMTiles tool version, release assets and SHA-256 checksums are maintained in apps/batch/pmtiles.json.
 
 Full BSD-3-Clause notice:
 
@@ -71,8 +71,10 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 
 3. Pinned dependency licenses
 
-Versions are pinned in package.json manifests. License identifiers are from the
+Versions are pinned in package.json manifests and the pnpm-workspace.yaml catalog. License identifiers are from the
 published packages at those versions.
+  maplibre-gl 6.16.0                       BSD-3-Clause
+  vite 7.3.7                               MIT
   zod 4.6.7                                MIT
   hono 4.13.14                             MIT
   @hono/zod-openapi 1.6.3                  MIT
@@ -83,13 +85,16 @@ published packages at those versions.
   @img/sharp-libvips-* 1.3.4               LGPL-3.0-or-later and bundled licenses
   @cornerstonejs/codec-openjpeg 1.3.6      MIT
   typescript 5.9.3                         Apache-2.0
-  vitest 3.2.7                             MIT
-  eslint 9.39.1                            MIT
+  vitest 5.0.5                             MIT
+  eslint 10.14.0                            MIT
   typescript-eslint 8.72.1                 MIT
   tsx 4.23.15                              MIT
   wrangler 4.156.0                         MIT OR Apache-2.0
   @cloudflare/workers-types 5.20261030.1   MIT OR Apache-2.0
   @types/node 22.19.15                     MIT
+
+The deployed preview includes MapLibre-LICENSE.txt copied from the installed
+MapLibre package, including its bundled component notices.
 
 Sharp's Apache-2.0 license is retained in the installed package's LICENSE file:
 https://github.com/lovell/sharp/blob/v0.35.5/LICENSE

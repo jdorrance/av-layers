@@ -1,33 +1,33 @@
-# Generated platform reference
+# Generated reference
 
-This file is generated from executable definitions. Edit their owning source, then run:
+Generated from the source files linked below. After editing them, run:
 
 ```sh
-pnpm exec node --import tsx scripts/generate-reference.ts
+pnpm docs:generate
 ```
 
 `pnpm docs:check` rejects stale generated references. No live forecast, storage credentials or network access is required to generate them.
 
-This describes the current producer. Retained builds keep their own immutable descriptors; readers do not compare historical parameters or legends with this reference.
+These are the current settings. Published builds include their own methods, units, and legends.
 
 ## Batch CLI
 
 Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.
 
-Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI admission](../apps/batch/src/cli.ts).
+Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build:sample`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`.
 
-## Admitted production capabilities
+## Live models
 
-Source: [product registry](../packages/contracts/src/index.ts). Test-only fixtures are excluded.
+Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate.
 
 ### GFS (gfs-soaring)
 
-- Model family: `gfs`; source configuration: `noaa-gfs-0p25`; domain: `global`.
+- Public model ID: `gfs`; model family: `gfs`; source configuration: `noaa-gfs-0p25`; domain: `global`.
 - Attribution: NOAA GFS · Aviation Forecast Layers.
 - Grid: `regular-latlon`; 1440 columns × 721 rows; spherical Earth radius 6371229 m; periodic longitude: true.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
@@ -35,11 +35,11 @@ Source: [product registry](../packages/contracts/src/index.ts). Test-only fixtur
 - Native tile zoom: 0–7.
 - Forecast lead hours: `[3,6,9,12,15,18,21,24]`; interval: 3 hours.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
-- Latest promotion: cycle age at most 18 hours; remaining horizon at least 6 hours.
+- Publishing freshness: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
 ## Scalar quantities and units
 
-Source: [layer definitions](../packages/contracts/src/index.ts). Interpret values and absence using [the data guide](data.md).
+Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).
 
 ### Precipitation rate (precip-rate)
 
@@ -69,7 +69,7 @@ Source: [layer definitions](../packages/contracts/src/index.ts). Interpret value
 
 Public sample statuses: `valid`, `no-usable-lift`, `unavailable`, `outside-domain`.
 
-The packed status and support constants below come from the same [contract exports](../packages/contracts/src/index.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.
+The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.
 
 - `STATUS_MASK`: `3`.
 - `STATUS_NO_LIFT`: `1`.
@@ -83,7 +83,7 @@ The packed status and support constants below come from the same [contract expor
 
 ## Methods and normalized inputs
 
-Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension recipes](extensions.md) for assumptions and future admission.
+Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.
 
 ### dry-lenschow-pbl-1p2-v1
 
@@ -156,9 +156,9 @@ Caveats:
 - `tempK`: `air-temperature`; units `K`; dimensions `level-cell`; vertical reference `isobaric levels`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `terrainM`: `geopotential-height`; units `m`; dimensions `cell`; vertical reference `MSL`; time support `static`; missingness `explicit-cell-mask`.
 
-## Admission budgets
+## Resource limits
 
-These are admission limits, not measured latency or memory claims. [Capacity admission](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) records the API resource model and qualification limits.
+These are configured limits. [Capacity checks](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) describes API memory and load checks.
 
 Complete-build limits:
 
@@ -171,18 +171,23 @@ Complete-build limits:
 Shared producer/consumer contract limits and storage constants:
 
 - `CELL_BYTES`: `5`.
+- `MAX_COVERAGE_BITSET_BYTES`: `524288`.
+- `MAX_COVERAGE_DESCRIPTOR_BYTES`: `131072`.
+- `MAX_GRID_CELLS`: `4000000`.
 - `MAX_MANIFEST_BYTES`: `524288`.
 - `MAX_METADATA_JSON_TOKENS`: `8192`.
+- `MAX_NATIVE_ZOOM`: `8`.
 - `MAX_POINTER_BYTES`: `131072`.
 - `MAX_PROVENANCE_BYTES`: `1048576`.
 - `MAX_PROVENANCE_JSON_TOKENS`: `65536`.
 - `MAX_RETAINED_BUILDS`: `256`.
 - `MAX_SAMPLE_RANGE_BYTES`: `262144`.
 - `MAX_SAMPLE_VALUES`: `256`.
+- `MAX_TILE_BYTES`: `1048576`.
 - `RETENTION_DAYS`: `7`.
 - `SAMPLE_BLOCK_SIZE`: `16`.
 
-Raster pool admission ([source](../apps/batch/src/raster-pool.ts)):
+Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):
 
 - `MAX_RASTER_WORKERS`: 3.
 - `MAX_RASTER_SHARED_INPUT_BYTES`: 67108864.

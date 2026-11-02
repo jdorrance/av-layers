@@ -1,16 +1,11 @@
-import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
+import { OpenAPIHono, createRoute, z, type RouteConfig } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import {
-  getProduct,
+  PRODUCTS,
   type ProductDefinition,
   LAYER_IDS,
-  MAX_SAMPLE_RANGE_BYTES,
-  MODEL_IDS,
   PALETTES,
-  SAMPLE_STATUSES,
-  STATUS_OUTSIDE,
   computeFreshness,
-  isCovered,
   isPaletteId,
   isTileCovered,
   latestSchema,
@@ -21,15 +16,14 @@ import {
   provenanceSchema,
   sampleResponseSchema,
   type LayerId,
-  type Manifest,
   type ModelId
 } from '@av/contracts';
-import { packedCellsFromRange, planPackedSample, planSample, sampleCells, type Sample } from '@av/forecast';
+import { serveSample } from './sample';
 import { readTile } from './pmtiles';
 import { resolveCoverage } from './coverage';
-import { binaryRead, countRead, type RequestMetrics, readObjectBytes, boundResponse, type WaitContext } from './resources';
+import { type RequestMetrics, boundResponse, type WaitContext } from './resources';
 import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
-import { Problem, fail, ensureLive, query, response, json, finish, cached, validIp, handleError } from './http';
+import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
 
 type Env = {
   Bindings: {
@@ -50,34 +44,14 @@ function layerId(value: string): LayerId {
   return value as LayerId;
 }
 
-async function view(m: Manifest, origin: string, bucket: R2Bucket, ctx: WaitContext) {
-  const { mask } = await resolveCoverage(bucket, m, ctx);
-  return {
-    manifest: m,
-    templates: Object.fromEntries(m.layers.map(layer => [layer, `${origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-    bounds: m.descriptors.bounds, maxNativeZoom: m.coverage.maxZoom, palettes: m.descriptors.palettes,
-    coverage: { ...m.coverage, tileBits: Array.from(mask.tiles) }
-  };
-}
-
-export function createApp({ products = Object.fromEntries(MODEL_IDS.map(id => [id, getProduct(id)!])) }: { products?: Record<string, ProductDefinition> } = {}) {
+export function createApp({ products = Object.fromEntries(PRODUCTS.map(product => [product.modelId, product])) }: { products?: Record<string, ProductDefinition> } = {}) {
 const modelId = (value: string): ModelId => {
   if (!Object.hasOwn(products, value)) fail(404, 'unknown-model', 'Unknown model');
   return value;
 };
 const app = new OpenAPIHono<Env>({
   defaultHook: result => {
-    if (!result.success) {
-      return new Response(
-        JSON.stringify({
-          type: 'urn:windy-av:invalid-parameter',
-          title: 'invalid-parameter',
-          status: 400,
-          detail: 'Invalid request parameters'
-        }),
-        { status: 400, headers: { 'content-type': 'application/problem+json; charset=utf-8', 'cache-control': 'no-store' } }
-      );
-    }
+    if (!result.success) fail(400, 'invalid-parameter', 'Invalid request parameters');
   }
 });
 
@@ -115,7 +89,6 @@ function requiredParam(c: Context<Env>, name: string): string {
 
 function registerJsonRoute(
   path: string,
-  honoPath: string,
   params: Record<string, z.ZodTypeAny>,
   queries: Record<string, z.ZodTypeAny>,
   schema: z.ZodTypeAny,
@@ -123,7 +96,7 @@ function registerJsonRoute(
 ): void {
   const paramValidator = z.object(params);
   const queryValidator = z.object(queries);
-  const route = createRoute({
+  const route: RouteConfig = createRoute({
     method: 'get',
     path,
     request: { params: paramValidator, query: queryValidator },
@@ -132,22 +105,17 @@ function registerJsonRoute(
       ...problemResponses
     }
   });
-  app.openAPIRegistry.registerPath(route);
-  app.get(honoPath, async c => {
+  app.openapi(route, async c => {
     const url = new URL(c.req.url);
     query(url, Object.keys(queries));
-    if (!paramValidator.safeParse(c.req.param()).success) {
-      fail(400, 'invalid-parameter', 'Invalid request parameters');
-    }
     return handler(c, url);
   });
 }
 
-registerJsonRoute('/healthz', '/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
+registerJsonRoute('/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
   json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
 
 registerJsonRoute(
-  '/v1/catalog',
   '/v1/catalog',
   {},
   {},
@@ -182,14 +150,10 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/latest',
-  '/v1/models/:model/latest',
   { model: param },
   { expand: z.enum(['manifest']).optional() },
   latestSchema,
   async (c, url) => {
-    if (url.searchParams.has('expand') && url.searchParams.get('expand') !== 'manifest') {
-      fail(400, 'invalid-query', 'Invalid expand');
-    }
     const model = modelId(requiredParam(c, 'model'));
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
     const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx);
@@ -197,7 +161,10 @@ registerJsonRoute(
     const servedManifest = { ...m, source: servedSource(m, url.origin) };
     return json({
       pointer: ptr,
-      ...(url.searchParams.has('expand') ? await view(servedManifest, url.origin, c.env.BUCKET, c.executionCtx) : {}),
+      ...(url.searchParams.has('expand') ? {
+        manifest: servedManifest,
+        templates: Object.fromEntries(m.layers.map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
+      } : {}),
       freshness: computeFreshness(m)
     });
   }
@@ -205,7 +172,6 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/runs',
-  '/v1/models/:model/runs',
   { model: param },
   {},
   z.object({ model: z.string(), retained: modelPointerSchema.shape.retained }),
@@ -218,7 +184,6 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}',
-  '/v1/models/:model/runs/:buildId',
   { model: param, buildId: param },
   {},
   manifestSchema,
@@ -234,7 +199,6 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/provenance',
-  '/v1/models/:model/runs/:buildId/provenance',
   { model: param, buildId: param },
   {},
   provenanceSchema,
@@ -253,7 +217,6 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/layers/{layer}/{frame}/tilejson.json',
-  '/v1/models/:model/runs/:buildId/layers/:layer/:frame/tilejson.json',
   { model: param, buildId: param, layer: param, frame: param },
   {},
   z.object({
@@ -291,7 +254,6 @@ registerJsonRoute(
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/sample',
-  '/v1/models/:model/runs/:buildId/sample',
   { model: param, buildId: param },
   { lat: z.string(), lon: z.string(), frame: z.string().optional(), layers: z.string().optional() },
   sampleResponseSchema,
@@ -300,7 +262,7 @@ registerJsonRoute(
     const buildId = requiredParam(c, 'buildId');
     const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
     const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
-    return sample(c.req.raw, c.env.BUCKET, c.executionCtx, m, url);
+    return serveSample(c.req.raw, c.env.BUCKET, c.executionCtx, m, url);
   }
 );
 
@@ -385,95 +347,6 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
     return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
   });
 });
-
-async function sample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: Manifest, url: URL): Promise<Response> {
-  const coordinate = (name: string, min: number, max: number) => {
-    const value = url.searchParams.get(name);
-    if (value === null || value.trim() === '' || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value)) {
-      fail(400, 'invalid-query', `Invalid ${name}`);
-    }
-    const n = Number(value);
-    if (!Number.isFinite(n) || n < min || n > max) fail(400, 'invalid-query', `Invalid ${name}`);
-    return Object.is(n, -0) ? 0 : n;
-  };
-  const lat = coordinate('lat', -90, 90),
-    lon = coordinate('lon', -180, 180);
-  const requested = url.searchParams.get('frame');
-  const frameIds = requested === 'all' ? m.frames.map(f => f.id) : requested === null ? [m.frames[0].id] : requested.split(',');
-  const layers = url.searchParams.get('layers')?.split(',') ?? [...m.layers];
-  if (frameIds.length * layers.length > m.descriptors.maxSampleValues) fail(429, 'sample-limit', `Select at most ${m.descriptors.maxSampleValues} frame/layer values`);
-  if (!frameIds.length || !layers.length || new Set(frameIds).size !== frameIds.length || new Set(layers).size !== layers.length) {
-    fail(400, 'invalid-query', 'Select distinct frames and layers');
-  }
-  const selectedLayers = layers.map(layerId).sort();
-  const frames = frameIds
-    .map(id => {
-      const f = m.frames.find(frame => frame.id === id);
-      if (!f) return fail(404, 'unknown-frame', 'Unknown frame');
-      return f;
-    })
-    .sort((a, b) => a.validTime.localeCompare(b.validTime));
-  const jobs = frames.flatMap(frame => selectedLayers.map(layer => ({ frame, layer, channel: artifact(m, layer, frame.id).channel })));
-  const canonical = new URL(url.origin + url.pathname);
-  canonical.searchParams.set('lat', String(lat));
-  canonical.searchParams.set('lon', String(lon));
-  canonical.searchParams.set('frame', frames.map(f => f.id).join(','));
-  canonical.searchParams.set('layers', selectedLayers.join(','));
-  const canonicalRequest = new Request(canonical, { headers: request.headers });
-  return cached(canonicalRequest, m.expiresAt, ctx, async () => {
-    const { mask, layout: sampleLayout } = await resolveCoverage(bucket, m, ctx);
-    const outside = !isCovered(mask, lat, lon);
-    const plan = outside ? null : planSample(m.grid, lat, lon);
-    const packed = plan ? planPackedSample(sampleLayout, plan, m.samples.channelCount, jobs.map(job => job.channel)) : null;
-    if (packed) {
-      const { offset, length } = packed.byteRange;
-      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > m.samples.bytes) {
-        fail(503, 'publication-invalid', 'Invalid sample range');
-      }
-      if (length > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample range exceeds the byte budget');
-    }
-    const source = servedSource(m, url.origin);
-    let bytes: Uint8Array = new Uint8Array();
-    if (packed) {
-      bytes = await binaryRead(bucket, `${m.samples.key}:${packed.byteRange.offset}:${packed.byteRange.length}`, async signal => {
-        countRead(ctx);
-        const object = await bucket.get(m.samples.key, { range: packed.byteRange });
-        if (!object || !('body' in object) || object.size !== m.samples.bytes) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
-        return readObjectBytes(object, packed.byteRange.length, true, ctx, signal);
-      }, ctx);
-      ensureLive(m.expiresAt);
-      if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-    }
-    const values = new Map<string, Sample>();
-    for (const job of jobs) {
-      values.set(`${job.frame.id}/${job.layer}`, plan && packed
-        ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), m.descriptors.layers[job.layer])
-        : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false });
-    }
-    const result = {
-      model: m.model,
-      buildId: m.buildId,
-      lat,
-      lon,
-      method: m.method,
-      source,
-      coverage: m.coverage,
-      expiresAt: m.expiresAt,
-      frames: frames.map(frame => ({
-        ...frame,
-        layers: Object.fromEntries(
-          selectedLayers.map(layer => {
-            const value = values.get(`${frame.id}/${layer}`)!;
-            return [layer, { ...value, status: SAMPLE_STATUSES[value.status] }];
-          })
-        )
-      }))
-    };
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString()));
-    const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}-v3`);
-  }, 'sample-blocks-v1');
-}
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });
 app.openAPIRegistry.registerPath({ method: 'get', path: '/docs', responses: { 200: { description: 'Interactive API documentation' } } });

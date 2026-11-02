@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GFS_GRID, GFS_PRODUCT, MAX_PROVENANCE_BYTES, LAYER_IDS, createProductDescriptors, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
@@ -16,11 +16,11 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 vi.mock('./validate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./validate.js')>();
-  return { ...actual, wasValidatedInProcess: vi.fn(actual.wasValidatedInProcess), loadCoverage: vi.fn(async () => ({})), validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest) };
+  return { ...actual, validateBuild: vi.fn(async (root: string, manifest: Manifest) => ({ root: resolve(root), manifest, hash: actual.sha256(Buffer.from(JSON.stringify(manifest))) })) };
 });
 
 import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
-import { localPath, sha256, validateBuild, wasValidatedInProcess } from './validate.js';
+import { localPath, sha256 } from './validate.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date }>();
@@ -55,7 +55,7 @@ class MemoryStore implements ObjectStorage {
   async delete(keys: string[]) { for (const key of keys) this.objects.delete(key); }
 }
 
-const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
+const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
 const now = Date.parse('2026-10-30T06:01:00.000Z');
 const id = '20261030T060000Z-12345678-1234-4234-8234-123456789abc';
 const temp: string[] = [];
@@ -160,17 +160,12 @@ describe('immutable publication', () => {
     expect(vi.mocked(readFile).mock.calls.some(([file]) => file === path)).toBe(false);
     expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
   });
-  it('reuses a process-local validation result but still checks the actual uploaded bytes', async () => {
+  it('rejects a persisted validation result before accessing storage', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    const checks = vi.mocked(validateBuild).mock.calls.length;
-    vi.mocked(wasValidatedInProcess).mockReturnValueOnce(true);
-    await publish(store, root, manifest, { authority, now: () => now });
-    expect(vi.mocked(validateBuild).mock.calls.length).toBe(checks);
-    const nextStore = new MemoryStore();
-    await writeFile(localPath(root, manifest.samples.key), 'changed after validation');
-    vi.mocked(wasValidatedInProcess).mockReturnValueOnce(true);
-    await expect(publish(nextStore, root, manifest, { authority, now: () => now })).rejects.toThrow('Local hash mismatch');
-    expect(nextStore.objects.has('catalog/gfs/latest.json')).toBe(false);
+    const validated = JSON.parse(JSON.stringify({ root, manifest, hash: sha256(Buffer.from(JSON.stringify(manifest))) }));
+    await expect(publish(store, root, manifest, { authority, now: () => now, validated })).rejects.toThrow('validation result');
+    expect(store.gets).toHaveLength(0);
+    expect(store.objects.size).toBe(0);
   });
   it('publishes verified external provenance before the manifest and latest pointer', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
@@ -414,7 +409,7 @@ describe('immutable publication', () => {
   it('requires an unexpired retained rollback and protects retained and fresh objects during cleanup', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });
-    expect(() => workflowAuthority({})).toThrow('serialized');
+    expect(() => workflowAuthority({})).toThrow('workflow on main');
     await rollback(store, 'gfs', id, authority, now);
     await expect(rollback(store, 'gfs', id, authority, Date.parse(manifest.expiresAt))).rejects.toThrow('not retained');
     const stale = '20261028T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';

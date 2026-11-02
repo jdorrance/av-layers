@@ -95,7 +95,7 @@ export class NoaaTransport {
   private readonly retry: Required<NonNullable<NoaaFetchOptions['retry']>>;
 
   constructor(options: NoaaFetchOptions & { cacheDir?: string; stats?: NoaaTransportStats }) {
-    this.fetchImpl = options.fetch ?? options.fetchImpl ?? globalThis.fetch;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.cacheDir = options.cacheDir;
     this.signal = options.signal;
     this.stats = options.stats ?? { networkRequests: 0, cacheReads: 0, memoryIndexHits: 0 };

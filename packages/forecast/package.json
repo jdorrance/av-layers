@@ -1,1 +1,12 @@
-{"name":"@av/forecast","version":"0.0.0","private":true,"type":"module","exports":{".":"./src/index.ts"},"dependencies":{"@av/contracts":"workspace:*"}}
+{
+  "name": "@av/forecast",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@av/contracts": "workspace:*"
+  }
+}

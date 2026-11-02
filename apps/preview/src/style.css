@@ -127,7 +127,7 @@ dd {
   word-break: break-word;
 }
 
-.legend-row {
+.av-legend-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -135,7 +135,7 @@ dd {
   min-height: 18px;
 }
 
-.swatch {
+.av-swatch {
   width: 24px;
   height: 12px;
   border-radius: 2px;
@@ -210,3 +210,5 @@ th {
 }
 
 a { color: #8fceef; }
+
+.av-palette-note { color: #8fa4ad; font-size: 11px; }

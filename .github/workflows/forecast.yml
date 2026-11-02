@@ -1,4 +1,4 @@
-name: Forecast sample
+name: Forecast
 on:
   schedule:
     - cron: '17 5,17 * * *'
@@ -14,9 +14,7 @@ on:
         required: true
       model:
         description: Forecast model
-        type: choice
-        options:
-          - gfs
+        type: string
         default: gfs
         required: true
       cycle:
@@ -39,7 +37,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: forecast-${{ inputs.environment || 'production' }}-gfs
+  group: forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}
   cancel-in-progress: false
 jobs:
   build-publish:
@@ -55,27 +53,18 @@ jobs:
       ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
       RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
       RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.23.4
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: Run forecast
         run: pnpm operations forecast
-      - name: Upload build receipts
+      - name: Upload build records
         uses: actions/upload-artifact@v4
         if: always()
         with:

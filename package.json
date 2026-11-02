@@ -20,14 +20,15 @@
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",
     "test": "vitest run",
     "build": "pnpm --filter @av/preview build && pnpm --filter @av/api build",
-    "forecast": "tsx apps/batch/src/cli.ts build:sample",
+    "forecast": "tsx apps/batch/src/cli.ts build",
     "capacity": "tsx apps/batch/src/cli.ts capacity",
     "input:proof": "tsx apps/batch/src/cli.ts input-proof",
     "sample-preview": "tsx scripts/sample-preview.ts",
     "dev": "tsx scripts/dev-fixture.ts",
     "masks:build": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py",
     "tools:pmtiles": "node scripts/setup-pmtiles.mjs",
-    "docs:check": "node --import tsx scripts/generate-reference.ts --check",
+    "docs:generate": "tsx scripts/generate-reference.ts",
+    "docs:check": "tsx scripts/generate-reference.ts --check",
     "operations": "node --import tsx scripts/operations.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check && pnpm build && git diff --check"
@@ -35,13 +36,14 @@
   "devDependencies": {
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
-    "@cloudflare/workers-types": "5.20261030.1",
+    "@cloudflare/workers-types": "catalog:",
     "@types/node": "22.19.15",
-    "eslint": "9.39.1",
+    "eslint": "10.14.0",
     "tsx": "4.23.15",
-    "typescript": "5.9.3",
+    "typescript": "catalog:",
     "typescript-eslint": "8.72.1",
-    "vitest": "3.2.7",
-    "wrangler": "4.156.0"
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   }
 }

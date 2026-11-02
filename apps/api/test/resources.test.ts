@@ -61,12 +61,20 @@ it('uses bounded buffers for fragmented streams, cancels stalled reads and relea
   const release = reserveAllocation(32 * 1024 * 1024); release();
 });
 
-it('cancels timed-out coalesced operations and permits a fresh retry', async () => {
+it('holds admission after a deadline until an uncancellable owner actually settles', async () => {
   const reads = new MaterializedReads<number>(1, 5);
   let signal: AbortSignal | undefined;
-  await expect(reads.run('slow', async value => { signal = value; return new Promise(() => {}); })).rejects.toThrow('deadline');
+  let finish!: (value: number) => void;
+  const owners: Promise<unknown>[] = [];
+  const replacement = vi.fn(async () => 42);
+  await expect(reads.run('slow', async value => { signal = value; return new Promise(resolve => { finish = resolve; }); }, { waitUntil: promise => owners.push(promise) })).rejects.toThrow('deadline');
   expect(signal?.aborted).toBe(true);
-  expect(await reads.run('slow', async () => 42)).toBe(42);
+  await expect(reads.run('slow', replacement)).rejects.toThrow('deadline');
+  await expect(reads.run('another', replacement)).rejects.toThrow('concurrent');
+  expect(replacement).not.toHaveBeenCalled();
+  finish(7);
+  await Promise.all(owners);
+  expect(await reads.run('slow', replacement)).toBe(42);
 });
 
 it('rejects large flat object graphs before parsing and admits bounded realistic receipt structure', async () => {

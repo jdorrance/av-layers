@@ -10,9 +10,13 @@ pnpm test apps/windy-plugin
 AV_API_BASE=https://your-api.example pnpm --filter @av/windy-plugin build
 ```
 
-The build writes `dist/plugin.js` and `dist/plugin.min.js`. Set `AV_API_BASE` to
+The Vite build writes `dist/plugin.min.js` and its source map. Set `AV_API_BASE` to
 the API you want to use; it is included in the bundle and defaults to
 `http://localhost:8787`.
+
+[src/pluginConfig.ts](src/pluginConfig.ts) owns the plugin name, version, and
+Windy settings. The build creates `plugin.json` and the install package metadata
+from those settings.
 
 Serve the bundle over HTTPS and open it with
 [Windy's developer loader](https://www.windy.com/developer-mode).

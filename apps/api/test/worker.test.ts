@@ -84,7 +84,7 @@ class MemoryBucket {
         view.setFloat32(i, (layer === 'precip-rate' ? 7 : 310) + frame, true);
         view.setUint8(i + 4, layer === 'usable-lift-msl' ? 2 : 0);
       }
-      return { size: manifest.samples.bytes, body: true, async arrayBuffer() { return bytes.buffer; } };
+      return { size: manifest.samples.bytes, body: stream(bytes) };
     }
     const fixture = await coverageFixture;
     const coverageFile = key.startsWith(`coverage/${coverageHash}/`) ? key.split('/').at(-1) : undefined;
@@ -95,19 +95,19 @@ class MemoryBucket {
     const expire = this.expireDuringProvenance && key.endsWith('/provenance.json');
     return {
       size: bytes.byteLength,
-      body: true,
-      async json() { return JSON.parse(new TextDecoder().decode(bytes)); },
-      async arrayBuffer() {
-        if (expire) vi.setSystemTime(now + 60_000);
-        return bytes.slice().buffer;
-      }
+      body: stream(bytes, () => { if (expire) vi.setSystemTime(now + 60_000); })
     };
   }
 }
 
+function stream(bytes: Uint8Array, onRead = () => {}): ReadableStream<Uint8Array> {
+  return new ReadableStream({ pull(controller) { onRead(); controller.enqueue(bytes); controller.close(); } }, { highWaterMark: 0 });
+}
+
 let bucket: MemoryBucket;
 let cache: MemoryCache;
-let limiter: { limit: ReturnType<typeof vi.fn> };
+type RateLimit = Parameters<typeof worker.fetch>[1]['SAMPLE_RATE_LIMITER']['limit'];
+let limiter: { limit: ReturnType<typeof vi.fn<RateLimit>> };
 async function call(path: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', '192.0.2.1');
@@ -121,7 +121,7 @@ beforeEach(() => {
   vi.setSystemTime(now);
   pending = [];
   bucket = new MemoryBucket();
-  limiter = { limit: vi.fn(async () => ({ success: true })) };
+  limiter = { limit: vi.fn<RateLimit>(async () => ({ success: true })) };
   bucket.install(publication('build-1'));
   cache = new MemoryCache();
   vi.stubGlobal('caches', { default: cache });
@@ -302,8 +302,8 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/runs/old-schema/provenance')).status).toBe(503);
   });
   it('advertises transparent no-lift and invalidates old palette JSON and SVG validators', async () => {
-    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { palettes: { id: string; noLiftColor?: string }[] };
-    expect(latest.palettes.find(palette => palette.id === 'lift')?.noLiftColor).toBe('#00000000');
+    const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { manifest: { descriptors: { palettes: { id: string; noLiftColor?: string }[] } } };
+    expect(latest.manifest.descriptors.palettes.find(palette => palette.id === 'lift')?.noLiftColor).toBe('#00000000');
     for (const extension of ['json', 'svg']) {
       const path = `/v1/palettes/lift.${extension}`;
       const result = await call(path, { headers: { 'if-none-match': '"palette-lift-v1"' } });
@@ -323,16 +323,16 @@ describe('read-only worker', () => {
     bucket.install(current, old);
     let result = await call('/v1/models/gfs/latest?expand=manifest');
     expect(result.status).toBe(200);
-    let body = await result.json() as { palettes: { id: string; noLiftColor?: string }[] };
-    expect(body.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#55184d');
+    let body = await result.json() as { manifest: { descriptors: { palettes: { id: string; noLiftColor?: string }[] } } };
+    expect(body.manifest.descriptors.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#55184d');
     expect((await call('/v1/models/gfs/runs/current')).status).toBe(200);
     expect((await (await call('/v1/palettes/lift.json')).json() as { noLiftColor: string }).noLiftColor).toBe('#00000000');
     bucket = new MemoryBucket();
     bucket.install(old, current);
     result = await call('/v1/models/gfs/latest?expand=manifest');
     expect(result.status).toBe(200);
-    body = await result.json() as { palettes: { id: string; noLiftColor?: string }[] };
-    expect(body.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#00000000');
+    body = await result.json() as { manifest: { descriptors: { palettes: { id: string; noLiftColor?: string }[] } } };
+    expect(body.manifest.descriptors.palettes.find(p => p.id === 'lift')?.noLiftColor).toBe('#00000000');
     expect((await call('/v1/models/gfs/runs/retained-snapshot')).status).toBe(200);
   });
   it('validates route parameter lengths and rejects unknown models and layers', async () => {
@@ -524,6 +524,23 @@ describe('read-only worker', () => {
     expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(2);
   });
 
+  it('cancels a sample body with mismatched object size before reading it and permits retry', async () => {
+    const get = bucket.get.bind(bucket), cancel = vi.fn(), pull = vi.fn();
+    let invalid = true;
+    vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => key.endsWith('/samples.bin') && invalid
+      ? { size: 1, body: new ReadableStream<Uint8Array>({ pull, cancel }, { highWaterMark: 0 }) }
+      : get(key, options));
+    const path = '/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&frame=all';
+    const result = await call(path);
+    expect(result.status).toBe(503);
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull).not.toHaveBeenCalled();
+    expect(cache.entries.size).toBe(0);
+    invalid = false;
+    expect((await call(path)).status).toBe(200);
+  });
+
   it('uses declared frame/layer channel order while canonicalizing requested order', async () => {
     const pub = publication('ordered');
     pub.manifest.frames.reverse();
@@ -645,12 +662,10 @@ describe('read-only worker', () => {
     const spy = vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => {
       const object = await get(key, options);
       if (!key.endsWith('/manifest.json') || !object) return object;
-      const arrayBuffer = object.arrayBuffer.bind(object);
-      return { ...object, async arrayBuffer() {
-        const raw = await arrayBuffer();
+      return { ...object, body: object.body.pipeThrough(new TransformStream({ transform(chunk, controller) {
         vi.setSystemTime(now + 60_000);
-        return raw;
-      } };
+        controller.enqueue(chunk);
+      } })) };
     });
     const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     expect((await call(path)).status).toBe(404);
@@ -710,10 +725,10 @@ describe('read-only worker', () => {
   });
 
   it('rejects an oversized object before reading its body and rejects oversized URLs before storage', async () => {
-    const read = vi.fn(async () => new ArrayBuffer(0));
+    const read = vi.fn();
     const get = bucket.get.bind(bucket);
     vi.spyOn(bucket, 'get').mockImplementation(async (key, options) => key === 'catalog/gfs/latest.json'
-      ? { size: 128 * 1024 + 1, body: true, arrayBuffer: read, json: async () => ({}) }
+      ? { size: 128 * 1024 + 1, body: new ReadableStream({ pull: read }, { highWaterMark: 0 }) }
       : get(key, options));
     expect((await call('/v1/models/gfs/latest')).status).toBe(503);
     expect(read).not.toHaveBeenCalled();

@@ -25,7 +25,7 @@ Useful files:
 - [src/index.ts](src/index.ts): routes and Worker entry point.
 - [src/publication.ts](src/publication.ts): checks forecast files before serving them.
 - [src/pmtiles.ts](src/pmtiles.ts): reads map tiles from archives.
-- [wrangler.jsonc](wrangler.jsonc): local and deployed Worker settings.
+- [wrangler.json](wrangler.json): local and deployed Worker settings.
 
 See [the data guide](../../docs/data.md) for values and missing-data rules, and
 [operations](../../docs/operations.md) for deployment.

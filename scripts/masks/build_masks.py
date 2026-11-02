@@ -43,23 +43,23 @@ SOURCE_ARCHIVE_BYTES = 799734
 if geos_version_string != "3.13.1" or proj_version_str != "9.5.1":
     raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1")
 
-POLICY_ID = "soaring-land-v1"
-LAT_MIN = -55.0
-LAT_MAX = 65.0
-SEA_BUFFER_METERS = 50_000.0
-EXCLUDED_A3 = ("RUS", "ATA", "GRL")
-
-LON0 = -180.0
-LAT0 = 90.0
-WIDTH = 1440
-HEIGHT = 721
-DX = 0.25
-DY = -0.25
-CELL_HALF = 0.125
+SETTINGS = json.loads((Path(__file__).resolve().parents[2] / "packages/contracts/config/gfs.json").read_text())
+GRID = SETTINGS["grid"]
+COVERAGE = SETTINGS["coverage"]
+if GRID["kind"] != "regular-latlon" or not GRID["wrapLongitude"]:
+    raise SystemExit("This generator requires the declared global regular GFS grid")
+POLICY_ID = COVERAGE["id"]
+LAT_MIN, LAT_MAX = COVERAGE["south"], COVERAGE["north"]
+SEA_BUFFER_METERS = COVERAGE["seaBufferMeters"]
+EXCLUDED_A3 = tuple(COVERAGE["excludedA3"])
+HALO_CELLS = COVERAGE["interpolationHaloCells"]
+LON0, LAT0 = GRID["lon0"], GRID["lat0"]
+WIDTH, HEIGHT = GRID["width"], GRID["height"]
+DX, DY = GRID["dx"], GRID["dy"]
+CELL_HALF = abs(DX) / 2
 CELL_COUNT = WIDTH * HEIGHT
 CELL_BYTES = (CELL_COUNT + 7) // 8
-
-TILE_ZOOMS = (0, 1, 2, 3, 4, 5, 6, 7)
+TILE_ZOOMS = tuple(range(COVERAGE["maxNativeZoom"] + 1))
 TILE_OFFSETS = {}
 _running = 0
 for _z in TILE_ZOOMS:
@@ -370,11 +370,11 @@ def build_halo(active: bytearray) -> bytearray:
         if not is_active:
             continue
         row, col = divmod(idx, WIDTH)
-        for dr in (-1, 0, 1):
+        for dr in range(-HALO_CELLS, HALO_CELLS + 1):
             rr = row + dr
             if rr < 0 or rr >= HEIGHT:
                 continue
-            for dc in (-1, 0, 1):
+            for dc in range(-HALO_CELLS, HALO_CELLS + 1):
                 if dr == 0 and dc == 0:
                     continue
                 cc = (col + dc) % WIDTH
@@ -518,7 +518,7 @@ def main() -> None:
 
         tile_geoms = []
         lat_centers = [
-            -55.0 + 10.0 * i for i in range(13)
+            LAT_MIN + TILE_DEG * i for i in range(int((LAT_MAX - LAT_MIN) / TILE_DEG) + 1)
         ]
         lon_centers = [-175.0 + 10.0 * i for i in range(36)]
         for lat_center in lat_centers:
@@ -749,7 +749,21 @@ def main() -> None:
         manifest_bytes = (
             json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
         ).encode("utf-8")
-        write_atomic(args.output / "manifest.json", manifest_bytes)
+        write_atomic(args.output / "source.json", manifest_bytes)
+        # The batch process and API read this same compact, content-addressed format.
+        descriptor = {
+            "version": 1, "id": POLICY_ID, "grid": GRID,
+            "bounds": [COVERAGE["west"], LAT_MIN, COVERAGE["east"], LAT_MAX],
+            "policy": COVERAGE["description"], "maxZoom": TILE_ZOOMS[-1],
+            "supportHaloCells": HALO_CELLS,
+            "sampleLayout": {"format": "cell-major-blocks-v1", "blockSize": 16},
+            "files": {
+                "output": {"bytes": len(output_bytes), "sha256": output_sha},
+                "halo": {"bytes": len(halo_bytes), "sha256": halo_sha},
+                "tiles": {"bytes": len(tile_bytes), "sha256": tile_sha},
+            },
+        }
+        write_atomic(args.output / "manifest.json", json.dumps(descriptor, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
     print(
         json.dumps(

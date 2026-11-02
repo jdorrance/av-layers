@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GFS_GRID } from '@av/contracts';
-import { validateNormalizedFrame, type NormalizedFrame } from './providers.js';
+import { validateNormalizedFrame, type NormalizedFrame } from '@av/forecast';
 
 function frame(): NormalizedFrame {
   const values = () => Float32Array.of(1), missing = () => Uint8Array.of(0), time = '2026-10-30T00:00:00Z', window = { start: time, end: time };

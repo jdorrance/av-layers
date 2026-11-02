@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
-import { validateHealthContract, verifyWorkerReadiness } from './smoke-api';
+import { readFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { manifestSchema } from '@av/contracts';
+import { ApiClient, type PinnedBuild } from '@av/contracts/client';
+import { probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
+
+afterEach(() => vi.restoreAllMocks());
 
 const deploymentId = `${'a'.repeat(40)}-12345-2`;
 
@@ -88,4 +93,42 @@ describe('Worker readiness after deployment', () => {
     await expect(verifyWorkerReadiness({ url, expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0, timeoutMs: 20 })).resolves.toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+});
+
+
+it('rejects oversized declared or streamed probe bodies and cancels the stream', async () => {
+  const cancel = vi.fn();
+  const declared = new Response(new ReadableStream({ cancel }), { headers: { 'content-length': '17' } });
+  await expect(readResponseBytes(declared, 16)).rejects.toThrow('byte limit');
+  expect(cancel).toHaveBeenCalledOnce();
+  const streamed = new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(17)); }, cancel }));
+  await expect(readResponseBytes(streamed, 16)).rejects.toThrow('byte limit');
+  expect(cancel).toHaveBeenCalledTimes(2);
+});
+
+it('uses one pinned build for the shared sample/tile probe and propagates serving failures', async () => {
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: Object.fromEntries(manifest.layers.map(layer => [layer, 'unused'])) as PinnedBuild['templates'] };
+  const latest = vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockResolvedValue({ model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt, frames: [] });
+  let corruptTile = false;
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/healthz') return Response.json({ ok: true, deploymentId });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+    expect(path).toBe(`/tiles/${manifest.model}/${manifest.buildId}/${manifest.layers[0]}/${manifest.frames[0].id}/0/0/0.webp`);
+    return new Response(corruptTile ? 'corrupt' : 'RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+  });
+  const options = { baseUrl: 'https://api.example', model: manifest.model, expectedDeploymentId: deploymentId, fetchImpl };
+  expect(await probeApi(options)).toBe(manifest);
+  expect(latest).toHaveBeenCalledWith(manifest.model, { requireLive: true });
+  expect(sample).toHaveBeenCalledWith(build, { lat: 32.9, lon: -117.25, frames: [manifest.frames[0].id] });
+  corruptTile = true;
+  const observeManifest = vi.fn();
+  await expect(probeApi({ ...options, requireLive: false, observeManifest })).rejects.toThrow('not WebP');
+  expect(observeManifest).toHaveBeenCalledWith(manifest);
+  expect(latest).toHaveBeenLastCalledWith(manifest.model, { requireLive: false });
+  sample.mockRejectedValueOnce(new Error('sample unavailable'));
+  await expect(probeApi(options)).rejects.toThrow('sample unavailable');
 });

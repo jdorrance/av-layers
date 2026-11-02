@@ -22,6 +22,8 @@ Entry points:
 Useful files:
 
 - [src/index.ts](src/index.ts): public types and exports.
+- [config/gfs.json](config/gfs.json): GFS source, grid, forecast, and coverage settings.
+- [src/products.ts](src/products.ts): model definitions and the live registry.
 - [src/methods.ts](src/methods.ts): input fields and calculation parameters.
 - [src/geometry.ts](src/geometry.ts): grid coordinates and map projections.
 - [src/client.ts](src/client.ts): client helper exports.

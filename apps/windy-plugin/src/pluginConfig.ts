@@ -1,10 +1,4 @@
-import type { ExternalPluginConfig } from '@windy/interfaces';
-
-const BUILD_API_BASE = '__AV_API_BASE__';
-
-export const API_BASE = BUILD_API_BASE;
-
-const config: ExternalPluginConfig = {
+const config = {
   name: 'windy-plugin-av-layer',
   version: '0.1.0',
   icon: '🪂',
@@ -16,6 +10,6 @@ const config: ExternalPluginConfig = {
   mobileUI: 'fullscreen',
   routerPath: '/av-layer',
   private: true
-};
+} as const;
 
 export default config;

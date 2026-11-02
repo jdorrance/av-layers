@@ -4,7 +4,7 @@ import { DeleteObjectsCommand, PutObjectCommand, S3Client } from '@aws-sdk/clien
 import { describe, expect, it, vi } from 'vitest';
 import { r2ClientOptions, r2Storage } from './storage';
 
-const env = { R2_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
+const env = { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
 
 describe('R2 S3 client configuration', () => {
   it('preserves listed object sizes and distinguishes missing metadata from zero bytes', async () => {
@@ -48,7 +48,7 @@ describe('R2 S3 client configuration', () => {
 
   it('uses the R2 endpoint and required-only SDK checksums', () => {
     const options = r2ClientOptions(env)!;
-    expect(options.endpoint).toBe(`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+    expect(options.endpoint).toBe(`https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`);
     expect(options.requestChecksumCalculation).toBe('WHEN_REQUIRED');
     expect(options.responseChecksumValidation).toBe('WHEN_REQUIRED');
   });

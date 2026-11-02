@@ -14,7 +14,7 @@ const lambert: Grid = gridSchema.parse({ kind: 'lambert-conformal', width: 3, he
 function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string; policy?: string; value?: number } = {}) {
   const model = options.model ?? 'synthetic', buildId = 'fixture-1', prefix = `builds/${model}/${buildId}`;
   const bounds: [number, number, number, number] = grid.kind === 'regular-latlon' ? [-2, -2, 2, 2] : [-2, 38, 2, 42];
-  const product: ProductDefinition = { id: 'synthetic-test', source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers: ['precip-rate'] };
+  const product: ProductDefinition = { id: 'synthetic-test', modelId: model, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers: ['precip-rate'] };
   const output = Uint8Array.of(255, 1), halo = Uint8Array.of(0, 0), tiles = Uint8Array.of(0);
   const descriptor = { version: 1, id: product.coverageId, grid, bounds, policy: product.coverageDescription, maxZoom: 0, supportHaloCells: 0, sampleLayout: { format: 'cell-major-blocks-v1', blockSize: 16 }, files: Object.fromEntries(Object.entries({ output, halo, tiles }).map(([name, data]) => [name, { bytes: data.length, sha256: hash(data) }])) };
   const descriptorBytes = json(descriptor), coverageHash = hash(descriptorBytes), coveragePrefix = `coverage/${coverageHash}`;
@@ -47,10 +47,10 @@ it.each([regular, lambert])('serves a synthetic %s product with five frames, one
   const fetch = (path: string) => app.fetch(new Request(`https://api.test${path}`, { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
   const latest = await fetch('/v1/models/synthetic/latest?expand=manifest');
   expect(latest.status, await latest.clone().text()).toBe(200);
-  const metadata = await latest.json() as { manifest: Manifest; bounds: number[] };
+  const metadata = await latest.json() as { manifest: Manifest };
   expect(metadata.manifest.frames).toHaveLength(5); expect(metadata.manifest.layers).toEqual(['precip-rate']);
   expect(metadata.manifest.descriptors.attribution).toBe(product.attribution);
-  expect(metadata.bounds).toEqual(product.bounds);
+  expect(metadata.manifest.descriptors.bounds).toEqual(product.bounds);
   const sample = await fetch(`/v1/models/synthetic/runs/fixture-1/sample?lat=${grid.kind === 'regular-latlon' ? 0 : 40}&lon=0&frame=all`);
   expect(sample.status, await sample.clone().text()).toBe(200);
   expect((await sample.json() as { frames: { layers: unknown }[] }).frames.map(frame => frame.layers)).toEqual(Array.from({ length: 5 }, () => ({ 'precip-rate': { value: 7, status: 'valid', support: 0, interpolated: false } })));

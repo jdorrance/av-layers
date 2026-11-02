@@ -1,9 +1,9 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { coverageDescriptorSchema, coveragePrefix, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastObjects, getProduct, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { coverageDescriptorSchema, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastObjects, getProduct, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
-import { localPath, sha256, validateBuild, wasValidatedInProcess } from './validate.js';
-import { BUILD_BUDGETS } from './capacity.js';
+import { assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
+import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
 import { readCoverage } from './coverage.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
@@ -26,7 +26,7 @@ export function buildIdTime(id: string): number {
 
 function assertLifetime(manifest: Manifest, now: number): void {
   const start = buildIdTime(manifest.buildId);
-  if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > 6 * 3600000 || Date.parse(manifest.expiresAt) <= now) {
+  if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > MAX_BUILD_LIFETIME_MS || Date.parse(manifest.expiresAt) <= now) {
     throw new Error('Build is outside its publication lifetime');
   }
 }
@@ -52,9 +52,9 @@ export function assertUsefulHorizon(manifest: Manifest, now: number): void {
   if (cycleAgeHours < 0 || cycleAgeHours > product.freshness.maxCycleAgeHours || horizonHours < product.freshness.minHorizonHours) throw new Error('Build lacks the required useful forecast horizon');
 }
 
-export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal }): Promise<void> {
-  const validatedHere = wasValidatedInProcess(root, raw);
+export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild }): Promise<void> {
   const now = options.now ?? Date.now, manifest = manifestSchema.parse(raw);
+  if (options.validated) assertValidatedBuild(root, manifest, options.validated);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
   const captured = await readPointer(store, manifest.model);
@@ -70,7 +70,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (!validatedHere) await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
+  if (!options.validated) await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
   validateArtifactRecords(manifest);
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
   const files = forecastObjects(manifest);
@@ -80,11 +80,11 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
     return { ...file, size };
   }));
-  const coverageBytes = await readLocalFile(localPath(root, manifest.coverage.maskKey), 128 * 1024);
+  const coverageBytes = await readLocalFile(localPath(root, manifest.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
   if (sha256(coverageBytes) !== manifest.coverage.hash || manifest.coverage.maskKey !== `${coveragePrefix(manifest.coverage.hash)}/manifest.json`) throw new Error('Coverage descriptor hash mismatch');
   const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
   for (const name of ['output', 'halo', 'tiles'] as const) {
-    const objectKey = `${coveragePrefix(manifest.coverage.hash)}/${name}.bin`, bytes = await readLocalFile(localPath(root, objectKey), 512 * 1024, descriptor.files[name].bytes);
+    const objectKey = `${coveragePrefix(manifest.coverage.hash)}/${name}.bin`, bytes = await readLocalFile(localPath(root, objectKey), MAX_COVERAGE_BITSET_BYTES, descriptor.files[name].bytes);
     if (bytes.byteLength !== descriptor.files[name].bytes || sha256(bytes) !== descriptor.files[name].sha256) throw new Error(`Coverage ${name} hash mismatch`);
     check(); await putImmutable(store, objectKey, bytes, 'application/octet-stream', options.signal);
   }

@@ -1,4 +1,5 @@
 import { parseProduct, type Identification } from '@azohra/meteo.grib';
+import { GFS_INTERVAL_HOURS, GFS_STATISTICS_RESET_HOURS } from './constants.ts';
 import { NoaaError } from './errors.ts';
 import type { DecodedFieldReceipt, NoaaIntervalReceipt } from './types.ts';
 
@@ -9,7 +10,7 @@ export function validAt(referenceTime: string, hour: number): string {
 }
 
 export function gfsWindowStart(hour: number): number {
-  return Math.floor((hour - 3) / 6) * 6;
+  return Math.floor((hour - GFS_INTERVAL_HOURS) / GFS_STATISTICS_RESET_HOURS) * GFS_STATISTICS_RESET_HOURS;
 }
 
 export interface NoaaStatRange {
@@ -185,7 +186,7 @@ export function admitNoaaWindowPair(
   if (idKeys.some((key) => current.identification[key] !== companion.identification[key])) {
     refuse('NOAA window pair initialization conflict');
   }
-  if (a.start !== b.start || Date.parse(a.end) - Date.parse(b.end) !== 3 * HOUR_MS) {
+  if (a.start !== b.start || Date.parse(a.end) - Date.parse(b.end) !== GFS_INTERVAL_HOURS * HOUR_MS) {
     refuse('NOAA window pair does not bound one trailing three-hour interval', {
       current: a,
       companion: b,
@@ -204,7 +205,7 @@ export function admitNoaaWindowPair(
   }
   const currentHours = (Date.parse(a.end) - Date.parse(a.start)) / HOUR_MS;
   const previousHours = (Date.parse(b.end) - Date.parse(b.start)) / HOUR_MS;
-  if (previousHours <= 0 || currentHours <= previousHours || currentHours - previousHours !== 3) {
+  if (previousHours <= 0 || currentHours <= previousHours || currentHours - previousHours !== GFS_INTERVAL_HOURS) {
     refuse('NOAA window pair does not yield exactly three hours', {
       currentHours,
       previousHours,

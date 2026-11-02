@@ -1,0 +1,12 @@
+name: Set up workspace
+description: Install the package-defined Node and pnpm versions and locked dependencies
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version-file: package.json
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash

@@ -1,23 +1,38 @@
-import { pathToFileURL } from 'node:url';
-import { type LayerId } from '@av/contracts';
+import type { Manifest } from '@av/contracts';
 import { ApiClient } from '@av/contracts/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-function arg(name: string): string | undefined {
-  const index = process.argv.indexOf(`--${name}`);
-  if (index < 0) return undefined;
-  const value = process.argv[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`--${name} requires a value`);
-  return value;
+/** Shared by the deployment and hourly probes; abort deadlines remain active while reading. */
+export async function readResponseBytes(response: Response, limit = 1024 * 1024): Promise<Uint8Array> {
+  const length = response.headers.get('content-length');
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > limit)) {
+    await response.body?.cancel(); throw new Error('Response exceeds byte limit');
+  }
+  if (!response.body) throw new Error('Response body is missing');
+  const reader = response.body.getReader(), bytes = new Uint8Array(limit);
+  let used = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return bytes.subarray(0, used);
+      if (used + value.byteLength > limit) throw new Error('Response exceeds byte limit');
+      bytes.set(value, used); used += value.byteLength;
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
-async function get(url: string, accept: string): Promise<Response> {
-  const response = await fetch(url, { headers: { accept }, signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`${response.status} ${url}: ${(await response.text()).slice(0, 300)}`);
-  return response;
+export interface RetryOptions { retries?: number; delayMs?: number }
+export async function retryProbe(label: string, check: () => Promise<void>, options: RetryOptions = {}): Promise<void> {
+  let last = '';
+  for (let attempt = 0; attempt <= (options.retries ?? 3); attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, options.delayMs ?? 5000));
+    try { await check(); return; }
+    catch (error) { last = error instanceof Error ? error.message : String(error); }
+  }
+  throw new Error(`${label} verification failed: ${last}`);
 }
 
 export function validateHealthContract(health: unknown, expectedDeploymentId?: string): void {
@@ -27,85 +42,46 @@ export function validateHealthContract(health: unknown, expectedDeploymentId?: s
   }
 }
 
-export interface WorkerReadinessOptions {
-  url: string;
-  expectedDeploymentId?: string;
-  fetchImpl?: typeof fetch;
-  retries?: number;
-  delayMs?: number;
-  timeoutMs?: number;
+export interface WorkerReadinessOptions extends RetryOptions {
+  url: string; expectedDeploymentId?: string; fetchImpl?: typeof fetch; timeoutMs?: number;
 }
-
 export async function verifyWorkerReadiness(options: WorkerReadinessOptions): Promise<void> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const retries = options.retries ?? 3;
-  const delay = options.delayMs ?? 5000;
-  let last = '';
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    try {
-      const response = await fetchImpl(options.url, {
-        headers: { accept: 'application/json' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
-      });
-      if (!response.ok) {
-        last = `status ${response.status}`;
-        await response.body?.cancel();
-        continue;
-      }
-      validateHealthContract(await response.json(), options.expectedDeploymentId);
-      return;
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new Error(`Worker readiness verification failed: ${last} (${options.url})`);
+  await retryProbe('Worker readiness', async () => {
+    const response = await (options.fetchImpl ?? fetch)(options.url, {
+      headers: { accept: 'application/json' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
+    });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`status ${response.status}`); }
+    validateHealthContract(JSON.parse(new TextDecoder().decode(await readResponseBytes(response, 16 * 1024))), options.expectedDeploymentId);
+  }, options);
 }
 
-async function main(): Promise<void> {
-  const baseUrl = (arg('base-url') ?? (() => { throw new Error('--base-url is required'); })()).replace(/\/+$/, '');
-  const model = arg('model') ?? 'gfs';
-  const lat = arg('lat') ?? '32.9';
-  const lon = arg('lon') ?? '-117.25';
-  const expectedDeploymentId = arg('expected-deployment-id');
-
-  await verifyWorkerReadiness({ url: `${baseUrl}/healthz`, expectedDeploymentId });
-
-  const catalog = await get(`${baseUrl}/v1/catalog`, 'application/json');
-  const catalogBody = await catalog.json() as { models?: Array<{ model?: string; available?: boolean }> };
-  invariant(Array.isArray(catalogBody.models), '/v1/catalog did not return models');
-  const entry = catalogBody.models.find(item => item.model === model);
-  invariant(entry?.available === true, `/v1/catalog reports no available publication for ${model}. Publish a forecast for this environment first. In GitHub Actions, start Forecast sample on current main, then Deploy Worker and Pages.`);
-
-  const client = new ApiClient({ baseUrl, requestTimeoutMs: 30_000 });
-  const build = await client.latest(model);
-  const { manifest } = build;
-
-  const runs = await get(`${baseUrl}/v1/models/${model}/runs`, 'application/json');
-  const runBody = await runs.json() as { retained?: Array<{ buildId?: string }> };
-  invariant(Array.isArray(runBody.retained) && runBody.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
-
-  const frame = arg('frame') ?? manifest.frames[0]!.id;
-  const requestedLayers = (arg('layers') ?? manifest.layers.join(',')).split(',').filter(Boolean);
-  invariant(manifest.frames.some(item => item.id === frame), `unknown frame ${frame}`);
-  invariant(requestedLayers.every(layer => (manifest.layers as string[]).includes(layer)), 'requested layer not published');
-
-  await client.sample(build, { lat: Number(lat), lon: Number(lon), frames: [frame], layers: requestedLayers as LayerId[] });
-
-  const tileUrl = `${baseUrl}/tiles/${model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`;
-  const tile = await get(tileUrl, 'image/webp');
-  invariant(tile.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
-  invariant(tile.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
-  invariant(tile.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
-  const bytes = new Uint8Array(await tile.arrayBuffer());
+/** One live serving check for deployment and monitoring, pinned to a single immutable build. */
+export async function probeApi(options: {
+  baseUrl: string; model: string; expectedDeploymentId?: string; requireLive?: boolean;
+  fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: Manifest) => void;
+}): Promise<Manifest> {
+  const baseUrl = options.baseUrl.replace(/\/+$/, ''), fetchImpl = options.fetchImpl ?? fetch;
+  await verifyWorkerReadiness({ url: `${baseUrl}/healthz`, expectedDeploymentId: options.expectedDeploymentId, fetchImpl });
+  const get = async (path: string, accept: string) => {
+    const response = await fetchImpl(`${baseUrl}${path}`, { headers: { accept }, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`${response.status} ${path}`); }
+    return { response, bytes: await readResponseBytes(response) };
+  };
+  const json = async (path: string) => JSON.parse(new TextDecoder().decode((await get(path, 'application/json')).bytes));
+  const catalog = await json('/v1/catalog') as { models?: Array<{ model?: string; available?: boolean }> };
+  invariant(Array.isArray(catalog.models) && catalog.models.some(item => item.model === options.model && item.available === true), `Catalog reports no publication for ${options.model}`);
+  const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: 30_000, now: options.now });
+  const build = await client.latest(options.model, { requireLive: options.requireLive ?? true });
+  const { manifest } = build, frame = manifest.frames[0].id;
+  options.observeManifest?.(manifest);
+  const runs = await json(`/v1/models/${options.model}/runs`) as { retained?: Array<{ buildId?: string }> };
+  invariant(Array.isArray(runs.retained) && runs.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
+  await client.sample(build, { lat: 32.9, lon: -117.25, frames: [frame] });
+  const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`, 'image/webp');
+  invariant(response.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
+  invariant(response.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
+  invariant(response.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
   const decoder = new TextDecoder();
-  invariant(decoder.decode(bytes.subarray(0, 4)) === 'RIFF' && decoder.decode(bytes.subarray(8, 12)) === 'WEBP', 'tile body is not WebP');
-
-  console.log(`smoke-api: ok ${baseUrl} ${model} ${manifest.buildId} frame ${frame}`);
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => {
-    console.error(`smoke-api: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
+  invariant(bytes.length >= 25 && decoder.decode(bytes.subarray(0, 4)) === 'RIFF' && decoder.decode(bytes.subarray(8, 12)) === 'WEBP', 'tile body is not WebP');
+  return manifest;
 }

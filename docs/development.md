@@ -64,6 +64,9 @@ for units, coverage, and forecast times, and [science](science.md) for calculati
 on one area, such as `pnpm test packages/forecast` or `pnpm test apps/api`.
 The suite includes a disposable local Worker test; it does not use remote R2.
 
+Shared dependency versions live in the catalog in `pnpm-workspace.yaml`.
+After changing them, run `pnpm install` and commit the updated lockfile.
+
 Run `pnpm verify` before submitting a change. It runs lint, type checks, tests,
 documentation checks, and app builds. `pnpm build` just bundles the apps; it does
 not publish forecasts or deploy services. Use [operations](operations.md) for that.
@@ -71,7 +74,7 @@ not publish forecasts or deploy services. Use [operations](operations.md) for th
 After changing API schemas or CLI definitions, refresh the generated reference:
 
 ```sh
-pnpm exec node --import tsx scripts/generate-reference.ts
+pnpm docs:generate
 pnpm docs:check
 ```
 

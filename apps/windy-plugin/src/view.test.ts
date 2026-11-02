@@ -1,6 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, LAYER_IDS, PALETTES, SAMPLE_BLOCK_SIZE } from '@av/contracts';
-import type { PinnedBuild } from '@av/contracts/client';
+import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -103,16 +102,13 @@ it('renders build-specific opaque or transparent no-lift legends and discloses d
   const callbacks = { onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() };
   for (const [color, label] of [['#00000000', 'no usable lift (transparent)'], ['#55184d', 'no usable lift']]) {
     const panel = new PluginPanel(callbacks);
-    const build = {
-      model: 'gfs',
-      manifest: { descriptors: createProductDescriptors(), buildId: color, layers: ['usable-lift-msl', 'precip-rate'], frames: [], source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) }, method: { id: 'method' }, expiresAt: 'later' },
-      maxNativeZoom: 5,
-      coverage: { id: 'mask' },
-      palettes: [
+    const build = fixtureBuild({
+      buildId: color === '#00000000' ? 'transparent' : 'opaque',
+      descriptors: { ...fixtureManifest().descriptors, palettes: [
         { id: 'lift', units: 'm', edges: [0, 300], colors: ['#55184d'], noLiftColor: color },
         { id: 'rain', units: 'mm/h', edges: [0.1, 0.5], colors: ['#b9e5ff'], transparentBelow: 0.1, provisional: true }
-      ]
-    } as unknown as PinnedBuild;
+      ] }
+    });
     panel.renderBuild(build);
     const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
     const nodes = visit(panel.root as unknown as FakeElement);
@@ -130,6 +126,7 @@ it('normalizes wrapped longitudes and clears existing series when clicking a new
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
   vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
   const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  panel.renderBuild(fixtureBuild());
   panel.setClicked(32.9, 190);
   expect(panel.clickedPoint).toEqual({ lat: 32.9, lon: -170 });
   panel.renderSeries(
@@ -178,13 +175,9 @@ it.each(['https://api.test/provenance.json', 'http://localhost:8787/provenance.j
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
   vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
   const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  panel.renderBuild({
-    model: 'gfs', bounds: [-180, -55, 180, 65], maxNativeZoom: 5, coverage: { id: 'mask' }, palettes: [],
-    manifest: {
-      descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)), buildId: 'build-1', layers: ['precip-rate'], frames: [], cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z',
-      grid: GFS_GRID, source: { provenanceUrl }, method: { id: 'method', hash: 'a'.repeat(64) }
-    }
-  } as unknown as PinnedBuild);
+  const build = fixtureBuild();
+  build.manifest.source.provenanceUrl = provenanceUrl;
+  panel.renderBuild(build);
   const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
   const diagnostics = (panel.root as unknown as FakeElement).children.find(element => element.tag === 'details')!;
   const link = visit(diagnostics).find(element => element.tag === 'a');
@@ -196,27 +189,11 @@ it.each(['https://api.test/provenance.json', 'http://localhost:8787/provenance.j
 });
 
 
-it('reuses legend nodes for unchanged state and refreshes them for layer, palette or build changes', () => {
+it('reuses legend nodes for unchanged state and refreshes them for layer or immutable build changes', () => {
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
   vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
   const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const cycle = '2026-10-30T00:00:00.000Z', expiresAt = '2026-11-06T00:00:00.000Z';
-  const frames = [{ id: 'f003', validTime: '2026-10-30T03:00:00.000Z', intervalStart: cycle, intervalEnd: '2026-10-30T03:00:00.000Z' }];
-  const coverage = { id: 'soaring-land-v1', hash: 'a'.repeat(64), maskKey: 'coverage/manifest.json', maxZoom: 5 };
-  const build: PinnedBuild = {
-    baseUrl: 'https://api.test', model: 'gfs',
-    pointer: { version: 1, model: 'gfs', latestBuildId: 'build-1', retained: [{ buildId: 'build-1', manifestKey: 'builds/gfs/build-1/manifest.json', cycle, expiresAt }] },
-    manifest: {
-      version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)), model: 'gfs', buildId: 'build-1', cycle, createdAt: cycle, expiresAt,
-      method: { id: 'method', hash: 'b'.repeat(64) }, coverage, grid: GFS_GRID,
-      frames, layers: [...LAYER_IDS], source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) }, tool: {}, palettes: ['lift', 'rain'], metrics: {},
-      artifacts: LAYER_IDS.map(layer => ({ layer, frame: 'f003', tilesKey: `builds/gfs/build-1/${layer}/f003.pmtiles`, tilesSha256: 'c'.repeat(64) })),
-      samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: 1, channelCount: LAYER_IDS.length, bytes: LAYER_IDS.length * 5, key: 'builds/gfs/build-1/samples.bin', sha256: 'd'.repeat(64) }
-    },
-    templates: { 'usable-lift-msl': 'msl/{frame}/{z}/{x}/{y}', 'usable-lift-agl': 'agl/{frame}/{z}/{x}/{y}', 'precip-rate': 'rain/{frame}/{z}/{x}/{y}' },
-    bounds: [-180, -55, 180, 65], maxNativeZoom: 5, palettes: [PALETTES.lift, PALETTES.rain], coverage,
-    fetchedAtMs: Date.parse(cycle), expiresAtMs: Date.parse(expiresAt)
-  };
+  const build = fixtureBuild({ buildId: 'build-1' });
   const state: ControllerState = { phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5, badge: 'f003', message: null, horizonNotice: null };
   panel.renderBuild(build);
   const legend = (panel.root as unknown as FakeElement).children.find(element => element.className === 'av-legend')!;
@@ -234,12 +211,14 @@ it('reuses legend nodes for unchanged state and refreshes them for layer, palett
   panel.renderState({ ...state, layerId: 'precip-rate', opacity: 0.2 });
   expect(legend.children[0]).toBe(rain);
 
-  panel.renderBuild({ ...build, palettes: [PALETTES.lift, { ...PALETTES.rain, colors: ['#123456'] }] });
+  panel.renderBuild(fixtureBuild({ ...build.manifest, buildId: 'recolored', layers: ['precip-rate'], descriptors: {
+    ...build.manifest.descriptors, palettes: build.manifest.descriptors.palettes.map(palette => palette.id === 'rain' ? { ...palette, colors: ['#123456'] } : palette)
+  }, artifacts: undefined }));
   const recolored = legend.children[0];
   expect(recolored).not.toBe(rain);
   expect(recolored.children[1].children[0].style.background).toBe('#123456');
 
-  panel.renderBuild({ ...build, manifest: { ...build.manifest, buildId: 'build-2' } });
+  panel.renderBuild(fixtureBuild({ buildId: 'build-2' }));
   expect(legend.children[0]).not.toBe(recolored);
   expect(legend.children[0].children[0].textContent).toBe('lift · m');
 });

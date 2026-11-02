@@ -18,6 +18,7 @@ Useful files:
 
 - [index.ts](index.ts): public download functions and session setup.
 - [fields.ts](fields.ts): which GFS fields to request.
+- [GFS settings](../../../../packages/contracts/config/gfs.json): source products, pressure levels, and forecast hours.
 - [transport.ts](transport.ts): downloads, caching, and retries.
 - [load.ts](load.ts): record checks and decoding.
 - [intervals.ts](intervals.ts): converts averages into the required time windows.

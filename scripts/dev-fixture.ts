@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import type { CoverageMask } from '@av/contracts';
@@ -27,12 +28,12 @@ export async function generateOfflineFixture(out: string, now = Date.now()): Pro
 }
 
 async function main(): Promise<void> {
-  const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
-  const manifestPath = await generateOfflineFixture(resolve(arg('out') ?? 'output/offline-fixture'));
+  const { values } = parseArgs({ strict: true, allowPositionals: false, options: { out: { type: 'string' }, 'persist-to': { type: 'string' }, port: { type: 'string' }, 'generate-only': { type: 'boolean' }, 'seed-only': { type: 'boolean' }, reseed: { type: 'boolean' } } });
+  const manifestPath = await generateOfflineFixture(resolve(values.out ?? 'output/offline-fixture'));
   console.log(`SYNTHETIC fixture: ${manifestPath}`);
   console.log('No model downloads. Test sample: latitude 40, longitude -100; first-frame rain = 2.75 mm/h.');
-  if (process.argv.includes('--generate-only')) return;
-  await previewBuild({ manifestPath, persistTo: resolve(arg('persist-to') ?? '.wrangler/fixture-state'), port: Number(arg('port') ?? 8787), fixture: true, seedOnly: process.argv.includes('--seed-only'), reseed: process.argv.includes('--reseed') });
+  if (values['generate-only']) return;
+  await previewBuild({ manifestPath, persistTo: resolve(values['persist-to'] ?? '.wrangler/fixture-state'), port: Number(values.port ?? 8787), fixture: true, seedOnly: values['seed-only'], reseed: values.reseed });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit } from '@av/contracts';
-import { BILINEAR_SUPPORT, COLUMN_SUPPORT, MAX_SUPPORT_CELLS, composeSupport, expandSupport, planFieldSupport, unionSupport, type SupportGrid, type SupportOffset } from './support.js';
+import { getBit, setBit, MAX_GRID_CELLS } from '@av/contracts';
+import { BILINEAR_SUPPORT, COLUMN_SUPPORT, composeSupport, expandSupport, planFieldSupport, unionSupport, type SupportGrid, type SupportOffset } from './support.js';
 
 const grid: SupportGrid = { width: 9, height: 9, wrapLongitude: false };
 const mask = (indices: number[], g = grid) => { const bits = new Uint8Array(Math.ceil(g.width * g.height / 8)); for (const i of indices) setBit(bits, i); return bits; };
@@ -54,7 +54,7 @@ describe('composable native-grid support', () => {
   });
 
   it('bounds masks/composition and ignores unused padding bits', () => {
-    expect(() => expandSupport({ width: MAX_SUPPORT_CELLS + 1, height: 1, wrapLongitude: false }, new Uint8Array(), COLUMN_SUPPORT)).toThrow('budget');
+    expect(() => expandSupport({ width: MAX_GRID_CELLS + 1, height: 1, wrapLongitude: false }, new Uint8Array(), COLUMN_SUPPORT)).toThrow('budget');
     expect(() => expandSupport(grid, new Uint8Array(1), COLUMN_SUPPORT)).toThrow('size');
     expect(() => expandSupport(grid, mask([40]), [[0, 0.5]])).toThrow('offsets');
     expect(() => composeSupport([[Number.MAX_SAFE_INTEGER, 0]], [[1, 0]])).toThrow('overflow');

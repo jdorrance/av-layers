@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -27,7 +28,7 @@ export interface LocalPreviewStore {
 export async function openLocalPreviewStore(persistTo: string): Promise<LocalPreviewStore> {
   const { getPlatformProxy } = await import('wrangler');
   // Wrangler CLI adds /v3 to --persist-to; the public proxy API accepts that final path.
-  const proxy = await getPlatformProxy<{ BUCKET: Omit<LocalPreviewStore, 'dispose'> }>({ configPath: join(apiDir, 'wrangler.jsonc'), persist: { path: join(persistTo, 'v3') }, remoteBindings: false, envFiles: [] });
+  const proxy = await getPlatformProxy<{ BUCKET: Omit<LocalPreviewStore, 'dispose'> }>({ configPath: join(apiDir, 'wrangler.json'), persist: { path: join(persistTo, 'v3') }, remoteBindings: false, envFiles: [] });
   return { head: key => proxy.env.BUCKET.head(key), put: (key, bytes, options) => proxy.env.BUCKET.put(key, bytes, options), dispose: proxy.dispose };
 }
 
@@ -143,7 +144,7 @@ export async function previewBuild(options: PreviewOptions): Promise<void> {
     const previewDir = join(root, 'apps', 'preview');
     const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1'], {
       cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
-      env: { ...process.env, VITE_API_BASE: `http://127.0.0.1:${port}`, VITE_OFFLINE_FIXTURE: String(options.fixture ?? false), VITE_BUILD_REVISION: 'development' }
+      env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${port}`, VITE_OFFLINE_FIXTURE: String(options.fixture ?? false), VITE_BUILD_REVISION: 'development' }
     });
     children.push(web); completed.push(completion(web));
     process.exitCode = await Promise.race(completed);
@@ -158,10 +159,10 @@ export async function previewBuild(options: PreviewOptions): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : undefined; };
-  const manifestPath = arg('manifest');
   (async () => {
+    const { values } = parseArgs({ strict: true, allowPositionals: false, options: { manifest: { type: 'string' }, 'persist-to': { type: 'string' }, port: { type: 'string' }, fixture: { type: 'boolean' }, 'seed-only': { type: 'boolean' }, reseed: { type: 'boolean' } } });
+    const manifestPath = values.manifest;
     invariant(manifestPath, '--manifest is required');
-    await previewBuild({ manifestPath, port: Number(arg('port') ?? 8787), persistTo: arg('persist-to'), reseed: process.argv.includes('--reseed'), fixture: process.argv.includes('--fixture'), seedOnly: process.argv.includes('--seed-only') });
+    await previewBuild({ manifestPath, port: Number(values.port ?? 8787), persistTo: values['persist-to'], reseed: values.reseed, fixture: values.fixture, seedOnly: values['seed-only'] });
   })().catch(error => { console.error(`sample-preview: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
 }

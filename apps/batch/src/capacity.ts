@@ -1,15 +1,17 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, GFS_PRODUCT, LAYERS, MAX_RETAINED_BUILDS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, LAYERS, MAX_GRID_CELLS, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 
 /** Admission budgets, not predictions about an unknown runner or upstream service. */
 export const BUILD_BUDGETS = {
-  gridCells: 4_000_000,
+  gridCells: MAX_GRID_CELLS,
   tiles: 100_000,
   samplePackBytes: 256 * 1024 * 1024,
   elapsedMs: 20 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
 } as const;
+
+export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
 
 export interface CapacityScenario {
   frames?: number;
@@ -56,11 +58,11 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 }
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild(mask: CoverageMask, product: ProductDefinition = GFS_PRODUCT, resources: { maxLevels: number } = { maxLevels: 37 }) {
+export function prepareBuild(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number }) {
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
   if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
-  if (mask.maxZoom !== product.maxNativeZoom || JSON.stringify(mask.grid) !== JSON.stringify(product.grid)) throw new Error('Coverage does not match the trusted product');
+  if (mask.maxZoom !== product.maxNativeZoom || !sameGrid(mask.grid, product.grid)) throw new Error('Coverage does not match the trusted product');
   if (mask.grid.width * mask.grid.height > BUILD_BUDGETS.gridCells) throw new Error('Grid-cell budget exceeded');
   const indices = coverageIndices(mask), layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
   if (!indices.output.length || !indices.active.length) throw new Error('Coverage must contain output and active cells before acquisition');

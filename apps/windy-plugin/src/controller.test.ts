@@ -1,62 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, SAMPLE_BLOCK_SIZE, type Manifest } from '@av/contracts';
+import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
 import type { PinnedBuild } from '@av/contracts/client';
-import { Lifecycle } from './lifecycle';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
 afterEach(() => vi.useRealTimers());
 
 const created = '2026-10-30T00:00:00.000Z';
 const expiresAt = '2026-10-31T00:00:00.000Z';
-const layerIds = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
-
-function frames() {
-  return [
-    { id: 'f003', validTime: '2026-10-30T03:00:00.000Z', intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: '2026-10-30T06:00:00.000Z' },
-    { id: 'f006', validTime: '2026-10-30T06:00:00.000Z', intervalStart: '2026-10-30T03:00:00.000Z', intervalEnd: '2026-10-30T09:00:00.000Z' },
-    { id: 'f009', validTime: '2026-10-30T09:00:00.000Z', intervalStart: '2026-10-30T06:00:00.000Z', intervalEnd: '2026-10-30T12:00:00.000Z' }
-  ];
-}
-
+function frames() { return fixtureManifest().frames.slice(0, 3); }
 function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof frames> } = {}): PinnedBuild {
-  const frameList = overrides.frames ?? frames();
-  const manifest: Manifest = {
-    version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, 'a'.repeat(64)),
-    model: 'gfs',
-    buildId: 'build-1',
-    cycle: created,
-    createdAt: created,
-    expiresAt: overrides.expiresAt ?? expiresAt,
-    method: { id: 'dry-lenschow-pbl-1p2-v1', hash: 'a'.repeat(64) },
-    coverage: { id: 'soaring-land-v1', hash: 'b'.repeat(64), maskKey: 'masks/soaring-land-v1', maxZoom: 5 },
-    grid: GFS_GRID,
-    frames: frameList,
-    layers: [...layerIds],
-    artifacts: layerIds.flatMap(layer => frameList.map(frame => ({
-      layer,
-      frame: frame.id,
-      tilesKey: `builds/gfs/build-1/${layer}/${frame.id}.pmtiles`,
-      tilesSha256: 'c'.repeat(64)
-    }))),
-    samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: 1, channelCount: frameList.length * layerIds.length, bytes: frameList.length * layerIds.length * 5, key: 'builds/gfs/build-1/samples.bin', sha256: 'd'.repeat(64) },
-    source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
-    tool: {},
-    palettes: ['lift', 'rain'],
-    metrics: {}
-  };
-  return {
-    baseUrl: 'https://api.test',
-    model: 'gfs',
-    pointer: { version: 1, model: 'gfs', latestBuildId: 'build-1', retained: [{ buildId: 'build-1', manifestKey: 'builds/gfs/build-1/manifest.json', cycle: created, expiresAt: manifest.expiresAt }] },
-    manifest,
-    templates: Object.fromEntries(layerIds.map(layer => [layer, `https://api.test/tiles/gfs/build-1/${layer}/{frame}/{z}/{x}/{y}.webp`])) as PinnedBuild['templates'],
-    bounds: [-180, -55, 180, 65],
-    maxNativeZoom: 5,
-    palettes: [],
-    coverage: { id: 'soaring-land-v1', hash: 'b'.repeat(64), maskKey: 'masks/soaring-land-v1', maxZoom: 5 },
-    fetchedAtMs: Date.parse(created),
-    expiresAtMs: Date.parse(manifest.expiresAt)
-  };
+  return fixtureBuild({ buildId: 'build-1', createdAt: created, expiresAt, frames: frames(), ...overrides });
 }
 
 class StubLayer implements HostTileLayer {
@@ -124,28 +77,23 @@ function stubHost(initialTimestamp: number | null = null) {
   return { host, added, removed, listeners, values };
 }
 
-describe('Lifecycle', () => {
-  it('aborts and runs cleanups in reverse order exactly once', () => {
-    const lifecycle = new Lifecycle();
-    const order: string[] = [];
-    lifecycle.add(() => order.push('first'));
-    lifecycle.add(() => order.push('second'));
-    lifecycle.dispose();
-    lifecycle.dispose();
-    expect(lifecycle.signal.aborted).toBe(true);
-    expect(order).toEqual(['second', 'first']);
-  });
-
-  it('runs a cleanup immediately when added after disposal', () => {
-    const lifecycle = new Lifecycle();
-    lifecycle.dispose();
-    const cleanup = vi.fn();
-    lifecycle.add(cleanup);
-    expect(cleanup).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe('PluginController', () => {
+  it('removes a partially mounted view when host subscription fails', async () => {
+    const stub = stubHost();
+    const subscribe = stub.host.store.on;
+    stub.host.store.on = (event, listener) => {
+      subscribe(event, listener);
+      throw new Error('Host subscription failed');
+    };
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+    expect(await controller.start()).toMatchObject({ phase: 'error', message: 'Host subscription failed' });
+    expect(stub.added).toHaveLength(1);
+    expect(stub.removed).toEqual(stub.added);
+    expect(stub.listeners.size).toBe(0);
+    expect([...stub.added[0].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+    controller.dispose();
+    expect(stub.removed).toHaveLength(1);
+  });
   it('starts from an exact host frame, adds one 256px non-retina layer at 0.5 opacity', async () => {
     const stub = stubHost(Date.parse('2026-10-30T06:00:00.000Z'));
     const loadBuild = vi.fn(async () => pinned());
@@ -156,7 +104,7 @@ describe('PluginController', () => {
     expect(state?.badge).toContain('Host frame f006');
     expect(stub.added).toHaveLength(1);
     expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.webp');
-    expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 5, maxZoom: 18, opacity: 0.5 });
+    expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 7, maxZoom: 18, opacity: 0.5 });
   });
 
   it('keeps each failed tile visible until that tile succeeds or leaves the viewport', async () => {

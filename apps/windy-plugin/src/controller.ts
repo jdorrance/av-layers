@@ -1,6 +1,7 @@
 import type { LayerId, ModelId } from '@av/contracts';
 import {
   clampOpacity,
+  DEFAULT_OPACITY,
   forecastHorizonNotice,
   frameBadge,
   frameTileUrl,
@@ -14,7 +15,6 @@ import {
   type WindyTileOptions
 } from '@av/contracts/client';
 export type { WindyTileOptions } from '@av/contracts/client';
-import { Lifecycle } from './lifecycle';
 
 export interface HostTileEvent {
   /** Leaflet's tile element identifies a displayed tile across load, error and unload events. */
@@ -84,7 +84,8 @@ export class PluginController {
   private readonly now: () => number;
   private readonly setTimer: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (handle: ReturnType<typeof setTimeout>) => void;
-  private lifecycle: Lifecycle | null = null;
+  private loadAbort: AbortController | null = null;
+  private subscribed = false;
   private build: PinnedBuild | null = null;
   private layer: HostTileLayer | null = null;
   private frameId: string | null = null;
@@ -126,7 +127,7 @@ export class PluginController {
     this.now = options.now ?? Date.now;
     this.setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.clearTimer = options.clearTimer ?? (handle => clearTimeout(handle));
-    this.opacity = clampOpacity(options.opacity ?? 0.5);
+    this.opacity = clampOpacity(options.opacity ?? DEFAULT_OPACITY);
   }
 
   get currentBuild(): PinnedBuild | null {
@@ -164,11 +165,12 @@ export class PluginController {
     this.message = null;
     this.clearTileState();
     this.emit();
-    this.lifecycle = new Lifecycle();
+    const loadAbort = new AbortController();
+    this.loadAbort = loadAbort;
     try {
-      const build = await this.options.loadBuild(this.options.model, { signal: this.lifecycle.signal });
-      if (this.disposed || this.lifecycle.isDisposed) return null;
-      if (build.model !== this.options.model) {
+      const build = await this.options.loadBuild(this.options.model, { signal: loadAbort.signal });
+      if (this.disposed || loadAbort.signal.aborted) return null;
+      if (build.manifest.model !== this.options.model) {
         this.fail('Loaded build model does not match the requested model');
         return this.state();
       }
@@ -199,30 +201,23 @@ export class PluginController {
       }
       this.badge = frameBadge(first, hostFrame, hostValue).text;
       this.tileUrl = frameTileUrl(template, first.id);
-      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.maxNativeZoom, this.opacity, build.manifest.descriptors.attribution));
+      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.manifest.coverage.maxZoom, this.opacity, build.manifest.descriptors.attribution));
       this.layer = tileLayer;
       tileLayer.on?.('tileloadstart', this.onTileStart);
       tileLayer.on?.('tileerror', this.onTileError);
       tileLayer.on?.('tileunload', this.onTileUnload);
       tileLayer.on?.('tileload', this.onTileLoad);
       this.host.map.addLayer(tileLayer);
+      // Own the subscription before calling a host that may subscribe and throw.
+      this.subscribed = true;
       this.host.store.on('timestamp', this.onTimestamp);
-      this.lifecycle.add(() => {
-        this.host.store.off?.('timestamp', this.onTimestamp);
-        tileLayer.off?.('tileloadstart', this.onTileStart);
-        tileLayer.off?.('tileerror', this.onTileError);
-        tileLayer.off?.('tileunload', this.onTileUnload);
-        tileLayer.off?.('tileload', this.onTileLoad);
-        if (this.layer) this.host.map.removeLayer(this.layer);
-        this.layer = null;
-      });
-      this.lifecycle.add(() => this.cancelTimeTimer());
       this.scheduleTimeCheck();
       this.phase = 'ready';
       this.emit();
       return this.state();
     } catch (error) {
       if (this.disposed || (error instanceof DOMException && error.name === 'AbortError')) return null;
+      this.releaseResources();
       this.fail(error instanceof Error ? error.message : String(error));
       return this.state();
     }
@@ -299,15 +294,12 @@ export class PluginController {
     this.phase = 'disposed';
     this.badge = 'Plugin closed';
     this.clearTileState();
-    this.lifecycle?.dispose();
-    this.lifecycle = null;
-    this.cancelTimeTimer();
-    this.layer = null;
+    this.releaseResources();
     this.emit();
   }
 
   private canUse(): boolean {
-    if (!this.build || this.disposed || this.phase === 'expired') return false;
+    if (!this.build || this.disposed || this.phase === 'expired' || this.phase === 'error') return false;
     if (this.checkExpiry()) return false;
     return true;
   }
@@ -353,16 +345,36 @@ export class PluginController {
     }
   }
 
+  private releaseResources(): void {
+    this.loadAbort?.abort();
+    this.loadAbort = null;
+    this.cancelTimeTimer();
+    const layer = this.layer;
+    this.layer = null;
+    try {
+      if (this.subscribed) {
+        this.subscribed = false;
+        this.host.store.off?.('timestamp', this.onTimestamp);
+      }
+    } finally {
+      if (layer) {
+        try {
+          layer.off?.('tileloadstart', this.onTileStart);
+          layer.off?.('tileerror', this.onTileError);
+          layer.off?.('tileunload', this.onTileUnload);
+          layer.off?.('tileload', this.onTileLoad);
+        } finally { this.host.map.removeLayer(layer); }
+      }
+    }
+  }
+
   private expire(): void {
     if (this.phase === 'expired') return;
     this.phase = 'expired';
     this.clearTileState();
     this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
-    this.cancelTimeTimer();
-    this.lifecycle?.dispose();
-    this.lifecycle = null;
-    this.layer = null;
+    this.releaseResources();
     this.emit();
   }
 }
