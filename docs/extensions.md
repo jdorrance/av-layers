@@ -1,9 +1,9 @@
-# Extending the foundation
+# Extending the project
 
 The production registry currently admits GFS and the three existing scalar
 layers. The examples below exercise extension boundaries with synthetic data.
 They do not admit another live model or make a new forecast-skill claim.
-Start with [local development](local-development.md), then use the smallest
+Start with [development](development.md), then use the smallest
 recipe that proves the intended change.
 
 ## Supply existing science from another adapter
@@ -17,7 +17,7 @@ the real build, numeric packing, rendering and validation pipeline.
 
 ```sh
 pnpm exec vitest run apps/batch/src/native-build.integration.test.ts
-pnpm dev:fixture --generate-only
+pnpm dev --generate-only
 ```
 
 1. Implement the small `ForecastProvider`/session interface in
@@ -85,8 +85,8 @@ list, rather than another copy of the acquisition/build pipeline.
   dependency arrays, output channels, tile count, point range and total working
   set before admitting the quantity.
 
-This milestone does not implement another scalar product. For a harmless
-infrastructure rehearsal, change the existing layer/frame subset in the native
+To try a pipeline change without adding a scalar product, change the existing
+layer/frame subset in the native
 integration test rather than inventing a forecast quantity.
 
 ## Add geometry or change support and coverage
@@ -154,8 +154,25 @@ before choosing Int16 scales. Account for every field, stored support cell,
 padding cell, level, time and byte. Do not use output-cell counts as stored-cell
 counts, or omit pressure merely because temperature/height/wind were listed
 first. Decide overflow and reserved-value behavior and bound the largest point
-read before introducing a binary format. The plan's corrected storage example
-and rejected shortcuts are recorded in [the foundation plan](foundation-plan.md).
+read before introducing a binary format.
+
+For example, 210,237 output cells × eight frames × 21 levels × five Int16 fields
+require **353,198,160 bytes**, or **1,680 bytes per point**, before status flags,
+indexes, headers, or padding. That already exceeds the current 256 MiB scalar
+sample-pack and per-artifact upload limits. A profile product needs its own
+storage, upload, and query budgets; use [capacity checks](../apps/batch/src/capacity.ts)
+to account for the actual layout.
+
+- Height, temperature, dew point, U, and V omit pressure. This five-field record
+  only works with an exact shared pressure axis stored elsewhere; native WRF
+  pressure varies by location, level, and time.
+- The scalar pack stores complete touched blocks and neighboring cells. Its
+  stored-cell count cannot be replaced by the public output-cell count.
+- A 1,680-byte read assumes an uncompressed contiguous record with metadata and
+  indexes already available. Compression changes how much data must be read.
+- Each Int16 field needs a scale, offset, missing sentinel, rounding rule, valid
+  range, and overflow policy. Measure real data before choosing compression or
+  a custom bit-packed format.
 
 A future WRF adapter needs independent fixtures for mass versus staggered grids,
 destaggering order, perturbation plus base pressure, perturbation potential
@@ -166,6 +183,11 @@ column. Extend that contract explicitly when such an adapter is authorized.
 Domain/nest identity, moving geometry, source time support and native terrain
 must also be defined before admission. Do not resample to a regular grid merely
 to satisfy an existing interface.
+
+Consult [NCAR's WRF output definitions](https://www2.mmm.ucar.edu/wrf/site/documentation/users_guide/output_variables.html),
+[wind rotation](https://wrf-python.readthedocs.io/en/latest/user_api/generated/wrf.uvmet.html),
+and [destaggering](https://wrf-python.readthedocs.io/en/latest/user_api/generated/wrf.destagger.html)
+when defining those conversions.
 
 ## Alpha cutover
 

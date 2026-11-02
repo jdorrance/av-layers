@@ -36,5 +36,5 @@ async function main(): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => { console.error(`dev:fixture: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
+  main().catch(error => { console.error(`dev: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; });
 }

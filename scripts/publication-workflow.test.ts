@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Manifest } from '@av/contracts';
-const fake = vi.hoisted(() => ({ build: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), append: vi.fn(), validated: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn() }));
+const fake = vi.hoisted(() => ({ build: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), validated: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn() }));
 vi.mock('../apps/batch/src/build.js', () => ({ buildSample: fake.build }));
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup }));
 vi.mock('../apps/batch/src/validate.js', () => ({ wasValidatedInProcess: fake.validated }));
@@ -12,18 +12,16 @@ vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
-vi.mock('node:fs/promises', () => ({ appendFile: fake.append, writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
-import { buildAndPublish } from './build-and-publish.js';
-import { resumePublication } from './resume-publication.js';
+vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
+import { buildAndPublish, resumePublication, forecastArtifactRevision, downloadForecastArtifact } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 let manifest: Manifest;
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', GITHUB_ENV: '/tmp/ci-env', CYCLE: '', RESUME_RUN_ID: '100' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', CYCLE: '', RESUME_RUN_ID: '100' })) vi.stubEnv(key, value);
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
-  vi.stubEnv('SOURCE_BUILD_REVISION', revision);
   fake.build.mockImplementation(async ({ onValidated }) => { await onValidated(manifest, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.gh.mockResolvedValue({ stdout: revision + '\n' });
   fake.publish.mockResolvedValue(undefined);
@@ -91,7 +89,7 @@ it('records an ambiguous commit reconciled by publish before deferring cleanup a
 });
 it('resumes matching artifacts through the same admission/journal without rebuilding science', async () => {
   fake.validated.mockReturnValue(false);
-  await resumePublication();
+  await resumePublication(revision);
   expect(fake.build).not.toHaveBeenCalled();
   expect(fake.publish).toHaveBeenCalledTimes(1);
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
@@ -99,13 +97,13 @@ it('resumes matching artifacts through the same admission/journal without rebuil
 });
 it('refuses resume after recipe changes and preserves a failure receipt', async () => {
   fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
-  await expect(resumePublication()).rejects.toThrow('recipe differs');
+  await expect(resumePublication(revision)).rejects.toThrow('recipe differs');
   expect(fake.publish).not.toHaveBeenCalled();
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('recipe differs'));
 });
 it('refuses ambiguous downloaded build sets before any publication', async () => {
   fake.directories.mockResolvedValueOnce([{ name: manifest.buildId, isDirectory: () => true }, { name: 'another', isDirectory: () => true }]);
-  await expect(resumePublication()).rejects.toThrow('exactly one');
+  await expect(resumePublication(revision)).rejects.toThrow('exactly one');
   expect(fake.publish).not.toHaveBeenCalled();
 });
 
@@ -128,4 +126,26 @@ it('persists cleanup cost observations and preserves unknown deletion progress o
   await expect(buildAndPublish()).rejects.toThrow('maintenance failed');
   const maintenance = fake.write.mock.calls.filter(([path]) => path.endsWith('/maintenance.json')).at(-1);
   expect(JSON.parse(maintenance![1])).toMatchObject({ status: 'failed', publication: 'committed', summary });
+});
+
+const repository = 'owner/repo';
+const run = { id: 123, path: '.github/workflows/forecast.yml', head_branch: 'main', head_sha: revision, event: 'schedule', status: 'completed', repository: { full_name: repository }, head_repository: { full_name: repository } };
+it('accepts completed main publisher runs and returns their immutable source revision', () => {
+  expect(forecastArtifactRevision(run, repository, '123')).toBe(revision);
+  expect(forecastArtifactRevision({ ...run, event: 'workflow_dispatch' }, repository, '123')).toBe(revision);
+});
+it('rejects lookalike artifacts from forks, other workflows, refs or uncompleted runs', () => {
+  for (const patch of [{ event: 'pull_request' }, { head_branch: 'feature' }, { head_repository: { full_name: 'fork/repo' } }, { path: '.github/workflows/ci.yml' }, { status: 'in_progress' }, { id: 124 }]) {
+    expect(() => forecastArtifactRevision({ ...run, ...patch }, repository, '123')).toThrow();
+  }
+});
+it('verifies the completed source workflow before downloading a retained forecast', async () => {
+  fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify(run) });
+  await expect(downloadForecastArtifact('123')).resolves.toBe(revision);
+  expect(fake.gh).toHaveBeenNthCalledWith(1, 'gh', ['api', 'repos/owner/repo/actions/runs/123'], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+  expect(fake.gh).toHaveBeenNthCalledWith(2, 'gh', ['run', 'download', '123', '--repo', 'owner/repo', '--name', 'forecast-gfs-123', '--dir', 'output'], { timeout: 300_000, maxBuffer: 1024 * 1024 });
+  fake.gh.mockClear();
+  fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify({ ...run, head_branch: 'feature' }) });
+  await expect(downloadForecastArtifact('123')).rejects.toThrow('authorized main forecast');
+  expect(fake.gh).toHaveBeenCalledTimes(1);
 });

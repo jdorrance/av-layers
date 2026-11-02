@@ -3,8 +3,11 @@ import commonjs from '@rollup/plugin-commonjs';
 import terser from '@rollup/plugin-terser';
 import swc from 'rollup-plugin-swc3';
 import { transformCodeToESMPlugin } from '@windycom/plugin-devtools';
+import { readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 const apiBase = process.env.AV_API_BASE || 'http://localhost:8787';
+const { name, version, type, main } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 export default {
   input: 'src/plugin.ts',
@@ -13,7 +16,6 @@ export default {
     { file: 'dist/plugin.min.js', format: 'module', sourcemap: true, plugins: [terser()] }
   ],
   external: id => id.startsWith('@windy/'),
-  onwarn: () => {},
   plugins: [
     {
       name: 'define-api-base',
@@ -32,7 +34,7 @@ export default {
         this.emitFile({
           type: 'asset',
           fileName: 'package.json',
-          source: JSON.stringify({ name: '@av/windy-plugin', version: '0.1.0', type: 'module', main: 'plugin.min.js' }, null, 2)
+          source: JSON.stringify({ name, version, type, main: basename(main) }, null, 2)
         });
       }
     }

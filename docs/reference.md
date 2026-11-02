@@ -12,16 +12,13 @@ This describes the current producer. Retained builds keep their own immutable de
 
 ## Batch CLI
 
-Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. String options take a value; boolean options are switches. These lists define accepted options, not whether an operational command is authorized or whether its required values are present. See [operations](operations.md) for publication authority and [getting started](getting-started.md) for working commands.
+Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI admission](../apps/batch/src/cli.ts).
 
 - `build:sample`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
-- `cleanup`: `--model <string>`.
 - `input-proof`: `--cycle <string>`, `--cache-dir <string>`.
-- `publish`: `--manifest <string>`, `--allow-same-cycle`.
-- `rollback`: `--model <string>`, `--build-id <string>`.
 - `validate`: `--manifest <string>`.
 
 ## Admitted production capabilities

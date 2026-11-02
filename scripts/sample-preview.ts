@@ -7,17 +7,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { coverageDescriptorSchema, forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
 import { readCoverage } from '../apps/batch/src/coverage.js';
 
-export { validateArtifactRecords };
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
 const wranglerJs = join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 function invariant(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 
-export function buildLocalPointer(manifest: Manifest, manifestKey: string): ModelPointer {
+function buildLocalPointer(manifest: Manifest, manifestKey: string): ModelPointer {
   return modelPointerSchema.parse({ version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt }] });
 }
-export function shouldSeedAssets(markerExists: boolean, reseed: boolean): boolean { return reseed || !markerExists; }
 
 export interface LocalPreviewStore {
   head(key: string): Promise<{ size: number; customMetadata?: Record<string, string> } | null>;
@@ -75,7 +73,7 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
   }
   const markerDir = join(persistTo, '.sample-preview'), marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
   const markerExists = await stat(marker).then(() => true, () => false);
-  const force = shouldSeedAssets(markerExists, options.reseed ?? false);
+  const force = options.reseed || !markerExists;
   let uploadedObjects = 0, reusedObjects = 0;
   const store = await openStore(persistTo);
   try {
@@ -110,21 +108,53 @@ export async function previewBuild(options: PreviewOptions): Promise<void> {
   if (options.seedOnly) return;
   const args = [wranglerJs, 'dev', ...(options.fixture ? [join(apiDir, 'test', 'fixture-worker.ts')] : []), '--local', '--var', 'AV_LOCAL_DEVELOPMENT:true', '--ip', '127.0.0.1', '--port', String(port), '--persist-to', seeded.persistTo, '--log-level', 'info', '--show-interactive-dev-session=false'];
   console.log(`sample-preview: serving http://127.0.0.1:${port} from ${seeded.persistTo}`);
-  const child = spawn(process.execPath, args, { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
+  const api = spawn(process.execPath, args, { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
+  const children = [api];
+  const completion = (child: typeof api) => new Promise<number>((done, reject) => {
+    child.once('error', reject);
+    child.once('close', code => done(code ?? 0));
+  });
+  const completed = [completion(api)];
+  const startup = new AbortController();
   const forward = (signal: NodeJS.Signals): void => {
-    if (child.exitCode === null) {
+    for (const child of children) {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); }
       catch { child.kill(signal); }
     }
   };
-  const onInt = (): void => forward('SIGINT'), onTerm = (): void => forward('SIGTERM');
+  const onInt = (): void => { startup.abort(); forward('SIGINT'); }, onTerm = (): void => { startup.abort(); forward('SIGTERM'); };
   process.on('SIGINT', onInt); process.on('SIGTERM', onTerm);
   try {
-    await new Promise<void>((done, reject) => {
-      child.once('error', reject);
-      child.once('close', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); done(); });
+    // Start the browser app only after its API is ready.
+    const ready = async () => {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        startup.signal.throwIfAborted();
+        try {
+          const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.any([startup.signal, AbortSignal.timeout(500)]) });
+          await response.body?.cancel();
+          if (response.ok) return;
+        } catch { /* The local listener is still starting. */ }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error('Local API did not start within 15 seconds');
+    };
+    await Promise.race([ready(), completed[0].then(() => { throw new Error('Local API stopped before startup completed'); })]);
+    const previewDir = join(root, 'apps', 'preview');
+    const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1'], {
+      cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
+      env: { ...process.env, VITE_API_BASE: `http://127.0.0.1:${port}`, VITE_OFFLINE_FIXTURE: String(options.fixture ?? false), VITE_BUILD_REVISION: 'development' }
     });
-  } finally { process.off('SIGINT', onInt); process.off('SIGTERM', onTerm); }
+    children.push(web); completed.push(completion(web));
+    process.exitCode = await Promise.race(completed);
+  } finally {
+    startup.abort();
+    forward('SIGTERM');
+    const force = setTimeout(() => forward('SIGKILL'), 5000).unref();
+    await Promise.allSettled(completed);
+    clearTimeout(force);
+    process.off('SIGINT', onInt); process.off('SIGTERM', onTerm);
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

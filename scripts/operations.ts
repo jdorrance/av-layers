@@ -1,5 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
+import { assertCurrentMain, buildAndPublish, downloadForecastArtifact, resumePublication } from './publication-workflow.js';
 
 export const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
 export const R2_BUCKET_NOT_FOUND_CODE = 10006;
@@ -370,40 +372,127 @@ export async function provisionCloudflare(env: CiEnvironment, fetchImpl: FetchLi
   };
 }
 
-function arg(name: string): string | undefined {
-  const index = process.argv.indexOf(`--${name}`);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+
+export interface PagesRevisionOptions {
+  url: string;
+  expectedDeploymentId: string;
+  fetchImpl?: typeof fetch;
+  retries?: number;
+  delayMs?: number;
+  timeoutMs?: number;
 }
 
-async function main(): Promise<void> {
-  const command = process.argv[2];
-  if (command !== 'envcheck' && command !== 'provision' && command !== 'publicationcheck' && command !== 'pagescheck') {
-    throw new Error('usage: cloudflare-ci.ts envcheck|provision|publicationcheck|pagescheck --env staging|production');
+export function deploymentMarker(expectedDeploymentId: string): string {
+  if (!/^[0-9a-f]{40}-\d{1,20}-\d{1,10}$/i.test(expectedDeploymentId)) throw new Error('EXPECTED_DEPLOYMENT_ID must be a commit SHA, run ID and run attempt');
+  return `name="build-deployment" content="${expectedDeploymentId}"`;
+}
+
+export async function verifyPagesRevision(options: PagesRevisionOptions): Promise<void> {
+  const marker = deploymentMarker(options.expectedDeploymentId);
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const retries = options.retries ?? 3;
+  const delay = options.delayMs ?? 5000;
+  let last = '';
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    try {
+      const response = await fetchImpl(options.url, {
+        headers: { accept: 'text/html' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
+      });
+      if (!response.ok) {
+        last = `status ${response.status}`;
+        await response.body?.cancel();
+        continue;
+      }
+      const html = await response.text();
+      if (html.includes(marker)) return;
+      last = 'served HTML does not contain the expected revision marker';
+    } catch (error) {
+      last = error instanceof Error ? error.message : String(error);
+    }
   }
-  const targetEnv = arg('env') ?? process.env.TARGET_ENV;
-  if (command === 'publicationcheck') {
-    const publication = validatePublicationEnvironment({ ...process.env, TARGET_ENV: targetEnv });
-    console.log(`cloudflare-ci: ${publication.targetEnv} bucket ${publication.r2Bucket}`);
+  throw new Error(`Pages revision verification failed: ${last}`);
+}
+
+type Operation = 'bootstrap' | 'deploy' | 'forecast' | 'maintenance';
+
+export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
+  if (!['bootstrap', 'deploy', 'forecast', 'maintenance'].includes(command)) throw new Error('Usage: pnpm operations bootstrap|deploy|forecast|maintenance');
+  if (!['staging', 'production'].includes(env.TARGET_ENV ?? '')) throw new Error('TARGET_ENV must be staging or production');
+  if (command === 'bootstrap' && env.CONFIRM !== 'bootstrap-private-cloudflare') throw new Error('Confirm bootstrap-private-cloudflare');
+  if (command === 'deploy' && env.GITHUB_EVENT_NAME === 'workflow_dispatch' && env.CONFIRM !== 'deploy-read-only-worker') throw new Error('Confirm deploy-read-only-worker');
+  if (command === 'forecast' || command === 'maintenance') {
+    if (env.MODEL !== 'gfs') throw new Error('Only the gfs model is admitted');
+  }
+  if (command === 'forecast' && env.RESUME_RUN_ID && !/^[1-9]\d{0,19}$/.test(env.RESUME_RUN_ID)) throw new Error('resume-run-id must be numeric');
+  if (command === 'maintenance') {
+    if (env.CONFIRM !== 'serialized-maintenance') throw new Error('Confirm serialized-maintenance');
+    if (env.ACTION !== 'rollback' && env.ACTION !== 'cleanup') throw new Error('Maintenance action must be rollback or cleanup');
+    if (env.ACTION === 'rollback' && !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(env.BUILD_ID ?? '')) throw new Error('Invalid rollback build ID');
+    if (env.ACTION === 'cleanup' && env.BUILD_ID) throw new Error('Only rollback accepts a build ID');
+  }
+}
+
+/** Each child is a normal package command; cancellation stops its complete process group. */
+async function pnpm(args: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  const child = spawn('pnpm', args, { stdio: 'inherit', env, detached: true });
+  let cancelled = false, killTimer: ReturnType<typeof setTimeout> | undefined;
+  const stop = (signal: NodeJS.Signals): void => {
+    if (!child.pid) return;
+    try { process.kill(-child.pid, signal); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  };
+  const abort = (): void => { cancelled = true; stop('SIGTERM'); killTimer ??= setTimeout(() => stop('SIGKILL'), 10_000); };
+  process.once('SIGINT', abort); process.once('SIGTERM', abort);
+  try {
+    const code = await new Promise<number | null>((accept, reject) => { child.once('error', reject); child.once('close', accept); });
+    if (cancelled || code !== 0) throw new Error(cancelled ? 'Operation interrupted' : `pnpm ${args.join(' ')} exited ${code}`);
+  } finally {
+    if (killTimer) clearTimeout(killTimer);
+    if (cancelled) stop('SIGKILL');
+    process.off('SIGINT', abort); process.off('SIGTERM', abort);
+  }
+}
+
+export async function runOperation(command: string): Promise<void> {
+  validateOperationInputs(command);
+  const env = command === 'bootstrap' || command === 'deploy' ? validateCiEnvironment(process.env) : validatePublicationEnvironment(process.env);
+  await assertCurrentMain();
+  if (command === 'forecast') {
+    if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID));
+    else {
+      await pnpm(['tools:pmtiles']);
+      await buildAndPublish();
+    }
     return;
   }
-  const env = validateCiEnvironment({ ...process.env, TARGET_ENV: targetEnv });
-  if (command === 'envcheck') {
-    console.log(`cloudflare-ci: ${env.targetEnv} bucket ${env.r2Bucket} pages ${env.pagesProjectName} api ${env.apiBaseUrl}`);
+  if (command === 'maintenance') {
+    const [{ maintenanceWorkflow }, { workflowAuthority }, { r2Storage }] = await Promise.all([
+      import('../apps/batch/src/maintenance.js'), import('../apps/batch/src/authority.js'), import('../apps/batch/src/storage.js')
+    ]);
+    console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store: r2Storage() })));
     return;
   }
-  if (command === 'pagescheck') {
-    const pages = await verifyPagesProduction(env);
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `url=${pages.url}\n`);
-    console.log(`cloudflare-ci: ${env.targetEnv} pages ${env.pagesProjectName} production-branch main url ${pages.url}`);
+  const cloud = env as CiEnvironment;
+  if (command === 'bootstrap') {
+    console.log(JSON.stringify(await provisionCloudflare(cloud)));
     return;
   }
-  const summary = await provisionCloudflare(env);
-  console.log(`cloudflare-ci: ${summary.environment} bucket ${summary.bucket} created=${summary.bucketCreated} private=${!summary.bucketPublicDevUrlEnabled} pages ${summary.pagesProject} created=${summary.pagesProjectCreated} url ${summary.pagesUrl}`);
+  const deploymentId = `${required(process.env, 'GITHUB_SHA')}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
+  deploymentMarker(deploymentId);
+  // Check destination configuration before changing either application.
+  const pages = await verifyPagesProduction(cloud);
+  await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
+  await assertCurrentMain();
+  await pnpm(['--filter', '@av/api', 'exec', 'wrangler', 'deploy', '--env', cloud.targetEnv, '--var', `AV_DEPLOYMENT_ID:${deploymentId}`]);
+  await pnpm(['exec', 'tsx', 'scripts/smoke-api.ts', '--base-url', cloud.apiBaseUrl, '--model', 'gfs', '--expected-deployment-id', deploymentId]);
+  await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
+  await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
+  console.log(`Deployed ${cloud.targetEnv}: ${cloud.apiBaseUrl} and ${pages.url}`);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Deployed ${cloud.targetEnv}\n\nAPI: ${cloud.apiBaseUrl}\n\nPages: ${pages.url}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => {
-    console.error(`cloudflare-ci: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
+  if (process.argv.length !== 3) { console.error('Usage: pnpm operations bootstrap|deploy|forecast|maintenance'); process.exitCode = 1; }
+  else runOperation(process.argv[2]!).catch(error => { console.error(error); process.exitCode = 1; });
 }
+

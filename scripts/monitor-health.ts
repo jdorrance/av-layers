@@ -20,7 +20,7 @@ export function forecastFindings(manifest: Manifest, now: number): string[] {
 export interface ObservedWorkflowRun { status: string; conclusion: string | null; created_at: string; html_url: string; display_title: string }
 export function maintenanceFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number): string[] {
   const findings: string[] = [];
-  for (const action of ['cleanup', 'rollback', 'qualify']) {
+  for (const action of ['cleanup', 'rollback']) {
     const latest = runs.filter(run => run.display_title === `Maintenance ${environment} ${action}` && run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000)
       .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
     if (latest && latest.conclusion !== 'success') findings.push(`maintenance-workflow-failure (${action}): ${latest.html_url}`);
@@ -70,7 +70,7 @@ export async function monitor(baseUrl: string, simulateFailure = false) {
     });
   }
   if (simulateFailure) findings.push('drill: deliberate monitor failure; serving was not changed');
-  return { version: 1, checkedAt, baseUrl, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#monitor-and-recover' };
+  return { version: 1, checkedAt, baseUrl, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#check-a-failure' };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -44,7 +44,7 @@ jobs:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
           GH_TOKEN: ${{ github.token }}
           SIMULATE_FAILURE: ${{ inputs['simulate-failure'] || false }}
-        run: pnpm exec tsx scripts/monitor-health.ts
+        run: pnpm health
       - uses: actions/upload-artifact@v4
         if: always()
         with:

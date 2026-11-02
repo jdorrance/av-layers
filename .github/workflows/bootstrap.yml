@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 20
     environment: ${{ inputs.environment }}
     env:
+      GH_TOKEN: ${{ github.token }}
       TARGET_ENV: ${{ inputs.environment }}
       CONFIRM: ${{ inputs.confirm }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
@@ -38,17 +39,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Refuse superseded main revision
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
-          if [ "${current}" != "${GITHUB_SHA}" ]; then
-            echo 'This revision has been superseded on main; run the latest revision instead.' >&2
-            exit 1
-          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.9
@@ -57,22 +47,5 @@ jobs:
           node-version: 22.23.4
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Validate bootstrap inputs and credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${TARGET_ENV}" in
-            staging|production) ;;
-            *) echo 'unsupported bootstrap environment' >&2; exit 1 ;;
-          esac
-          if [ "${CONFIRM}" != 'bootstrap-private-cloudflare' ]; then
-            echo 'confirm must equal bootstrap-private-cloudflare' >&2
-            exit 1
-          fi
-          if [ "${GITHUB_REF}" != 'refs/heads/main' ]; then
-            echo 'bootstrap runs only from main' >&2
-            exit 1
-          fi
-          pnpm exec tsx scripts/cloudflare-ci.ts envcheck --env "${TARGET_ENV}"
-      - name: Provision private R2 bucket and Pages project
-        run: pnpm exec tsx scripts/cloudflare-ci.ts provision --env "${TARGET_ENV}"
+      - name: Run bootstrap
+        run: pnpm operations bootstrap
