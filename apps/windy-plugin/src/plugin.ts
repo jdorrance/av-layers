@@ -193,17 +193,23 @@ export const __pluginConfig = __WINDY_CONFIG__;
 export const title = __pluginConfig.title;
 
 export default class ExternalApp {
+  private static active: ExternalApp | null = null;
+
   constructor(args: { target: HTMLElement; anchor?: HTMLElement }) {
+    ExternalApp.active = this;
     mountTarget = args.target;
     // Windy wires native pane behavior after mounting the component.
     ensurePanel();
   }
 
   onopen(params?: unknown): void {
+    if (ExternalApp.active !== this) return;
     onopen(params);
   }
 
   $destroy(): void {
+    if (ExternalApp.active !== this) return;
+    ExternalApp.active = null;
     onclose();
     panel?.mobileHeader.remove();
     panel?.root.remove();

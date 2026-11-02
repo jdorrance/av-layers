@@ -176,7 +176,7 @@ it.each([
   expect(singleclick.on).not.toHaveBeenCalled();
   expect(addWindowListener).not.toHaveBeenCalled();
   expect(addVisibilityListener).not.toHaveBeenCalled();
-  const initialTarget = target, mounted = [...target.children];
+  const initialApp = app, initialTarget = target, mounted = [...target.children];
   target = new FakeElement('replacement-target');
   app = new loaded.default({ target, anchor: target });
   expect(initialTarget.children).toHaveLength(0);
@@ -234,6 +234,14 @@ it.each([
   const button = elements.find(element => element.textContent === 'Sample clicked point')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
+  // A delayed callback from the replaced app must not touch the current app's
+  // panel, controller, or pending point request.
+  initialApp.$destroy();
+  initialApp.onopen();
+  expect(sampleSignal?.aborted).toBe(false);
+  expect(target.children).toEqual(mounted);
+  expect(map.removeLayer).not.toHaveBeenCalled();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
   win.dispatchEvent(new Event('focus'));
   expect(button.disabled).toBe(true);
   expect(sampleSignal?.aborted).toBe(false);
@@ -298,6 +306,10 @@ it.each([
     click({ lat: 3, lon: 4 });
     reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
     expect(sampleSignal?.aborted).toBe(false);
+    expect(protocols.size).toBe(1);
+    app.$destroy();
+    expect(sampleSignal?.aborted).toBe(false);
+    expect(target.children).toEqual([mobileHeader, root]);
     expect(protocols.size).toBe(1);
     reopenedElements.find(element => element.className === 'av-back')!.dispatch('click');
     expect(broadcast.emit.mock.calls).toEqual([
