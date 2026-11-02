@@ -27,7 +27,7 @@ export async function readResponseBytes(response: Response, limit = 1024 * 1024)
 export interface RetryOptions { retries?: number; delayMs?: number }
 export async function retryProbe(label: string, check: () => Promise<void>, options: RetryOptions = {}): Promise<void> {
   let last = '';
-  for (let attempt = 0; attempt <= (options.retries ?? 3); attempt++) {
+  for (let attempt = 0; attempt <= (options.retries ?? 12); attempt++) {
     if (attempt) await new Promise(resolve => setTimeout(resolve, options.delayMs ?? 5000));
     try { await check(); return; }
     catch (error) { last = error instanceof Error ? error.message : String(error); }
