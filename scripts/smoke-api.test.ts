@@ -4,7 +4,7 @@ import { manifestSchema } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 import { probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const deploymentId = `${'a'.repeat(40)}-12345-2`;
 
@@ -46,10 +46,22 @@ describe('Worker readiness after deployment', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it('waits through a rollout that keeps serving the previous version for 25 seconds', async () => {
+    vi.useFakeTimers();
+    const startedAt = Date.now();
+    const fetchImpl = vi.fn(async () => Response.json({
+      ok: true, deploymentId: Date.now() - startedAt >= 25_000 ? deploymentId : 'previous'
+    }));
+    const ready = expect(verifyWorkerReadiness({ url, expectedDeploymentId: deploymentId, fetchImpl })).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(25_000);
+    await ready;
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
   it('fails after the default bounded retries if the URL keeps serving a different deployment', async () => {
     const fetchImpl = vi.fn(async () => Response.json({ ok: true, deploymentId: `${'b'.repeat(40)}-12345-2` }));
     await expect(verifyWorkerReadiness({ url, expectedDeploymentId: deploymentId, fetchImpl, delayMs: 0 })).rejects.toThrow(/Worker readiness verification failed:.*expected Worker deployment marker/);
-    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl).toHaveBeenCalledTimes(13);
   });
 
   it('reports the final HTTP failure when readiness never succeeds', async () => {
