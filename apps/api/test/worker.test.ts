@@ -401,9 +401,12 @@ describe('read-only worker', () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
     expect(catalog.models.map(m => m.model)).toEqual(['gfs']);
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
-    bucket.objects.delete('builds/gfs/build-1/manifest.json');
+    bucket = new MemoryBucket();
+    const broken = publication('build-broken');
+    bucket.install(broken);
+    bucket.objects.delete(broken.retained.manifestKey);
     expect((await call('/v1/catalog')).status).toBe(503);
-    bucket.objects.delete('catalog/gfs/latest.json');
+    bucket = new MemoryBucket();
     const unavailable = await call('/v1/catalog');
     expect(unavailable.status).toBe(200);
     expect(await unavailable.json()).toMatchObject({ models: [{ model: 'gfs', available: false, error: 'publication-unavailable' }] });

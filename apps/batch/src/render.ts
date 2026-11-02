@@ -181,5 +181,5 @@ export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId,
   return encodeWebp(renderTileRgba(field, mask, layer, z, x, y), RASTER_TILE_SIZE, RASTER_TILE_SIZE);
 }
 export function renderArchive(path: string, field: GridField, mask: CoverageMask, layer: LayerId): Promise<void> {
-  return createRenderer(mask).renderArchive(path, field, layer);
+  return createRenderer(mask, { rasterWorkers: 0 }).renderArchive(path, field, layer);
 }

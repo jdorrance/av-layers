@@ -236,6 +236,9 @@ describe('bounded end-to-end build pipeline integration', () => {
       actualValidate.validateBuild(root, raw, mask, coverageHash)
     );
     vi.mocked(validateModule.finalizeValidatedMetrics).mockImplementationOnce(actualValidate.finalizeValidatedMetrics);
+    vi.mocked(renderModule.createRenderer).mockImplementationOnce((mask, options) =>
+      actualRender.createRenderer(mask, { ...options, rasterWorkers: 0 })
+    );
     vi.mocked(renderModule.renderArchive).mockImplementation(actualRender.renderArchive);
     vi.mocked(summaryModule.summarizeFields).mockImplementation(actualSummary.summarizeFields);
 
