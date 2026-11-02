@@ -46,6 +46,7 @@ server options.
 - [Science](docs/science.md): how lift and precipitation are calculated.
 - [Development](docs/development.md): working on the code.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
+- [Project status](docs/status.md): release checks and remaining work.
 
 Source data and third-party license notices are listed in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

@@ -148,6 +148,10 @@ dd {
   border-top: 1px solid #253036;
 }
 
+#series {
+  overflow-x: auto;
+}
+
 button {
   padding: 7px 10px;
   background: #1c6b8a;

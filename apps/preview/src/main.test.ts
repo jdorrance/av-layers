@@ -12,6 +12,7 @@ class Element extends EventTarget {
   href = '';
   hidden = false;
   disabled = false;
+  tabIndex = -1;
   private selected = '';
   constructor(readonly tag: string) { super(); }
   get value(): string { return this.selected || this.children[0]?.value || ''; }
@@ -211,6 +212,27 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
   expect(ui('series-button').disabled).toBe(false);
   expect(ui('series-status').textContent).toContain('Point request interrupted');
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('makes point values keyboard-scrollable only while the series has results', async () => {
+  await start();
+  expect(ui('series').tabIndex).toBe(-1);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+    model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
+    method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
+    frames: manifest.frames.map(frame => ({
+      ...frame,
+      layers: Object.fromEntries(manifest.layers.map(layer => [layer, { value: 1, status: 'valid', support: 0, interpolated: false }]))
+    }))
+  })));
+  ui('series-button').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('series').children).toHaveLength(1));
+  expect(ui('series').tabIndex).toBe(0);
+
+  map().emit('click', { lngLat: { lat: 33, lng: -117 } });
+  expect(ui('series').children).toHaveLength(0);
+  expect(ui('series').tabIndex).toBe(-1);
 });
 
 

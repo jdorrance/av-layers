@@ -27,7 +27,9 @@ Source adapter → calculations → tiles + point data → private R2 bucket
 ## Settings have an owner
 
 [GFS settings](../packages/contracts/config/gfs.json) define its grid, forecast
-hours, source fields, coverage, and freshness rules. TypeScript and the Python
+hours, source products and pressure levels, coverage, and freshness rules. The
+[NOAA field mapping](../apps/batch/src/noaa/fields.ts) selects the actual input fields.
+TypeScript and the Python
 mask generator read the same file. The [product registry](../packages/contracts/src/products.ts)
 lists available models. A public model ID is separate from its upstream model
 family, configuration, and domain.
