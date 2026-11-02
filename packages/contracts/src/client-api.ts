@@ -1,4 +1,4 @@
-import { SUPPORT_MASK, getProvenanceReference, latestSchema, sampleResponseSchema, validateArtifactRecords, type LayerId, type Manifest, type ModelId } from './index.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, sampleResponseSchema, validateArtifactRecords, type LayerId, type Manifest, type ModelId } from './index.ts';
 import type { PinnedBuild, SamplePayload } from './client-types.ts';
 
 export interface RequestOptions {
@@ -66,7 +66,8 @@ async function readError(response: Response, signal?: AbortSignal): Promise<ApiE
   try {
     const body = (await readJsonBounded(response, 64 * 1024, signal)) as { code?: unknown; type?: unknown; detail?: unknown; title?: unknown };
     if (typeof body.code === 'string') code = body.code;
-    else if (typeof body.type === 'string') code = body.type;
+    else if (typeof body.title === 'string') code = body.title;
+    else if (typeof body.type === 'string') code = body.type.replace(/^urn:windy-av:/, '');
     if (typeof body.detail === 'string') detail = body.detail;
     else if (typeof body.title === 'string') detail = body.title;
   } catch {
@@ -122,7 +123,7 @@ export class ApiClient {
     this.baseUrl = normalizeBaseUrl(requireString(options.baseUrl, 'baseUrl'));
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.now = options.now ?? Date.now;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.retryDelayMs = options.retryDelayMs ?? 200;
     if (!(this.requestTimeoutMs > 0) || !Number.isFinite(this.requestTimeoutMs) || this.retryDelayMs < 0 || !Number.isFinite(this.retryDelayMs)) throw new RangeError('Invalid request timing budget');
   }

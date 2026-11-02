@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
 import type { GfsFrameAcquisition } from './noaa/types.js';
 import type { NormalizedFrame } from '@av/forecast';
@@ -45,6 +45,8 @@ const noMs = (hour: number): string => ms(hour).replace('.000Z', 'Z');
 
 function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
   const empty = () => new Float32Array(1);
+  const startHour = hour - GFS_PRODUCT.intervalHours;
+  const blockStart = Math.floor(startHour / 6) * 6;
   return {
     schemaVersion: 1,
     model: 'gfs',
@@ -79,11 +81,11 @@ function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
     },
     intervals: {
       profileTime: noMs(hour),
-      fluxWindow: { start: ms(hour - 3), end: ms(hour) },
-      precipitationWindow: { start: ms(hour - 3), end: ms(hour) },
-      fluxSourceWindow: { start: ms(0), end: ms(hour) },
-      precipitationSourceWindow: { start: ms(0), end: ms(hour) },
-      usedCompanion: hour > 3,
+      fluxWindow: { start: ms(startHour), end: ms(hour) },
+      precipitationWindow: { start: ms(startHour), end: ms(hour) },
+      fluxSourceWindow: { start: ms(blockStart), end: ms(hour) },
+      precipitationSourceWindow: { start: ms(blockStart), end: ms(hour) },
+      usedCompanion: hour - blockStart > GFS_PRODUCT.intervalHours,
     },
     receipt: { schemaVersion: 1, cycle: noMs(0), hour, validAt: noMs(hour), capturedAt: '2026-10-30T08:25:13.148Z' },
   } as unknown as GfsFrameAcquisition & NormalizedFrame;
@@ -104,14 +106,14 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
 
 describe('build sample acquisition intervals', () => {
   it.each(['acquire', 'render'])('records a structured %s failure and only completely rendered frames', async phase => {
-    const failure = Object.assign(new Error('Injected field failure'), { code: 'fixture-failure', details: { reason: 'fixture', hour: 6 } });
+    const failure = Object.assign(new Error('Injected field failure'), { code: 'fixture-failure', details: { reason: 'fixture', hour: 2 } });
     if (phase === 'render') {
       const render = vi.mocked(renderModule.renderArchive), original = render.getMockImplementation()!;
       render.mockImplementationOnce(original).mockImplementationOnce(original).mockImplementationOnce(original).mockRejectedValueOnce(failure);
     }
-    await expect(run(hour => { if (phase === 'acquire' && hour === 6) throw failure; return frame(hour); })).rejects.toThrow('Injected field failure');
+    await expect(run(hour => { if (phase === 'acquire' && hour === 2) throw failure; return frame(hour); })).rejects.toThrow('Injected field failure');
     const directory = join(temp.at(-1)!, 'builds/gfs'), [buildId] = await readdir(directory);
-    expect(JSON.parse(await readFile(join(directory, buildId, 'failure.json'), 'utf8'))).toMatchObject({ state: 'failed', phase, completedFrames: 1, failedFrameHour: 6, cancelled: false, error: { name: 'Error', code: 'fixture-failure', message: 'Injected field failure', details: { reason: 'fixture', hour: 6 } } });
+    expect(JSON.parse(await readFile(join(directory, buildId, 'failure.json'), 'utf8'))).toMatchObject({ state: 'failed', phase, completedFrames: 1, failedFrameHour: 2, cancelled: false, error: { name: 'Error', code: 'fixture-failure', message: 'Injected field failure', details: { reason: 'fixture', hour: 2 } } });
   });
   it('forwards the cache directory to discovery and acquisition', async () => {
     const out = await mkdtemp(join(tmpdir(), 'av-build-cache-')); temp.push(out);
@@ -126,12 +128,12 @@ describe('build sample acquisition intervals', () => {
     const manifest = await run(frame, cycle);
     expect(manifest.cycle).toBe(CYCLE);
     expect(manifest.tool.liftRenderStyle).toBe('transparent-no-lift-v2');
-    expect(manifest.frames.find(f => f.id === 'f003')).toEqual({ id: 'f003', validTime: ms(3), intervalStart: ms(0), intervalEnd: ms(3) });
-    expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(3), intervalEnd: ms(6) });
+    expect(manifest.frames.find(f => f.id === 'f001')).toEqual({ id: 'f001', validTime: ms(1), intervalStart: ms(0), intervalEnd: ms(1) });
+    expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(5), intervalEnd: ms(6) });
     expect(manifest.source).toMatchObject({
       provider: 'NOAA',
       model: 'gfs',
-      frameCount: 8,
+      frameCount: 24,
       provenanceKey: `builds/gfs/${manifest.buildId}/provenance.json`
     });
     expect(manifest.source).not.toHaveProperty('frames');
@@ -139,7 +141,7 @@ describe('build sample acquisition intervals', () => {
   });
 
   it('rejects a frame cycle with a different actual instant', async () => {
-    await expect(run(hour => ({ ...frame(hour), cycle: noMs(1) }))).rejects.toThrow('Acquisition interval mismatch f3');
+    await expect(run(hour => ({ ...frame(hour), cycle: noMs(1) }))).rejects.toThrow('Acquisition interval mismatch f1');
     const session = await vi.mocked(createGfsAcquisitionSession).mock.results.at(-1)!.value;
     expect(session.close).toHaveBeenCalledOnce();
   });
@@ -158,19 +160,19 @@ describe('build sample acquisition intervals', () => {
 });
 
 describe('frame derivation', () => {
-  function fixture(): { input: GfsFrameAcquisition & NormalizedFrame; mask: CoverageMask; index: number } {
+  function fixture(hour = 12): { input: GfsFrameAcquisition & NormalizedFrame; mask: CoverageMask; index: number } {
     const index = 360 * GFS_GRID.width + 720;
     const bits = Math.ceil(GFS_GRID.width * GFS_GRID.height / 8);
     const mask: CoverageMask = { grid: GFS_GRID, output: new Uint8Array(bits), halo: new Uint8Array(bits), tiles: new Uint8Array(1), maxZoom: 0 };
     setBit(mask.output, index); setBit(mask.halo, index + 1);
     const values = (v: number) => new Float32Array([v, v]);
     const missing = () => new Uint8Array(2);
-    const input = { ...frame(3), activeIndices: new Uint32Array([index, index + 1]), terrainM: values(100), surfacePressurePa: values(100000), temp2mK: values(293.15), specificHumidity2mKgKg: values(0.008), pblHeightM: values(300), sensibleHeatFluxWm2: values(250), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [990, 950, 900], hgtM: [new Float32Array([100, 90]), values(600), values(1100)], tempK: [values(290), values(286.15), values(281.15)], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), pbl: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing(), missing(), missing()], temp: [missing(), missing(), missing()] } };
+    const input = { ...frame(hour), activeIndices: new Uint32Array([index, index + 1]), terrainM: values(100), surfacePressurePa: values(100000), temp2mK: values(293.15), specificHumidity2mKgKg: values(0.008), pblHeightM: values(300), sensibleHeatFluxWm2: values(250), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [990, 950, 900], hgtM: [new Float32Array([100, 90]), values(600), values(1100)], tempK: [values(290), values(286.15), values(281.15)], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), pbl: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing(), missing(), missing()], temp: [missing(), missing(), missing()] } };
     return { input, mask, index };
   }
 
   it('derives halo contributors without publishing halo-only points', () => {
-    const { input, mask, index } = fixture(), fields = deriveFrame(input, mask);
+    const { input, mask, index } = fixture(12), fields = deriveFrame(input, mask);
     expect(fields['precip-rate'].flags[index + 1]).toBe(STATUS_VALID);
     expect(fields['usable-lift-agl'].flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
     const sample = sampleGrid(GFS_GRID, fields['precip-rate'], 0, 0.1, 'precip-rate', mask);
@@ -180,7 +182,7 @@ describe('frame derivation', () => {
   });
 
   it('drops finite subterranean heights but not missing profile levels', () => {
-    const { input, mask, index } = fixture();
+    const { input, mask, index } = fixture(12);
     expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_VALID);
     expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_VALID);
     input.missing.hgt[1][0] = 1;
@@ -188,10 +190,28 @@ describe('frame derivation', () => {
     expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
     expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
   });
+
+  it('skips both lift and precipitation derivation outside of daytime', () => {
+    // At 03:00 UTC, (lat=0, lon=0) is in nighttime darkness
+    const { input, mask, index } = fixture(3);
+    const nightFields = deriveFrame(input, mask);
+    expect(nightFields['usable-lift-msl'].flags[index]).toBe(STATUS_NO_LIFT);
+    expect(nightFields['usable-lift-msl'].values[index]).toBe(100);
+    expect(nightFields['usable-lift-agl'].flags[index]).toBe(STATUS_NO_LIFT);
+    expect(nightFields['usable-lift-agl'].values[index]).toBe(0);
+    expect(nightFields['precip-rate'].flags[index]).toBe(STATUS_UNAVAILABLE);
+    expect(Number.isNaN(nightFields['precip-rate'].values[index])).toBe(true);
+
+    // Explicitly disabling daylightOnly evaluates column physics and precipitation at night
+    const unGatedFields = deriveFrame(input, mask, { daylightOnly: false });
+    expect(unGatedFields['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_VALID);
+    expect(unGatedFields['precip-rate'].flags[index]).toBe(STATUS_VALID);
+    expect(unGatedFields['precip-rate'].values[index]).toBe(2);
+  });
 });
 
 describe('bounded end-to-end build pipeline integration', () => {
-  it('runs incremental packing, summarizeFields, renderArchive and validateBuild across 8 frames × 3 layers', async () => {
+  it('runs incremental packing, summarizeFields, renderArchive and validateBuild across 24 frames × 3 layers', async () => {
     const actualValidate = await vi.importActual<typeof import('./validate.js')>('./validate.js');
     const actualRender = await vi.importActual<typeof import('./render.js')>('./render.js');
     const actualSummary = await vi.importActual<typeof import('./summary.js')>('./summary.js');
@@ -216,6 +236,9 @@ describe('bounded end-to-end build pipeline integration', () => {
       actualValidate.validateBuild(root, raw, mask, coverageHash)
     );
     vi.mocked(validateModule.finalizeValidatedMetrics).mockImplementationOnce(actualValidate.finalizeValidatedMetrics);
+    vi.mocked(renderModule.createRenderer).mockImplementationOnce((mask, options) =>
+      actualRender.createRenderer(mask, { ...options, rasterWorkers: 0 })
+    );
     vi.mocked(renderModule.renderArchive).mockImplementation(actualRender.renderArchive);
     vi.mocked(summaryModule.summarizeFields).mockImplementation(actualSummary.summarizeFields);
 
@@ -251,14 +274,14 @@ describe('bounded end-to-end build pipeline integration', () => {
         },
       }), CYCLE, async value => { completed = value; });
 
-      expect(manifest.artifacts).toHaveLength(24);
+      expect(manifest.artifacts).toHaveLength(72);
       const outDir = temp.at(-1)!;
       expect(() => actualValidate.assertValidatedBuild(outDir, manifest, completed!)).not.toThrow();
       expect(() => actualValidate.assertValidatedBuild(join(outDir, 'another'), manifest, completed!)).toThrow('changed');
       completed!.manifest.method.id = 'changed';
       expect(() => actualValidate.assertValidatedBuild(outDir, manifest, completed!)).toThrow('changed');
       expect(() => actualValidate.finalizeValidatedMetrics(outDir, completed!, {})).toThrow('changed');
-      expect((await stat(join(outDir, manifest.samples.key))).size).toBe(manifest.samples.storedCells * 24 * CELL_BYTES);
+      expect((await stat(join(outDir, manifest.samples.key))).size).toBe(manifest.samples.storedCells * 72 * CELL_BYTES);
       await expect(stat(join(outDir, '.work', manifest.buildId))).rejects.toMatchObject({ code: 'ENOENT' });
       for (const artifact of manifest.artifacts) {
         const tilesStat = await stat(join(outDir, artifact.tilesKey));

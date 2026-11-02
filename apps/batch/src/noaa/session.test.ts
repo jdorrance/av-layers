@@ -37,7 +37,7 @@ function source() {
     } } as unknown as admission.InspectedGfsField;
   });
   const sample = vi.spyOn(NoaaFieldSampler.prototype, 'sample').mockImplementation(async (inspected, indices, destination) => {
-    const previous = inspected.receipt.interval.end === validAt(cycle, 3);
+    const previous = inspected.receipt.interval.end === validAt(cycle, 1);
     const value = inspected.receipt.key === 'precipitation' ? previous ? 99999.999 : 100000 : inspected.receipt.kind === 'sensible-flux' || inspected.receipt.kind === 'latent-flux' ? previous ? 100.0000001 : 150.00000005 : 1.23456789123;
     const values = new Float64Array(indices.length).fill(value);
     const missing = new Uint8Array(indices.length); if (indices.length > 1) missing[1] = 1;
@@ -58,11 +58,11 @@ it('overlaps independent instantaneous decodes while preserving output and recei
   });
   const options = { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl };
   const serial = await createGfsAcquisitionSession({ ...options, fetchConcurrency: 1, decodeConcurrency: 1 });
-  const expected = await serial.acquire(3); await serial.close();
+  const expected = await serial.acquire(1); await serial.close();
   expect(peak).toBe(1); peak = 0;
   const parallel = await createGfsAcquisitionSession({ ...options, fetchConcurrency: 2, decodeConcurrency: 2 });
   try {
-    expect(withoutClock(await parallel.acquire(3))).toEqual(withoutClock(expected));
+    expect(withoutClock(await parallel.acquire(1))).toEqual(withoutClock(expected));
     expect(peak).toBe(2);
     expect(parallel.stats.peakPrefetchBytes).toBe(2 * estimateDecodeWorkingBytes(32, 2));
   } finally { await parallel.close(); }
@@ -72,7 +72,7 @@ it('overlaps independent instantaneous decodes while preserving output and recei
 it('rejects a job whose decoded working set cannot fit before fetching its field', async () => {
   const { fetchImpl, sample } = source();
   const session = await createGfsAcquisitionSession({ cycle, activeIndices: Uint32Array.of(0), fetchImpl, prefetchBytes: 1024 });
-  await expect(session.acquire(3)).rejects.toThrow('byte budget');
+  await expect(session.acquire(1)).rejects.toThrow('byte budget');
   expect(sample).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls.every(([url]) => String(url).endsWith('.idx'))).toBe(true);
   await session.close();
@@ -81,29 +81,29 @@ it('rejects a job whose decoded working set cannot fit before fetching its field
 it('reuses raw companion precision and immutable inventory/index state with identical frame outputs', async () => {
   const { fetchImpl, sample } = source();
   const options = { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl };
-  const standalone3 = await acquireGfsFrame({ ...options, hour: 3 });
-  const standalone6 = await acquireGfsFrame({ ...options, hour: 6 });
+  const standalone1 = await acquireGfsFrame({ ...options, hour: 1 });
+  const standalone2 = await acquireGfsFrame({ ...options, hour: 2 });
   sample.mockClear(); fetchImpl.mockClear();
   const session = await createGfsAcquisitionSession(options);
   try {
     options.activeIndices[0] = 100; // the session owns its validated snapshot
-    const frame3 = await session.acquire(3);
-    expect(withoutClock(frame3)).toEqual(withoutClock(standalone3));
-    frame3.activeIndices[0] = 200;
-    const prior = frame3.receipt.fields.find(field => field.key === 'precipitation')!;
+    const frame1 = await session.acquire(1);
+    expect(withoutClock(frame1)).toEqual(withoutClock(standalone1));
+    frame1.activeIndices[0] = 200;
+    const prior = frame1.receipt.fields.find(field => field.key === 'precipitation')!;
     prior.asset.sha256 = 'caller-mutated';
-    const frame6 = await session.acquire(6);
-    expect(withoutClock(frame6)).toEqual(withoutClock(standalone6));
-    expect(frame6.precipitationMmPerHour[0]).toBeCloseTo(0.001 / 3, 9);
-    expect(frame6.missing.precipitation).toEqual(Uint8Array.of(0, 1));
+    const frame2 = await session.acquire(2);
+    expect(withoutClock(frame2)).toEqual(withoutClock(standalone2));
+    expect(frame2.precipitationMmPerHour[0]).toBeCloseTo(0.001, 9);
+    expect(frame2.missing.precipitation).toEqual(Uint8Array.of(0, 1));
     expect(sample).toHaveBeenCalledTimes(100);
     expect(session.stats.rawCompanionHits).toBe(3);
     expect(session.stats.peakPrefetchBytes).toBeLessThanOrEqual(128 * 1024 * 1024);
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(4);
-    const companion = frame6.receipt.fields.find(field => field.key === 'precipitation' && field.role === 'companion')!;
+    const companion = frame2.receipt.fields.find(field => field.key === 'precipitation' && field.role === 'companion')!;
     expect(companion.asset.sha256).not.toBe('caller-mutated');
   } finally { await session.close(); }
-  await expect(session.acquire(9)).rejects.toThrow('closed');
+  await expect(session.acquire(3)).rejects.toThrow('closed');
 });
 
 it('shares discovery inventories with the acquired cycle', async () => {
@@ -111,9 +111,9 @@ it('shares discovery inventories with the acquired cycle', async () => {
   const session = await createGfsAcquisitionSession({ activeIndices: Uint32Array.of(0), now: new Date('2026-10-30T08:00:00Z'), fetchImpl });
   try {
     expect(session.cycle).toBe(cycle);
-    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(16);
-    await session.acquire(3);
-    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(16);
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(48);
+    await session.acquire(1);
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(48);
   } finally { await session.close(); }
 });
 

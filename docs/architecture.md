@@ -16,8 +16,14 @@ Source adapter → calculations → tiles + point data → private R2 bucket
 
 - [contracts](../packages/contracts/README.md): model settings, shared schemas,
   grids, layers, palettes, and client helpers.
-- [forecast](../packages/forecast/README.md): pure calculations, normalized input
+- [forecast](../packages/forecast/README.md): whole-frame derivation, normalized input
   arrays, interpolation, and sample-pack layout.
+- [solar](../packages/solar/README.md): NOAA solar position, sunrise/sunset, and
+  separable grid daylight evaluation.
+- [thermodynamics](../packages/thermodynamics/README.md): pure dry-air thermodynamics
+  and parcel equations.
+- [soaring](../packages/soaring/README.md): dry convective parcel crossing, Deardorff
+  $w_*$ (`m/s`), Lenschow updraft profile, and configurable sink-rate thresholds (`m/s`).
 - [batch](../apps/batch/README.md): downloads, file generation, validation,
   publication, and cleanup.
 - [api](../apps/api/README.md): HTTP requests, storage reads, and caching.

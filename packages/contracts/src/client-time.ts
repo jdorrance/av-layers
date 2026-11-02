@@ -67,14 +67,15 @@ export function syncTimestampForFrame(frame: FrameLike, range: DatasetRange | nu
 export function frameBadge(selected: FrameLike | null, hostMatch: FrameLike | null, hostTimestampMs: number | null, expired = false): FrameBadge {
   if (expired) return { kind: 'expired', text: 'Build expired — overlay removed' };
   if (!selected) return { kind: 'explicit', text: 'No frame selected' };
+  const interval = ` · interval ${selected.intervalStart} → ${selected.intervalEnd}`;
   if (hostMatch && hostMatch.id === selected.id) {
-    return { kind: 'in-frame', text: `Host frame ${selected.id} · ${selected.validTime}` };
+    return { kind: 'in-frame', text: `Host frame ${selected.id} · ${selected.validTime}${interval}` };
   }
   if (hostTimestampMs !== null && !hostMatch) {
     const time = new Date(hostTimestampMs).toISOString();
-    return { kind: 'off-frame', text: `Host time ${time} is off-frame — keeping ${selected.id}` };
+    return { kind: 'off-frame', text: `Host time ${time} is off-frame — keeping ${selected.id} · ${selected.validTime}${interval}` };
   }
-  return { kind: 'explicit', text: `Explicit frame ${selected.id} · ${selected.validTime}` };
+  return { kind: 'explicit', text: `Explicit frame ${selected.id} · ${selected.validTime}${interval}` };
 }
 
 export function formatDuration(ms: number): string {
@@ -85,6 +86,14 @@ export function formatDuration(ms: number): string {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${seconds}s`;
   return `${seconds}s`;
+}
+
+export function formatBuildFreshness(
+  manifest: Pick<Manifest, 'buildId' | 'createdAt'>,
+  expiresAtMs: number,
+  now = Date.now()
+): string {
+  return `Pinned build ${manifest.buildId} · age ${formatDuration(buildAgeMs(manifest.createdAt, now))} · expires in ${formatDuration(expiresAtMs - now)}`;
 }
 
 export function watchBuildExpiry(expiresAtMs: number, expire: () => void, targets: EventTarget[]): () => void {

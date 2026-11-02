@@ -12,7 +12,14 @@ const temporary: string[] = [];
 let base: string, relativeManifest: string;
 beforeAll(async () => {
   base = await mkdtemp(join(tmpdir(), 'av-offline-base-'));
-  relativeManifest = relative(base, await generateOfflineFixture(base));
+  // Use 06:00 UTC (North American nighttime) to verify the synthetic dev fixture remains populated at night
+  const nightNow = new Date(Math.floor(Date.now() / 86_400_000) * 86_400_000 + 6 * 3_600_000).getTime();
+  vi.setSystemTime(nightNow);
+  try {
+    relativeManifest = relative(base, await generateOfflineFixture(base, nightNow));
+  } finally {
+    vi.useRealTimers();
+  }
 });
 afterAll(async () => { await rm(base, { recursive: true, force: true }); });
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -45,7 +52,8 @@ describe('offline fixture and local seeding', () => {
     expect(manifest.layers).toHaveLength(3);
     expect(manifest.metrics.acquisition).toEqual({ fixture: true, networkRequests: 0 });
     expect(Date.parse(manifest.expiresAt)).toBeGreaterThan(Date.now());
-    expect(Math.abs(Date.parse(manifest.cycle) - Date.now())).toBeLessThan(3600000);
+    expect(Math.abs(Date.parse(manifest.cycle) - Date.now())).toBeLessThan(86_400_000);
+    expect((manifest.metrics.frames as Record<string, Record<string, { valid: number }>>).f001['precip-rate'].valid).toBe(40);
     expect(MODEL_IDS).toEqual(['gfs']);
     expect(getProduct('gfs')!.id).not.toBe(OFFLINE_PRODUCT.id);
   });

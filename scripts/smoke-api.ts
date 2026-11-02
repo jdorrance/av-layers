@@ -1,4 +1,4 @@
-import type { Manifest } from '@av/contracts';
+import { DEFAULT_PROBE_TIMEOUT_MS, type Manifest } from '@av/contracts';
 import { ApiClient } from '@av/contracts/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -48,7 +48,7 @@ export interface WorkerReadinessOptions extends RetryOptions {
 export async function verifyWorkerReadiness(options: WorkerReadinessOptions): Promise<void> {
   await retryProbe('Worker readiness', async () => {
     const response = await (options.fetchImpl ?? fetch)(options.url, {
-      headers: { accept: 'application/json' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
+      headers: { accept: 'application/json' }, signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS)
     });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`status ${response.status}`); }
     validateHealthContract(JSON.parse(new TextDecoder().decode(await readResponseBytes(response, 16 * 1024))), options.expectedDeploymentId);
@@ -63,14 +63,14 @@ export async function probeApi(options: {
   const baseUrl = options.baseUrl.replace(/\/+$/, ''), fetchImpl = options.fetchImpl ?? fetch;
   await verifyWorkerReadiness({ url: `${baseUrl}/healthz`, expectedDeploymentId: options.expectedDeploymentId, fetchImpl });
   const get = async (path: string, accept: string) => {
-    const response = await fetchImpl(`${baseUrl}${path}`, { headers: { accept }, signal: AbortSignal.timeout(30_000) });
+    const response = await fetchImpl(`${baseUrl}${path}`, { headers: { accept }, signal: AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS) });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`${response.status} ${path}`); }
     return { response, bytes: await readResponseBytes(response) };
   };
   const json = async (path: string) => JSON.parse(new TextDecoder().decode((await get(path, 'application/json')).bytes));
-  const catalog = await json('/v1/catalog') as { models?: Array<{ model?: string; available?: boolean }> };
+  const catalog = await json('/v1/catalog') as { models?: Array<{ model?: string; available?: boolean; error?: string }> };
   invariant(Array.isArray(catalog.models) && catalog.models.some(item => item.model === options.model && item.available === true), `Catalog reports no publication for ${options.model}`);
-  const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: 30_000, now: options.now });
+  const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS, now: options.now });
   const build = await client.latest(options.model, { requireLive: options.requireLive ?? true });
   const { manifest } = build, frame = manifest.frames[0].id;
   options.observeManifest?.(manifest);

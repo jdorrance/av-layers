@@ -6,6 +6,7 @@ import {
   LAYER_IDS,
   PALETTES,
   computeFreshness,
+  freshnessSchema,
   isPaletteId,
   isTileCovered,
   latestSchema,
@@ -115,11 +116,24 @@ function registerJsonRoute(
 registerJsonRoute('/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
   json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
 
+const catalogModelSchema = z.object({
+  model: z.string(),
+  label: z.string().optional(),
+  available: z.boolean(),
+  latest: z.string().optional(),
+  cycle: z.string().optional(),
+  expiresAt: z.string().optional(),
+  coverage: manifestSchema.shape.coverage.optional(),
+  ageSeconds: z.number().optional(),
+  freshness: freshnessSchema.optional(),
+  error: z.string().optional()
+});
+
 registerJsonRoute(
   '/v1/catalog',
   {},
   {},
-  z.object({ models: z.array(z.object({ model: z.string(), available: z.boolean() }).passthrough()) }),
+  z.object({ models: z.array(catalogModelSchema) }),
   async c => {
     const models = await Promise.all(
       Object.keys(products).map(async model => {
@@ -140,7 +154,10 @@ registerJsonRoute(
             freshness
           };
         } catch (e) {
-          return { model, label: products[model].label, available: false, error: e instanceof Problem ? e.code : 'publication-unavailable' };
+          if (e instanceof Problem && e.code === 'publication-unavailable') {
+            return { model, label: products[model].label, available: false, error: e.code };
+          }
+          throw e;
         }
       })
     );

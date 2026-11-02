@@ -98,6 +98,6 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString()));
     const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
     return json(result, m.expiresAt, `sample-${tag}-v3`);
-  }, 'sample-blocks-v1');
+  }, 'sample-v3');
 }
 

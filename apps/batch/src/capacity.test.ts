@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 267, 847, 2794];
-const Z7_TOTAL_TILES = 97032;
+const Z7_TOTAL_TILES = 291096;
 
 function receipt(): Manifest {
   return {
@@ -16,8 +16,8 @@ function receipt(): Manifest {
     cycle: '2026-10-30T00:00:00Z',
     grid: { width: 1440, height: 721 },
     coverage: { maxZoom: 7 },
-    artifacts: new Array(24).fill({}),
-    samples: { bytes: 44_000_000 },
+    artifacts: new Array(72).fill({}),
+    samples: { bytes: 132_000_000 },
     metrics: { elapsedMs: 90_000, peakRssBytes: 1_300_000_000, tiles: [...Z7_TILES_BY_ZOOM] }
   } as unknown as Manifest;
 }
@@ -27,7 +27,7 @@ describe('build capacity admission and performance budgets', () => {
     const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--frames', '48', '--layers', '8', '--models', '4'], { encoding: 'utf8' });
     expect(result.status).toBe(1);
     const report = JSON.parse(result.stdout);
-    expect(report).toMatchObject({ frames: 48, layers: 8, models: 4, currentProductAdmission: { frames: 8, layers: 3, rasterWorkers: rasterWorkerCount(), budgetBytes: BUILD_BUDGETS.peakRssBytes } });
+    expect(report).toMatchObject({ frames: 48, layers: 8, models: 4, currentProductAdmission: { frames: 24, layers: 3, rasterWorkers: rasterWorkerCount(), budgetBytes: BUILD_BUDGETS.peakRssBytes } });
     expect(report.currentProductAdmission.estimatedPeakBytes).toBe(Object.values(report.currentProductAdmission.workingSet as Record<string, number>).reduce((sum, value) => sum + value, 0));
     expect(report.violations.length).toBeGreaterThan(0);
   });
@@ -42,8 +42,8 @@ describe('build capacity admission and performance budgets', () => {
       tilesByZoom: Z7_TILES_BY_ZOOM,
       tiles: Z7_TOTAL_TILES,
       quarterSamples: Z7_TOTAL_TILES * 256 * 256 * 4,
-      samplePackBytes: 43835520,
-      point: { reads: 1, worstCaseRangeBytes: 2280, values: 24 },
+      samplePackBytes: 131506560,
+      point: { reads: 1, worstCaseRangeBytes: 6840, values: 72 },
       violations: []
     });
     expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
@@ -55,9 +55,9 @@ describe('build capacity admission and performance budgets', () => {
   });
   it('projects native tile growth and rejects it until a trusted product and budget support it', async () => {
     const mask = await loadCoverage(), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 16, layers: 6, models: 2 });
+    const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
     expect(doubled.tiles).toBe(Z7_TOTAL_TILES * 8);
-    expect(doubled.totalSamplePackBytes).toBe(43835520 * 8);
+    expect(doubled.totalSamplePackBytes).toBe(131506560 * 8);
     const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 8 });
     expect(deeper.violations).toContain('tile budget exceeded');
     expect(deeper.violations.join()).toContain('trusted product');

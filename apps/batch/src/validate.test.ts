@@ -27,6 +27,23 @@ describe('build provenance validation', () => {
     manifest.coverage.maskKey = `coverage/${manifest.coverage.hash}/manifest.json`;
     manifest.createdAt = manifest.cycle;
     manifest.expiresAt = new Date(Date.parse(manifest.createdAt) + 7 * 86400000).toISOString();
+    const cycleMs = Date.parse(manifest.cycle);
+    manifest.frames = GFS_PRODUCT.frameHours.map(hour => ({
+      id: `f${String(hour).padStart(3, '0')}`,
+      validTime: new Date(cycleMs + hour * 3600000).toISOString(),
+      intervalStart: new Date(cycleMs + (hour - GFS_PRODUCT.intervalHours) * 3600000).toISOString(),
+      intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
+    }));
+    manifest.artifacts = manifest.frames.flatMap(frame =>
+      manifest.layers.map(layer => ({
+        layer,
+        frame: frame.id,
+        tilesKey: `builds/${manifest.model}/${manifest.buildId}/${layer}/${frame.id}.pmtiles`,
+        tilesSha256: '0'.repeat(64)
+      }))
+    );
+    manifest.samples.channelCount = manifest.artifacts.length;
+    manifest.samples.bytes = manifest.samples.storedCells * manifest.artifacts.length * CELL_BYTES;
     const root = await mkdtemp(join(tmpdir(), 'av-validate-'));
     await writeCoverage(root, mask, GFS_PRODUCT);
     const key = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;

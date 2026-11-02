@@ -29,15 +29,20 @@ requires compact Float32 arrays in declared units, binary missing masks and a
 strictly descending pressure axis in hPa. Precipitation is normalized to mm/h. Nonfinite values require an explicit missing flag; invalid array
 types, shapes or active-index identity stop the build.
 
-[Frame derivation](../packages/forecast/src/frame.ts) performs below-ground screening and
-unit conversion, then reuses a level scratch array with an explicit active count.
-Unused tail entries never enter the solver. Reuse changes allocation behavior,
+[Frame derivation](../packages/forecast/src/frame.ts) evaluates solar elevation
+across each cell's trailing interval and valid time using
+[`@av/solar`](../packages/solar/src/index.ts) (`minimumSolarElevationDeg = -0.833°`),
+skipping nighttime cells before profile extraction (`STATUS_NO_LIFT` for lift layers
+and `STATUS_UNAVAILABLE` for precipitation). For daytime cells, it performs below-ground
+screening and unit conversion, then reuses a level scratch array with an explicit active
+count. Unused tail entries never enter the solver. Reuse changes allocation behavior,
 not profile selection, physical assumptions or branch tolerances.
 
 ## Statistical windows
 
 The GFS adapter verifies continuous statistical intervals from decoded GRIB
-metadata. For two means sharing start `a`, it recovers the trailing mean as
+metadata across 1-hour forecast steps (`+1h..+24h`). For two means sharing start `a`,
+it recovers the trailing mean as
 `((t2-a) × mean(a,t2) - (t1-a) × mean(a,t1)) / (t2-t1)`.
 Block resets are respected; a later lead is not necessarily an
 initialization-to-lead mean. Compatible accumulation differences become rain
@@ -55,10 +60,12 @@ and PBL, an explicit temporal approximation recorded in the manifest. GFS
 ## Lift depth and usable top
 
 Method `dry-lenschow-pbl-1p2-v1` follows a dry parcel from the surface using a
-0.0098 K/m lapse rate. Profiles have ascending above-ground heights and at most
-1,000 m gaps, including the first observation. A positive-to-nonpositive parcel
-temperature excess gives an interpolated crossing. If the profile ends first,
-the result is limited to its observed top.
+configurable dry-adiabatic lapse rate (`dryLapseRateKperM = 0.0098 K/m` in
+[`@av/thermodynamics`](../packages/thermodynamics/src/index.ts)). Profiles have
+ascending above-ground heights and at most 1,000 m gaps, including the first
+observation. A positive-to-nonpositive parcel temperature excess gives an
+interpolated crossing. If the profile ends first, the result is limited to its
+observed top.
 
 PBL closes only the first-layer case: with positive buoyancy flux and a
 nonpositive first-level excess, depth is the smaller of first-level height and
@@ -66,10 +73,14 @@ positive model PBL depth. Missing PBL invalidates that branch alone; resolved
 crossings above PBL remain intact. Verified nonpositive buoyancy flux gives no
 lift. There is no heat-flux-only depth fallback, cloud cap or moist continuation.
 
-Surface-density-consistent Deardorff velocity scales the Lenschow updraft curve.
-A peak below 1.2 m/s gives no usable lift; a top that meets the threshold retains
-that top; otherwise the descending threshold crossing sets the usable depth.
-[The solver](../packages/forecast/src/science.ts) uses the shared
+Surface-density-consistent Deardorff velocity $w_*$ (`m/s`) scales the Lenschow
+updraft curve in [`@av/soaring`](../packages/soaring/src/index.ts). All velocity
+thresholds in `m/s` (`sinkRateMps = 1.2 m/s`, `minimumThermalVelocityMps = 0 m/s`,
+and aircraft presets `SINK_RATE_PRESETS_MPS`) are explicitly parameterized in
+[method parameters](../packages/contracts/src/methods.ts) and overridable per call.
+A peak below `sinkRateMps` gives no usable lift; a top that meets the threshold
+retains that top; otherwise the descending threshold crossing sets the usable depth.
+[The solver](../packages/soaring/src/index.ts) uses the shared
 [method parameters](../packages/contracts/src/methods.ts), and
 [its tests](../packages/forecast/src/science.test.ts) cover branch boundaries.
 

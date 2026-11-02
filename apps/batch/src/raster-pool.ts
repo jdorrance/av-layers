@@ -9,8 +9,20 @@ export type { RasterMetrics, RasterPixels } from './raster.js';
 
 export const MAX_RASTER_WORKERS = 3;
 export const MAX_RASTER_SHARED_INPUT_BYTES = 64 * 1024 * 1024;
-/** Admission reserve, not a hard RSS limit. Raster buffers are budgeted separately. */
-export const RASTER_WORKER_RESERVE_BYTES = 128 * 1024 * 1024;
+export const RASTER_WORKER_RESOURCE_LIMITS = Object.freeze({
+  maxOldGenerationSizeMb: 64,
+  maxYoungGenerationSizeMb: 16,
+  stackSizeMb: 4
+} as const);
+export const RASTER_WORKER_NATIVE_RESERVE_MB = 44;
+/** Admission reserve per worker: 84 MiB V8 heap/stack ceiling plus 44 MiB native/off-heap allowance. */
+export const RASTER_WORKER_RESERVE_BYTES =
+  (RASTER_WORKER_RESOURCE_LIMITS.maxOldGenerationSizeMb +
+    RASTER_WORKER_RESOURCE_LIMITS.maxYoungGenerationSizeMb +
+    RASTER_WORKER_RESOURCE_LIMITS.stackSizeMb +
+    RASTER_WORKER_NATIVE_RESERVE_MB) *
+  1024 *
+  1024;
 export function rasterWorkerCount(cpus = availableParallelism()): number {
   if (!Number.isSafeInteger(cpus) || cpus < 1) throw new RangeError('Invalid available CPU count');
   return cpus === 1 ? 0 : Math.min(MAX_RASTER_WORKERS, cpus);
@@ -61,7 +73,7 @@ export async function createRasterPool(mask: CoverageMask, targets: readonly { f
       initialization.push(reject);
       const data: RasterWorkerData = { mask: sharedMask, fields, layers: targets.map(target => target.layer), geometryCacheBytes: Math.floor(geometryCacheBytes / count) };
       const worker = new Worker('import("node:worker_threads").then(async ({workerData}) => { const {tsImport} = await import(workerData.loader); await tsImport(workerData.entry, workerData.entry); })', {
-        eval: true, resourceLimits: { maxOldGenerationSizeMb: 64, maxYoungGenerationSizeMb: 16, stackSizeMb: 4 },
+        eval: true, resourceLimits: { ...RASTER_WORKER_RESOURCE_LIMITS },
         workerData: { ...data, loader: pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href, entry: new URL('./raster-worker.ts', import.meta.url).href }
       });
       workers.push(worker);

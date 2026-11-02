@@ -187,7 +187,7 @@ export function admitNoaaWindowPair(
     refuse('NOAA window pair initialization conflict');
   }
   if (a.start !== b.start || Date.parse(a.end) - Date.parse(b.end) !== GFS_INTERVAL_HOURS * HOUR_MS) {
-    refuse('NOAA window pair does not bound one trailing three-hour interval', {
+    refuse(`NOAA window pair does not bound one trailing ${GFS_INTERVAL_HOURS}-hour interval`, {
       current: a,
       companion: b,
     });
@@ -206,7 +206,7 @@ export function admitNoaaWindowPair(
   const currentHours = (Date.parse(a.end) - Date.parse(a.start)) / HOUR_MS;
   const previousHours = (Date.parse(b.end) - Date.parse(b.start)) / HOUR_MS;
   if (previousHours <= 0 || currentHours <= previousHours || currentHours - previousHours !== GFS_INTERVAL_HOURS) {
-    refuse('NOAA window pair does not yield exactly three hours', {
+    refuse(`NOAA window pair does not yield ${GFS_INTERVAL_HOURS} hour(s)`, {
       currentHours,
       previousHours,
     });

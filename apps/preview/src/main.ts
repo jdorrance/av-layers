@@ -11,17 +11,18 @@ import {
   OVERLAY_LAYER_ID,
   OVERLAY_SOURCE_ID,
   assertNotExpired,
-  buildAgeMs,
   coverageSummaryText,
-  formatDuration,
   forecastHorizonNotice,
+  formatBuildFreshness,
   formatSeriesSummary,
+  frameBadge,
   normalizePoint,
   sampleRequestText,
   populateModelOptions,
   previewRasterLayer,
   previewRasterSource,
   samePoint,
+  selectExplicitFrame,
   watchBuildExpiry,
   type GeoPoint,
   type PinnedBuild
@@ -187,7 +188,7 @@ function startPreview(): void {
     const notice = forecastHorizonNotice(build.manifest, now);
     horizonNotice.textContent = notice ?? '';
     horizonNotice.hidden = notice === null;
-    freshness.textContent = `Build ${build.manifest.buildId} · age ${formatDuration(buildAgeMs(build.manifest.createdAt, now))} · expires in ${formatDuration(build.expiresAtMs - now)} · pinned immutable build`;
+    freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);
   }
 
   function setControlsEnabled(enabled: boolean): void {
@@ -227,7 +228,7 @@ function startPreview(): void {
     removeOverlay();
     setControlsEnabled(false);
     seriesButton.disabled = true;
-    timestampBadge.textContent = 'Build expired — cached tiles are not assembled as a current view';
+    timestampBadge.textContent = frameBadge(null, null, null, true).text;
     freshness.textContent = 'Expired immutable build';
     showError('This build has expired. Reload to discover the latest retained build.');
   }
@@ -264,10 +265,8 @@ function startPreview(): void {
       source.tiles = source.tiles.map(overlayProtocol.url);
       map.addSource(overlaySourceId, source);
       map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
-      const frame = build.manifest.frames.find(item => item.id === selectedFrame);
-      timestampBadge.textContent = frame
-        ? `Explicit frame ${frame.id} · valid ${frame.validTime} · interval ${frame.intervalStart} → ${frame.intervalEnd}`
-        : `Explicit frame ${selectedFrame}`;
+      const frame = selectExplicitFrame(build.manifest.frames, selectedFrame);
+      timestampBadge.textContent = frameBadge(frame, null, null).text;
     } catch (error) {
       removeOverlay();
       timestampBadge.textContent = 'Overlay unavailable';

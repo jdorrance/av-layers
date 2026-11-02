@@ -14,10 +14,14 @@ resolve local terrain.
   interval, in millimetres per hour.
 
 Every sample includes a status. `valid` carries a finite value.
-`no-usable-lift` is a physical result: its public MSL value is `null` and its
-AGL value is `0`. `unavailable` means required inputs are missing or inadmissible;
-`outside-domain` means the point falls outside published coverage. Both carry
-`null`, never an invented zero. Rain has no no-lift status or lift-support flags.
+`no-usable-lift` is emitted when a daytime column solves to no usable lift or
+when the cell is outside of daytime across the frame's trailing interval and valid
+time (`solarElevation <= minimumSolarElevationDeg`, with support `0`): its public
+MSL value is `null` and its AGL value is `0`. `unavailable` means required inputs
+are missing or inadmissible, or—for `precip-rate`—that the cell is outside of
+daytime (`solarElevation <= minimumSolarElevationDeg`); `outside-domain` means the
+point falls outside published coverage. Both carry `null`, never an invented zero.
+Rain has no no-lift status or lift-support flags.
 
 Missingness follows each layer's dependencies. Missing thermal inputs can leave
 rain usable, and missing precipitation can leave lift usable. The `interpolated`

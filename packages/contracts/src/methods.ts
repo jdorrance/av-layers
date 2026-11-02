@@ -21,9 +21,18 @@ export type NormalizedInputId = keyof typeof NORMALIZED_INPUTS;
 for (const input of Object.values(NORMALIZED_INPUTS)) Object.freeze(input);
 Object.freeze(NORMALIZED_INPUTS);
 
-/** These exact values are consumed by the column kernel, never copied into it. */
+/**
+ * These exact values are consumed by the column kernel, never copied into it.
+ *
+ * All soaring velocity thresholds in m/s (`sinkRateMps`, `minimumThermalVelocityMps`),
+ * dry boundary-layer lapse rates (`dryLapseRateKperM`), Lenschow profile shape constants,
+ * and solar elevation daylight cutoffs (`minimumSolarElevationDeg`) are explicitly
+ * parameterized here so callers and method descriptors can inspect or override them.
+ */
 export const LIFT_METHOD_PARAMETERS = Object.freeze({
   sinkRateMps: 1.2,
+  minimumThermalVelocityMps: 0,
+  minimumSolarElevationDeg: -0.833,
   lenschowScale: 4,
   lenschowShape: 0.8,
   lenschowPeakZeta: 0.3125,
@@ -49,7 +58,10 @@ export const LIFT_METHOD_PARAMETERS = Object.freeze({
   crossingEpsilonMultiplier: 8,
   maximumBisectionIterations: 60
 } as const);
-export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({ minimumRateMmPerHour: 0 } as const);
+export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
+  minimumRateMmPerHour: 0,
+  minimumSolarElevationDeg: -0.833
+} as const);
 
 const liftInputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressureLevelsHpa', 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
 const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readonly NormalizedInputId[];
@@ -62,7 +74,8 @@ export const LIFT_METHOD = Object.freeze({
   parameters: LIFT_METHOD_PARAMETERS,
   caveats: Object.freeze([
     'Dry parcel calculation; no moist parcel or cloud treatment.',
-    'Interval-mean surface fluxes are paired with the endpoint profile and PBL.',
+    'Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.',
+    'Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
     'PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.',
     'A profile without a resolved crossing is capped at its highest usable level and flagged.',
     'MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.'
@@ -77,6 +90,7 @@ export const PRECIPITATION_METHOD = Object.freeze({
   parameters: PRECIPITATION_METHOD_PARAMETERS,
   caveats: Object.freeze([
     'The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.',
+    'Evaluated only for cells in daylight across the trailing interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells are marked unavailable and skipped.',
     'Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.'
   ])
 } as const);

@@ -58,7 +58,7 @@ export function validateCycle(cycle: string): string {
 
 export function validateHour(hour: number): void {
   if (!Number.isInteger(hour) || !GFS_FORECAST_HOURS.includes(hour)) {
-    invalid('GFS forecast hour must be an integer in 3..24 divisible by 3', { hour });
+    invalid('GFS forecast hour must be an integer in 1..24', { hour });
   }
 }
 

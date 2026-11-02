@@ -1,9 +1,10 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { RASTER_TILE_SIZE, MAX_TILE_BYTES, expectedTiles, LAYERS, type CoverageMask, type LayerId } from '@av/contracts';
 import type { GridField } from '@av/forecast';
@@ -12,6 +13,8 @@ export { mercatorPoint, renderTileRgba } from './raster.js';
 import { encodeWebp } from './webp.js';
 import { createRasterPool, MAX_RASTER_WORKERS, rasterWorkerCount, type RasterMetrics, type RasterPixels } from './raster-pool.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
+
+const execFileAsync = promisify(execFile);
 
 export interface ArchiveTarget { path: string; field: GridField; layer: LayerId }
 
@@ -105,11 +108,12 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
         stats.workerStarts += rasterWorkers; stats.workerStartupMs += performance.now() - started;
         stats.peakSharedInputBytes = Math.max(stats.peakSharedInputBytes, pool.sharedInputBytes);
       }
+      const bounds = (mask.bounds ?? [-180, -85.051129, 180, 85.051129]).join(',');
       const inserts = paths.map((path, index) => {
         const db = new DatabaseSync(path); databases.push(db);
         db.exec('CREATE TABLE metadata (name TEXT, value TEXT); CREATE TABLE tiles (zoom_level INTEGER, tile_column INTEGER, tile_row INTEGER, tile_data BLOB); CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row); BEGIN');
         const metadata = db.prepare('INSERT INTO metadata VALUES (?, ?)');
-        for (const [key, value] of Object.entries({ name: targets[index].layer, format: 'webp', type: 'overlay', version: '1', minzoom: '0', maxzoom: String(mask.maxZoom), bounds: '-180,-85.051129,180,85.051129' })) metadata.run(key, value);
+        for (const [key, value] of Object.entries({ name: targets[index].layer, format: 'webp', type: 'overlay', version: '1', minzoom: '0', maxzoom: String(mask.maxZoom), bounds })) metadata.run(key, value);
         return db.prepare('INSERT INTO tiles VALUES (?, ?, ?, ?)');
       });
       for (let job = 0; job < jobs; job++) {
@@ -151,10 +155,10 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
         const path = targets[i].path;
         await mkdir(dirname(path), { recursive: true });
         let started = performance.now();
-        execFileSync(binary, ['convert', '--no-deduplication', paths[i], path], { stdio: 'pipe' });
+        await execFileAsync(binary, ['convert', '--no-deduplication', paths[i], path], { signal: options.signal });
         stats.convertMs += performance.now() - started;
         started = performance.now();
-        execFileSync(binary, ['verify', path], { stdio: 'pipe' });
+        await execFileAsync(binary, ['verify', path], { signal: options.signal });
         stats.verifyMs += performance.now() - started;
       }
     } finally {
@@ -177,5 +181,5 @@ export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId,
   return encodeWebp(renderTileRgba(field, mask, layer, z, x, y), RASTER_TILE_SIZE, RASTER_TILE_SIZE);
 }
 export function renderArchive(path: string, field: GridField, mask: CoverageMask, layer: LayerId): Promise<void> {
-  return createRenderer(mask).renderArchive(path, field, layer);
+  return createRenderer(mask, { rasterWorkers: 0 }).renderArchive(path, field, layer);
 }

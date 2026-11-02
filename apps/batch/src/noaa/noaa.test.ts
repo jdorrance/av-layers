@@ -31,11 +31,17 @@ function codeOf(fn: () => unknown): string | undefined {
 
 describe('GFS interval reset and companion differencing', () => {
   it('resets six-hour GFS blocks', () => {
+    expect(gfsWindowStart(1)).toBe(0);
+    expect(gfsWindowStart(2)).toBe(0);
     expect(gfsWindowStart(3)).toBe(0);
     expect(gfsWindowStart(6)).toBe(0);
+    expect(gfsWindowStart(7)).toBe(6);
     expect(gfsWindowStart(9)).toBe(6);
     expect(gfsWindowStart(12)).toBe(6);
+    expect(gfsWindowStart(13)).toBe(12);
     expect(gfsWindowStart(15)).toBe(12);
+    expect(gfsWindowStart(18)).toBe(12);
+    expect(gfsWindowStart(19)).toBe(18);
     expect(gfsWindowStart(24)).toBe(18);
   });
 
@@ -214,7 +220,7 @@ describe('GFS interval reset and companion differencing', () => {
 });
 
 describe('diagnostic proof and transport accounting', () => {
-  function inventoryFetch(mode: 'complete' | 'unbounded' | 'missing-secondary' | 'duplicates' | 'conflict-3' | 'conflict-6'): typeof fetch {
+  function inventoryFetch(mode: 'complete' | 'unbounded' | 'missing-secondary' | 'duplicates' | 'conflict-5' | 'conflict-6'): typeof fetch {
     return async (input, init) => {
       const url = String(input);
       if (!url.endsWith('.idx')) {
@@ -242,8 +248,8 @@ describe('diagnostic proof and transport accounting', () => {
       if (mode === 'missing-secondary' && hour === 24 && product === 'secondary') {
         specs = specs.filter((spec) => spec.key !== '625.tmp');
       }
-      const duplicateMode = mode === 'duplicates' || mode === 'conflict-3' || mode === 'conflict-6';
-      if (duplicateMode && product === 'primary' && (hour === 3 || hour === 6)) {
+      const duplicateMode = mode === 'duplicates' || mode === 'conflict-5' || mode === 'conflict-6';
+      if (duplicateMode && product === 'primary' && (hour === 5 || hour === 6)) {
         const i = specs.findIndex((spec) => spec.key === 'precipitation');
         specs.splice(i, 0, specs[i]!);
       }
@@ -258,7 +264,7 @@ describe('diagnostic proof and transport accounting', () => {
 
   it('labels complete inventories as decoded admission not checked', async () => {
     const result = await discoverGfsRun({ now: new Date('2026-10-30T08:00:00Z'), fetchImpl: inventoryFetch('complete') });
-    expect(result).toMatchObject({ cycle: '2026-10-30T00:00:00Z', inventoryComplete: true, decodedAdmission: 'not-checked', availableHours: [3, 6, 9, 12, 15, 18, 21, 24] });
+    expect(result).toMatchObject({ cycle: '2026-10-30T00:00:00Z', inventoryComplete: true, decodedAdmission: 'not-checked', availableHours: Array.from({ length: 24 }, (_, i) => i + 1) });
   });
 
   it('rejects candidate runs with an unbounded required record or a missing secondary level', async () => {
@@ -282,7 +288,7 @@ describe('diagnostic proof and transport accounting', () => {
     expect(result).toMatchObject({ inventoryComplete: true, decodedAdmission: 'not-checked' });
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'current')).toBe(true);
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'companion')).toBe(true);
-    for (const mode of ['conflict-3', 'conflict-6'] as const) {
+    for (const mode of ['conflict-5', 'conflict-6'] as const) {
       await expect(discoverGfsRun({ ...options, fetchImpl: inventoryFetch(mode) })).rejects.toMatchObject({ code: 'record-ambiguous' });
     }
   });
@@ -298,7 +304,7 @@ describe('diagnostic proof and transport accounting', () => {
     });
     vi.spyOn(NoaaFieldSampler.prototype, 'sample').mockResolvedValue({ values: Float64Array.of(1), missing: Uint8Array.of(0), missingCount: 0 });
     try {
-      for (const mode of ['conflict-3', 'conflict-6'] as const) {
+      for (const mode of ['conflict-5', 'conflict-6'] as const) {
         await expect(acquireGfsFrame({ cycle: '2026-10-30T00:00:00Z', hour: 6, activeIndices: Uint32Array.of(0), fetchImpl: inventoryFetch(mode) })).rejects.toMatchObject({ code: 'record-ambiguous' });
       }
     } finally {
@@ -508,7 +514,7 @@ describe('verified GFS duplicate selection', () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.endsWith('.idx')) {
-        const forecast = url.includes('.f003.') ? '0-3 hour acc fcst' : '0-6 hour acc fcst';
+        const forecast = url.includes('.f005.') ? '0-5 hour acc fcst' : '0-6 hour acc fcst';
         return new Response(`1:0:d=2026103000:APCP:surface:${forecast}:\n2:24:d=2026103000:APCP:surface:${forecast}:\n3:48:d=2026103000:DUMMY:surface:other:`);
       }
       return fetchMessages([a, b])(input, init);

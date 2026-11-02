@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
-import { deriveFrame, validateNormalizedFrame } from '@av/forecast';
+import { getProduct, createProductDescriptors, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
 import { getForecastProvider, type ForecastProvider, type ForecastSession } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
@@ -15,7 +15,7 @@ import { createSamplePackBuilder } from './sample-pack.js';
 import { failureReason } from './failure.js';
 import { fileSha256, finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
-export interface BuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
+export interface BuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: DeriveFrameOptions; onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
 export async function buildProduct(modelId: string, options: BuildOptions): Promise<string> {
   const product = getProduct(modelId), provider = getForecastProvider(modelId);
   if (!product) throw new Error(`No forecast product for ${modelId}`);
@@ -64,7 +64,7 @@ export async function buildForecast(options: BuildOptions & { product: ProductDe
       receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
       const tDerive = Date.now();
       phase = 'derive';
-      const fields = deriveFrame(frame, mask);
+      const fields = deriveFrame(frame, mask, options.deriveOptions);
       summaries[id] = summarizeFields(fields, mask, indices.output);
       deriveMs += Date.now() - tDerive;
       phase = 'pack';
@@ -104,7 +104,7 @@ export async function buildForecast(options: BuildOptions & { product: ProductDe
       cycle,
       createdAt: created.toISOString(),
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),
-      method: { id: product.id, hash: identity.scienceHash },
+      method: { id: createProductMethodId(product), hash: identity.scienceHash },
       coverage: { id: product.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: product.maxNativeZoom },
       grid: product.grid,
       frames,

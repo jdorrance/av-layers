@@ -17,7 +17,7 @@ import { decodeWebp } from './webp.js';
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
-const CYCLE = '2026-11-01T00:00:00.000Z';
+const CYCLE = '2026-06-21T15:00:00.000Z';
 
 describe('offline native-grid build integration', () => {
   it('rejects invalid product shapes before opening a provider or writing coverage', async () => {
@@ -80,7 +80,7 @@ describe('offline native-grid build integration', () => {
     expect(() => assertValidatedBuild(root, manifest, JSON.parse(JSON.stringify(validated)))).toThrow('validation result');
     expect(() => assertValidatedBuild(root, manifest, { ...validated })).toThrow('validation result');
     expect(() => assertValidatedBuild(join(root, 'other'), manifest, validated)).toThrow('validation result');
-    expect(() => assertValidatedBuild(root, { ...manifest, cycle: '2026-11-01T06:00:00.000Z' }, validated)).toThrow('validation result');
+    expect(() => assertValidatedBuild(root, { ...manifest, cycle: '2026-06-21T21:00:00.000Z' }, validated)).toThrow('validation result');
     await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, modelId: 'wrong-public-id' })).rejects.toThrow('Unsupported model');
     await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, source: { ...product.source, modelFamily: 'wrong-family' } })).rejects.toThrow('Unsupported model');
     const alteredMask = { ...loadedMask, output: new Uint8Array(loadedMask.output) };

@@ -393,12 +393,88 @@
                   "properties": {
                     "models": {
                       "items": {
-                        "additionalProperties": {
-                          "nullable": true
-                        },
                         "properties": {
+                          "ageSeconds": {
+                            "type": "number"
+                          },
                           "available": {
                             "type": "boolean"
+                          },
+                          "coverage": {
+                            "properties": {
+                              "hash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maskKey": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxZoom": {
+                                "maximum": 8,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "hash",
+                              "maskKey",
+                              "maxZoom"
+                            ],
+                            "type": "object"
+                          },
+                          "cycle": {
+                            "type": "string"
+                          },
+                          "error": {
+                            "type": "string"
+                          },
+                          "expiresAt": {
+                            "type": "string"
+                          },
+                          "freshness": {
+                            "properties": {
+                              "ageSeconds": {
+                                "type": "number"
+                              },
+                              "cycle": {
+                                "type": "string"
+                              },
+                              "cycleAgeSeconds": {
+                                "type": "number"
+                              },
+                              "earliestValidTime": {
+                                "type": "string"
+                              },
+                              "expiresAt": {
+                                "type": "string"
+                              },
+                              "horizonExhausted": {
+                                "type": "boolean"
+                              },
+                              "horizonRemainingSeconds": {
+                                "type": "number"
+                              },
+                              "latestValidTime": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "ageSeconds",
+                              "expiresAt"
+                            ],
+                            "type": "object"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "latest": {
+                            "type": "string"
                           },
                           "model": {
                             "type": "string"

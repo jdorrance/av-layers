@@ -1,4 +1,4 @@
-import { parseBoundedJson, ResourceLimitError } from '@av/contracts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, parseBoundedJson, ResourceLimitError } from '@av/contracts';
 export { parseBoundedJson, ResourceLimitError } from '@av/contracts';
 
 /** Cache limits account retained typed arrays and estimated decoded object storage. */
@@ -43,7 +43,7 @@ export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.m
 export class MaterializedReads<T> {
   private pending = new Map<string, { promise: Promise<T>; waiters: number; deadlineError?: Error }>();
   private waiters = 0;
-  constructor(readonly maxPending = 16, readonly timeoutMs = 15_000, readonly maxWaiters = 32) {}
+  constructor(readonly maxPending = 16, readonly timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, readonly maxWaiters = 32) {}
   run(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext): Promise<T> {
     const existing = this.pending.get(key);
     if (existing?.deadlineError) return Promise.reject(existing.deadlineError);
@@ -95,7 +95,7 @@ export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limi
     let length = 0, chunks = 0, failure: unknown;
     const cancel = (reason: unknown) => { failure = reason; void reader!.cancel(reason).catch(() => {}); };
     abort = () => cancel(options.signal!.reason);
-    timer = setTimeout(() => cancel(new ResourceLimitError('Object body deadline exceeded')), options.timeoutMs ?? 15_000);
+    timer = setTimeout(() => cancel(new ResourceLimitError('Object body deadline exceeded')), options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
     for (;;) {
@@ -148,7 +148,7 @@ export function transferBodyLease(from: ReadableStream<Uint8Array> | null, to: R
 }
 function reserveResponse(size: number): BodyLease {
   const reserved = Math.max(1, size) * 4;
-  if (!Number.isSafeInteger(size) || size < 0 || size > 1024 * 1024 || responseBytes + reserved > MAX_RESPONSE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
+  if (!Number.isSafeInteger(size) || size < 0 || size > MAX_PROVENANCE_BYTES || responseBytes + reserved > MAX_RESPONSE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
   responseBytes += reserved;
   let refs = 1;
   return { size, retain() { refs++; }, release() { if (--refs === 0) responseBytes -= reserved; } };
@@ -181,20 +181,20 @@ function wrapResponse(response: Response, lease: BodyLease, timeoutMs: number): 
   } catch (error) { release(); throw error; }
 }
 /** The callback cannot allocate a payload until the outgoing byte permit exists. */
-export function createBoundedResponse(size: number, create: () => Response, timeoutMs = 15_000): Response {
+export function createBoundedResponse(size: number, create: () => Response, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Response {
   const lease = reserveResponse(size);
   let response: Response;
   try { response = create(); } catch (error) { lease.release(); throw error; }
   return wrapResponse(response, lease, timeoutMs);
 }
 /** Wrap a streaming cache hit before reading it; API-created bodies already have a lease. */
-export function boundResponse(response: Response, timeoutMs = 15_000): Response {
+export function boundResponse(response: Response, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Response {
   if (!response.body || bodyLeases.has(response.body)) return response;
   const size = response.headers.has('content-length') ? Number(response.headers.get('content-length')) : 1024 * 1024;
   try { return createBoundedResponse(size, () => response, timeoutMs); }
   catch (error) { void response.body.cancel().catch(() => {}); throw error; }
 }
-export function forkResponseForCache(response: Response, timeoutMs = 15_000): { client: Response; cache: Response } {
+export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): { client: Response; cache: Response } {
   const bounded = boundResponse(response, timeoutMs);
   if (!bounded.body) return { client: bounded, cache: bounded.clone() };
   const lease = bodyLeases.get(bounded.body)!;

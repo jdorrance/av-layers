@@ -33,7 +33,7 @@ Source: [product registry](../packages/contracts/src/products.ts). Test fixtures
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.
 - Native tile zoom: 0–7.
-- Forecast lead hours: `[3,6,9,12,15,18,21,24]`; interval: 3 hours.
+- Forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
 - Publishing freshness: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
@@ -109,8 +109,10 @@ Parameters:
 - `maximumSurfacePressureHpa`: `1100`.
 - `maximumSurfaceTemperatureC`: `60`.
 - `minimumProfileTemperatureC`: `-120`.
+- `minimumSolarElevationDeg`: `-0.833`.
 - `minimumSurfacePressureHpa`: `100`.
 - `minimumSurfaceTemperatureC`: `-100`.
+- `minimumThermalVelocityMps`: `0`.
 - `pascalsPerHectopascal`: `100`.
 - `saturationExponent`: `17.67`.
 - `saturationRelativeTolerance`: `0.000001`.
@@ -122,7 +124,8 @@ Parameters:
 Caveats:
 
 - Dry parcel calculation; no moist parcel or cloud treatment.
-- Interval-mean surface fluxes are paired with the endpoint profile and PBL.
+- Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
+- Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
 - PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.
 - A profile without a resolved crossing is capped at its highest usable level and flagged.
 - MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.
@@ -136,10 +139,12 @@ Caveats:
 Parameters:
 
 - `minimumRateMmPerHour`: `0`.
+- `minimumSolarElevationDeg`: `-0.833`.
 
 Caveats:
 
 - The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.
+- Evaluated only for cells in daylight across the trailing interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells are marked unavailable and skipped.
 - Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.
 
 ### Normalized input vocabulary
@@ -166,11 +171,13 @@ Complete-build limits:
 - `gridCells`: `4000000`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.
-- `tiles`: `100000`.
+- `tiles`: `300000`.
 
 Shared producer/consumer contract limits and storage constants:
 
 - `CELL_BYTES`: `5`.
+- `DEFAULT_PROBE_TIMEOUT_MS`: `30000`.
+- `DEFAULT_REQUEST_TIMEOUT_MS`: `15000`.
 - `MAX_COVERAGE_BITSET_BYTES`: `524288`.
 - `MAX_COVERAGE_DESCRIPTOR_BYTES`: `131072`.
 - `MAX_GRID_CELLS`: `4000000`.
@@ -178,8 +185,8 @@ Shared producer/consumer contract limits and storage constants:
 - `MAX_METADATA_JSON_TOKENS`: `8192`.
 - `MAX_NATIVE_ZOOM`: `8`.
 - `MAX_POINTER_BYTES`: `131072`.
-- `MAX_PROVENANCE_BYTES`: `1048576`.
-- `MAX_PROVENANCE_JSON_TOKENS`: `65536`.
+- `MAX_PROVENANCE_BYTES`: `4194304`.
+- `MAX_PROVENANCE_JSON_TOKENS`: `262144`.
 - `MAX_RETAINED_BUILDS`: `256`.
 - `MAX_SAMPLE_RANGE_BYTES`: `262144`.
 - `MAX_SAMPLE_VALUES`: `256`.
@@ -191,7 +198,9 @@ Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):
 
 - `MAX_RASTER_WORKERS`: 3.
 - `MAX_RASTER_SHARED_INPUT_BYTES`: 67108864.
-- `RASTER_WORKER_RESERVE_BYTES`: 134217728; admission estimate per worker, not an operating-system memory limit.
+- `RASTER_WORKER_RESOURCE_LIMITS`: `{"maxOldGenerationSizeMb":64,"maxYoungGenerationSizeMb":16,"stackSizeMb":4}` (V8 heap/stack ceiling per worker).
+- `RASTER_WORKER_NATIVE_RESERVE_MB`: 44.
+- `RASTER_WORKER_RESERVE_BYTES`: 134217728; admission reserve per worker derived from the V8 heap/stack ceiling plus native allowance.
 
 ## API reference
 
