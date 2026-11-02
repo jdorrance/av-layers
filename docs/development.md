@@ -47,6 +47,9 @@ This downloads a complete GFS run and can take a while. Repeated builds reuse
 `.cache/gfs`. To choose a run, add `--cycle` with an available GFS 00, 06, 12, or
 18 UTC timestamp. Without it, the builder finds a complete recent run.
 
+The build records its commit and any uncommitted producer or runtime-config
+changes. Commit those changes before publishing.
+
 Copy the printed manifest path into the following command, replacing `BUILD_ID`:
 
 ```sh

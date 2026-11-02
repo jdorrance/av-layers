@@ -1,73 +1,65 @@
 # Project status
 
-The project is in alpha. GFS is the only supported live model. It provides usable
-lift above sea level, usable lift above model ground, and precipitation rate
-through the API, standalone map, and Windy plugin.
+The project is in alpha. GFS is the only live model, with usable lift above sea
+level, usable lift above model ground, and precipitation rate.
 
 Open the [production map](https://windy-av-preview.pages.dev/),
 [Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
 or [API documentation](https://windy-av-api-production.jdorrance.workers.dev/docs).
 
-## November 2 release checks
+## November 2 release
 
-The production cutover used build
-`20261102T153050Z-7d2b5638-878c-4b39-9149-4854288c66b7`, produced by `73025ec`.
-[Staging](https://github.com/jdorrance/av-layers/actions/runs/41472250670),
-[exact-file promotion](https://github.com/jdorrance/av-layers/actions/runs/41477738281),
-and [production deployment](https://github.com/jdorrance/av-layers/actions/runs/41478550965)
-succeeded. The three previous production builds remained available for rollback.
+The pending changes were reviewed, corrected, and merged with current main in
+[PR 16](https://github.com/jdorrance/av-layers/pull/16). The final code checks passed
+**625 tests in 57 files**, plus lint, types, documentation checks, and app builds.
+The review fixed response-body ownership, content-based palette cache tags,
+upload cancellation, schedule monitoring, and Windy lifecycle races. Duplicate
+wake handlers were removed. Workflows remain small wrappers around pnpm commands.
 
-The final local `pnpm verify` run passed 602 tests plus lint, type checks,
-documentation checks, and both app builds. Nine unused GitHub secrets/variables
-were removed; live environment credentials and required settings were preserved.
+The fresh 12Z forecast is
+`20261102T172417Z-8b355ab5-81ea-421c-b6ac-3dc03a02559e`, built from `051a8cf`.
+Its [staging run](https://github.com/jdorrance/av-layers/actions/runs/41490757874)
+validated every payload, coverage mask, sample flag, and all 97,032 tile entries.
+The hosted build took **16.36 minutes** and peaked at **994 MiB RSS**, inside the
+20-minute and 2-GiB limits. Production uses the
+[exact tested files](https://github.com/jdorrance/av-layers/actions/runs/41494570293)
+and [tested API and clients](https://github.com/jdorrance/av-layers/actions/runs/41494576023).
+Previous builds remain available for rollback.
 
-- Five warm build pairs on an M4 Max with Node 22.23.4 reduced median time from
-  **28.65 to 5.53 minutes**. Packed values/flags and all **97,032 decoded tiles**
-  matched exactly. The separate empty-cache build took **7.63 minutes**.
-  All candidate builds met the 20-minute/2-GiB limits. Memory did not improve:
-  median process RSS rose about 5%; maximum sampled process-tree RSS was 1.33 GB.
-- Remote API load used 3,000 requests per cache mode, 10 requests/s for five
-  minutes, with a 90% tile / 4% sample / 6% metadata mix. No errors or dropped
-  requests occurred. Tile/sample p95 was **109/73 ms** for verified response-cache
-  hits and **295/210 ms** with that cache disabled. One warm-workload tile was a
-  miss (237 ms), reported separately. Measurements came from one Cloudflare location.
-- Local memory sampling with production logging enabled peaked at **87.63 MiB**
-  across GFS and near-limit payload tests, below the 96-MiB test limit. Saturation
-  returned bounded, uncached 503 responses and recovered. These are local workerd
-  samples, not a measurement of continuous deployed-isolate peak memory.
-- The actual Windy host and desktop/mobile preview rendered tiles and complete
-  point tables. Production values matched staging. Time selection, keyboard
-  controls, overzoom, historical-data warnings, close/reopen, and visible tile/point
-  failure and recovery were checked. Suspended timers and late responses also
-  have deterministic regression tests.
-- Remote retry, rollback, invalid-target rejection, monitor failure/recovery,
-  and cleanup passed. [Recovered staging health](https://github.com/jdorrance/av-layers/actions/runs/41471562379)
-  had no findings. Cancellation during one upload reached commit; retry confirmed
-  the same objects and pointer. It is not counted as an upload stopped before commit.
+Fresh local API checks, with production logging enabled, passed both cache modes
+and near-limit payload tests. Each normal run completed 3,000 requests without
+errors or drops. The largest sampled allocation was **88.43 MiB**, below the
+96-MiB test limit. Overload returned bounded, uncached 503 responses and recovered.
+These are local workerd samples, not continuous deployed-isolate measurements.
 
-Timing measurements belong to `3659702`, compared with `1d78d1c`. The final
-producer inputs and resolved dependencies matched that measured version. Declaring
-an existing YAML test dependency changed the conservative lockfile-based recipe
-identity, so the cutover used a fresh build; its 25 forecast payloads also matched
-the previously qualified build.
+The actual Windy host and desktop/mobile map have rendered tiles and complete
+point tables. Checks cover time selection, keyboard scrolling, overzoom,
+close/reopen, historical warnings, and visible tile/point failure and recovery.
+Delayed callbacks and suspended timers also have regression coverage. Retry,
+rollback, invalid-target rejection, monitoring, and protected cleanup passed.
+One cancelled upload reached commit; it is not evidence of a pre-commit abort.
 
-Detailed local results and screenshots are in `output/evidence/foundation/`,
-`output/evidence/simplify-foundations/`, and
-`output/evidence/simplify-staging-drills-20261102/`. Experiment helpers stay outside
-the tracked source. [CI](https://github.com/jdorrance/av-layers/actions/workflows/ci.yml)
-runs the normal pnpm checks.
+Earlier five-pair build measurements reduced median time from 28.65 to 5.53
+minutes with identical packed values and decoded pixels. Those measurements
+compare `3659702` with `1d78d1c`; they are not a new benchmark of this follow-up.
+Earlier remote API load checks passed, but predate the final response/parser
+changes. Additional benchmark and remote load testing was stopped at the user's
+request. No result is claimed for that unrun replay.
 
-## Remaining completion check
+Detailed results and screenshots are kept locally under
+`output/evidence/foundation/` and `output/evidence/simplify-foundations/`.
+Experiment helpers are not tracked source. Nine unused GitHub secrets/variables
+were removed; required environment settings remain.
 
-The foundation milestone remains open until **two consecutive scheduled
-production publications** succeed. Manual promotions and same-cycle skips do not
-count. The next scheduled times are November 2 at 17:17 UTC and November 3 at
-05:17 UTC; GitHub may start them later. The schedule has not been accelerated for
-testing.
+## Remaining validation and deferred work
 
-Physical-device testing is explicitly deferred. Mobile layout checks do not
-replace it. Generated fixtures prove additional grid shapes, not live models.
-New models, WRF processing, profiles, and other forecast products remain deferred.
+Two consecutive normal scheduled production publications have **not yet been
+observed**, so that foundation qualification gate remains open. Manual runs and
+same-cycle skips do not count. The normal forecast and health schedules remain
+enabled; no extra follow-up automation was created for this wrap-up.
 
-See [development](development.md) for local use, [operations](operations.md) for
-running the service, and [the roadmap](roadmap.md) for future work.
+Physical-device testing is deferred. Desktop mobile-layout checks do not replace
+it. New models, enhanced WRF, profiles, and other products remain deferred.
+
+See [development](development.md), [operations](operations.md), and
+[the roadmap](roadmap.md) for the next time work resumes.
