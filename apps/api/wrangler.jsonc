@@ -43,7 +43,8 @@
       },
       "observability": {
         "enabled": true,
-        "head_sampling_rate": 1
+        "head_sampling_rate": 1,
+        "redact_query_string": true
       }
     },
     "production": {
@@ -70,12 +71,14 @@
       },
       "observability": {
         "enabled": true,
-        "head_sampling_rate": 0.1
+        "head_sampling_rate": 0.1,
+        "redact_query_string": true
       }
     }
   },
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 0.1
+    "head_sampling_rate": 0.1,
+    "redact_query_string": true
   }
 }
