@@ -18,7 +18,7 @@ const J2000 = 2_451_545.0;
  * Standard apparent sunrise/sunset geometric horizon angle in degrees,
  * sourced from `@av/contracts` `LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg`.
  */
-export const DEFAULT_HORIZON_DEG = LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg;
+export const DEFAULT_HORIZON_DEG: number = LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg;
 
 export interface SolarEphemeris {
   readonly declinationDeg: number;

@@ -397,10 +397,16 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/runs')).status).toBe(200);
     expect(bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json')).toHaveLength(2);
   });
-  it('advertises only admitted production products', async () => {
+  it('advertises only admitted production products and returns 503 when a published manifest is invalid', async () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
     expect(catalog.models.map(m => m.model)).toEqual(['gfs']);
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
+    bucket.objects.delete('builds/gfs/build-1/manifest.json');
+    expect((await call('/v1/catalog')).status).toBe(503);
+    bucket.objects.delete('catalog/gfs/latest.json');
+    const unavailable = await call('/v1/catalog');
+    expect(unavailable.status).toBe(200);
+    expect(await unavailable.json()).toMatchObject({ models: [{ model: 'gfs', available: false, error: 'publication-unavailable' }] });
   });
   it('validates resource and expiry before cached blank and reduces TTL on hits', async () => {
     const url = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
