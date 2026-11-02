@@ -50,7 +50,7 @@ afterEach(() => {
 it.each([
   ['configured', 'https://api.example.test:9443/prefix'],
   ['default', undefined]
-])('loads the built Windy module with %s API base, shows stale horizons and tile errors, normalizes clicks, cancels stale requests, and expires a pending series', async (_name, configuredBase) => {
+])('loads the built Windy module with %s API base, routes clicks without closing its pane, shows stale horizons and tile errors, cancels stale requests, and expires a pending series', async (_name, configuredBase) => {
   const pluginDir = resolve(import.meta.dirname, '..');
   const vite = resolve(pluginDir, 'node_modules/vite/bin/vite.js');
   const base = configuredBase ?? 'http://localhost:8787';
@@ -101,7 +101,22 @@ it.each([
     sampleSignal = init?.signal;
     return new Promise(resolve => { resolveSample = resolve; });
   });
-  let click: ((event: { latlng: { lat: number; lng: number } }) => void) | undefined;
+  const clickListeners = new Map<string, Set<(point: WindySingleclickPoint) => void>>();
+  const singleclick = {
+    on: vi.fn((name: string, listener: (point: WindySingleclickPoint) => void) => {
+      const listeners = clickListeners.get(name) ?? new Set<(point: WindySingleclickPoint) => void>();
+      listeners.add(listener);
+      clickListeners.set(name, listeners);
+    }),
+    off: vi.fn((name: string, listener: (point: WindySingleclickPoint) => void) => {
+      const listeners = clickListeners.get(name);
+      listeners?.delete(listener);
+      if (listeners?.size === 0) clickListeners.delete(name);
+    }),
+    emit(name: string, point: WindySingleclickPoint): void {
+      for (const listener of clickListeners.get(name) ?? []) listener(point);
+    }
+  };
   const tileListeners = new Map<string, (event: { tile: object }) => void>();
   const source = {
     on: vi.fn((name: string, listener: (event: { tile: object }) => void) => tileListeners.set(name, listener)),
@@ -111,7 +126,7 @@ it.each([
     url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
     source: () => source
   };
-  const map = { on: vi.fn((_name, listener) => { click = listener; }), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
+  const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   let destroyApp: (() => void) | undefined;
   const broadcast = { emit: vi.fn((event: string, name: string) => {
@@ -121,7 +136,7 @@ it.each([
   vi.stubGlobal('document', document);
   vi.stubGlobal('Option', FakeOption);
   vi.stubGlobal('fetch', fetchImpl);
-  vi.stubGlobal('W', { map: { map }, store, broadcast });
+  vi.stubGlobal('W', { map: { map }, singleclick: { singleclick }, store, broadcast });
   const protocols = new Map<string, unknown>();
   vi.stubGlobal('L', {
     tileLayer: (url: string) => { layer.url = url; return layer; },
@@ -133,6 +148,16 @@ it.each([
   expect(loaded.__pluginConfig.name).toBe('windy-plugin-av-layer');
   expect(typeof loaded.default).toBe('function');
   const metadata = JSON.parse(readFileSync(resolve(pluginDir, 'dist/plugin.json'), 'utf8'));
+  const openWeatherPicker = vi.fn(() => destroyApp?.());
+  const click = (point: WindySingleclickPoint): void => {
+    // Windy routes claimed clicks to the open plugin; otherwise its weather
+    // picker opens and dismisses a conflicting native pane.
+    if (metadata.listenToSingleclick && clickListeners.has(metadata.name)) {
+      singleclick.emit(metadata.name, point);
+    } else {
+      openWeatherPicker();
+    }
+  };
   const installPackage = JSON.parse(readFileSync(resolve(pluginDir, 'dist/package.json'), 'utf8'));
   expect(metadata).toEqual(loaded.__pluginConfig);
   expect(installPackage).toEqual({ name: metadata.name, version: metadata.version, type: 'module', main: 'plugin.min.js' });
@@ -144,11 +169,15 @@ it.each([
   expect(target.children[1].className.split(' ')).toContain('plugin__content');
   expect(fetchImpl).not.toHaveBeenCalled();
   expect(map.on).not.toHaveBeenCalled();
+  expect(singleclick.on).not.toHaveBeenCalled();
   destroyApp = () => app.$destroy();
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');
   app.onopen();
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
+  expect(singleclick.on).toHaveBeenCalledWith(metadata.name, expect.any(Function));
+  expect(clickListeners.get(metadata.name)?.size).toBe(1);
+  expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
   expect(layer.url).toContain('/tiles/gfs/b1/precip-rate/f006/');
   expect(protocols.size).toBe(1);
@@ -175,10 +204,14 @@ it.each([
   selects[2].dispatch('change');
   expect(store.set).toHaveBeenCalledWith('timestamp', Date.parse('2026-10-30T03:00:00.000Z'));
 
-  click?.({ latlng: { lat: 1, lng: 190 } });
+  click({ lat: 1, lon: 190 });
+  expect(openWeatherPicker).not.toHaveBeenCalled();
+  expect(target.children).toHaveLength(2);
+  expect(map.removeLayer).not.toHaveBeenCalled();
   const button = elements.find(element => element.textContent === 'Sample clicked point')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
+  expect(fetchImpl.mock.calls[1][0]).toContain('lat=1');
   expect(fetchImpl.mock.calls[1][0]).toContain('lon=-170');
   resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
   const series = elements.find(element => element.className === 'av-series')!;
@@ -186,7 +219,7 @@ it.each([
 
   button.dispatch('click');
   const firstSignal = sampleSignal;
-  click?.({ latlng: { lat: 2, lng: 3 } });
+  click({ lat: 2, lon: 3 });
   expect(firstSignal?.aborted).toBe(true);
   expect(series.children).toHaveLength(0);
 
@@ -205,11 +238,13 @@ it.each([
   await Promise.resolve();
   expect(series.children).toHaveLength(0);
   app.$destroy();
-  expect(map.off).toHaveBeenCalledTimes(1);
+  expect(singleclick.off).toHaveBeenCalledTimes(1);
+  expect(clickListeners.size).toBe(0);
+  expect(map.off).not.toHaveBeenCalled();
   expect(target.children).toHaveLength(0);
 
   // A live view must close before opening the menu, releasing its
-  // pending point request, time subscription, map listener and raster protocol.
+  // pending point request, time subscription, click listener and raster protocol.
   clock.mockReturnValue(now);
   const previousElementCount = elements.length;
   const reopened = new loaded.default({ target, anchor: target });
@@ -224,7 +259,8 @@ it.each([
     expect(target.children).toEqual([mobileHeader, root]);
     expect(target.children).toContain(root);
     expect(document.body.children).not.toContain(root);
-    click?.({ latlng: { lat: 3, lng: 4 } });
+    expect(clickListeners.get(metadata.name)?.size).toBe(1);
+    click({ lat: 3, lon: 4 });
     reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
     expect(sampleSignal?.aborted).toBe(false);
     expect(protocols.size).toBe(1);
@@ -234,7 +270,11 @@ it.each([
       ['rqstOpen', 'menu']
     ]);
     expect(sampleSignal?.aborted).toBe(true);
-    expect(map.off).toHaveBeenCalledTimes(2);
+    expect(singleclick.off).toHaveBeenCalledTimes(2);
+    expect(clickListeners.size).toBe(0);
+    expect(map.on).not.toHaveBeenCalled();
+    expect(map.off).not.toHaveBeenCalled();
+    expect(openWeatherPicker).not.toHaveBeenCalled();
     expect(store.off).toHaveBeenCalledTimes(2);
     expect(map.removeLayer).toHaveBeenCalledTimes(2);
     expect(tileListeners.size).toBe(0);
