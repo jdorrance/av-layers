@@ -61,11 +61,16 @@ it.each([
 
   const elements: FakeElement[] = [];
   const target = new FakeElement('target');
-  const document = {
+  const document = Object.assign(new EventTarget(), {
     body: new FakeElement('body'), head: new FakeElement('head'),
     getElementById: () => null,
     createElement: (tag: string) => { const element = new FakeElement(tag); elements.push(element); return element; }
-  };
+  });
+  const win = new EventTarget();
+  const addFocusListener = vi.spyOn(win, 'addEventListener');
+  const removeFocusListener = vi.spyOn(win, 'removeEventListener');
+  const addVisibilityListener = vi.spyOn(document, 'addEventListener');
+  const removeVisibilityListener = vi.spyOn(document, 'removeEventListener');
   class FakeOption extends FakeElement {
     constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; }
   }
@@ -134,6 +139,7 @@ it.each([
     if (event === 'rqstClose' && name === 'windy-plugin-av-layer') destroyApp?.();
   }) };
   vi.stubGlobal('document', document);
+  vi.stubGlobal('window', win);
   vi.stubGlobal('Option', FakeOption);
   vi.stubGlobal('fetch', fetchImpl);
   vi.stubGlobal('W', { map: { map }, singleclick: { singleclick }, store, broadcast });
@@ -170,6 +176,8 @@ it.each([
   expect(fetchImpl).not.toHaveBeenCalled();
   expect(map.on).not.toHaveBeenCalled();
   expect(singleclick.on).not.toHaveBeenCalled();
+  expect(addFocusListener).not.toHaveBeenCalled();
+  expect(addVisibilityListener).not.toHaveBeenCalled();
   destroyApp = () => app.$destroy();
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');
@@ -177,6 +185,8 @@ it.each([
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
   expect(singleclick.on).toHaveBeenCalledWith(metadata.name, expect.any(Function));
   expect(clickListeners.get(metadata.name)?.size).toBe(1);
+  expect(addFocusListener).toHaveBeenCalledTimes(1);
+  expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
   expect(layer.url).toContain('/tiles/gfs/b1/precip-rate/f006/');
@@ -194,6 +204,15 @@ it.each([
   expect(tileError.hidden).toBe(false);
   expect(tileError.textContent).toContain('Overlay tile failed to load');
   expect(horizonNotice.hidden).toBe(false);
+  // Simulate changed wall time while the scheduled timeout has not fired.
+  clock.mockReturnValue(hostTime - 60_000);
+  win.dispatchEvent(new Event('focus'));
+  expect(horizonNotice.hidden).toBe(true);
+  expect(tileError.hidden).toBe(false);
+  clock.mockReturnValue(now);
+  document.dispatchEvent(new Event('visibilitychange'));
+  expect(horizonNotice.hidden).toBe(false);
+  expect(tileError.hidden).toBe(false);
   tileListeners.get('data')?.(failed);
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
@@ -211,6 +230,9 @@ it.each([
   const button = elements.find(element => element.textContent === 'Sample clicked point')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
+  win.dispatchEvent(new Event('focus'));
+  expect(button.disabled).toBe(true);
+  expect(sampleSignal?.aborted).toBe(false);
   expect(fetchImpl.mock.calls[1][0]).toContain('lat=1');
   expect(fetchImpl.mock.calls[1][0]).toContain('lon=-170');
   resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
@@ -226,8 +248,7 @@ it.each([
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
   clock.mockReturnValue(expiresAtMs);
-  selects[2].value = 'f006';
-  selects[2].dispatch('change');
+  win.dispatchEvent(new Event('focus'));
   expect(sampleSignal?.aborted).toBe(true);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
   expect(horizonNotice.hidden).toBe(true);
@@ -239,6 +260,10 @@ it.each([
   expect(series.children).toHaveLength(0);
   app.$destroy();
   expect(singleclick.off).toHaveBeenCalledTimes(1);
+  expect(removeFocusListener).toHaveBeenCalledTimes(1);
+  expect(removeFocusListener).toHaveBeenCalledWith('focus', addFocusListener.mock.calls[0][1]);
+  expect(removeVisibilityListener).toHaveBeenCalledTimes(1);
+  expect(removeVisibilityListener).toHaveBeenCalledWith('visibilitychange', addVisibilityListener.mock.calls[0][1]);
   expect(clickListeners.size).toBe(0);
   expect(map.off).not.toHaveBeenCalled();
   expect(target.children).toHaveLength(0);
@@ -260,6 +285,8 @@ it.each([
     expect(target.children).toContain(root);
     expect(document.body.children).not.toContain(root);
     expect(clickListeners.get(metadata.name)?.size).toBe(1);
+    expect(addFocusListener).toHaveBeenCalledTimes(2);
+    expect(addVisibilityListener).toHaveBeenCalledTimes(2);
     click({ lat: 3, lon: 4 });
     reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
     expect(sampleSignal?.aborted).toBe(false);
@@ -271,6 +298,8 @@ it.each([
     ]);
     expect(sampleSignal?.aborted).toBe(true);
     expect(singleclick.off).toHaveBeenCalledTimes(2);
+    expect(removeFocusListener).toHaveBeenCalledTimes(2);
+    expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
     expect(clickListeners.size).toBe(0);
     expect(map.on).not.toHaveBeenCalled();
     expect(map.off).not.toHaveBeenCalled();
@@ -285,4 +314,6 @@ it.each([
   } finally {
     reopened.$destroy();
   }
+  expect(removeFocusListener).toHaveBeenCalledTimes(2);
+  expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
 });
