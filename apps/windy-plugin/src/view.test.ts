@@ -96,6 +96,25 @@ it('keeps native panel control keys separate from page shortcuts while allowing 
   expect(hostTime).toBe(10);
 });
 
+it('leaves native mobile header gestures to the host and hides both pane elements together', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  const target = new FakeElement('target');
+  target.append(panel.mobileHeader as unknown as FakeElement, panel.root as unknown as FakeElement);
+  const startSlide = vi.fn();
+  target.addEventListener('pointerdown', startSlide);
+  const gesture = new Event('pointerdown', { bubbles: true, cancelable: true });
+  expect((panel.mobileHeader as unknown as FakeElement).dispatchEvent(gesture)).toBe(true);
+  expect(startSlide).toHaveBeenCalledWith(gesture);
+  panel.setVisible(false);
+  expect(panel.mobileHeader.hidden).toBe(true);
+  expect(panel.root.hidden).toBe(true);
+  panel.setVisible(true);
+  expect(panel.mobileHeader.hidden).toBe(false);
+  expect(panel.root.hidden).toBe(false);
+});
+
 it('renders build-specific opaque or transparent no-lift legends and discloses diagnostics inside details', () => {
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
   vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });

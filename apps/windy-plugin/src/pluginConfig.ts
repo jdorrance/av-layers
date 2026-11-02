@@ -6,8 +6,8 @@ const config = {
   description: 'GFS usable lift above sea level and model ground, plus precipitation rate.',
   author: 'AV Forecast Layers',
   repository: 'https://github.com/jdorrance/av-layers',
-  desktopUI: 'embedded',
-  mobileUI: 'small',
+  desktopUI: 'rhpane',
+  mobileUI: 'fullscreen',
   routerPath: '/av-layer',
   private: true
 } as const;

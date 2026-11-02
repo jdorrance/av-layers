@@ -7,6 +7,7 @@ import { computeFreshness, latestSchema, manifestSchema, validateArtifactRecords
 
 class FakeElement {
   children: FakeElement[] = [];
+  parent?: FakeElement;
   listeners = new Map<string, () => void>();
   style: Record<string, string> = {};
   textContent = '';
@@ -22,11 +23,22 @@ class FakeElement {
   constructor(readonly tag: string) {}
   get value(): string { return this.selected || this.children[0]?.value || ''; }
   set value(value: string) { this.selected = value; }
-  append(...children: FakeElement[]): void { this.children.push(...children); }
+  append(...children: FakeElement[]): void {
+    for (const child of children) child.parent = this;
+    this.children.push(...children);
+  }
   add(child: FakeElement): void { this.append(child); }
-  replaceChildren(...children: FakeElement[]): void { this.children = children; this.selected = ''; }
+  replaceChildren(...children: FakeElement[]): void {
+    for (const child of this.children) child.parent = undefined;
+    this.children = [];
+    this.append(...children);
+    this.selected = '';
+  }
   addEventListener(name: string, listener: () => void): void { this.listeners.set(name, listener); }
-  remove(): void { this.hidden = true; }
+  remove(): void {
+    if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = undefined;
+  }
   dispatch(name: string): void { this.listeners.get(name)?.(); }
 }
 
@@ -103,7 +115,7 @@ it.each([
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   let destroyApp: (() => void) | undefined;
   const broadcast = { emit: vi.fn((event: string, name: string) => {
-    // Embedded plugins stay open when menus open; only an explicit close unmounts them.
+    // Model the host's explicit close lifecycle independently of menu opening.
     if (event === 'rqstClose' && name === 'windy-plugin-av-layer') destroyApp?.();
   }) };
   vi.stubGlobal('document', document);
@@ -125,6 +137,13 @@ it.each([
   expect(metadata).toEqual(loaded.__pluginConfig);
   expect(installPackage).toEqual({ name: metadata.name, version: metadata.version, type: 'module', main: 'plugin.min.js' });
   const app = new loaded.default({ target, anchor: target });
+  // Native mobile sliders must find their header immediately after mounting,
+  // before opening starts network or map work.
+  expect(target.children).toHaveLength(2);
+  expect(target.children[0].className.split(' ')).toContain('plugin__mobile-header');
+  expect(target.children[1].className.split(' ')).toContain('plugin__content');
+  expect(fetchImpl).not.toHaveBeenCalled();
+  expect(map.on).not.toHaveBeenCalled();
   destroyApp = () => app.$destroy();
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');
@@ -187,9 +206,9 @@ it.each([
   expect(series.children).toHaveLength(0);
   app.$destroy();
   expect(map.off).toHaveBeenCalledTimes(1);
-  expect(target.children[0].hidden).toBe(true);
+  expect(target.children).toHaveLength(0);
 
-  // A live embedded view must close before opening the menu, releasing its
+  // A live view must close before opening the menu, releasing its
   // pending point request, time subscription, map listener and raster protocol.
   clock.mockReturnValue(now);
   const previousElementCount = elements.length;
@@ -199,7 +218,10 @@ it.each([
   try {
     await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(2));
     const reopenedElements = elements.slice(previousElementCount);
-    const root = reopenedElements.find(element => element.className === 'av-panel')!;
+    const root = reopenedElements.find(element => element.className.split(' ').includes('av-panel'))!;
+    const mobileHeader = reopenedElements.find(element => element.className.split(' ').includes('plugin__mobile-header'))!;
+    expect(root.className.split(' ')).toContain('plugin__content');
+    expect(target.children).toEqual([mobileHeader, root]);
     expect(target.children).toContain(root);
     expect(document.body.children).not.toContain(root);
     click?.({ latlng: { lat: 3, lng: 4 } });
@@ -218,6 +240,8 @@ it.each([
     expect(tileListeners.size).toBe(0);
     expect(protocols.size).toBe(0);
     expect(root.hidden).toBe(true);
+    expect(mobileHeader.hidden).toBe(true);
+    expect(target.children).toHaveLength(0);
   } finally {
     reopened.$destroy();
   }
