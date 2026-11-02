@@ -101,7 +101,10 @@ async function temporaryRoot(): Promise<string> {
   temporary.push(root);
   return root;
 }
-afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
 
 describe('forecast hour-group builds', () => {
   let fixtureRoot: string, serialRoot: string, shardRoot: string;
@@ -122,14 +125,22 @@ describe('forecast hour-group builds', () => {
     // Both sessions overlap; deliberately finish later hours before releasing the earlier group.
     holdEarlier = true;
     laterFinished = new Promise(resolve => { releaseEarlier = resolve; });
-    const runs = await Promise.allSettled([0, 1].map(async shard => {
+    const workerRoots = plan.groups.map((_, shard) => join(fixtureRoot, `worker-${shard}`));
+    const runs = await Promise.allSettled(workerRoots.map(async (out, shard) => {
       try {
-        receipts[shard] = await buildShard({ plan, shard, out: shardRoot, product, mask, provider: source.provider });
+        await cp(shardRoot, out, { recursive: true });
+        const downloadedPlan = JSON.parse(await readFile(join(out, 'plan.json'), 'utf8')) as BuildPlan;
+        const receipt = await buildShard({ plan: downloadedPlan, shard, out, product, mask, provider: source.provider });
+        receipts[shard] = join(shardRoot, relative(out, receipt));
         completionOrder.push(shard);
       } finally { if (shard === 1) releaseEarlier(); }
     }));
     holdEarlier = false;
     for (const result of runs) if (result.status === 'rejected') throw result.reason;
+    // Match the workflow's artifact handoff: only completed packs, receipts and archives merge.
+    for (const out of workerRoots) for (const directory of ['builds', 'shards']) {
+      await cp(join(out, directory), join(shardRoot, directory), { recursive: true });
+    }
   }, 60_000);
   afterAll(async () => { if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true }); });
 
@@ -148,7 +159,8 @@ describe('forecast hour-group builds', () => {
   const finalize = (out: string, onValidated?: Parameters<typeof finalizeBuild>[0]['onValidated']) =>
     finalizeBuild({ plan, out, product, mask, provider: source.provider, onValidated });
 
-  it('reproduces serial sample bytes and tile pixels for a non-GFS, non-hourly product', async () => {
+  it('reproduces serial sample bytes and tile pixels after isolated workers transfer their artifacts', async () => {
+    vi.stubEnv('PMTILES_BIN', '/unused/finalizer-must-not-run-the-archive-builder');
     const out = await copyCompleted(), onValidated = vi.fn();
     const path = await finalize(out, onValidated), manifest = await readManifest(path);
     expect(plan.groups).toEqual([[2, 4], [6, 8]]);

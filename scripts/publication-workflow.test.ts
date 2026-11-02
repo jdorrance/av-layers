@@ -26,7 +26,7 @@ beforeEach(() => {
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
   fake.storage.mockReturnValue({});
-  fake.plan.mockResolvedValue({ planPath: 'output/plan.json', shards: [0, 1, 2, 3] });
+  fake.plan.mockResolvedValue([0, 1, 2, 3]);
   fake.shard.mockResolvedValue('output/shards/0/receipt.json');
   fake.finalize.mockImplementation(async (_plan, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.discover.mockResolvedValue({ cycle: manifest.cycle });
@@ -71,7 +71,7 @@ it.each(['schedule', 'workflow_dispatch'])('permits an intentional same-cycle re
 });
 it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered new cycle once using the inventory cache', async pointer => {
   fake.pointer.mockResolvedValue({ pointer });
-  await expect(planForecast()).resolves.toEqual({ planPath: 'output/plan.json', shards: [0, 1, 2, 3] });
+  await expect(planForecast()).resolves.toEqual([0, 1, 2, 3]);
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));

@@ -79,7 +79,7 @@ export async function publicationWorkflow<T>(work: (run: {
 }
 
 /** Resolve the cycle once before independent workers receive the immutable plan. */
-export async function planForecast(store?: ObjectStorage): Promise<{ planPath: string; shards: number[] } | null> {
+export async function planForecast(store?: ObjectStorage): Promise<number[] | null> {
   return publicationWorkflow(async ({ root, signal, store, model }) => {
     const cacheDir = `.cache/${model}`;
     const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });

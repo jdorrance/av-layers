@@ -8,9 +8,9 @@ import { summarizeFields } from './summary.js';
 import { MAX_BUILD_LIFETIME_MS, type PreparedBuild } from './capacity.js';
 import { createSamplePackBuilder } from './sample-pack.js';
 import { failureReason } from './failure.js';
-import { fileSha256, localPath, type ValidatedBuild } from './validate.js';
+import { fileSha256, localPath } from './validate.js';
 
-export interface BuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: DeriveFrameOptions; onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
+export interface FrameBuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: DeriveFrameOptions }
 export interface ForecastInputs { product: ProductDefinition; mask: CoverageMask; provider: ForecastProvider }
 export interface BuildStamp { buildId: string; createdAt: string }
 export interface FrameBuildResult {
@@ -48,7 +48,7 @@ export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frame
 }
 
 /** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
-export async function buildFrames(options: BuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
+export async function buildFrames(options: FrameBuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
   const { product, mask, provider, buildId, hours, samplesKey, journalPrefix } = options;
   const root = resolve(options.out), started = Date.now(), prefix = `builds/${product.modelId}/${buildId}`;
   const cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);

@@ -9,10 +9,10 @@ import { WEBP_ENCODER } from './webp.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
 import { prepareBuild, type PreparedBuild } from './capacity.js';
 import { failureReason } from './failure.js';
-import { finalizeValidatedMetrics, localPath, sha256, validateBuild } from './validate.js';
+import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
-import { buildFrames, type BuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
-export type { BuildOptions } from './frame-build.js';
+import { buildFrames, type FrameBuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
+export interface BuildOptions extends FrameBuildOptions { onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
 
 export function createBuildStamp(): BuildStamp {
   const createdAt = new Date().toISOString();
@@ -36,7 +36,7 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
 }
 
 /** Assemble and validate a complete product once, before any publication callback. */
-export async function finishForecast(options: BuildOptions & ForecastInputs & BuildStamp & {
+export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal' | 'onValidated'> & ForecastInputs & BuildStamp & {
   prepared: PreparedBuild; coverageHash: string; identity: Awaited<ReturnType<typeof buildIdentity>>; result: FrameBuildResult; execution?: Record<string, unknown>;
 }): Promise<string> {
   const { product, mask, provider, buildId, createdAt, coverageHash, identity, result } = options;
@@ -49,7 +49,6 @@ export async function finishForecast(options: BuildOptions & ForecastInputs & Bu
   let phase = 'provenance';
   try {
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
-    phase = 'provenance';
     const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle, provider: provider.provider, temporalApproximation: 'interval flux with endpoint profile and PBL', frames: receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
     await mkdir(dirname(provenancePath), { recursive: true });
     await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });

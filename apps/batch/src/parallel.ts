@@ -3,9 +3,9 @@ import { resolve } from 'node:path';
 import z from 'zod';
 import { CELL_BYTES, encodeBoundedJson, getProduct, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson } from '@av/contracts';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
-import { createBuildStamp, finishForecast } from './build.js';
+import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
 import { describeCoverage, loadCoverage, writeCoverage } from './coverage.js';
-import { buildFrames, forecastFrame, matchesFrameIntervals, type BuildOptions, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
+import { buildFrames, forecastFrame, matchesFrameIntervals, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
 import { buildIdentity } from './identity.js';
 import { readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
@@ -168,9 +168,9 @@ async function inputsFor(modelId: string): Promise<ForecastInputs> {
 async function readPlan(path: string): Promise<BuildPlan> {
   return planSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
 }
-export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<{ planPath: string; shards: number[] }> {
+export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<number[]> {
   const plan = await createBuildPlan({ ...options, ...await inputsFor(modelId) });
-  return { planPath: localPath(options.out, 'plan.json'), shards: plan.groups.map((_, i) => i) };
+  return plan.groups.map((_, i) => i);
 }
 export async function buildForecastShard(planPath: string, shard: number, options: Pick<BuildOptions, 'out' | 'cacheDir' | 'signal'>): Promise<string> {
   const plan = await readPlan(planPath);

@@ -156,14 +156,14 @@ export async function runOperation(command: string): Promise<void> {
     const config = validatePublicationEnvironment(process.env);
     const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
     if (command === 'forecast-plan') {
-      const planned = await planForecast(store);
+      const shards = await planForecast(store);
       if (process.env.GITHUB_OUTPUT) {
         const artifact = `forecast-plan-${process.env.MODEL ?? 'gfs'}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
-        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${planned !== null}\nshards=${JSON.stringify(planned?.shards ?? [])}\nartifact=${artifact}\n`);
+        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${shards !== null}\nshards=${JSON.stringify(shards ?? [])}\nartifact=${artifact}\n`);
       }
     } else if (command === 'forecast') {
       if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID), store);
-      else { await pnpm(['tools:pmtiles']); await finalizeAndPublish(store); }
+      else await finalizeAndPublish(store);
     } else {
       const { maintenanceWorkflow } = await import('../apps/batch/src/maintenance.js');
       console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: process.env.MODEL ?? 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store })));
