@@ -1,8 +1,5 @@
 name: CI
 on:
-  push:
-    branches-ignore:
-      - main
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -10,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify:
     runs-on: ubuntu-24.04

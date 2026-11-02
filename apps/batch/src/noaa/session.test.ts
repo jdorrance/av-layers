@@ -136,18 +136,19 @@ it('closes an in-flight acquisition and refuses concurrent frame calls', async (
 });
 
 it('drains a sibling inventory request before returning an initial inventory failure', async () => {
-  let abortSeen = false, finish!: () => void, settled = false;
+  let observedAbort!: () => void, finish!: () => void, settled = false;
+  const aborted = new Promise<void>(resolve => { observedAbort = resolve; });
   const cleanup = new Promise<void>(resolve => { finish = resolve; });
   const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
     if (!String(url).includes('pgrb2b.')) return new Response('', { status: 500 });
     return await new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => {
-      abortSeen = true;
+      observedAbort();
       void cleanup.then(() => reject(init!.signal!.reason));
     }, { once: true }));
   });
   const session = await createGfsAcquisitionSession({ cycle, activeIndices: Uint32Array.of(0), fetchImpl });
   const work = session.acquire(3).catch(error => { settled = true; return error; });
-  await vi.waitFor(() => expect(abortSeen).toBe(true));
+  await aborted;
   expect(settled).toBe(false); finish();
   expect(await work).toMatchObject({ message: expect.stringContaining('HTTP 500') });
   await expect(session.acquire(6)).rejects.toThrow('closed');
