@@ -8,6 +8,16 @@ import { createProductDescriptors, createRecipeIdentity, type ProductDefinition 
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const digest = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
+
+export async function readProducerSourceState(root = ROOT): Promise<{ revision: string; dirty: boolean }> {
+  const git = promisify(execFile);
+  const [{ stdout: revision }, { stdout: dirty }] = await Promise.all([
+    git('git', ['rev-parse', 'HEAD'], { cwd: root }),
+    git('git', ['status', '--porcelain', '--untracked-files=normal', '--', 'apps/batch', 'packages/forecast', 'packages/contracts', 'scripts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json'], { cwd: root })
+  ]);
+  return { revision: revision.trim(), dirty: !!dirty.trim() };
+}
+
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(entries.map(async entry => entry.isDirectory() ? sourceFiles(join(directory, entry.name)) : /\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [join(directory, entry.name)] : []))).flat().sort();
@@ -33,11 +43,7 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
   const lockHash = digest(await readFile(join(ROOT, 'pnpm-lock.yaml')));
   const configurationHash = digest(JSON.stringify({ product, coverageHash }));
   const hash = digest(JSON.stringify({ components, lockHash, configurationHash }));
-  const git = promisify(execFile);
-  const [{ stdout: revision }, { stdout: dirty }] = await Promise.all([
-    git('git', ['rev-parse', 'HEAD'], { cwd: ROOT }),
-    git('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: ROOT })
-  ]);
+  const { revision, dirty } = await readProducerSourceState();
   const scienceHash = digest(JSON.stringify({ source: components.science, methods: createProductDescriptors(product).methods }));
-  return { recipe: createRecipeIdentity(product, hash, revision.trim(), !!dirty.trim(), lockHash), components: { ...components, configuration: configurationHash }, scienceHash };
+  return { recipe: createRecipeIdentity(product, hash, revision, dirty, lockHash), components: { ...components, configuration: configurationHash }, scienceHash };
 }

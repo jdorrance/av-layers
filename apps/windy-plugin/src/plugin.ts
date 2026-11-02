@@ -14,6 +14,7 @@ let controller: PluginController | null = null;
 let seriesAbort: AbortController | null = null;
 let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
+let mountedIn: HTMLElement | null = null;
 
 const host: WindyHost = {
   map: {
@@ -27,6 +28,7 @@ const host: WindyHost = {
 function onClick({ lat, lon }: WindySingleclickPoint): void {
   seriesAbort?.abort();
   seriesAbort = null;
+  if (controller?.checkExpiry()) return;
   const point = normalizePoint(lat, lon);
   panel?.setClicked(point.lat, point.lon);
   panel?.setSeriesEnabled(controller?.state().phase === 'ready');
@@ -86,29 +88,39 @@ async function requestSeries(): Promise<void> {
 }
 
 function ensurePanel(): PluginPanel {
-  if (panel) return panel;
-  panel = new PluginPanel({
-    onModel: model => {
-      void startController(model as ModelId);
-    },
-    onLayer: (layer: LayerId) => {
-      controller?.selectLayer(layer);
-    },
-    onFrame: frame => {
-      controller?.selectFrame(frame);
-    },
-    onOpacity: opacity => {
-      controller?.setOpacity(opacity);
-    },
-    onSeries: () => {
-      void requestSeries();
-    },
-    onBack: () => {
-      bcast.emit('rqstClose', __pluginConfig.name);
-      bcast.emit('rqstOpen', 'menu');
+  const container = mountTarget ?? document.body;
+  if (!panel) {
+    panel = new PluginPanel({
+      onModel: model => {
+        void startController(model as ModelId);
+      },
+      onLayer: (layer: LayerId) => {
+        controller?.selectLayer(layer);
+      },
+      onFrame: frame => {
+        controller?.selectFrame(frame);
+      },
+      onOpacity: opacity => {
+        controller?.setOpacity(opacity);
+      },
+      onSeries: () => {
+        void requestSeries();
+      },
+      onBack: () => {
+        onclose();
+        bcast.emit('rqstClose', __pluginConfig.name);
+        bcast.emit('rqstOpen', 'menu');
+      }
+    });
+  }
+  if (mountedIn !== container) {
+    if (mountedIn) {
+      panel.mobileHeader.remove();
+      panel.root.remove();
     }
-  });
-  (mountTarget ?? document.body).append(panel.mobileHeader, panel.root);
+    container.append(panel.mobileHeader, panel.root);
+    mountedIn = container;
+  }
   return panel;
 }
 
@@ -121,14 +133,15 @@ async function startController(model: ModelId): Promise<void> {
   ui.setError(null);
   ui.clearSeries();
   ui.setStatus('Loading latest immutable build…');
-  controller = new PluginController({
+  const activeController: PluginController = new PluginController({
     model,
     host,
-    hostRange: () => (controller?.currentBuild ? datasetRange(controller.currentBuild.manifest.frames) : null),
+    hostRange: () => (activeController.currentBuild ? datasetRange(activeController.currentBuild.manifest.frames) : null),
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
     onState: state => {
+      if (controller !== activeController) return;
       if (state.phase === 'ready' && state.buildId) {
-        const build = controller?.currentBuild;
+        const build = activeController.currentBuild;
         if (build) ui.renderBuild(build);
       }
       if (state.phase === 'expired' || state.phase === 'disposed') {
@@ -139,19 +152,21 @@ async function startController(model: ModelId): Promise<void> {
       ui.renderState(state);
       if (seriesAbort) ui.setSeriesEnabled(false);
       if (state.phase === 'ready' && state.buildId) {
-        const build = controller?.currentBuild;
+        const build = activeController.currentBuild;
         const remaining = build ? Math.max(0, build.expiresAtMs - Date.now()) : 0;
         ui.setStatus(`Pinned build ${state.buildId} · artifacts expire in ${Math.floor(remaining / 60000)} min`);
       }
     }
   });
-  await controller.start();
+  controller = activeController;
+  await activeController.start();
 }
 
 export const onopen = (_params: unknown): void => {
   if (!listenersBound) {
     singleclick.on(__pluginConfig.name, onClick);
     window.addEventListener('focus', refreshTime);
+    window.addEventListener('pageshow', refreshTime);
     document.addEventListener('visibilitychange', refreshTime);
     listenersBound = true;
   }
@@ -166,9 +181,11 @@ export function onclose(): void {
   if (listenersBound) {
     singleclick.off(__pluginConfig.name, onClick);
     window.removeEventListener('focus', refreshTime);
+    window.removeEventListener('pageshow', refreshTime);
     document.removeEventListener('visibilitychange', refreshTime);
     listenersBound = false;
   }
+  panel?.clearSeries();
   panel?.setVisible(false);
 }
 
@@ -176,21 +193,28 @@ export const __pluginConfig = __WINDY_CONFIG__;
 export const title = __pluginConfig.title;
 
 export default class ExternalApp {
+  private static active: ExternalApp | null = null;
+
   constructor(args: { target: HTMLElement; anchor?: HTMLElement }) {
+    ExternalApp.active = this;
     mountTarget = args.target;
     // Windy wires native pane behavior after mounting the component.
     ensurePanel();
   }
 
   onopen(params?: unknown): void {
+    if (ExternalApp.active !== this) return;
     onopen(params);
   }
 
   $destroy(): void {
+    if (ExternalApp.active !== this) return;
+    ExternalApp.active = null;
     onclose();
     panel?.mobileHeader.remove();
     panel?.root.remove();
     panel = null;
     mountTarget = null;
+    mountedIn = null;
   }
 }

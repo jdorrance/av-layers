@@ -25,6 +25,20 @@ it('admits two active requests, drains queued tiles, and preserves cache metadat
     expect(fetchImpl.mock.calls.length).toBe(Math.min(i + 3, 5));
   }
 });
+it('honors custom active and queued limits and drains the admitted queue', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl, maxActive: 3, maxQueued: 1 });
+  const pending = Array.from({ length: 4 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  await expect(protocol.load({ url: protocol.url(tile(4)) }, new AbortController())).rejects.toThrow('queue is full');
+  for (let i = 0; i < pending.length; i++) {
+    finish[i](webp());
+    await pending[i];
+  }
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
+});
+it.each([{ maxActive: 0 }, { maxActive: 17 }, { maxActive: 1.5 }, { maxActive: NaN }, { maxQueued: 0 }, { maxQueued: 513 }, { maxQueued: 1.5 }, { maxQueued: Infinity }])('rejects invalid raster admission limits: %j', options => {
+  expect(() => createRasterTileProtocol(base, options)).toThrow('Invalid raster request');
+});
 it('bounds admission and disposes both queued and active requests without starting queued work', async () => {
   const { fetchImpl } = heldFetch(), protocol = setup({ fetchImpl });
   const promises = Array.from({ length: 67 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));

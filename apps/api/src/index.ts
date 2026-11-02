@@ -20,7 +20,7 @@ import {
 } from '@av/contracts';
 import { serveSample } from './sample';
 import { readTile } from './pmtiles';
-import { resolveCoverage } from './coverage';
+import { resolveCoverage, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, type WaitContext } from './resources';
 import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
@@ -125,7 +125,7 @@ registerJsonRoute(
       Object.keys(products).map(async model => {
         try {
           const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
-          const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx);
+          const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx, ptr);
           const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
           const freshness = computeFreshness(m);
           return {
@@ -156,7 +156,7 @@ registerJsonRoute(
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
-    const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx);
+    const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx, ptr);
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
     const servedManifest = { ...m, source: servedSource(m, url.origin) };
     return json({
@@ -210,7 +210,7 @@ registerJsonRoute(
     const reference = provenanceReference(m);
     return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
       const bytes = await readProvenance(c.env.BUCKET, m, reference, c.executionCtx);
-      return response(bytes.buffer as ArrayBuffer, 'application/json; charset=utf-8', m.expiresAt, reference.sha256);
+      return response(bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, reference.sha256);
     });
   }
 );
@@ -296,8 +296,11 @@ app.get('/v1/palettes/:asset', async c => {
   const [, id, format] = match;
   if (!isPaletteId(id)) fail(404, 'unknown-palette', 'Unknown palette');
   const palette = PALETTES[id];
-  const expiry = new Date(Date.now() + 31536000000).toISOString();
-  if (format === 'json') return json(palette, expiry, `palette-${id}-v2`);
+  const expiry = new Date(Date.now() + 86400000).toISOString();
+  if (format === 'json') {
+    const bytes = new TextEncoder().encode(JSON.stringify(palette));
+    return response(bytes, 'application/json; charset=utf-8', expiry, await sha256(bytes));
+  }
   const items: { color: string; text: string }[] = palette.colors.map((color, i) => ({
     color,
     text: `${paletteBinLabel(palette.edges, palette.colors.length, i)} ${palette.units}`
@@ -307,7 +310,8 @@ app.get('/v1/palettes/:asset', async c => {
   const rows = items
     .map((item, i) => `<rect x="0" y="${i * 24}" width="24" height="24" fill="${item.color}"/><text x="32" y="${i * 24 + 17}">${item.text}</text>`)
     .join('');
-  return response(`<svg xmlns="http://www.w3.org/2000/svg" width="220" height="${items.length * 24}">${rows}</svg>`, 'image/svg+xml', expiry, `palette-${id}-v2`);
+  const bytes = new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="220" height="${items.length * 24}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#111">${rows}</svg>`);
+  return response(bytes, 'image/svg+xml', expiry, await sha256(bytes));
 });
 
 const tileParamSchema = z.object({ model: param, buildId: param, layer: param, frame: param, z: param, x: param, y: param });

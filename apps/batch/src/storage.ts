@@ -40,11 +40,16 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           throw new Error(`Object exceeds read byte budget: ${key}`);
         }
         const chunks: Uint8Array[] = []; let length = 0;
-        for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
-          signal?.throwIfAborted();
-          length += chunk.byteLength;
-          if (length > maximum) throw new Error(`Object exceeds read byte budget: ${key}`);
-          chunks.push(chunk);
+        try {
+          for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
+            signal?.throwIfAborted();
+            length += chunk.byteLength;
+            if (length > maximum) throw new Error(`Object exceeds read byte budget: ${key}`);
+            chunks.push(chunk);
+          }
+        } catch (error) {
+          if (result.Body instanceof Readable) result.Body.destroy();
+          throw error;
         }
         const bytes = Buffer.concat(chunks, length);
         if (bytes.length !== result.ContentLength) throw new Error(`Incorrect object response length for ${key}`);

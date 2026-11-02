@@ -122,6 +122,77 @@ it('reclaims a stalled cache branch at its deadline without releasing an active 
   await expect(branches[0].cache.arrayBuffer()).rejects.toThrow('deadline');
 });
 
+it('releases outgoing body permits immediately when both forked branches complete without waiting for the deadline', async () => {
+  const { createBoundedResponse, forkResponseForCache } = await import('../src/resources');
+  const size = 1024 * 1024;
+  const branches = Array.from({ length: 4 }, () => forkResponseForCache(createBoundedResponse(size, () => new Response(new Uint8Array(size), { headers: { 'content-length': String(size) } })), 15_000));
+  await Promise.all(branches.flatMap(({ client, cache }) => [client.arrayBuffer(), cache.arrayBuffer()]));
+  const recovered = Array.from({ length: 4 }, () => createBoundedResponse(size, () => new Response('ok')));
+  expect(await Promise.all(recovered.map(response => response.text()))).toEqual(['ok', 'ok', 'ok', 'ok']);
+});
+
+it('keeps the original cache sibling readable when its client is forked again', async () => {
+  const { createBoundedResponse, forkResponseForCache } = await import('../src/resources');
+  const first = forkResponseForCache(createBoundedResponse(3, () => new Response('abc')));
+  const next = forkResponseForCache(first.client);
+  expect(await Promise.all([first.cache.text(), next.client.text(), next.cache.text()])).toEqual(['abc', 'abc', 'abc']);
+});
+
+it('cancels a failed cache clone and returns its outgoing permit', async () => {
+  const { createBoundedResponse, forkResponseForCache } = await import('../src/resources');
+  const { finish } = await import('../src/http');
+  const size = 1024 * 1024, cancel = vi.fn();
+  for (let i = 0; i < 4; i++) {
+    const bounded = createBoundedResponse(size, () => new Response(new ReadableStream({ cancel })));
+    const result = finish(new Request('https://api.example/test'), bounded);
+    vi.spyOn(result, 'clone').mockImplementation(() => { throw new Error('clone failed'); });
+    expect(() => forkResponseForCache(result)).toThrow('clone failed');
+  }
+  expect(cancel).toHaveBeenCalledTimes(4);
+  expect(await createBoundedResponse(size, () => new Response('ok')).text()).toBe('ok');
+});
+
+it('cancels constructed responses and reclaims outgoing permits when expiry is discovered during finish', async () => {
+  const { finish, response } = await import('../src/http');
+  const size = 1024 * 1024;
+  for (let i = 0; i < 4; i++) {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const past = new Date(Date.now() - 1_000).toISOString();
+    expect(() => finish(new Request('https://api.example/test'), response(new Uint8Array(size), 'application/octet-stream', future), past)).toThrow();
+  }
+  expect((await response(new Uint8Array(size), 'application/octet-stream').arrayBuffer()).byteLength).toBe(size);
+});
+
+it('cancels an already constructed body when the build expires while awaiting its producer', async () => {
+  const { cached, finish, response } = await import('../src/http');
+  const size = 1024 * 1024, start = Date.now(), clock = vi.spyOn(Date, 'now').mockReturnValue(start);
+  const bodies: Response[] = [];
+  try {
+    for (let i = 0; i < 4; i++) {
+      clock.mockReturnValue(start);
+      const expiry = new Date(start + 1000).toISOString();
+      let created!: () => void, complete!: () => void;
+      const started = new Promise<void>(resolve => { created = resolve; });
+      const gate = new Promise<void>(resolve => { complete = resolve; });
+      const pending = cached(new Request('https://api.example/test'), expiry, { waitUntil() {} }, async () => {
+        const result = response(new Uint8Array(size), 'application/octet-stream', expiry);
+        bodies.push(result); created();
+        await gate;
+        return result;
+      });
+      await started;
+      clock.mockReturnValue(start + 1001);
+      complete();
+      await expect(pending).rejects.toThrow('expired');
+    }
+    const ok = response(new Uint8Array(size), 'application/octet-stream');
+    expect((await finish(new Request('https://api.example/test'), ok).arrayBuffer()).byteLength).toBe(size);
+  } finally {
+    clock.mockRestore();
+    await Promise.all(bodies.map(body => body.body?.cancel().catch(() => {})));
+  }
+});
+
 
 it('caps total coalesced waiters across keys and reclaims all permits after completion', async () => {
   const reads = new MaterializedReads<number>(16, 15_000, 32);

@@ -6,26 +6,30 @@ export const MAX_METADATA_JSON_TOKENS = 8192;
 export const MAX_PROVENANCE_JSON_TOKENS = 65_536;
 export class ResourceLimitError extends Error {}
 
-/** Bound nesting and structural tokens before JSON.parse allocates an object graph. */
+/** Bound nesting and structural tokens before TextDecoder or JSON.parse allocates strings or an object graph. */
 export function parseBoundedJson(bytes: Uint8Array, maxTokens = MAX_METADATA_JSON_TOKENS): unknown {
-  const text = new TextDecoder().decode(bytes);
   let string = false, escaped = false, depth = 0, tokens = 0;
-  const containers: { kind: string; entries: number }[] = [];
-  for (const character of text) {
-    if (string) { if (escaped) escaped = false; else if (character === '\\') escaped = true; else if (character === '"') string = false; }
-    else if (character === '"') string = true;
-    else if ('{}[],:'.includes(character)) {
+  const containers: { kind: number; entries: number }[] = [];
+  for (let i = 0; i < bytes.length; i++) {
+    const byte = bytes[i]!;
+    if (string) {
+      if (escaped) escaped = false;
+      else if (byte === 0x5c) escaped = true;
+      else if (byte === 0x22) string = false;
+    } else if (byte === 0x22) {
+      string = true;
+    } else if (byte === 0x7b || byte === 0x7d || byte === 0x5b || byte === 0x5d || byte === 0x2c || byte === 0x3a) {
       if (++tokens > maxTokens) throw new ResourceLimitError('JSON structure exceeds object budget');
-      if (character === '{' || character === '[') { depth++; containers.push({ kind: character, entries: 0 }); }
-      if (character === '}' || character === ']') { depth--; containers.pop(); }
+      if (byte === 0x7b || byte === 0x5b) { depth++; containers.push({ kind: byte, entries: 0 }); }
+      if (byte === 0x7d || byte === 0x5d) { depth--; containers.pop(); }
       const container = containers.at(-1);
-      if (container && ((character === ':' && container.kind === '{') || (character === ',' && container.kind === '['))) {
-        if (++container.entries > (container.kind === '{' ? 256 : 255)) throw new ResourceLimitError('JSON container exceeds property budget');
+      if (container && ((byte === 0x3a && container.kind === 0x7b) || (byte === 0x2c && container.kind === 0x5b))) {
+        if (++container.entries > (container.kind === 0x7b ? 256 : 255)) throw new ResourceLimitError('JSON container exceeds property budget');
       }
       if (depth > 32) throw new ResourceLimitError('JSON nesting exceeds object budget');
     }
   }
-  return JSON.parse(text);
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 /** Validate serialized bytes, including object-graph limits, before committing metadata. */

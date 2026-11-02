@@ -139,6 +139,13 @@ let responseBytes = 0;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 interface BodyLease { size: number; retain(): void; release(): void }
 const bodyLeases = new WeakMap<ReadableStream<Uint8Array>, BodyLease>();
+export function transferBodyLease(from: ReadableStream<Uint8Array> | null, to: ReadableStream<Uint8Array> | null): void {
+  if (!from || !to || from === to) return;
+  const lease = bodyLeases.get(from);
+  if (lease) {
+    bodyLeases.set(to, lease);
+  }
+}
 function reserveResponse(size: number): BodyLease {
   const reserved = Math.max(1, size) * 4;
   if (!Number.isSafeInteger(size) || size < 0 || size > 1024 * 1024 || responseBytes + reserved > MAX_RESPONSE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
@@ -191,9 +198,15 @@ export function forkResponseForCache(response: Response, timeoutMs = 15_000): { 
   const bounded = boundResponse(response, timeoutMs);
   if (!bounded.body) return { client: bounded, cache: bounded.clone() };
   const lease = bodyLeases.get(bounded.body)!;
-  const copy = bounded.clone();
-  // Retain each tee branch before either can pull. The original source keeps its
-  // own reference, so draining the cache cannot free the pending client body.
+  let copy: Response;
+  try {
+    copy = bounded.clone();
+  } catch (error) {
+    void bounded.body.cancel(error).catch(() => {});
+    throw error;
+  }
+  // Each tee branch has its own reference. The original source keeps its guard
+  // until it drains, so neither sibling can release another stream's permit.
   lease.retain(); lease.retain();
   return { client: wrapResponse(bounded, lease, timeoutMs), cache: wrapResponse(copy, lease, timeoutMs) };
 }

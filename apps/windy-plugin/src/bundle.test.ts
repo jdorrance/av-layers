@@ -60,15 +60,15 @@ it.each([
   execFileSync(process.execPath, [vite, 'build'], { cwd: pluginDir, env, stdio: 'pipe' });
 
   const elements: FakeElement[] = [];
-  const target = new FakeElement('target');
+  let target = new FakeElement('target');
   const document = Object.assign(new EventTarget(), {
     body: new FakeElement('body'), head: new FakeElement('head'),
     getElementById: () => null,
     createElement: (tag: string) => { const element = new FakeElement(tag); elements.push(element); return element; }
   });
   const win = new EventTarget();
-  const addFocusListener = vi.spyOn(win, 'addEventListener');
-  const removeFocusListener = vi.spyOn(win, 'removeEventListener');
+  const addWindowListener = vi.spyOn(win, 'addEventListener');
+  const removeWindowListener = vi.spyOn(win, 'removeEventListener');
   const addVisibilityListener = vi.spyOn(document, 'addEventListener');
   const removeVisibilityListener = vi.spyOn(document, 'removeEventListener');
   class FakeOption extends FakeElement {
@@ -134,10 +134,8 @@ it.each([
   const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   let destroyApp: (() => void) | undefined;
-  const broadcast = { emit: vi.fn((event: string, name: string) => {
-    // Model the host's explicit close lifecycle independently of menu opening.
-    if (event === 'rqstClose' && name === 'windy-plugin-av-layer') destroyApp?.();
-  }) };
+  // Host unmount can happen after the request; Back must release resources immediately.
+  const broadcast = { emit: vi.fn() };
   vi.stubGlobal('document', document);
   vi.stubGlobal('window', win);
   vi.stubGlobal('Option', FakeOption);
@@ -167,7 +165,7 @@ it.each([
   const installPackage = JSON.parse(readFileSync(resolve(pluginDir, 'dist/package.json'), 'utf8'));
   expect(metadata).toEqual(loaded.__pluginConfig);
   expect(installPackage).toEqual({ name: metadata.name, version: metadata.version, type: 'module', main: 'plugin.min.js' });
-  const app = new loaded.default({ target, anchor: target });
+  let app = new loaded.default({ target, anchor: target });
   // Native mobile sliders must find their header immediately after mounting,
   // before opening starts network or map work.
   expect(target.children).toHaveLength(2);
@@ -176,8 +174,13 @@ it.each([
   expect(fetchImpl).not.toHaveBeenCalled();
   expect(map.on).not.toHaveBeenCalled();
   expect(singleclick.on).not.toHaveBeenCalled();
-  expect(addFocusListener).not.toHaveBeenCalled();
+  expect(addWindowListener).not.toHaveBeenCalled();
   expect(addVisibilityListener).not.toHaveBeenCalled();
+  const initialApp = app, initialTarget = target, mounted = [...target.children];
+  target = new FakeElement('replacement-target');
+  app = new loaded.default({ target, anchor: target });
+  expect(initialTarget.children).toHaveLength(0);
+  expect(target.children).toEqual(mounted);
   destroyApp = () => app.$destroy();
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');
@@ -185,7 +188,7 @@ it.each([
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
   expect(singleclick.on).toHaveBeenCalledWith(metadata.name, expect.any(Function));
   expect(clickListeners.get(metadata.name)?.size).toBe(1);
-  expect(addFocusListener).toHaveBeenCalledTimes(1);
+  expect(addWindowListener).toHaveBeenCalledTimes(2);
   expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
@@ -227,9 +230,18 @@ it.each([
   expect(openWeatherPicker).not.toHaveBeenCalled();
   expect(target.children).toHaveLength(2);
   expect(map.removeLayer).not.toHaveBeenCalled();
+  const pointStatus = elements.find(element => element.textContent.startsWith('Clicked '))!;
   const button = elements.find(element => element.textContent === 'Sample clicked point')!;
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
+  // A delayed callback from the replaced app must not touch the current app's
+  // panel, controller, or pending point request.
+  initialApp.$destroy();
+  initialApp.onopen();
+  expect(sampleSignal?.aborted).toBe(false);
+  expect(target.children).toEqual(mounted);
+  expect(map.removeLayer).not.toHaveBeenCalled();
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
   win.dispatchEvent(new Event('focus'));
   expect(button.disabled).toBe(true);
   expect(sampleSignal?.aborted).toBe(false);
@@ -248,20 +260,24 @@ it.each([
   button.dispatch('click');
   expect(sampleSignal?.aborted).toBe(false);
   clock.mockReturnValue(expiresAtMs);
-  win.dispatchEvent(new Event('focus'));
+  win.dispatchEvent(new Event('pageshow'));
   expect(sampleSignal?.aborted).toBe(true);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
   expect(horizonNotice.hidden).toBe(true);
   expect(tileListeners.size).toBe(0);
   expect(protocols.size).toBe(0);
+  click({ lat: 5, lon: 6 });
+  expect(pointStatus.textContent).toBe('');
+  expect(button.disabled).toBe(true);
   resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
   await Promise.resolve();
   await Promise.resolve();
   expect(series.children).toHaveLength(0);
   app.$destroy();
   expect(singleclick.off).toHaveBeenCalledTimes(1);
-  expect(removeFocusListener).toHaveBeenCalledTimes(1);
-  expect(removeFocusListener).toHaveBeenCalledWith('focus', addFocusListener.mock.calls[0][1]);
+  expect(removeWindowListener).toHaveBeenCalledTimes(2);
+  expect(removeWindowListener).toHaveBeenCalledWith('focus', addWindowListener.mock.calls[0][1]);
+  expect(removeWindowListener).toHaveBeenCalledWith('pageshow', addWindowListener.mock.calls[1][1]);
   expect(removeVisibilityListener).toHaveBeenCalledTimes(1);
   expect(removeVisibilityListener).toHaveBeenCalledWith('visibilitychange', addVisibilityListener.mock.calls[0][1]);
   expect(clickListeners.size).toBe(0);
@@ -285,11 +301,15 @@ it.each([
     expect(target.children).toContain(root);
     expect(document.body.children).not.toContain(root);
     expect(clickListeners.get(metadata.name)?.size).toBe(1);
-    expect(addFocusListener).toHaveBeenCalledTimes(2);
+    expect(addWindowListener).toHaveBeenCalledTimes(4);
     expect(addVisibilityListener).toHaveBeenCalledTimes(2);
     click({ lat: 3, lon: 4 });
     reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
     expect(sampleSignal?.aborted).toBe(false);
+    expect(protocols.size).toBe(1);
+    app.$destroy();
+    expect(sampleSignal?.aborted).toBe(false);
+    expect(target.children).toEqual([mobileHeader, root]);
     expect(protocols.size).toBe(1);
     reopenedElements.find(element => element.className === 'av-back')!.dispatch('click');
     expect(broadcast.emit.mock.calls).toEqual([
@@ -298,7 +318,7 @@ it.each([
     ]);
     expect(sampleSignal?.aborted).toBe(true);
     expect(singleclick.off).toHaveBeenCalledTimes(2);
-    expect(removeFocusListener).toHaveBeenCalledTimes(2);
+    expect(removeWindowListener).toHaveBeenCalledTimes(4);
     expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
     expect(clickListeners.size).toBe(0);
     expect(map.on).not.toHaveBeenCalled();
@@ -310,10 +330,12 @@ it.each([
     expect(protocols.size).toBe(0);
     expect(root.hidden).toBe(true);
     expect(mobileHeader.hidden).toBe(true);
+    expect(target.children).toEqual([mobileHeader, root]);
+    destroyApp?.();
     expect(target.children).toHaveLength(0);
   } finally {
     reopened.$destroy();
   }
-  expect(removeFocusListener).toHaveBeenCalledTimes(2);
+  expect(removeWindowListener).toHaveBeenCalledTimes(4);
   expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
 });

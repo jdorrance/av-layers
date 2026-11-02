@@ -59,6 +59,8 @@ describe('real contract-shaped fixtures', () => {
 
 describe('declarative workflows', () => {
   it('retains shared writer serialization and environment-scoped credentials', () => {
+    expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }}");
+    expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}");
     for (const name of ['forecast.yml', 'maintenance.yml']) {
       expect(record(workflow(name).concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}", 'cancel-in-progress': false });
       const job = record(Object.values(record(workflow(name).jobs))[0]);
