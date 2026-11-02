@@ -101,10 +101,15 @@ it.each([
   };
   const map = { on: vi.fn((_name, listener) => { click = listener; }), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
+  let destroyApp: (() => void) | undefined;
+  const broadcast = { emit: vi.fn((event: string, name: string) => {
+    // Embedded plugins stay open when menus open; only an explicit close unmounts them.
+    if (event === 'rqstClose' && name === 'windy-plugin-av-layer') destroyApp?.();
+  }) };
   vi.stubGlobal('document', document);
   vi.stubGlobal('Option', FakeOption);
   vi.stubGlobal('fetch', fetchImpl);
-  vi.stubGlobal('W', { map: { map }, store, broadcast: { emit: vi.fn() } });
+  vi.stubGlobal('W', { map: { map }, store, broadcast });
   const protocols = new Map<string, unknown>();
   vi.stubGlobal('L', {
     tileLayer: (url: string) => { layer.url = url; return layer; },
@@ -120,6 +125,7 @@ it.each([
   expect(metadata).toEqual(loaded.__pluginConfig);
   expect(installPackage).toEqual({ name: metadata.name, version: metadata.version, type: 'module', main: 'plugin.min.js' });
   const app = new loaded.default({ target, anchor: target });
+  destroyApp = () => app.$destroy();
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');
   app.onopen();
@@ -182,4 +188,37 @@ it.each([
   app.$destroy();
   expect(map.off).toHaveBeenCalledTimes(1);
   expect(target.children[0].hidden).toBe(true);
+
+  // A live embedded view must close before opening the menu, releasing its
+  // pending point request, time subscription, map listener and raster protocol.
+  clock.mockReturnValue(now);
+  const previousElementCount = elements.length;
+  const reopened = new loaded.default({ target, anchor: target });
+  destroyApp = () => reopened.$destroy();
+  reopened.onopen();
+  try {
+    await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(2));
+    const reopenedElements = elements.slice(previousElementCount);
+    const root = reopenedElements.find(element => element.className === 'av-panel')!;
+    expect(target.children).toContain(root);
+    expect(document.body.children).not.toContain(root);
+    click?.({ latlng: { lat: 3, lng: 4 } });
+    reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
+    expect(sampleSignal?.aborted).toBe(false);
+    expect(protocols.size).toBe(1);
+    reopenedElements.find(element => element.className === 'av-back')!.dispatch('click');
+    expect(broadcast.emit.mock.calls).toEqual([
+      ['rqstClose', loaded.__pluginConfig.name],
+      ['rqstOpen', 'menu']
+    ]);
+    expect(sampleSignal?.aborted).toBe(true);
+    expect(map.off).toHaveBeenCalledTimes(2);
+    expect(store.off).toHaveBeenCalledTimes(2);
+    expect(map.removeLayer).toHaveBeenCalledTimes(2);
+    expect(tileListeners.size).toBe(0);
+    expect(protocols.size).toBe(0);
+    expect(root.hidden).toBe(true);
+  } finally {
+    reopened.$destroy();
+  }
 });
