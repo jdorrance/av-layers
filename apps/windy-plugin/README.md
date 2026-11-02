@@ -1,27 +1,31 @@
 # Windy plugin
 
-`@av/windy-plugin` is one consumer of the forecast API, displaying forecast
-tiles and point series inside Windy using the host map and timestamp store.
+Displays forecast tiles and point forecasts inside Windy. The plugin follows
+Windy's selected time and uses the same API as the standalone preview.
 
-Build from the repository root with the intended API address:
+After the [root setup](../../README.md), run from the repository root:
 
 ```sh
+pnpm test apps/windy-plugin
 AV_API_BASE=https://your-api.example pnpm --filter @av/windy-plugin build
 ```
 
-`AV_API_BASE` is embedded at build time and defaults to `http://localhost:8787`.
-Rollup writes `dist/plugin.js` and `dist/plugin.min.js` using the pinned Windy
-devtools. Host `@windy/*` modules remain external.
+The build writes `dist/plugin.js` and `dist/plugin.min.js`. Set `AV_API_BASE` to
+the API you want to use; it is included in the bundle and defaults to
+`http://localhost:8787`.
 
-[plugin.ts](src/plugin.ts) owns host lifecycle and requests;
-[controller.ts](src/controller.ts) owns build/frame state and overlay teardown;
-[view.ts](src/view.ts) owns the panel. Shared client helpers live in
-[`@av/contracts/client`](../../packages/contracts/README.md).
+Serve the bundle over HTTPS and open it with
+[Windy's developer loader](https://www.windy.com/developer-mode).
+See [Windy's plugin guide](https://docs.windy-plugins.com/getting-started/debugging.html)
+for the loader's setup requirements. For everyday UI work without a Windy login,
+use the [standalone preview](../preview/README.md).
 
-Built-module tests use a simulated host. Actual host installation and
-behavior remain unverified; see [status](../../docs/status.md) and
-[development](../../docs/development.md).
+Useful files:
 
-The v3 manifest owns layer labels, units, vertical/time support, palette/status semantics, coverage and attribution. Shared pure legend/series models and strict API validation live in the focused contracts client modules; Windy timestamp matching, cancellation, listener ownership and teardown stay in this host controller. Model options include only admitted production IDs.
+- [src/plugin.ts](src/plugin.ts): connects the plugin to Windy.
+- [src/controller.ts](src/controller.ts): selected build, layer, and time.
+- [src/raster-layer.ts](src/raster-layer.ts): Windy tile loading and cleanup.
+- [src/view.ts](src/view.ts): panel and controls.
 
-Set `AV_API_BASE` explicitly for every hosted plugin build; a hosted asset using the localhost default cannot reach the deployed API. Hosting the built JavaScript proves asset availability only. Installation, host module resolution, map overlays, timestamp matching, point requests and close/reopen behavior must also pass on the actual Windy host.
+This is an experimental plugin. See [the data guide](../../docs/data.md) for what
+the forecasts mean.

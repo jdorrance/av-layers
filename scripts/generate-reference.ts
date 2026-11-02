@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import * as contracts from '@av/contracts';
@@ -41,7 +41,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     '`pnpm docs:check` rejects stale generated references. No live forecast, storage credentials or network access is required to generate them.', '',
     'This describes the current producer. Retained builds keep their own immutable descriptors; readers do not compare historical parameters or legends with this reference.', '',
     '## Batch CLI', '',
-    'Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. String options take a value; boolean options are switches. These lists define accepted options, not whether an operational command is authorized or whether its required values are present. See [operations](operations.md) for publication authority and [getting started](getting-started.md) for working commands.', '',
+    'Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.', '',
     'Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI admission](../apps/batch/src/cli.ts).', ''
   ];
   for (const [command, options] of entries(CLI_COMMANDS)) {
@@ -109,7 +109,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   return { 'docs/reference.md': `${lines.join('\n')}\n`, 'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n` };
 }
 
-export async function checkReference(): Promise<string[]> {
+async function checkDocumentation(): Promise<string[]> {
   const stale: string[] = [];
   for (const [path, expected] of Object.entries(await referenceArtifacts())) {
     const actual = await readFile(resolve(repository, path), 'utf8').catch((error: NodeJS.ErrnoException) => {
@@ -118,15 +118,33 @@ export async function checkReference(): Promise<string[]> {
     });
     if (actual !== expected) stale.push(`${path}: generated reference is stale; run ${regenerate}`);
   }
+  const excluded = new Set(['node_modules', '.git', '.cache', '.wrangler', '.tools', '.agents', '.codex', 'dist', 'output']);
+  async function markdown(directory: string): Promise<string[]> {
+    const files = await readdir(directory, { withFileTypes: true });
+    return (await Promise.all(files.filter(entry => !excluded.has(entry.name)).map(async entry => {
+      const path = resolve(directory, entry.name);
+      return entry.isDirectory() ? markdown(path) : entry.isFile() && entry.name.endsWith('.md') ? [path] : [];
+    }))).flat();
+  }
+  for (const file of await markdown(repository)) {
+    const content = (await readFile(file, 'utf8')).replace(/```[\s\S]*?```/g, '');
+    for (const match of content.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
+      const target = match[1].replace(/^<([^>]+)>.*$/, '$1').split(/\s+["']/)[0];
+      if (/^(?:[a-z]+:|\/|#)/i.test(target)) continue;
+      const path = resolve(dirname(file), decodeURIComponent(target.split('#')[0]));
+      try { if (!(await stat(path)).isFile()) throw new Error('not a file'); }
+      catch { stale.push(`${relative(repository, file)}: missing ${target}`); }
+    }
+  }
   return stale;
 }
 
 async function main(): Promise<void> {
   const { values } = parseArgs({ options: { check: { type: 'boolean' } }, strict: true, allowPositionals: false });
   if (values.check) {
-    const stale = await checkReference();
+    const stale = await checkDocumentation();
     if (stale.length) throw new Error(stale.join('\n'));
-    console.log('Generated platform and OpenAPI references verified');
+    console.log('Generated references and repository Markdown file links verified');
   } else {
     for (const [path, contents] of Object.entries(await referenceArtifacts())) {
       await mkdir(dirname(resolve(repository, path)), { recursive: true });

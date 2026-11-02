@@ -31,7 +31,7 @@ function assertLifetime(manifest: Manifest, now: number): void {
   }
 }
 
-async function readPointer(store: ObjectStorage, model: ModelId, signal?: AbortSignal): Promise<{ pointer: ModelPointer | null; etag?: string }> {
+export async function readPointer(store: ObjectStorage, model: ModelId, signal?: AbortSignal): Promise<{ pointer: ModelPointer | null; etag?: string }> {
   const object = await store.get(pointerKey(model), undefined, MAX_POINTER_BYTES, signal);
   if (!object) return { pointer: null };
   const pointer = modelPointerSchema.parse(decode(object.bytes));

@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  deploymentMarker, verifyPagesRevision, validateOperationInputs,
   PAGES_PROJECT_NOT_FOUND_CODE,
   R2_BUCKET_NOT_FOUND_CODE,
   loadWranglerConfig,
@@ -14,7 +13,7 @@ import {
   verifyPagesProduction,
   type FetchLike,
   type WranglerConfig
-} from './cloudflare-ci';
+} from './operations';
 
 const ACCOUNT_ID = '0123456789abcdef0123456789abcdef';
 const API = 'https://api.cloudflare.com/client/v4';
@@ -36,6 +35,26 @@ const base = {
   PAGES_PROJECT_NAME: PAGES,
   API_BASE_URL: 'https://api-staging.example.com'
 };
+
+describe('operation input admission', () => {
+  const maintenance = { TARGET_ENV: 'production', ACTION: 'rollback', MODEL: 'gfs', BUILD_ID: '20261030T000000Z-00000000-0000-4000-8000-000000000000', CONFIRM: 'serialized-maintenance' };
+  it('accepts the supported maintenance actions and rejects ambiguous or unsupported input', () => {
+    expect(() => validateOperationInputs('maintenance', maintenance)).not.toThrow();
+    expect(() => validateOperationInputs('maintenance', { ...maintenance, ACTION: 'cleanup', BUILD_ID: '' })).not.toThrow();
+    for (const patch of [{ ACTION: 'qualify' }, { ACTION: 'cleanup' }, { MODEL: 'hrrr' }, { TARGET_ENV: 'preview' }, { ACTION: 'rollback; touch /tmp/pwned' }, { BUILD_ID: '../other' }, { CONFIRM: '' }]) {
+      expect(() => validateOperationInputs('maintenance', { ...maintenance, ...patch })).toThrow();
+    }
+  });
+  it('requires explicit manual deployment/bootstrap intent and a numeric source run', () => {
+    expect(() => validateOperationInputs('deploy', { TARGET_ENV: 'staging', GITHUB_EVENT_NAME: 'push' })).not.toThrow();
+    expect(() => validateOperationInputs('deploy', { TARGET_ENV: 'production', GITHUB_EVENT_NAME: 'workflow_dispatch', CONFIRM: 'deploy-read-only-worker' })).not.toThrow();
+    expect(() => validateOperationInputs('deploy', { TARGET_ENV: 'production', GITHUB_EVENT_NAME: 'workflow_dispatch' })).toThrow();
+    expect(() => validateOperationInputs('bootstrap', { TARGET_ENV: 'staging', CONFIRM: 'bootstrap-private-cloudflare' })).not.toThrow();
+    expect(() => validateOperationInputs('bootstrap', { TARGET_ENV: 'staging' })).toThrow();
+    expect(() => validateOperationInputs('forecast', { TARGET_ENV: 'staging', MODEL: 'gfs', RESUME_RUN_ID: '123' })).not.toThrow();
+    expect(() => validateOperationInputs('forecast', { TARGET_ENV: 'staging', MODEL: 'gfs', RESUME_RUN_ID: '123; touch /tmp/pwned' })).toThrow();
+  });
+});
 
 const publicationBase = {
   TARGET_ENV: 'staging',
@@ -145,7 +164,7 @@ const createPagesRoute = (overrides: Record<string, unknown> = {}): Route => ({
 
 const env = () => validateCiEnvironment(base, config);
 
-describe('cloudflare-ci environment validation', () => {
+describe('Cloudflare environment validation', () => {
   it('accepts environment-scoped values that match wrangler', () => {
     expect(env()).toMatchObject({
       targetEnv: 'staging',
@@ -237,7 +256,7 @@ describe('cloudflare-ci environment validation', () => {
   });
 
   it('selects the BUCKET binding instead of the first wrangler bucket', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'cloudflare-ci-'));
+    const directory = mkdtempSync(join(tmpdir(), 'Cloudflare-'));
     const path = join(directory, 'wrangler.jsonc');
     try {
       writeFileSync(path, JSON.stringify({
@@ -275,7 +294,7 @@ describe('cloudflare-ci environment validation', () => {
   });
 });
 
-describe('cloudflare-ci publication environment', () => {
+describe('Cloudflare publication environment', () => {
   it('validates only R2 publication credentials and the selected bucket', () => {
     expect(validatePublicationEnvironment(publicationBase, config)).toEqual({
       targetEnv: 'staging',
@@ -325,7 +344,7 @@ describe('cloudflare-ci publication environment', () => {
   });
 });
 
-describe('cloudflare-ci deploy-time Pages verification', () => {
+describe('Cloudflare deploy-time Pages verification', () => {
   it('requires the configured project on the main production branch', async () => {
     const mock = mockCloudflare([existingPagesRoute()]);
     await expect(verifyPagesProduction(env(), mock.fetchImpl)).resolves.toEqual({ url: `https://${PAGES}.pages.dev` });
@@ -349,36 +368,10 @@ describe('Pages canonical URL', () => {
     await expect(verifyPagesProduction(env(), mock.fetchImpl)).rejects.toThrow(/valid production pages.dev hostname/);
   });
 
-  it('writes the canonical URL to the CLI GitHub output for deployment consumers', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'pages-output-'));
-    const output = join(directory, 'github-output');
-    const script = fileURLToPath(new URL('./cloudflare-ci.ts', import.meta.url));
-    const project = { name: PAGES, production_branch: 'main', subdomain: `${PAGES}-f19.pages.dev` };
-    try {
-      writeFileSync(output, 'previous=value\n');
-      const program = `
-        import { pathToFileURL } from 'node:url';
-        globalThis.fetch = async (url, init) => {
-          if (url !== ${JSON.stringify(PAGES_URL)} || new Headers(init.headers).get('authorization') !== 'Bearer token-value') throw new Error('unexpected request');
-          return new Response(JSON.stringify({ success: true, result: ${JSON.stringify(project)} }));
-        };
-        process.argv = [process.execPath, ${JSON.stringify(script)}, 'pagescheck', '--env', 'staging'];
-        await import(pathToFileURL(process.argv[1]).href);
-      `;
-      const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', program], {
-        cwd: fileURLToPath(new URL('../', import.meta.url)),
-        env: { ...process.env, ...base, GITHUB_OUTPUT: output },
-        encoding: 'utf8'
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(readFileSync(output, 'utf8')).toBe(`previous=value\nurl=https://${PAGES}-f19.pages.dev\n`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+
 });
 
-describe('cloudflare-ci provisioning', () => {
+describe('Cloudflare provisioning', () => {
   it('creates a missing private bucket and Pages project on main', async () => {
     const mock = mockCloudflare([
       missingBucketRoute(),
@@ -544,5 +537,75 @@ describe('cloudflare-ci provisioning', () => {
     ]);
     await expect(provisionCloudflare(env(), mock.fetchImpl)).rejects.toThrow(/Reading R2 bucket/);
     expect(mock.calls).toHaveLength(1);
+  });
+});
+
+const deploymentId = `${'a'.repeat(40)}-12345-1`;
+const marker = deploymentMarker(deploymentId);
+
+describe('Pages deployment revision verification', () => {
+  it('accepts HTML with the exact marker for the deployed commit', async () => {
+    const fetchImpl = vi.fn(async () => new Response(`<meta ${marker} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl })).resolves.toBeUndefined();
+  });
+
+  it('rejects stale, missing, quoted-mismatched and failed responses', async () => {
+    const stale = vi.fn(async () => new Response(`<meta ${deploymentMarker(`${'b'.repeat(40)}-12345-1`)} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: stale, retries: 0 })).rejects.toThrow(/does not contain/);
+    const sameCommitOlderRun = vi.fn(async () => new Response(`<meta ${deploymentMarker(`${'a'.repeat(40)}-12344-1`)} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: sameCommitOlderRun, retries: 0 })).rejects.toThrow(/does not contain/);
+    const missing = vi.fn(async () => new Response('<meta name="build-deployment" content="" />'));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: missing, retries: 0 })).rejects.toThrow(/does not contain/);
+    const failed = vi.fn(async () => new Response('unavailable', { status: 503 }));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: failed, retries: 0 })).rejects.toThrow(/status 503/);
+  });
+
+  it('retries a transient stale response and then succeeds', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response('<meta name="build-deployment" content="stale" />'))
+      .mockResolvedValueOnce(new Response(`<meta ${marker} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0 })).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects identifiers that are not commit-run-attempt values', () => {
+    expect(() => deploymentMarker('main')).toThrow(/commit SHA, run ID and run attempt/);
+    expect(() => deploymentMarker('a'.repeat(40))).toThrow(/commit SHA, run ID and run attempt/);
+  });
+
+  it('retries a transient connection failure and reports exhausted retries', async () => {
+    const fetchImpl = vi.fn()
+      .mockRejectedValueOnce(new TypeError('connection reset'))
+      .mockResolvedValueOnce(new Response(`<meta ${marker} />`));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0 })).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const failing = vi.fn().mockRejectedValue(new TypeError('connection reset'));
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl: failing, retries: 1, delayMs: 0 })).rejects.toThrow(/Pages revision verification failed: connection reset/);
+    expect(failing).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['headers', 'body'])('aborts stalled %s and retries with a fresh deadline', async stage => {
+    let stalledSignal: AbortSignal;
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => {
+      stalledSignal = init!.signal!;
+      if (stage === 'headers') {
+        return new Promise<Response>((_resolve, reject) => {
+          stalledSignal.addEventListener('abort', () => reject(stalledSignal.reason), { once: true });
+        });
+      }
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('<html>'));
+          stalledSignal.addEventListener('abort', () => controller.error(stalledSignal.reason), { once: true });
+        }
+      }));
+    }).mockImplementationOnce(async (_url, init) => {
+      expect(stalledSignal.aborted).toBe(true);
+      expect(init!.signal).not.toBe(stalledSignal);
+      expect(init!.signal!.aborted).toBe(false);
+      return new Response(`<meta ${marker} />`);
+    });
+    await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0, timeoutMs: 20 })).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

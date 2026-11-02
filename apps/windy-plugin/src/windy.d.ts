@@ -39,9 +39,12 @@ declare module '@windy/interfaces' {
 }
 
 declare const L: {
-    tileLayer(url: string, options?: Record<string, unknown>): {
+    addProtocol: import('./raster-layer').NativeRasterApi['addProtocol'];
+    removeProtocol(scheme: string): void;
+    tileLayer(url: string, options?: import('./controller').WindyTileOptions): {
       setUrl(url: string): unknown;
       setOpacity(opacity: number): unknown;
       remove(): unknown;
+      source(): import('./raster-layer').NativeRasterSource | undefined;
     };
   };

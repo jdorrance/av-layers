@@ -1,81 +1,99 @@
 # Development
 
-Use [offline development](local-development.md) for a tiny deterministic fixture
-and [getting started](getting-started.md) for real GFS acquisition.
-Use [extension recipes](extensions.md) before admitting another provider, quantity or grid.
-The [workspace map](architecture.md#workspace-map) links each package's purpose
-and entry points; read those boundaries before changing implementation details.
+Run commands from the repository root. The project is in alpha and currently
+supports GFS only. See [the project layout](architecture.md#workspace-map) to find
+the code for each app and package.
 
-## Making a change
+## Setup
 
-Keep a change within the responsibility that owns it. Provider handling belongs
-in batch, scientific behavior in forecast, shared data definitions and client
-helpers in contracts, and UI specifics in each consumer client. Extract a helper
-when it gives an existing caller less to understand. Preserve value, absence and
-freshness semantics during structural changes.
+Use the pnpm version declared in [package.json](../package.json):
 
-Add a focused regression test for a behavioral fix, then run the
-[development checks](../README.md#development-checks). Those commands define
-the CI baseline. For artifact or serving changes, follow
-the validation or smoke-test steps in [getting started](getting-started.md)
-and [operations](operations.md).
+```sh
+pnpm install
+pnpm tools:pmtiles
+```
 
-## What the checks establish
+pnpm installs the project's Node runtime locally. The second command installs
+the PMTiles tool in `.tools/`. These initial downloads need internet access;
+local development does not need a Cloudflare account.
 
-Forecast tests exercise calculations, missing data and interpolation. Batch
-tests cover source admission, rendering, artifact validation and publication
-races. API tests exercise routes, storage reads, coverage and caching. Client
-tests cover API handling, frame selection, expiry and a built plugin module
-loaded against a simulated host.
+## Start the sample-data map
 
-Real-build validation and local API smoke tests exercise the assembled pipeline.
-They complement fixtures; neither a simulated host nor local storage establishes
-deployed Cloudflare or live consumer host behavior. Keep new evidence and its
-limits in [status](status.md).
+```sh
+pnpm dev
+```
 
-To investigate GFS acquisition without rendering a forecast, run
-`pnpm input:proof --cache-dir .cache/gfs`. It prints an input-admission receipt;
-an optional `--cycle` selects an upstream run. The
-[proof entry point](../apps/batch/src/noaa/prove.ts) owns the diagnostic scope.
+This generates a small test forecast and starts both the local API and map.
+Open the URL printed by Vite. Ctrl-C stops both servers. The API normally runs
+at `http://127.0.0.1:8787`; its `/docs` page describes the available requests.
 
-For performance and capacity changes, run `pnpm capacity` and keep exact-value
-and pixel comparisons alongside timing evidence.
+The map labels its data **SYNTHETIC offline fixture** and uses a plain background
+with no external map requests. These are test values, not a weather forecast.
+Select the first frame and sample latitude **40**, longitude **−100**: rain is
+**2.75 mm/h**. Points outside the test rectangle return `outside-domain`.
 
-## Documentation ownership
+Each run creates fresh test data under `output/offline-fixture` and stores local
+API data under `.wrangler/fixture-state`. Nothing is uploaded. Use
+`pnpm dev --generate-only` to write files without starting servers, or
+`pnpm dev --seed-only` to also copy them into local storage.
 
-The root README owns orientation, the document index and development checks.
-[Getting started](getting-started.md) owns setup; [architecture](architecture.md)
-owns component boundaries; [data](data.md) owns interpretation;
-[science](science.md) owns the method; [operations](operations.md) owns running
-and publishing the service. [Status](status.md) records demonstrated behavior,
-and [roadmap](roadmap.md) tracks remaining work.
+## Build a real GFS forecast
 
-Package READMEs provide a short usage example and links to the next layer.
-Update the owner when behavior changes; link to it elsewhere.
-Keep signatures and endpoint details with their executable definitions. The [generated reference](reference.md) and OpenAPI snapshot come from those definitions. After changing them, run `pnpm exec node --import tsx scripts/generate-reference.ts`; `pnpm docs:check` rejects stale output.
+```sh
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs
+```
 
-## Verification
+This downloads a complete GFS run and can take a while. Repeated builds reuse
+`.cache/gfs`. To choose a run, add `--cycle` with an available GFS 00, 06, 12, or
+18 UTC timestamp. Without it, the builder finds a complete recent run.
 
-`pnpm verify` is the single offline verification entry point used locally and
-in CI. It runs lint, type checking, fixture tests, the real local workerd test,
-documentation freshness/link checks and production bundles once each. Install
-the pinned PMTiles tool during setup before disconnecting from the network.
-Live acquisition, full-build qualification and deployed load/host checks remain
-separate, explicit operations. Superseded feature-branch and pull-request
-verification is cancelled; deployment, publication and maintenance remain
-serialized without cancellation.
+Copy the printed manifest path into the following command, replacing `BUILD_ID`:
 
-## Evidence and cleanup
+```sh
+pnpm sample-preview --manifest output/builds/gfs/BUILD_ID/manifest.json
+```
 
-Run `pnpm docs:check` for repository Markdown file targets and
-`pnpm test:runtime` for actual workerd overlap/cancellation behavior. Browser
-receipts distinguish simulated host, desktop/mobile-layout and actual host/device
-checks. The [serving budget](serving-budgets.md) defines measured cache states,
-body-consumption latency and memory limitations.
+This validates the build, copies it into local storage, and starts the API and map.
+It reuses intact local files and repairs missing ones. The real-data basemap
+needs internet access. Ctrl-C stops both servers. Read [the data guide](data.md)
+for units, coverage, and forecast times, and [science](science.md) for calculations.
 
-Generated forecasts, caches, emulator state and raw measurements stay under
-ignored output directories. Commit compact reproducible receipts and experiment
-scripts, never downloaded weather archives or credentials. Delete a failed local
-fixture's own persistence directory only after its Worker has stopped. Production
-cleanup uses the serialized maintenance workflow; local file cleanup grants no
-authority to delete R2 objects.
+## Tests and builds
+
+`pnpm test` runs the tests without downloading weather data. Add a path to focus
+on one area, such as `pnpm test packages/forecast` or `pnpm test apps/api`.
+The suite includes a disposable local Worker test; it does not use remote R2.
+
+Run `pnpm verify` before submitting a change. It runs lint, type checks, tests,
+documentation checks, and app builds. `pnpm build` just bundles the apps; it does
+not publish forecasts or deploy services. Use [operations](operations.md) for that.
+
+After changing API schemas or CLI definitions, refresh the generated reference:
+
+```sh
+pnpm exec node --import tsx scripts/generate-reference.ts
+pnpm docs:check
+```
+
+Add a focused test for a behavior change. Keep source handling in batch,
+calculations in forecast, shared definitions in contracts, and UI behavior in
+the relevant app. Read [the extension guide](extensions.md) before adding a field,
+provider, or grid. Performance changes should preserve numeric values and pixels;
+`pnpm capacity` shows estimated build resources before downloading data.
+
+## Troubleshooting
+
+- **Missing PMTiles:** rerun `pnpm tools:pmtiles`. Use project pnpm commands so
+  they select the installed Node runtime.
+- **API port in use:** use `pnpm dev --port 8788` or pass `--port 8788` to
+  `pnpm sample-preview`. The map is connected to that port automatically.
+- **Expired local build:** rerun `pnpm dev`, or build a new real forecast.
+  Changing the expiry in an old file does not repair a build.
+- **Broken local test state:** stop the servers, then remove only
+  `output/offline-fixture` and `.wrangler/fixture-state` before running `pnpm dev`.
+- **Missing coverage assets:** they are normally checked in. If regeneration is
+  needed, install `uv` and run `pnpm masks:build`; this downloads the source shapes.
+
+Keep generated forecasts, caches, local server state, and experiment output in
+ignored directories. Do not commit downloaded weather archives or credentials.
+Local tests do not replace checking the deployed API or actual Windy host.

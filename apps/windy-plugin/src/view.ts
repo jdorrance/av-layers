@@ -112,18 +112,19 @@ export class PluginPanel {
     this.seriesButton.disabled = true;
     this.seriesButton.addEventListener('click', callbacks.onSeries);
     this.error.hidden = true;
+    this.error.role = 'alert';
     this.horizonNotice.hidden = true;
+    this.horizonNotice.role = 'status';
     const controls = node('div', 'av-controls');
-    controls.append(
-      node('label', undefined, 'Model'),
-      this.modelSelect,
-      node('label', undefined, 'Layer'),
-      this.layerSelect,
-      node('label', undefined, 'Frame'),
-      this.frameSelect,
-      node('label', undefined, 'Opacity'),
-      this.opacityInput
-    );
+    for (const [name, control] of [
+      ['Model', this.modelSelect], ['Layer', this.layerSelect],
+      ['Frame', this.frameSelect], ['Opacity', this.opacityInput]
+    ] as const) {
+      control.id = `av-${name.toLowerCase()}`;
+      const label = node('label', undefined, name);
+      label.htmlFor = control.id;
+      controls.append(label, control);
+    }
     const seriesPanel = node('section', 'av-series-panel');
     seriesPanel.append(node('h2', undefined, 'Point series'), this.seriesStatus, this.seriesButton, this.series);
     const diagnostics = node('details', 'av-diagnostics');

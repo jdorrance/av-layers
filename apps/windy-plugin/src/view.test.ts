@@ -13,6 +13,9 @@ class FakeElement {
   target = '';
   rel = '';
   className = '';
+  id = '';
+  htmlFor = '';
+  role = '';
   value = '';
   constructor(readonly tag: string) {}
   append(...children: FakeElement[]): void { this.children.push(...children); }
@@ -22,6 +25,20 @@ class FakeElement {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('associates visible labels with each keyboard control and exposes failures as alerts', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+  const nodes = visit(panel.root as unknown as FakeElement);
+  const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
+  expect(controls).toHaveLength(4);
+  expect(new Set(controls.map(control => control.id)).size).toBe(4);
+  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Layer', 'Frame', 'Opacity']);
+  expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
+  expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
+});
 
 it('renders build-specific opaque or transparent no-lift legends and discloses diagnostics inside details', () => {
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });

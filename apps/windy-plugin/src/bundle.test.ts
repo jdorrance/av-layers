@@ -78,7 +78,7 @@ it.each([
     pointer: { version: 1, model: 'gfs', latestBuildId: 'b1', retained: [{
       buildId: 'b1', manifestKey: 'builds/gfs/b1/manifest.json', cycle: manifest.cycle, expiresAt
     }] },
-    manifest, templates: { 'precip-rate': `${base}/f/{frame}/{z}/{x}/{y}.webp` },
+    manifest, templates: { 'precip-rate': `${base}/tiles/gfs/b1/precip-rate/{frame}/{z}/{x}/{y}.webp` },
     bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
     freshness: computeFreshness(manifest, now)
   });
@@ -91,10 +91,13 @@ it.each([
   });
   let click: ((event: { latlng: { lat: number; lng: number } }) => void) | undefined;
   const tileListeners = new Map<string, (event: { tile: object }) => void>();
-  const layer = {
-    url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
+  const source = {
     on: vi.fn((name: string, listener: (event: { tile: object }) => void) => tileListeners.set(name, listener)),
     off: vi.fn((name: string) => tileListeners.delete(name))
+  };
+  const layer = {
+    url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
+    source: () => source
   };
   const map = { on: vi.fn((_name, listener) => { click = listener; }), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
@@ -102,7 +105,12 @@ it.each([
   vi.stubGlobal('Option', FakeOption);
   vi.stubGlobal('fetch', fetchImpl);
   vi.stubGlobal('W', { map: { map }, store, broadcast: { emit: vi.fn() } });
-  vi.stubGlobal('L', { tileLayer: (url: string) => { layer.url = url; return layer; } });
+  const protocols = new Map<string, unknown>();
+  vi.stubGlobal('L', {
+    tileLayer: (url: string) => { layer.url = url; return layer; },
+    addProtocol: (scheme: string, handler: unknown) => { protocols.set(scheme, handler); },
+    removeProtocol: (scheme: string) => { protocols.delete(scheme); }
+  });
   const regularUrl = `${pathToFileURL(resolve(pluginDir, 'dist/plugin.js')).href}?test=${_name}-${Date.now()}`;
   const regular = await import(/* @vite-ignore */ regularUrl);
   expect(typeof regular.default).toBe('function');
@@ -115,21 +123,22 @@ it.each([
   app.onopen();
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
-  expect(layer.url).toContain('/f/f006/');
+  expect(layer.url).toContain('/tiles/gfs/b1/precip-rate/f006/');
+  expect(protocols.size).toBe(1);
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;
   expect(horizonNotice.hidden).toBe(false);
   expect(horizonNotice.textContent).toContain('Forecast ended at 2026-10-30T06:00:00.000Z');
   const tileError = elements.find(element => element.className === 'av-error')!;
   const failed = { tile: {} }, successful = { tile: {} };
-  tileListeners.get('tileloadstart')?.(failed);
-  tileListeners.get('tileloadstart')?.(successful);
-  tileListeners.get('tileerror')?.(failed);
-  tileListeners.get('tileload')?.(successful);
+  tileListeners.get('dataloading')?.(failed);
+  tileListeners.get('dataloading')?.(successful);
+  tileListeners.get('error')?.(failed);
+  tileListeners.get('data')?.(successful);
   tileListeners.get('load')?.(successful);
   expect(tileError.hidden).toBe(false);
   expect(tileError.textContent).toContain('Overlay tile failed to load');
   expect(horizonNotice.hidden).toBe(false);
-  tileListeners.get('tileload')?.(failed);
+  tileListeners.get('data')?.(failed);
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
@@ -163,6 +172,7 @@ it.each([
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
   expect(horizonNotice.hidden).toBe(true);
   expect(tileListeners.size).toBe(0);
+  expect(protocols.size).toBe(0);
   resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
   await Promise.resolve();
   await Promise.resolve();

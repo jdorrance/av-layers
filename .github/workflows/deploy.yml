@@ -32,8 +32,8 @@ jobs:
     timeout-minutes: 45
     environment: ${{ inputs.environment || 'production' }}
     env:
+      GH_TOKEN: ${{ github.token }}
       TARGET_ENV: ${{ inputs.environment || 'production' }}
-      DEPLOYMENT_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       CONFIRM: ${{ inputs.confirm || '' }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
@@ -45,17 +45,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Refuse superseded main revision
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          current="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
-          if [ "${current}" != "${GITHUB_SHA}" ]; then
-            echo 'This revision has been superseded on main; run the latest revision instead.' >&2
-            exit 1
-          fi
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.9
@@ -64,77 +53,5 @@ jobs:
           node-version: 22.23.4
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Validate deploy inputs and credentials
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${TARGET_ENV}" in
-            staging|production) ;;
-            *) echo 'unsupported deploy environment' >&2; exit 1 ;;
-          esac
-          if [ "${GITHUB_EVENT_NAME:-}" = 'workflow_dispatch' ] && [ "${CONFIRM:-}" != 'deploy-read-only-worker' ]; then
-            echo 'confirm must equal deploy-read-only-worker' >&2
-            exit 1
-          fi
-          test -n "${CLOUDFLARE_API_TOKEN}"
-          test -n "${CLOUDFLARE_ACCOUNT_ID}"
-      - name: Validate deploy environment mapping
-        run: pnpm exec tsx scripts/cloudflare-ci.ts envcheck --env "${TARGET_ENV}"
-      - name: Deploy Worker
-        shell: bash
-        run: |
-          set -euo pipefail
-          case "${TARGET_ENV}" in
-            staging) pnpm run deploy:staging --var "AV_DEPLOYMENT_ID:${DEPLOYMENT_ID}" ;;
-            production) pnpm run deploy:production --var "AV_DEPLOYMENT_ID:${DEPLOYMENT_ID}" ;;
-          esac
-      - name: Smoke API
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm exec tsx scripts/smoke-api.ts --base-url "${API_BASE_URL}" --model gfs --expected-deployment-id "${DEPLOYMENT_ID}"
-      - name: Build preview
-        env:
-          AV_API_BASE: ${{ vars.API_BASE_URL }}
-          VITE_API_BASE: ${{ vars.API_BASE_URL }}
-          VITE_BUILD_REVISION: ${{ env.DEPLOYMENT_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm --filter @av/preview build
-          pnpm --filter @av/windy-plugin build
-          mkdir -p apps/preview/dist/windy-plugin
-          cp apps/windy-plugin/dist/plugin.js apps/windy-plugin/dist/plugin.min.js apps/windy-plugin/dist/package.json apps/preview/dist/windy-plugin/
-          cat > apps/preview/dist/_headers <<'HEADERS'
-          /windy-plugin/*
-            Access-Control-Allow-Origin: https://www.windy.com
-            Cache-Control: public, max-age=300
-          HEADERS
-      - name: Verify Pages production branch
-        id: pages
-        run: pnpm exec tsx scripts/cloudflare-ci.ts pagescheck --env "${TARGET_ENV}"
-      - name: Deploy Pages
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm exec wrangler pages deploy apps/preview/dist --project-name "${PAGES_PROJECT_NAME}" --branch main
-      - name: Verify live Pages revision
-        env:
-          PAGES_BASE_URL: ${{ steps.pages.outputs.url }}
-          EXPECTED_DEPLOYMENT_ID: ${{ env.DEPLOYMENT_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          pnpm exec tsx scripts/verify-pages-revision.ts
-      - name: Deployment summary
-        if: success()
-        env:
-          PAGES_BASE_URL: ${{ steps.pages.outputs.url }}
-        shell: bash
-        run: |
-          {
-            printf '### Deployed %s\n' "${TARGET_ENV}"
-            printf -- '- API: %s\n' "${API_BASE_URL}"
-            printf -- '- Pages: %s\n' "${PAGES_BASE_URL}"
-            printf -- '- Order for a new environment: Bootstrap Cloudflare resources, Forecast sample, Deploy Worker and Pages.\n'
-          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Run deploy
+        run: pnpm operations deploy

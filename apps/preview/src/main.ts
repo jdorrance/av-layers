@@ -3,6 +3,8 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { type LayerId, type ModelId } from '@av/contracts';
 import {
   ApiClient,
+  createRasterTileProtocol,
+  type RasterTileProtocol,
   DEFAULT_OPACITY,
   OVERLAY_LAYER_ID,
   OVERLAY_SOURCE_ID,
@@ -60,7 +62,8 @@ if (offlineFixture) {
   warning.textContent = 'SYNTHETIC FIXTURE — development data, not a forecast';
   document.getElementById('panel')?.prepend(warning);
 }
-const api = new ApiClient({ baseUrl: import.meta.env.VITE_API_BASE ?? 'http://localhost:8787' });
+const apiBaseUrl = import.meta.env.VITE_API_BASE ?? 'http://localhost:8787';
+const api = new ApiClient({ baseUrl: apiBaseUrl });
 
 if (offlineFixture) modelSelect.add(new Option('Synthetic fixture', initialModel));
 else populateModelOptions(modelSelect);
@@ -91,6 +94,7 @@ let opacity = DEFAULT_OPACITY;
 let expired = false;
 let overlaySourceId = OVERLAY_SOURCE_ID;
 let overlayGeneration = 0;
+let overlayProtocol: RasterTileProtocol | null = null;
 const failedTiles = new Set<object>();
 let sourceFailed = false;
 let pendingModel: ModelId | null = null;
@@ -227,8 +231,15 @@ function setControlsEnabled(enabled: boolean): void {
 }
 
 function removeOverlay(): void {
-  if (map.getLayer(OVERLAY_LAYER_ID)) map.removeLayer(OVERLAY_LAYER_ID);
-  if (map.getSource(overlaySourceId)) map.removeSource(overlaySourceId);
+  const protocol = overlayProtocol;
+  overlayProtocol = null;
+  protocol?.dispose();
+  try {
+    if (map.getLayer(OVERLAY_LAYER_ID)) map.removeLayer(OVERLAY_LAYER_ID);
+    if (map.getSource(overlaySourceId)) map.removeSource(overlaySourceId);
+  } finally {
+    if (protocol) maplibregl.removeProtocol(protocol.scheme);
+  }
 }
 
 function expireView(): void {
@@ -276,14 +287,25 @@ function updateOverlay(): void {
   }
   removeOverlay();
   resetTileErrors();
-  // Give late events from an earlier frame a distinct source identity.
-  overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
-  map.addSource(overlaySourceId, previewRasterSource(template, selectedFrame, build.maxNativeZoom, build.manifest.descriptors.attribution));
-  map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
-  const frame = build.manifest.frames.find(item => item.id === selectedFrame);
-  timestampBadge.textContent = frame
-    ? `Explicit frame ${frame.id} · valid ${frame.validTime} · interval ${frame.intervalStart} → ${frame.intervalEnd}`
-    : `Explicit frame ${selectedFrame}`;
+  clearError();
+  try {
+    // Give late events from an earlier frame a distinct source identity.
+    overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
+    overlayProtocol = createRasterTileProtocol(apiBaseUrl);
+    maplibregl.addProtocol(overlayProtocol.scheme, overlayProtocol.load);
+    const source = previewRasterSource(template, selectedFrame, build.maxNativeZoom, build.manifest.descriptors.attribution);
+    source.tiles = source.tiles.map(overlayProtocol.url);
+    map.addSource(overlaySourceId, source);
+    map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
+    const frame = build.manifest.frames.find(item => item.id === selectedFrame);
+    timestampBadge.textContent = frame
+      ? `Explicit frame ${frame.id} · valid ${frame.validTime} · interval ${frame.intervalStart} → ${frame.intervalEnd}`
+      : `Explicit frame ${selectedFrame}`;
+  } catch (error) {
+    removeOverlay();
+    timestampBadge.textContent = 'Overlay unavailable';
+    showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function populateFrames(buildValue: PinnedBuild): void {
@@ -446,9 +468,9 @@ window.addEventListener('pagehide', (event: PageTransitionEvent) => {
     window.clearInterval(expiryTimer);
     expiryTimer = null;
   }
+  removeOverlay();
   if (event.persisted) return;
   disposeExpiry();
-  removeOverlay();
   map.remove();
 });
 
@@ -461,6 +483,7 @@ window.addEventListener('pageshow', (event: PageTransitionEvent) => {
     return;
   }
   if (build && ensureLive()) {
+    updateOverlay();
     setControlsEnabled(true);
     updateFreshness();
     if (expiryTimer === null) {

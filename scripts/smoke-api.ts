@@ -2,32 +2,8 @@ import { pathToFileURL } from 'node:url';
 import { type LayerId } from '@av/contracts';
 import { ApiClient } from '@av/contracts/client';
 
-export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
-export type SampleStatus = typeof SAMPLE_STATUSES[number];
-
-export interface SampleCell {
-  value: unknown;
-  status: unknown;
-  support: unknown;
-  interpolated: unknown;
-}
-
-export interface SampleContract {
-  model?: unknown;
-  buildId?: unknown;
-  frames?: Array<{ id?: unknown; layers?: Record<string, SampleCell> }>;
-  coverage?: unknown;
-  method?: unknown;
-  source?: unknown;
-  expiresAt?: unknown;
-}
-
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
-}
-
-export function isSampleStatus(value: unknown): value is SampleStatus {
-  return typeof value === 'string' && (SAMPLE_STATUSES as readonly string[]).includes(value);
 }
 
 function arg(name: string): string | undefined {
@@ -83,26 +59,6 @@ export async function verifyWorkerReadiness(options: WorkerReadinessOptions): Pr
     }
   }
   throw new Error(`Worker readiness verification failed: ${last} (${options.url})`);
-}
-
-export function validateSampleContract(sample: SampleContract, model: string, buildId: string, frame: string, requestedLayers: string[]): void {
-  invariant(sample.model === model, '/sample did not echo model');
-  invariant(sample.buildId === buildId, '/sample did not echo build');
-  invariant(Array.isArray(sample.frames), '/sample omitted frames');
-  invariant(sample.frames.length === 1, '/sample did not return exactly one frame');
-  invariant(sample.frames[0]?.id === frame, '/sample returned the wrong frame');
-  for (const layer of requestedLayers) {
-    const cell = sample.frames[0]?.layers?.[layer];
-    invariant(cell, `/sample omitted ${layer}`);
-    invariant('value' in cell, `/sample omitted ${layer} value`);
-    invariant(isSampleStatus(cell.status), `/sample returned invalid ${layer} status`);
-    invariant(typeof cell.support === 'number', `/sample omitted ${layer} support`);
-    invariant(typeof cell.interpolated === 'boolean', `/sample omitted ${layer} interpolated`);
-  }
-  invariant(sample.coverage, '/sample omitted coverage');
-  invariant(sample.method, '/sample omitted method');
-  invariant(sample.source, '/sample omitted source');
-  invariant(sample.expiresAt, '/sample omitted expiry');
 }
 
 async function main(): Promise<void> {

@@ -42,7 +42,7 @@ quarter-degree sampling and native tile zoom 7; higher display zoom does not imp
 finer forecasts. Version-3 manifests bind the exact grid, Earth radius, bounds,
 coverage policy and three coverage bitsets through a content hash. Retained builds
 keep their own descriptors rather than depending on the current registry.
-Current model availability and integration evidence are in [status](status.md).
+Current model availability and release work are listed in [status](status.md).
 
 ## Time and retention
 

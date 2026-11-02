@@ -93,7 +93,9 @@ export class PluginController {
   private badge = 'No frame selected';
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
-  private readonly activeTiles = new Set<object>();
+  // Successful LeafletGL tiles can move into the host cache without an unload
+  // event. Membership must not keep those otherwise collectible tiles alive.
+  private activeTiles = new WeakSet<object>();
   private readonly failedTiles = new Set<object>();
   private tileUrl: string | null = null;
   private timeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -322,7 +324,7 @@ export class PluginController {
   }
 
   private clearTileState(): void {
-    this.activeTiles.clear();
+    this.activeTiles = new WeakSet();
     this.failedTiles.clear();
   }
 

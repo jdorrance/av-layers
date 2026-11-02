@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Manifest } from '@av/contracts';
-const fake = vi.hoisted(() => ({ build: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), append: vi.fn(), validated: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn() }));
+import type { Manifest, ModelPointer } from '@av/contracts';
+const fake = vi.hoisted(() => ({ build: vi.fn(), discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), validated: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn() }));
 vi.mock('../apps/batch/src/build.js', () => ({ buildSample: fake.build }));
-vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup }));
+vi.mock('../apps/batch/src/noaa/discover.js', () => ({ discoverGfsRun: fake.discover }));
+vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer }));
 vi.mock('../apps/batch/src/validate.js', () => ({ wasValidatedInProcess: fake.validated }));
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
@@ -12,18 +13,18 @@ vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
-vi.mock('node:fs/promises', () => ({ appendFile: fake.append, writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
-import { buildAndPublish } from './build-and-publish.js';
-import { resumePublication } from './resume-publication.js';
+vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
+import { buildAndPublish, resumePublication, forecastArtifactRevision, downloadForecastArtifact } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 let manifest: Manifest;
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', GITHUB_ENV: '/tmp/ci-env', CYCLE: '', RESUME_RUN_ID: '100' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', CYCLE: '', RESUME_RUN_ID: '100', ALLOW_SAME_CYCLE: 'false' })) vi.stubEnv(key, value);
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
-  vi.stubEnv('SOURCE_BUILD_REVISION', revision);
+  fake.discover.mockResolvedValue({ cycle: manifest.cycle });
+  fake.pointer.mockResolvedValue({ pointer: null });
   fake.build.mockImplementation(async ({ onValidated }) => { await onValidated(manifest, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.gh.mockResolvedValue({ stdout: revision + '\n' });
   fake.publish.mockResolvedValue(undefined);
@@ -33,7 +34,72 @@ beforeEach(() => {
   fake.readLocal.mockImplementation(async () => Buffer.from(JSON.stringify(manifest)));
   fake.identity.mockImplementation(async () => ({ recipe: { hash: manifest.recipe.hash } }));
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+
+const retainedPointer = (cycles: string[]): ModelPointer => ({
+  version: 1, model: 'gfs', latestBuildId: 'build-0',
+  retained: cycles.map((cycle, i) => ({ buildId: `build-${i}`, manifestKey: `builds/gfs/build-${i}/manifest.json`, cycle, expiresAt: '2020-01-01T00:00:00Z' }))
+});
+
+it('skips an already-published scheduled cycle before building or writing anything', async () => {
+  vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+  fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  await buildAndPublish();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('No new build was produced'));
+  for (const call of [fake.build, fake.publish, fake.cleanup, fake.write]) expect(call).not.toHaveBeenCalled();
+});
+it('rejects manual equality early with explicit replacement guidance', async () => {
+  fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
+  await expect(buildAndPublish()).rejects.toThrow('allow-same-cycle=true');
+  expect(fake.build).not.toHaveBeenCalled();
+  expect(fake.publish).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
+});
+it.each(['schedule', 'workflow_dispatch'])('permits an intentional same-cycle replacement for %s', async event => {
+  vi.stubEnv('GITHUB_EVENT_NAME', event); vi.stubEnv('ALLOW_SAME_CYCLE', 'true'); vi.stubEnv('CYCLE', manifest.cycle);
+  fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
+  await buildAndPublish();
+  expect(fake.discover).not.toHaveBeenCalled();
+  expect(fake.build).toHaveBeenCalledWith(expect.objectContaining({ cycle: manifest.cycle.replace('.000Z', 'Z') }));
+  expect(fake.publish).toHaveBeenCalledWith({}, 'output', manifest, expect.objectContaining({ allowSameCycle: true }));
+});
+it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('builds a discovered new cycle using the same inventory cache', async pointer => {
+  fake.pointer.mockResolvedValue({ pointer });
+  await buildAndPublish();
+  expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
+  expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
+  expect(fake.build).toHaveBeenCalledWith(expect.objectContaining({ cycle: manifest.cycle.replace('.000Z', 'Z'), cacheDir: '.cache/gfs' }));
+});
+it('uses all retained cycles after rollback, including expired entries', async () => {
+  fake.pointer.mockResolvedValue({ pointer: retainedPointer(['2026-10-29T18:00:00Z', manifest.cycle]) });
+  vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+  await buildAndPublish();
+  expect(fake.build).not.toHaveBeenCalled();
+  vi.stubEnv('CYCLE', '2026-10-29T18:00:00Z'); vi.stubEnv('ALLOW_SAME_CYCLE', 'true');
+  await expect(buildAndPublish()).rejects.toThrow('Older cycle cannot be published');
+  expect(fake.build).not.toHaveBeenCalled();
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+it.each(['discover', 'pointer'] as const)('does not build or publish when %s fails', async stage => {
+  fake[stage].mockRejectedValueOnce(new Error(`${stage} unavailable`));
+  await expect(buildAndPublish()).rejects.toThrow(`${stage} unavailable`);
+  expect(fake.build).not.toHaveBeenCalled();
+  expect(fake.publish).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
+});
+it('rejects malformed explicit cycles before comparison instead of silently skipping them', async () => {
+  vi.stubEnv('CYCLE', '2026-10-30'); vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+  await expect(buildAndPublish()).rejects.toThrow('GFS cycle must be an exact ISO UTC');
+  expect(fake.discover).not.toHaveBeenCalled(); expect(fake.pointer).not.toHaveBeenCalled(); expect(fake.build).not.toHaveBeenCalled();
+});
+it('does not report a successful skip after cancellation during the pointer read', async () => {
+  vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+  fake.pointer.mockImplementationOnce(async () => { process.emit('SIGTERM'); return { pointer: retainedPointer([manifest.cycle]) }; });
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  await expect(buildAndPublish()).rejects.toThrow('interrupted');
+  expect(log).not.toHaveBeenCalled(); expect(fake.build).not.toHaveBeenCalled();
+});
 it('keeps a main-revision check between the completed build and publication', async () => {
   await buildAndPublish();
   expect(fake.gh).toHaveBeenCalledWith('gh', ['api', 'repos/owner/repo/git/ref/heads/main', '--jq', '.object.sha'], { timeout: 15_000, signal: expect.any(AbortSignal) });
@@ -91,7 +157,7 @@ it('records an ambiguous commit reconciled by publish before deferring cleanup a
 });
 it('resumes matching artifacts through the same admission/journal without rebuilding science', async () => {
   fake.validated.mockReturnValue(false);
-  await resumePublication();
+  await resumePublication(revision);
   expect(fake.build).not.toHaveBeenCalled();
   expect(fake.publish).toHaveBeenCalledTimes(1);
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
@@ -99,13 +165,13 @@ it('resumes matching artifacts through the same admission/journal without rebuil
 });
 it('refuses resume after recipe changes and preserves a failure receipt', async () => {
   fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
-  await expect(resumePublication()).rejects.toThrow('recipe differs');
+  await expect(resumePublication(revision)).rejects.toThrow('recipe differs');
   expect(fake.publish).not.toHaveBeenCalled();
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('recipe differs'));
 });
 it('refuses ambiguous downloaded build sets before any publication', async () => {
   fake.directories.mockResolvedValueOnce([{ name: manifest.buildId, isDirectory: () => true }, { name: 'another', isDirectory: () => true }]);
-  await expect(resumePublication()).rejects.toThrow('exactly one');
+  await expect(resumePublication(revision)).rejects.toThrow('exactly one');
   expect(fake.publish).not.toHaveBeenCalled();
 });
 
@@ -128,4 +194,26 @@ it('persists cleanup cost observations and preserves unknown deletion progress o
   await expect(buildAndPublish()).rejects.toThrow('maintenance failed');
   const maintenance = fake.write.mock.calls.filter(([path]) => path.endsWith('/maintenance.json')).at(-1);
   expect(JSON.parse(maintenance![1])).toMatchObject({ status: 'failed', publication: 'committed', summary });
+});
+
+const repository = 'owner/repo';
+const run = { id: 123, path: '.github/workflows/forecast.yml', head_branch: 'main', head_sha: revision, event: 'schedule', status: 'completed', repository: { full_name: repository }, head_repository: { full_name: repository } };
+it('accepts completed main publisher runs and returns their immutable source revision', () => {
+  expect(forecastArtifactRevision(run, repository, '123')).toBe(revision);
+  expect(forecastArtifactRevision({ ...run, event: 'workflow_dispatch' }, repository, '123')).toBe(revision);
+});
+it('rejects lookalike artifacts from forks, other workflows, refs or uncompleted runs', () => {
+  for (const patch of [{ event: 'pull_request' }, { head_branch: 'feature' }, { head_repository: { full_name: 'fork/repo' } }, { path: '.github/workflows/ci.yml' }, { status: 'in_progress' }, { id: 124 }]) {
+    expect(() => forecastArtifactRevision({ ...run, ...patch }, repository, '123')).toThrow();
+  }
+});
+it('verifies the completed source workflow before downloading a retained forecast', async () => {
+  fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify(run) });
+  await expect(downloadForecastArtifact('123')).resolves.toBe(revision);
+  expect(fake.gh).toHaveBeenNthCalledWith(1, 'gh', ['api', 'repos/owner/repo/actions/runs/123'], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+  expect(fake.gh).toHaveBeenNthCalledWith(2, 'gh', ['run', 'download', '123', '--repo', 'owner/repo', '--name', 'forecast-gfs-123', '--dir', 'output'], { timeout: 300_000, maxBuffer: 1024 * 1024 });
+  fake.gh.mockClear();
+  fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify({ ...run, head_branch: 'feature' }) });
+  await expect(downloadForecastArtifact('123')).rejects.toThrow('authorized main forecast');
+  expect(fake.gh).toHaveBeenCalledTimes(1);
 });

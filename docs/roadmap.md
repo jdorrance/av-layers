@@ -1,36 +1,22 @@
 # Roadmap
 
-The current milestone is the [foundation plan](foundation-plan.md), executed in
-[the foundation record](foundation-execution.md). [Status](status.md) separates
-implemented behavior from qualification still awaiting evidence. No new live
-forecast product or model is included in this milestone.
+Finish the [current GFS release checks](status.md) before adding models or
+forecast products. Keep the existing batch job, API, and shared calculations
+simple; add another abstraction when a concrete use needs it.
 
-## Deferred expansion
+Future work, in rough order:
 
-Keep one monorepo, one batch CLI, one private R2 bucket per environment and one
-read-only Worker. Expand only after the foundation qualification closes, using
-the [extension recipes](extensions.md).
+1. **One regional weather source.** Choose its domain, required fields, update
+   schedule, data rights, and resource limits before adding HRRR, ICON, or WRF.
+2. **Atmospheric profiles.** Define heights, pressure, units, missing values,
+   storage, and point-query limits before building profile charts or APIs.
+3. **Native-grid diagnostics.** Validate wind rotation, map scale, and neighboring
+   cells before adding convergence. Convergence is not a vertical climb forecast.
+4. **Ridge and mountain-wave research.** Distinguish terrain exposure from climb
+   rates, and validate stability, shear, and vertical motion against real cases.
+5. **More detailed WRF operation.** Specify nested or moving domains, terrain
+   references, vertical coordinates, and source timing explicitly.
 
-1. **One regional provider and its native coverage.** Choose the actual domain,
-   required fields, source rights, update cadence and operational envelope before
-   adding HRRR, ICON-Armenia or a WRF configuration. The synthetic Lambert proof
-   demonstrates geometry, not an operational adapter or forecast skill.
-2. **Atmospheric point profiles.** Define vertical coordinates, units,
-   staggering/rotation, missingness, time selection and an admitted response
-   shape. Measure native-cell bundles and frame grouping before choosing a
-   `profiles.bin` format, profile API, Skew-T or windgram UI. Do not force large
-   profiles into the scalar pack's all-channel point query.
-3. **Native-grid convergence.** Establish independent vector/metric tests,
-   stencil support and saved meteorological cases before admission. Horizontal
-   convergence in inverse seconds is not a vertical climb-rate forecast.
-4. **Ridge exposure and mountain wave research.** Separate DEM/wind exposure
-   from claimed climb rates. Wave strength and position require validated
-   stability, shear, critical-level and resolved/solved vertical-motion evidence.
-5. **Enhanced WRF operation.** Treat nesting, hybrid coordinates, source wind
-   rotation, terrain references and moving domains as explicit future contracts.
-   A model family is not a complete configuration/domain identity.
-
-No dates or benefits are promised for these features. First-party adaptation
-provenance and genuine dependency/data notices are maintained in
-[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt); no new public license grant
-is implied by the foundation work.
+These features are not part of the current implementation. There are no release
+dates for them. The [extension guide](extensions.md) describes the input and
+scientific checks needed before starting each kind of work.

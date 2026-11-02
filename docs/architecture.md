@@ -53,8 +53,8 @@ remain batch responsibilities. Clients discover a build, use its explicit
 frames and stop presenting it after expiry. They need no provider credentials
 or knowledge of archive internals.
 
-GFS is the integrated build path. See [status](status.md) for evidence and
-[roadmap](roadmap.md) for regional coverage, export and serving work.
+GFS is the only supported live model. See [status](status.md) for current release
+work and [roadmap](roadmap.md) for possible additions.
 
 Trusted [product definitions](../packages/contracts/src/index.ts) own required
 frames, layers, grid and native zoom. Batch admission checks resource budgets
