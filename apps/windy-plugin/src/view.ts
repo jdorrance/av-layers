@@ -11,6 +11,7 @@ import {
   type PinnedBuild
 } from '@av/contracts/client';
 import type { ControllerState } from './controller';
+import config from './pluginConfig';
 
 export interface PanelCallbacks {
   onModel(model: string): void;
@@ -24,8 +25,8 @@ export interface PanelCallbacks {
 const STYLE_ID = 'av-windy-plugin-style';
 const CSS = `
 .av-panel,.av-panel *{box-sizing:border-box}
-.av-panel{width:100%;max-width:360px;max-height:calc(100vh - 20px);overflow:auto;padding:14px;background:#13191cf2;color:#e6edf0;border:1px solid #36464d;border-radius:8px;box-shadow:0 8px 28px #0008;font:13px/1.4 ui-sans-serif,system-ui,sans-serif}
-.av-panel[hidden]{display:none}
+.av-panel{color:#e6edf0;font:13px/1.4 ui-sans-serif,system-ui,sans-serif}
+.av-panel[hidden],.av-mobile-header[hidden]{display:none}
 .av-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .av-header h1{margin:0;font-size:15px}
 .av-back,.av-button{padding:5px 8px;border:0;border-radius:4px;background:#1c6b8a;color:#fff;cursor:pointer;font-size:12px}
@@ -47,7 +48,6 @@ const CSS = `
 .av-series table{width:100%;border-collapse:collapse;font-size:9px;margin-top:6px}
 .av-series th,.av-series td{padding:2px 3px;border-bottom:1px solid #253036;text-align:left;white-space:nowrap}
 .av-series th{color:#8fa4ad}
-@media(max-width:600px){.av-panel{max-height:45vh}}
 `;
 
 function ensureStyles(): void {
@@ -65,7 +65,8 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string,
 }
 
 export class PluginPanel {
-  readonly root: HTMLDivElement;
+  readonly root: HTMLElement;
+  readonly mobileHeader: HTMLDivElement;
   private readonly modelSelect = node('select');
   private readonly layerSelect = node('select');
   private readonly frameSelect = node('select');
@@ -87,13 +88,16 @@ export class PluginPanel {
 
   constructor(callbacks: PanelCallbacks) {
     ensureStyles();
-    this.root = node('div', 'av-panel');
+    // Native pane content and mobile drag header are mounted as siblings,
+    // following Windy's rhpane/fullscreen layout contract.
+    this.root = node('section', 'plugin__content av-panel');
+    this.mobileHeader = node('div', 'plugin__mobile-header av-mobile-header', config.title);
     this.root.addEventListener('keydown', event => {
       // Keep control keys away from Windy's page shortcuts without canceling native actions.
       if (event.key !== 'Escape' && event.key !== 'Tab') event.stopPropagation();
     });
-    const header = node('header', 'av-header');
-    const title = node('h1', undefined, 'AV usable lift');
+    const header = node('header', 'plugin__title av-header');
+    const title = node('h1', undefined, config.title);
     const back = node('button', 'av-back', '← Menu');
     back.type = 'button';
     back.addEventListener('click', callbacks.onBack);
@@ -137,6 +141,7 @@ export class PluginPanel {
 
   setVisible(visible: boolean): void {
     this.root.hidden = !visible;
+    this.mobileHeader.hidden = !visible;
   }
 
   setStatus(text: string): void {

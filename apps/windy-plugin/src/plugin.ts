@@ -104,7 +104,7 @@ function ensurePanel(): PluginPanel {
       bcast.emit('rqstOpen', 'menu');
     }
   });
-  (mountTarget ?? document.body).append(panel.root);
+  (mountTarget ?? document.body).append(panel.mobileHeader, panel.root);
   return panel;
 }
 
@@ -169,6 +169,8 @@ export const title = __pluginConfig.title;
 export default class ExternalApp {
   constructor(args: { target: HTMLElement; anchor?: HTMLElement }) {
     mountTarget = args.target;
+    // Windy wires native pane behavior after mounting the component.
+    ensurePanel();
   }
 
   onopen(params?: unknown): void {
@@ -177,6 +179,7 @@ export default class ExternalApp {
 
   $destroy(): void {
     onclose();
+    panel?.mobileHeader.remove();
     panel?.root.remove();
     panel = null;
     mountTarget = null;
