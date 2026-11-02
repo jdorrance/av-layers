@@ -48,12 +48,11 @@ const CSS = `
 .av-series table{width:100%;border-collapse:collapse;font-size:9px;margin-top:6px}
 .av-series th,.av-series td{padding:2px 3px;border-bottom:1px solid #253036;text-align:left;white-space:nowrap}
 .av-series th{color:#8fa4ad}
-@media(max-width:600px){.av-panel{top:auto;bottom:10px;max-height:45vh}}
+@media(max-width:600px){#plugin-windy-plugin-av-layer{pointer-events:none}.av-panel{top:auto;bottom:10px;max-height:45vh;pointer-events:auto}}
 `;
 
 function ensureStyles(): void {
-  if (document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
+  const style = document.getElementById(STYLE_ID) ?? document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = CSS;
   document.head.append(style);
