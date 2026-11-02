@@ -1,96 +1,53 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
-import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
-import { getForecastProvider, type ForecastProvider, type ForecastSession } from './providers.js';
+import { dirname, resolve } from 'node:path';
+import { getProduct, createProductDescriptors, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE } from '@av/contracts';
+import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
-import { createRenderer } from './render.js';
 import { WEBP_ENCODER } from './webp.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
-import { summarizeFields } from './summary.js';
-import { MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
-import { createSamplePackBuilder } from './sample-pack.js';
+import { prepareBuild } from './capacity.js';
 import { failureReason } from './failure.js';
-import { fileSha256, finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
+import { finalizeValidatedMetrics, localPath, sha256, validateBuild } from './validate.js';
 
-export interface BuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: DeriveFrameOptions; onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
+import { buildFrames, type BuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
+export type { BuildOptions } from './frame-build.js';
+
+export function createBuildStamp(): BuildStamp {
+  const createdAt = new Date().toISOString();
+  return { createdAt, buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${randomUUID()}` };
+}
 export async function buildProduct(modelId: string, options: BuildOptions): Promise<string> {
   const product = getProduct(modelId), provider = getForecastProvider(modelId);
   if (!product) throw new Error(`No forecast product for ${modelId}`);
   return buildForecast({ ...options, product, mask: await loadCoverage(product), provider });
 }
 
-/** The pipeline knows normalized inputs and a trusted recipe; the adapter owns source discovery/decoding. */
-export async function buildForecast(options: BuildOptions & { product: ProductDefinition; mask: CoverageMask; provider: ForecastProvider }): Promise<string> {
-  const { product, mask, provider } = options;
-  const started = Date.now(), created = new Date(started), buildId = `${created.toISOString().replace(/[-:]/g, '').slice(0, 15)}Z-${randomUUID()}`;
-  const root = resolve(options.out);
-  const cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);
-  const requestedCycle = options.cycle;
-  const { indices, layout, capacity } = prepareBuild(mask, product, { maxLevels: provider.maxLevels }), active = indices.active;
+/** Local sequential execution and distributed workers share the same frame implementation. */
+export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
+  const stamp = createBuildStamp();
+  prepareBuild(options.mask, options.product, { maxLevels: options.provider.maxLevels });
+  const coverageHash = await writeCoverage(resolve(options.out), options.mask, options.product);
+  const identity = await buildIdentity(options.product, coverageHash);
+  const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
+  const result = await buildFrames({ ...options, ...stamp, hours: options.product.frameHours, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
+  return finishForecast({ ...options, ...stamp, coverageHash, identity, result });
+}
+
+/** Assemble and validate a complete product once, before any publication callback. */
+export async function finishForecast(options: BuildOptions & ForecastInputs & BuildStamp & {
+  coverageHash: string; identity: Awaited<ReturnType<typeof buildIdentity>>; result: FrameBuildResult; execution?: Record<string, unknown>;
+}): Promise<string> {
+  const { product, mask, provider, buildId, createdAt, coverageHash, identity, result } = options;
+  const root = resolve(options.out), started = Date.parse(createdAt), prefix = `builds/${product.modelId}/${buildId}`;
+  const { layout, capacity, indices } = prepareBuild(mask, product, { maxLevels: provider.maxLevels });
+  const { frames, artifacts, receipts, samples: packed, cycle } = result, samplesKey = packed.key;
   const channelCount = product.frameHours.length * product.layers.length;
-  let channel = 0;
-  const prefix = `builds/${product.modelId}/${buildId}`, frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: unknown[] = [], summaries: Record<string, ReturnType<typeof summarizeFields>> = {};
-  const counts = { active: active.length, tiles: capacity.tilesByZoom };
-  const coverageHash = await writeCoverage(root, mask, product);
-  const identity = await buildIdentity(product, coverageHash), descriptors = createProductDescriptors(product);
-  const renderer = createRenderer(mask, { signal: options.signal, rasterWorkers: capacity.rasterWorkers });
+  const descriptors = createProductDescriptors(product);
   await mkdir(localPath(root, prefix), { recursive: true });
-  await writeFile(localPath(root, `${prefix}/progress.json`), JSON.stringify({ state: 'acquiring', buildId, startedAt: created.toISOString(), recipe: identity.recipe }));
-  const pack = createSamplePackBuilder(layout, channelCount);
-  let acquisition: ForecastSession | undefined;
-  let completedFrames = 0, frameHour: number | null = null, phase = 'open-provider';
+  let phase = 'provenance';
   try {
-    acquisition = await provider.open({ cycle: requestedCycle, activeIndices: active, cacheDir, signal: options.signal });
-    const cycle = new Date(acquisition.cycle).toISOString();
-    let acquireMs = 0, deriveMs = 0, packMs = 0, renderMs = 0;
-    for (const hour of product.frameHours) {
-      frameHour = hour; phase = 'acquire';
-      options.signal?.throwIfAborted();
-      if (Date.now() - started > MAX_BUILD_LIFETIME_MS) throw new Error('Build exceeded six-hour publisher lifetime');
-      const tAcquire = Date.now();
-      const frame = await acquisition.acquire(hour);
-      validateNormalizedFrame(frame, active, mask.grid, provider.maxLevels);
-      acquireMs += Date.now() - tAcquire;
-      const start = new Date(Date.parse(cycle) + (hour - product.intervalHours) * 3600000).toISOString(), end = new Date(Date.parse(cycle) + hour * 3600000).toISOString();
-      const sameInstant = (actual: string, expected: string): boolean => Date.parse(actual) === Date.parse(expected);
-      if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, end) || !sameInstant(frame.intervals.profileTime, end) || !sameInstant(frame.intervals.fluxWindow.start, start) || !sameInstant(frame.intervals.fluxWindow.end, end) || !sameInstant(frame.intervals.precipitationWindow.start, start) || !sameInstant(frame.intervals.precipitationWindow.end, end)) {
-        throw new Error(`Acquisition interval mismatch f${hour}`);
-      }
-      const id = `f${String(hour).padStart(3, '0')}`;
-      frames.push({ id, validTime: end, intervalStart: start, intervalEnd: end });
-      receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
-      const tDerive = Date.now();
-      phase = 'derive';
-      const fields = deriveFrame(frame, mask, options.deriveOptions);
-      summaries[id] = summarizeFields(fields, mask, indices.output);
-      deriveMs += Date.now() - tDerive;
-      phase = 'pack';
-      const targets = product.layers.map(layer => {
-        const tilesKey = `${prefix}/${layer}/${id}.pmtiles`;
-        const tPack = Date.now();
-        pack.writeChannel(channel++, fields[layer]);
-        packMs += Date.now() - tPack;
-        return { path: localPath(root, tilesKey), field: fields[layer], layer, tilesKey };
-      });
-      const tRender = Date.now();
-      phase = 'render';
-      await renderer.renderArchives(targets);
-      phase = 'hash-artifacts';
-      for (const { path, layer, tilesKey } of targets) {
-        artifacts.push({ layer, frame: id, tilesKey, tilesSha256: await fileSha256(path) });
-      }
-      renderMs += Date.now() - tRender;
-      completedFrames++;
-      phase = 'write-progress';
-      await writeFile(localPath(root, `${prefix}/progress.json`), JSON.stringify({ state: 'rendered-frame', buildId, hour, completedFrames, elapsedMs: Date.now() - started, phasesMs: { acquireMs, deriveMs, packMs, renderMs }, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
-    }
-    frameHour = null; phase = 'finalize-pack';
-    const tTranspose = Date.now(), samplesKey = `${prefix}/samples.bin`;
-    const packed = await pack.finish(localPath(root, samplesKey));
-    packMs += Date.now() - tTranspose;
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
     phase = 'provenance';
     const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle, provider: provider.provider, temporalApproximation: 'interval flux with endpoint profile and PBL', frames: receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
@@ -102,7 +59,7 @@ export async function buildForecast(options: BuildOptions & { product: ProductDe
       model: product.modelId,
       buildId,
       cycle,
-      createdAt: created.toISOString(),
+      createdAt,
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),
       method: { id: createProductMethodId(product), hash: identity.scienceHash },
       coverage: { id: product.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: product.maxNativeZoom },
@@ -126,30 +83,26 @@ export async function buildForecast(options: BuildOptions & { product: ProductDe
     phase = 'validate';
     const validated = await validateBuild(root, manifestSchema.parse({ ...baseManifest, metrics: {} }), mask, coverageHash, product);
     const validateMs = Date.now() - tValidate;
-    const result = finalizeValidatedMetrics(root, validated, {
-      ...counts,
-      frames: summaries,
-      phasesMs: { acquireMs, deriveMs, packMs, renderMs, validateMs },
-      renderer: renderer.metrics(),
-      acquisition: acquisition.stats,
+    const completed = finalizeValidatedMetrics(root, validated, {
+      ...result.metrics,
+      active: indices.active.length, tiles: capacity.tilesByZoom,
+      phasesMs: { ...result.metrics.phasesMs, validateMs },
+      ...(options.execution ? { execution: options.execution } : {}),
       capacity,
       packing: { indexBytes: layout.indexBytes },
       elapsedMs: Date.now() - started,
-      peakRssBytes: process.resourceUsage().maxRSS * 1024
+      peakRssBytes: Math.max(result.metrics.peakRssBytes, process.resourceUsage().maxRSS * 1024)
     });
     const path = localPath(root, `${prefix}/manifest.json`);
     phase = 'write-manifest';
-    await writeFile(path, encodeBoundedJson(result.manifest, MAX_MANIFEST_BYTES), { flag: 'wx' });
+    await writeFile(path, encodeBoundedJson(completed.manifest, MAX_MANIFEST_BYTES), { flag: 'wx' });
     await writeFile(localPath(root, `${prefix}/progress.json`), JSON.stringify({ state: 'validated', buildId, elapsedMs: Date.now() - started }));
     options.signal?.throwIfAborted();
     phase = 'on-validated';
-    await options.onValidated?.(result, path);
+    await options.onValidated?.(completed, path);
     return path;
   } catch (error) {
-    await writeFile(localPath(root, `${prefix}/failure.json`), JSON.stringify({ version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? requestedCycle, phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }));
+    await writeFile(localPath(root, `${prefix}/failure.json`), JSON.stringify({ version: 1, state: 'failed', buildId, provider: provider.id, cycle, phase, failedFrameHour: null, completedFrames: frames.length, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }));
     throw error;
-  } finally {
-    pack.close();
-    await acquisition?.close();
   }
 }

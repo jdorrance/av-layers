@@ -54,7 +54,16 @@ Shared dependency versions use the pnpm catalog in
 An adapter returns normalized arrays with units, missing-value flags, a grid,
 and explicit time intervals. The builder checks the full workload before
 opening the source session. Related lift outputs share one calculation. Tile
-encoding uses bounded concurrency and reuses geometry between frames.
+encoding uses bounded concurrency and shares geometry between a frame's layers.
+
+The hosted workflow plans one source cycle and divides the product's frame list
+among at most four independent workers. Each uses the same frame pipeline as a
+local sequential build. Private completion receipts bind worker outputs to the
+plan, source revision, recipe and coverage. The finalizer checks every group,
+interleaves its numeric channels, and validates the complete product before
+publication. Whole-product limits apply before partitioning; worker memory
+limits apply separately. Elapsed build time includes worker startup and transfers,
+while summed worker durations record the work performed.
 
 Each layer and frame has a PMTiles archive. One numeric file holds point data
 for all frames and layers in spatial blocks. Block edges include neighboring

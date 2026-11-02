@@ -4,12 +4,18 @@ import { dirname } from 'node:path';
 import { CELL_BYTES, MAX_SAMPLE_VALUES } from '@av/contracts';
 import type { GridField, SamplePackLayout } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
+import { readLocalFile } from './local-file.js';
+
+function packByteLength(layout: SamplePackLayout, channelCount: number, maxBytes: number): number {
+  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_SAMPLE_VALUES) throw new RangeError('Invalid pack channel count');
+  const totalBytes = layout.storedCells * channelCount * CELL_BYTES;
+  if (!Number.isSafeInteger(layout.storedCells) || layout.storedCells < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(totalBytes) || totalBytes > maxBytes) throw new RangeError('Sample pack exceeds byte budget');
+  return totalBytes;
+}
 
 /** Incrementally write channels into one admitted final pack. No full-grid channel copies are retained. */
 export function createSamplePackBuilder(layout: SamplePackLayout, channelCount: number, maxBytes = BUILD_BUDGETS.samplePackBytes) {
-  const stride = channelCount * CELL_BYTES, totalBytes = layout.storedCells * stride;
-  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_SAMPLE_VALUES) throw new RangeError('Invalid pack channel count');
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(totalBytes) || totalBytes < 0 || totalBytes > maxBytes) throw new RangeError('Sample pack exceeds byte budget');
+  const stride = channelCount * CELL_BYTES, totalBytes = packByteLength(layout, channelCount, maxBytes);
   let packed: Buffer | undefined = Buffer.alloc(totalBytes);
   const written = new Uint8Array(channelCount);
   let completed = 0;
@@ -47,4 +53,43 @@ export function createSamplePackBuilder(layout: SamplePackLayout, channelCount: 
     },
     close(): void { packed = undefined; }
   };
+}
+
+/** Merge ordered channel groups without decoding values; only the final pack and one input are retained. */
+export async function mergeSamplePacks(
+  layout: SamplePackLayout,
+  inputs: readonly { path: string; channelCount: number; sha256: string }[],
+  output: string,
+  maxBytes = BUILD_BUDGETS.samplePackBytes,
+  signal?: AbortSignal
+): Promise<{ sha256: string; bytes: number }> {
+  signal?.throwIfAborted();
+  if (!inputs.length || inputs.length > MAX_SAMPLE_VALUES) throw new RangeError('Invalid pack channel count');
+  let channelCount = 0;
+  for (const input of inputs) {
+    packByteLength(layout, input.channelCount, maxBytes);
+    if (!/^[0-9a-f]{64}$/.test(input.sha256)) throw new Error('Invalid sample pack hash');
+    channelCount += input.channelCount;
+  }
+  const totalBytes = packByteLength(layout, channelCount, maxBytes), stride = channelCount * CELL_BYTES;
+  if (!totalBytes) throw new RangeError('Cannot merge empty sample packs');
+  const packed = Buffer.alloc(totalBytes);
+  let channelOffset = 0;
+  for (const input of inputs) {
+    signal?.throwIfAborted();
+    const inputStride = input.channelCount * CELL_BYTES;
+    const bytes = await readLocalFile(input.path, maxBytes, layout.storedCells * inputStride);
+    signal?.throwIfAborted();
+    if (createHash('sha256').update(bytes).digest('hex') !== input.sha256) throw new Error(`Sample pack hash mismatch: ${input.path}`);
+    for (let cell = 0; cell < layout.storedCells; cell++) {
+      bytes.copy(packed, cell * stride + channelOffset, cell * inputStride, (cell + 1) * inputStride);
+    }
+    channelOffset += inputStride;
+  }
+  signal?.throwIfAborted();
+  const sha256 = createHash('sha256').update(packed).digest('hex');
+  await mkdir(dirname(output), { recursive: true });
+  signal?.throwIfAborted();
+  await writeFile(output, packed, { flag: 'wx' });
+  return { sha256, bytes: totalBytes };
 }

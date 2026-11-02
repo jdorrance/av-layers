@@ -40,20 +40,26 @@ permissions:
 concurrency:
   group: forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}
   cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  TARGET_ENV: ${{ inputs.environment || 'production' }}
+  MODEL: ${{ inputs.model || 'gfs' }}
+  CYCLE: ${{ inputs.cycle || '' }}
+  ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
+  RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
+  RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
 jobs:
-  build-publish:
-    if: github.ref == 'refs/heads/main'
+  prepare:
+    if: ${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
     environment: ${{ inputs.environment || 'production' }}
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      shards: ${{ steps.plan.outputs.shards }}
+      artifact: ${{ steps.plan.outputs.artifact }}
     env:
-      GH_TOKEN: ${{ github.token }}
-      TARGET_ENV: ${{ inputs.environment || 'production' }}
-      MODEL: ${{ inputs.model || 'gfs' }}
-      CYCLE: ${{ inputs.cycle || '' }}
-      ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
-      RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
-      RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
+      FORECAST_PHASE: plan
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -63,7 +69,104 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Run forecast
+      - name: Admit cycle and plan forecast
+        id: plan
+        run: pnpm operations forecast
+      - name: Share immutable build plan
+        uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.ready == 'true'
+        with:
+          name: ${{ steps.plan.outputs.artifact }}
+          path: |
+            output/plan.json
+            output/coverage/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload planning failure
+        uses: actions/upload-artifact@v4
+        if: failure() || cancelled()
+        with:
+          name: forecast-plan-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/failure.json
+          if-no-files-found: warn
+          retention-days: 7
+  shard:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    env:
+      FORECAST_PHASE: shard
+      SHARD_ID: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: output
+      - name: Build forecast shard
+        run: pnpm operations forecast
+      - name: Upload completed shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}-shard-${{ matrix.shard }}
+          overwrite: true
+          path: |
+            output/builds/
+            output/shards/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload shard diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forecast-shard-records-${{ env.MODEL }}-${{ github.run_id }}-${{ matrix.shard }}
+          overwrite: true
+          path: |
+            output/shards/*/*.json
+            output/failure.json
+          if-no-files-found: warn
+          retention-days: 7
+  build-publish:
+    needs: [prepare, shard]
+    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (inputs['resume-run-id'] || (needs.prepare.outputs.ready == 'true' && needs.shard.result == 'success')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ inputs.environment || 'production' }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Download build plan
+        uses: actions/download-artifact@v4
+        if: ${{ !inputs['resume-run-id'] }}
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: output
+      - name: Finalize and publish forecast
+        if: ${{ !inputs['resume-run-id'] }}
+        env:
+          FORECAST_PHASE: finalize
+          FORECAST_PLAN_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
+          FORECAST_SHARDS: ${{ needs.prepare.outputs.shards }}
+        run: pnpm operations forecast
+      - name: Resume completed forecast
+        if: inputs['resume-run-id']
         run: pnpm operations forecast
       - name: Upload build records
         uses: actions/upload-artifact@v4

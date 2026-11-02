@@ -30,6 +30,15 @@ source-specific conversions inside the adapter. Declare `maxLevels` for resource
 admission. A production binding also implements `resolveCycle` for scheduled and
 manually selected runs.
 
+The hosted planner resolves one cycle and partitions the product's declared frame
+hours. Each worker opens an independent session with that explicit cycle and may
+start partway through the forecast. Fetch any earlier source records needed to
+recover interval fluxes inside the adapter; a worker never depends on another
+worker's calculated output. Product selection and partitioning stay in the shared
+[parallel builder](../apps/batch/src/parallel.ts). The
+[parallel fixture](../apps/batch/src/parallel.test.ts) checks serial agreement for
+a different model and non-hourly frame spacing.
+
 Return a [NormalizedFrame](../packages/forecast/src/inputs.ts) with the requested
 indices in exactly the same order. Inputs declare their units and missing-value
 arrays. In particular, surface pressure is Pa, temperatures are K, specific humidity is

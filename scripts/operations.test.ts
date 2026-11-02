@@ -22,6 +22,14 @@ it('accepts explicit operations without ceremonial confirmation and rejects ambi
   expect(() => validateOperationInputs('bootstrap', base)).toThrow('Usage');
 });
 
+it('admits bounded forecast phases without allowing resume to masquerade as a shard run', () => {
+  for (const phase of ['plan', 'finalize']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: phase })).not.toThrow();
+  for (const SHARD_ID of ['0', '1', '2', '3']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'shard', SHARD_ID })).not.toThrow();
+  for (const SHARD_ID of ['', '-1', '4', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'shard', SHARD_ID })).toThrow('SHARD_ID');
+  expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'other' })).toThrow('phase');
+  expect(() => validateOperationInputs('forecast', { ...base, FORECAST_PHASE: 'finalize', RESUME_RUN_ID: '123' })).toThrow('Resume');
+});
+
 it('derives publication bucket from the selected Wrangler environment and needs one account ID', () => {
   const env = { ...base, R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'ignored-stale-variable' };
   expect(validatePublicationEnvironment(env, config)).toMatchObject({ accountId: account, r2Bucket: config.staging.bucket });

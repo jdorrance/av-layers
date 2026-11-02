@@ -2,13 +2,14 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { getProduct, manifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type Manifest } from '@av/contracts';
+import { getProduct, manifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type Manifest, type ModelId } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
+import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel.js';
 import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import type { ValidatedBuild } from '../apps/batch/src/validate.js';
 
@@ -26,6 +27,20 @@ export async function downloadForecastArtifact(runId: string, root = 'output'): 
   const revision = forecastArtifactRevision(JSON.parse(stdout), repository, runId);
   await promisify(execFile)('gh', ['run', 'download', runId, '--repo', repository, '--name', `forecast-${workflowAuthority().model}-${runId}`, '--dir', root], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
   return revision;
+}
+
+/** Download only the declared workers from this run's producing plan, including failed-job retries. */
+export async function downloadForecastShards(artifact: string, shards: unknown, root = 'output'): Promise<void> {
+  const { repository } = workflowContext();
+  const authority = workflowAuthority();
+  const prefix = `forecast-plan-${authority.model}-${authority.runId}-`;
+  if (!artifact.startsWith(prefix) || !/^[1-9]\d{0,9}$/.test(artifact.slice(prefix.length))
+      || !Array.isArray(shards) || shards.length < 1 || shards.length > MAX_FORECAST_SHARDS
+      || shards.some((id, index) => !Number.isInteger(id) || id !== index)) throw new Error('Invalid forecast shard artifact selection');
+  for (const shard of shards) {
+    await promisify(execFile)('gh', ['run', 'download', authority.runId, '--repo', repository,
+      '--name', `${artifact}-shard-${shard}`, '--dir', root], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
+  }
 }
 
 /** Build and artifact-resume use the same writer, cancellation and durable outcome protocol. */
@@ -77,27 +92,74 @@ export async function publicationWorkflow(work: (run: {
   }
 }
 
+async function admittedCycle(store: ObjectStorage, model: ModelId, signal: AbortSignal): Promise<{ cycle: string; cacheDir: string } | null> {
+  const cacheDir = `.cache/${model}`;
+  const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });
+  const { pointer } = await readPointer(store, model, signal);
+  signal.throwIfAborted();
+  if (pointer) {
+    // Use every retained cycle, just like publish(), including after rollback.
+    const latestCycle = Math.max(...pointer.retained.map(item => Date.parse(item.cycle)));
+    if (Date.parse(cycle) < latestCycle) throw new Error('Older cycle cannot be published');
+    if (Date.parse(cycle) === latestCycle && process.env.ALLOW_SAME_CYCLE !== 'true') {
+      if (process.env.GITHUB_EVENT_NAME === 'schedule') {
+        console.log(`Skipped scheduled ${model} build: cycle ${cycle} was already published. No new build was produced.`);
+        return null;
+      }
+      throw new Error('This cycle was already published; set allow-same-cycle=true for an intentional replacement');
+    }
+  }
+  return { cycle, cacheDir };
+}
+
 /** The one writer workflow retains validation and owns exclusion through publication and cleanup. */
 export async function buildAndPublish(store?: ObjectStorage): Promise<void> {
   await publicationWorkflow(async ({ root, signal, store, model, commit }) => {
-    const cacheDir = `.cache/${model}`;
-    const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });
-    const { pointer } = await readPointer(store, model, signal);
-    signal.throwIfAborted();
-    if (pointer) {
-      // Use every retained cycle, just like publish(), including after rollback.
-      const latestCycle = Math.max(...pointer.retained.map(item => Date.parse(item.cycle)));
-      if (Date.parse(cycle) < latestCycle) throw new Error('Older cycle cannot be published');
-      if (Date.parse(cycle) === latestCycle && process.env.ALLOW_SAME_CYCLE !== 'true') {
-        if (process.env.GITHUB_EVENT_NAME === 'schedule') {
-          console.log(`Skipped scheduled ${model} build: cycle ${cycle} was already published. No new build was produced.`);
-          return;
-        }
-        throw new Error('This cycle was already published; set allow-same-cycle=true for an intentional replacement');
-      }
-    }
+    const selected = await admittedCycle(store, model, signal);
+    if (!selected) return;
     const { buildProduct } = await import('../apps/batch/src/build.js');
-    await buildProduct(model, { out: root, signal, cycle, cacheDir, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated) });
+    await buildProduct(model, { out: root, signal, ...selected, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated) });
+  }, store);
+}
+
+/** Resolve the cycle once before independent workers receive the immutable plan. */
+export async function planForecast(store?: ObjectStorage): Promise<{ planPath: string; shards: number[] } | null> {
+  let planned: { planPath: string; shards: number[] } | null = null;
+  await publicationWorkflow(async ({ root, signal, store, model }) => {
+    const selected = await admittedCycle(store, model, signal);
+    if (!selected) return;
+    const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
+    planned = await createForecastPlan(model, { out: root, cycle: selected.cycle, shards: MAX_FORECAST_SHARDS, signal });
+  }, store);
+  return planned;
+}
+
+async function assertPlannedModel(model: string): Promise<void> {
+  const raw = parseBoundedJson(await readLocalFile('output/plan.json', MAX_MANIFEST_BYTES));
+  if (!raw || typeof raw !== 'object' || !('model' in raw) || raw.model !== model) throw new Error('Forecast plan differs from the workflow model');
+}
+
+/** Shard workers have no publication storage or credentials. */
+export async function runForecastShard(shard: number): Promise<void> {
+  const authority = workflowAuthority();
+  const controller = new AbortController();
+  const abort = (): void => controller.abort(new Error('Forecast shard interrupted'));
+  process.once('SIGINT', abort); process.once('SIGTERM', abort);
+  try {
+    await assertPlannedModel(authority.model);
+    const { buildForecastShard } = await import('../apps/batch/src/parallel.js');
+    await buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal });
+  } finally {
+    process.off('SIGINT', abort); process.off('SIGTERM', abort);
+  }
+}
+
+/** Only the complete, validated shard set can enter the existing publication protocol. */
+export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
+  await publicationWorkflow(async ({ root, signal, model, commit }) => {
+    await assertPlannedModel(model);
+    const { finalizeForecastBuild } = await import('../apps/batch/src/parallel.js');
+    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated) });
   }, store);
 }
 

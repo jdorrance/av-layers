@@ -1,0 +1,113 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
+import { type ForecastProvider, type ForecastSession } from './providers.js';
+import { createRenderer } from './render.js';
+import { summarizeFields } from './summary.js';
+import { MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
+import { createSamplePackBuilder } from './sample-pack.js';
+import { failureReason } from './failure.js';
+import { fileSha256, localPath, type ValidatedBuild } from './validate.js';
+
+export interface BuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: DeriveFrameOptions; onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
+export interface ForecastInputs { product: ProductDefinition; mask: CoverageMask; provider: ForecastProvider }
+export interface BuildStamp { buildId: string; createdAt: string }
+export interface FrameBuildResult {
+  cycle: string;
+  frames: Manifest['frames'];
+  artifacts: Manifest['artifacts'];
+  receipts: { hour: number; intervals: unknown; receipt: unknown }[];
+  samples: { key: string; sha256: string; bytes: number; channelCount: number };
+  metrics: {
+    frames: Record<string, ReturnType<typeof summarizeFields>>;
+    phasesMs: { acquireMs: number; deriveMs: number; packMs: number; renderMs: number };
+    renderer: Record<string, unknown>;
+    acquisition: Record<string, unknown>;
+    elapsedMs: number;
+    peakRssBytes: number;
+  };
+}
+
+export function forecastFrame(cycle: string, hour: number, intervalHours: number): Manifest['frames'][number] {
+  const start = new Date(Date.parse(cycle) + (hour - intervalHours) * 3_600_000).toISOString();
+  const end = new Date(Date.parse(cycle) + hour * 3_600_000).toISOString();
+  return { id: `f${String(hour).padStart(3, '0')}`, validTime: end, intervalStart: start, intervalEnd: end };
+}
+
+/** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
+export async function buildFrames(options: BuildOptions & ForecastInputs & BuildStamp & { hours: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
+  const { product, mask, provider, buildId, hours, samplesKey, journalPrefix } = options;
+  const root = resolve(options.out), started = Date.now(), prefix = `builds/${product.modelId}/${buildId}`;
+  const cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);
+  const { indices, layout, capacity } = prepareBuild(mask, product, { maxLevels: provider.maxLevels }), active = indices.active;
+  const channelCount = hours.length * product.layers.length;
+  let channel = 0;
+  const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: FrameBuildResult['receipts'] = [], summaries: FrameBuildResult['metrics']['frames'] = {};
+  const renderer = createRenderer(mask, { signal: options.signal, rasterWorkers: capacity.rasterWorkers });
+  await mkdir(localPath(root, journalPrefix), { recursive: true });
+  const journal = (name: string, data: unknown) => writeFile(localPath(root, `${journalPrefix}/${name}.json`), JSON.stringify(data));
+  await journal('progress', { state: 'acquiring', buildId, startedAt: new Date(started).toISOString() });
+  const pack = createSamplePackBuilder(layout, channelCount);
+  let acquisition: ForecastSession | undefined;
+  let completedFrames = 0, frameHour: number | null = null, phase = 'open-provider';
+  try {
+    options.signal?.throwIfAborted();
+    acquisition = await provider.open({ cycle: options.cycle, activeIndices: active, cacheDir, signal: options.signal });
+    const cycle = new Date(acquisition.cycle).toISOString();
+    if (options.cycle && Date.parse(cycle) !== Date.parse(options.cycle)) throw new Error('Provider cycle differs from requested cycle');
+    let acquireMs = 0, deriveMs = 0, packMs = 0, renderMs = 0;
+    for (const hour of hours) {
+      frameHour = hour; phase = 'acquire';
+      options.signal?.throwIfAborted();
+      if (Date.now() - Date.parse(options.createdAt) > MAX_BUILD_LIFETIME_MS) throw new Error('Build exceeded six-hour publisher lifetime');
+      const tAcquire = Date.now();
+      const frame = await acquisition.acquire(hour);
+      validateNormalizedFrame(frame, active, mask.grid, provider.maxLevels);
+      acquireMs += Date.now() - tAcquire;
+      const descriptor = forecastFrame(cycle, hour, product.intervalHours), { id, intervalStart: start, intervalEnd: end } = descriptor;
+      const sameInstant = (actual: string, expected: string): boolean => Date.parse(actual) === Date.parse(expected);
+      if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, end) || !sameInstant(frame.intervals.profileTime, end) || !sameInstant(frame.intervals.fluxWindow.start, start) || !sameInstant(frame.intervals.fluxWindow.end, end) || !sameInstant(frame.intervals.precipitationWindow.start, start) || !sameInstant(frame.intervals.precipitationWindow.end, end)) {
+        throw new Error(`Acquisition interval mismatch f${hour}`);
+      }
+      frames.push(descriptor);
+      receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
+      const tDerive = Date.now();
+      phase = 'derive';
+      const fields = deriveFrame(frame, mask, options.deriveOptions);
+      summaries[id] = summarizeFields(fields, mask, indices.output);
+      deriveMs += Date.now() - tDerive;
+      phase = 'pack';
+      const targets = product.layers.map(layer => {
+        const tilesKey = `${prefix}/${layer}/${id}.pmtiles`;
+        const tPack = Date.now();
+        pack.writeChannel(channel++, fields[layer]);
+        packMs += Date.now() - tPack;
+        return { path: localPath(root, tilesKey), field: fields[layer], layer, tilesKey };
+      });
+      const tRender = Date.now();
+      phase = 'render';
+      await renderer.renderArchives(targets);
+      phase = 'hash-artifacts';
+      for (const { path, layer, tilesKey } of targets) artifacts.push({ layer, frame: id, tilesKey, tilesSha256: await fileSha256(path) });
+      renderMs += Date.now() - tRender;
+      completedFrames++;
+      phase = 'write-progress';
+      await journal('progress', { state: 'rendered-frame', buildId, hour, completedFrames, elapsedMs: Date.now() - started, phasesMs: { acquireMs, deriveMs, packMs, renderMs }, peakRssBytes: process.resourceUsage().maxRSS * 1024 });
+    }
+    frameHour = null; phase = 'finalize-pack';
+    const tPack = Date.now();
+    const packed = await pack.finish(localPath(root, samplesKey));
+    packMs += Date.now() - tPack;
+    return { cycle, frames, artifacts, receipts, samples: { ...packed, key: samplesKey, channelCount }, metrics: {
+      frames: summaries, phasesMs: { acquireMs, deriveMs, packMs, renderMs }, renderer: renderer.metrics(), acquisition: acquisition.stats,
+      elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024
+    } };
+  } catch (error) {
+    await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle, phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) });
+    throw error;
+  } finally {
+    pack.close();
+    await acquisition?.close();
+  }
+}

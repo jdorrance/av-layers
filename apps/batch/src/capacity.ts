@@ -7,7 +7,7 @@ export const BUILD_BUDGETS = {
   gridCells: MAX_GRID_CELLS,
   tiles: 300_000,
   samplePackBytes: 256 * 1024 * 1024,
-  elapsedMs: 20 * 60_000,
+  elapsedMs: 50 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
 } as const;
 

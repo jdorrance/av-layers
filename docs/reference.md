@@ -167,7 +167,7 @@ These are configured limits. [Capacity checks](../apps/batch/src/capacity.ts) ow
 
 Complete-build limits:
 
-- `elapsedMs`: `1200000`.
+- `elapsedMs`: `3000000`.
 - `gridCells`: `4000000`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.

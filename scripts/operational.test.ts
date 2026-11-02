@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel';
 import { GFS_DISCOVERY_LAG_HOURS, GFS_FORECAST_HOURS } from '../apps/batch/src/noaa/constants';
 
 const fixture = (name: string): string => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
@@ -69,12 +70,29 @@ describe('declarative workflows', () => {
     }
   });
 
+  it('isolates four compute workers from publication credentials and preserves the resume path', () => {
+    const forecast = workflow('forecast.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
+    expect(record(shard.strategy)['max-parallel']).toBe(MAX_FORECAST_SHARDS);
+    expect(record(shard.strategy)['fail-fast']).toBe(false);
+    expect(shard.needs).toBe('prepare');
+    expect(shard.environment).toBeUndefined();
+    for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'CLOUDFLARE_ACCOUNT_ID']) expect(env[key]).toBeUndefined();
+    expect(publisher.needs).toEqual(['prepare', 'shard']);
+    expect(String(publisher.if)).toContain("needs.shard.result == 'success'");
+    expect(String(publisher.if)).toContain("inputs['resume-run-id']");
+    expect(record(publisher.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
+    const steps = list(publisher.steps).map(record);
+    expect(steps.some(step => step.name === 'Resume completed forecast' && step.run === 'pnpm operations forecast')).toBe(true);
+    expect(steps.some(step => step.uses === 'actions/download-artifact@v4' && record(step.with).pattern)).toBe(false);
+  });
+
   it('finishes the next scheduled job before the previous forecast horizon ends', () => {
     const forecast = workflow('forecast.yml');
     const [minute, hours, day, month, weekday] = String(record(list(record(forecast.on).schedule)[0]).cron).split(' ');
     expect([day, month, weekday]).toEqual(['*', '*', '*']);
     const starts = hours!.split(',').map(hour => Number(hour) * 60 + Number(minute)).sort((a, b) => a - b);
-    const budget = Number(record(record(forecast.jobs)['build-publish'])['timeout-minutes']);
+    const jobs = record(forecast.jobs);
+    const budget = ['prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), 0);
     for (let i = 0; i < starts.length; i++) {
       const cycle = Math.floor((starts[i]! - GFS_DISCOVERY_LAG_HOURS * 60) / 360) * 360;
       const nextStart = starts[(i + 1) % starts.length]! + (i + 1 === starts.length ? 1440 : 0);

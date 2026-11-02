@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Manifest, ModelPointer } from '@av/contracts';
-const fake = vi.hoisted(() => ({ build: vi.fn(), discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn() }));
+const fake = vi.hoisted(() => ({ build: vi.fn(), discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn() }));
 vi.mock('../apps/batch/src/build.js', () => ({ buildProduct: fake.build }));
+vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
 vi.mock('../apps/batch/src/providers.js', async () => {
   const { validateCycle } = await import('../apps/batch/src/noaa/acquire.js');
   return { getForecastProvider: () => ({ async resolveCycle({ cycle, ...options }: { cycle?: string }) { return validateCycle(cycle || (await fake.discover(options)).cycle); } }) };
@@ -10,13 +11,13 @@ vi.mock('../apps/batch/src/providers.js', async () => {
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer }));
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
-vi.mock('../apps/batch/src/storage.js', () => ({ r2Storage: () => ({}) }));
+vi.mock('../apps/batch/src/storage.js', () => ({ r2Storage: fake.storage }));
 vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
 vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
-import { buildAndPublish, resumePublication, forecastArtifactRevision, downloadForecastArtifact } from './publication-workflow.js';
+import { buildAndPublish, resumePublication, forecastArtifactRevision, downloadForecastArtifact, downloadForecastShards, planForecast, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 let manifest: Manifest;
 beforeEach(() => {
@@ -25,6 +26,10 @@ beforeEach(() => {
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
+  fake.storage.mockReturnValue({});
+  fake.plan.mockResolvedValue({ planPath: 'output/plan.json', shards: [0, 1, 2, 3] });
+  fake.shard.mockResolvedValue('output/shards/0/receipt.json');
+  fake.finalize.mockImplementation(async (_plan, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.discover.mockResolvedValue({ cycle: manifest.cycle });
   fake.pointer.mockResolvedValue({ pointer: null });
   fake.build.mockImplementation(async (_model, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
@@ -216,4 +221,71 @@ it('verifies the completed source workflow before downloading a retained forecas
   fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify({ ...run, head_branch: 'feature' }) });
   await expect(downloadForecastArtifact('123')).rejects.toThrow('authorized main forecast');
   expect(fake.gh).toHaveBeenCalledTimes(1);
+});
+
+
+it('plans one admitted cycle for four workers without publishing', async () => {
+  await expect(planForecast()).resolves.toEqual({ planPath: 'output/plan.json', shards: [0, 1, 2, 3] });
+  expect(fake.discover).toHaveBeenCalledOnce();
+  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal) });
+  expect(fake.build).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
+});
+it('skips the entire shard fanout for an already published scheduled cycle', async () => {
+  vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+  fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
+  await expect(planForecast()).resolves.toBeNull();
+  expect(fake.plan).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
+});
+it('records planning failure without claiming publication', async () => {
+  fake.plan.mockRejectedValueOnce(new Error('Plan does not fit budget'));
+  await expect(planForecast()).rejects.toThrow('Plan does not fit budget');
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+it('runs a worker without constructing publication storage or resolving another cycle', async () => {
+  await runForecastShard(2);
+  expect(fake.shard).toHaveBeenCalledWith('output/plan.json', 2, { out: 'output', cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
+  expect(fake.storage).not.toHaveBeenCalled(); expect(fake.discover).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
+});
+it('cancels the shard and removes its signal handlers', async () => {
+  const before = process.listenerCount('SIGTERM');
+  fake.shard.mockImplementationOnce(async (_plan, _shard, { signal }) => { process.emit('SIGTERM'); signal.throwIfAborted(); });
+  await expect(runForecastShard(0)).rejects.toThrow('Forecast shard interrupted');
+  expect(process.listenerCount('SIGTERM')).toBe(before);
+  expect(fake.storage).not.toHaveBeenCalled();
+});
+it('finalizes shards through the existing validation, current-main, publication and cleanup protocol', async () => {
+  await finalizeAndPublish();
+  expect(fake.finalize).toHaveBeenCalledWith('output/plan.json', expect.objectContaining({ out: 'output', signal: expect.any(AbortSignal), onValidated: expect.any(Function) }));
+  expect(fake.build).not.toHaveBeenCalled(); expect(fake.discover).not.toHaveBeenCalled();
+  expect(fake.finalize.mock.invocationCallOrder[0]).toBeLessThan(fake.gh.mock.invocationCallOrder[0]);
+  expect(fake.gh.mock.invocationCallOrder[0]).toBeLessThan(fake.publish.mock.invocationCallOrder[0]);
+  expect(fake.cleanup).toHaveBeenCalledOnce();
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/publication.json', expect.stringContaining('"validationReused": true'));
+});
+it('never publishes or cleans up an incomplete shard set', async () => {
+  fake.finalize.mockRejectedValueOnce(new Error('Missing forecast shard'));
+  await expect(finalizeAndPublish()).rejects.toThrow('Missing forecast shard');
+  expect(fake.publish).not.toHaveBeenCalled(); expect(fake.cleanup).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
+});
+it('downloads only exact declared shard artifacts from the producing plan', async () => {
+  await downloadForecastShards('forecast-plan-gfs-123-1', [0, 1]);
+  expect(fake.gh).toHaveBeenCalledTimes(2);
+  for (const index of [0, 1]) expect(fake.gh).toHaveBeenNthCalledWith(index + 1, 'gh', ['run', 'download', '123', '--repo', 'owner/repo', '--name', `forecast-plan-gfs-123-1-shard-${index}`, '--dir', 'output'], { timeout: 300_000, maxBuffer: 1024 * 1024 });
+});
+it('refuses cross-run, cross-model, ambiguous or unbounded shard artifact selections', async () => {
+  for (const [artifact, shards] of [
+    ['forecast-plan-gfs-124-1', [0]], ['forecast-plan-icon-eu-123-1', [0]], ['forecast-plan-gfs-123-*', [0]],
+    ['forecast-plan-gfs-123-0', [0]], ['forecast-plan-gfs-123-1', []], ['forecast-plan-gfs-123-1', [0, 0]],
+    ['forecast-plan-gfs-123-1', [1, 0]], ['forecast-plan-gfs-123-1', [0, 1, 2, 3, 4]],
+  ] as const) await expect(downloadForecastShards(artifact, shards)).rejects.toThrow('artifact selection');
+  expect(fake.gh).not.toHaveBeenCalled();
+});
+
+it('rejects a plan for another workflow model before worker computation or finalization', async () => {
+  fake.readLocal.mockResolvedValue(Buffer.from(JSON.stringify({ model: 'other-model' })));
+  await expect(runForecastShard(0)).rejects.toThrow('workflow model');
+  await expect(finalizeAndPublish()).rejects.toThrow('workflow model');
+  expect(fake.shard).not.toHaveBeenCalled(); expect(fake.finalize).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
 });
