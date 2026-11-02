@@ -7,7 +7,9 @@ import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
-import { cleanup, publish, type CleanupSummary } from '../apps/batch/src/publication.js';
+import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
+import { discoverGfsRun } from '../apps/batch/src/noaa/discover.js';
+import { validateCycle } from '../apps/batch/src/noaa/acquire.js';
 import { r2Storage } from '../apps/batch/src/storage.js';
 import { wasValidatedInProcess } from '../apps/batch/src/validate.js';
 
@@ -87,9 +89,25 @@ export async function publicationWorkflow(work: (run: {
 
 /** The one writer workflow retains validation and owns exclusion through publication and cleanup. */
 export async function buildAndPublish(): Promise<void> {
-  const { buildSample } = await import('../apps/batch/src/build.js');
   await publicationWorkflow(async ({ root, signal, commit }) => {
-    await buildSample({ out: root, signal, cycle: process.env.CYCLE || undefined, cacheDir: '.cache/gfs', onValidated: commit });
+    const cacheDir = '.cache/gfs';
+    const cycle = validateCycle(process.env.CYCLE || (await discoverGfsRun({ cacheDir, signal })).cycle);
+    const { pointer } = await readPointer(r2Storage(), 'gfs', signal);
+    signal.throwIfAborted();
+    if (pointer) {
+      // Use every retained cycle, just like publish(), including after rollback.
+      const latestCycle = Math.max(...pointer.retained.map(item => Date.parse(item.cycle)));
+      if (Date.parse(cycle) < latestCycle) throw new Error('Older cycle cannot be published');
+      if (Date.parse(cycle) === latestCycle && process.env.ALLOW_SAME_CYCLE !== 'true') {
+        if (process.env.GITHUB_EVENT_NAME === 'schedule') {
+          console.log(`Skipped scheduled GFS build: cycle ${cycle} was already published. No new build was produced.`);
+          return;
+        }
+        throw new Error('This cycle was already published; set allow-same-cycle=true for an intentional replacement');
+      }
+    }
+    const { buildSample } = await import('../apps/batch/src/build.js');
+    await buildSample({ out: root, signal, cycle, cacheDir, onValidated: commit });
   });
 }
 

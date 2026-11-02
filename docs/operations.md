@@ -35,8 +35,8 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs
 
 Without `cycle`, the builder chooses a complete recent GFS run. To select one,
 add `-f cycle=YYYY-MM-DDTHH:00:00Z` using a 00, 06, 12 or 18 UTC cycle.
-Production also runs automatically at **05:17 and 17:17 UTC**. Successful
-publication is followed by cleanup.
+Production also runs automatically at **05:17 and 17:17 UTC**. Scheduled runs
+skip a cycle already published; successful publication is followed by cleanup.
 
 Publishing requires a source cycle at most **18 hours old**, at least **six
 hours of forecast remaining**, and a build created within the last **six hours**.
