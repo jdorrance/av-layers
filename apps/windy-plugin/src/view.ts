@@ -45,6 +45,7 @@ const CSS = `
 .av-legend-row{display:flex;align-items:center;gap:6px;font-size:10.5px;min-height:16px}
 .av-swatch{width:22px;height:11px;border-radius:2px;border:1px solid #ffffff22;flex:none}
 .av-series-panel{margin-top:12px;border-top:1px solid #253036;padding-top:8px}
+.av-series{overflow-x:auto}
 .av-series table{width:100%;border-collapse:collapse;font-size:9px;margin-top:6px}
 .av-series th,.av-series td{padding:2px 3px;border-bottom:1px solid #253036;text-align:left;white-space:nowrap}
 .av-series th{color:#8fa4ad}
@@ -118,6 +119,8 @@ export class PluginPanel {
     this.seriesButton.type = 'button';
     this.seriesButton.disabled = true;
     this.seriesButton.addEventListener('click', callbacks.onSeries);
+    this.series.role = 'region';
+    this.series.ariaLabel = 'Point forecast values';
     this.error.hidden = true;
     this.error.role = 'alert';
     this.horizonNotice.hidden = true;
@@ -159,11 +162,12 @@ export class PluginPanel {
 
   clearSeries(): void {
     this.series.replaceChildren();
+    this.series.tabIndex = -1;
     this.setSeriesStatus('');
   }
 
   setClicked(lat: number, lon: number): void {
-    this.series.replaceChildren();
+    this.clearSeries();
     this.clicked = normalizePoint(lat, lon);
     this.seriesButton.disabled = false;
     this.seriesStatus.textContent = `Clicked ${this.clicked.lat.toFixed(4)}, ${this.clicked.lon.toFixed(4)}`;
@@ -231,6 +235,7 @@ export class PluginPanel {
   ): void {
     if (!this.currentBuild) return;
     renderSampleTable(this.series, payload, layers, this.currentBuild);
+    this.series.tabIndex = 0;
     const targetPoint = point ?? this.clicked ?? { lat: 0, lon: 0 };
     this.seriesStatus.textContent = formatSeriesSummary(payload, layers, targetPoint);
   }
