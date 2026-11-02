@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createRecipeIdentity, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createProductMethodId, createRecipeIdentity, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -31,7 +31,7 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString(), 
   const prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: frameCount }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
   const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
-  const manifest = { version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: 'dry-lenschow-pbl-1p2-v1', hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
+  const manifest = { version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: createProductMethodId(), hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
 }

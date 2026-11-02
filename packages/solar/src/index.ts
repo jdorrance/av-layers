@@ -5,6 +5,8 @@
  * separable grid ephemeris tables for fast daylight-only forecast derivation.
  */
 
+import { LIFT_METHOD_PARAMETERS } from '@av/contracts';
+
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 const DAY_MS = 86_400_000;
@@ -14,9 +16,9 @@ const J2000 = 2_451_545.0;
 
 /**
  * Standard apparent sunrise/sunset geometric horizon angle in degrees,
- * accounting for atmospheric refraction and the solar disc semi-diameter.
+ * sourced from `@av/contracts` `LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg`.
  */
-export const DEFAULT_HORIZON_DEG = -0.833;
+export const DEFAULT_HORIZON_DEG = LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg;
 
 export interface SolarEphemeris {
   readonly declinationDeg: number;

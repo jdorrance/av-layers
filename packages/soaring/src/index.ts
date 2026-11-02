@@ -20,7 +20,7 @@ import {
   SUPPORT_PBL_CLOSURE,
   SUPPORT_PROFILE_TOP
 } from '@av/contracts';
-import { dryParcelTemperatureK, saturationVaporPressureHpa } from '@av/thermodynamics';
+import { dryParcelTemperatureC, saturationVaporPressureHpa } from '@av/thermodynamics';
 
 export const METHOD_ID = LIFT_METHOD.id;
 
@@ -332,7 +332,7 @@ export function deriveColumn(
   for (let i = 0; i < levelCount; i++) {
     const level = levels[i]!;
     const height = level.heightM - terrainM;
-    const parcelTemperature = dryParcelTemperatureK(
+    const parcelTemperature = dryParcelTemperatureC(
       parcelSurfaceTempC,
       0,
       height,
@@ -357,7 +357,7 @@ export function deriveColumn(
       const prev = levels[i - 1]!;
       const prevHeight = prev.heightM - terrainM;
       const prevExcess =
-        dryParcelTemperatureK(parcelSurfaceTempC, 0, prevHeight, dryLapseRate) -
+        dryParcelTemperatureC(parcelSurfaceTempC, 0, prevHeight, dryLapseRate) -
         prev.temperatureC;
       depth =
         prevHeight +

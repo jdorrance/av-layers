@@ -1,5 +1,5 @@
 import type { LayerId, ModelId } from '@av/contracts';
-import { ApiClient, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
+import { ApiClient, formatBuildFreshness, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
 import { PluginController, type WindyHost } from './controller';
 import { PluginPanel } from './view';
 import { WindyRasterLayer } from './raster-layer';
@@ -153,8 +153,7 @@ async function startController(model: ModelId): Promise<void> {
       if (seriesAbort) ui.setSeriesEnabled(false);
       if (state.phase === 'ready' && state.buildId) {
         const build = activeController.currentBuild;
-        const remaining = build ? Math.max(0, build.expiresAtMs - Date.now()) : 0;
-        ui.setStatus(`Pinned build ${state.buildId} · artifacts expire in ${Math.floor(remaining / 60000)} min`);
+        if (build) ui.setStatus(formatBuildFreshness(build.manifest, build.expiresAtMs));
       }
     }
   });

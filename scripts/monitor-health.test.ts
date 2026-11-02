@@ -73,6 +73,7 @@ describe('maintenance and forecast workflow observations', () => {
     expect(forecastWorkflowFindings([legacyManual], 'production', now)).toEqual([]);
     const scheduled = run({ display_title: 'Forecast', event: 'schedule', created_at: '2026-11-01T10:00:00Z' });
     expect(forecastWorkflowFindings([run({ ...legacyManual, conclusion: 'success' }), scheduled], 'production', now)).toEqual([`publisher-or-cleanup-failure: ${scheduled.html_url}`]);
-    expect(forecastScheduleFindings([scheduled], now)).toEqual([]);
+    expect(forecastScheduleFindings([scheduled], now)).toEqual([`publisher-or-cleanup-failure: ${scheduled.html_url}`]);
+    expect(forecastScheduleFindings([run({ ...scheduled, conclusion: 'success' })], now)).toEqual([]);
   });
 });

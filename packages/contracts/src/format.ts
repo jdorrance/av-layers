@@ -8,3 +8,5 @@ export const MAX_RETAINED_BUILDS = 256;
 export const MAX_NATIVE_ZOOM = 8;
 export const RASTER_TILE_SIZE = 256;
 export const MAX_TILE_BYTES = 1024 * 1024;
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_PROBE_TIMEOUT_MS = 30_000;

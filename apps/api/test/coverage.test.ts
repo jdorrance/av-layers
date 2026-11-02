@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { createProductDescriptors, createRecipeIdentity, gridSchema, type Grid, type Manifest, type ProductDefinition } from '@av/contracts';
+import { createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, type Grid, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
 import { resolveCoverage } from '../src/coverage';
@@ -24,7 +24,7 @@ function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string
   const samples = new Uint8Array(layout.storedCells * frames.length * 5), view = new DataView(samples.buffer);
   for (let offset = 0; offset < samples.length; offset += 5) view.setFloat32(offset, options.value ?? 7, true);
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
-  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: 'synthetic-method', hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers: ['precip-rate'], artifacts: frames.map(frame => ({ layer: 'precip-rate', frame: frame.id, tilesKey: `${prefix}/precip-rate/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: ['rain'], tool: {}, metrics: {} };
+  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: createProductMethodId(product), hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers: ['precip-rate'], artifacts: frames.map(frame => ({ layer: 'precip-rate', frame: frame.id, tilesKey: `${prefix}/precip-rate/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: ['rain'], tool: {}, metrics: {} };
   const objects = new Map<string, Uint8Array>([
     [`${coveragePrefix}/manifest.json`, descriptorBytes], [`${coveragePrefix}/output.bin`, output], [`${coveragePrefix}/halo.bin`, halo], [`${coveragePrefix}/tiles.bin`, tiles],
     [`${prefix}/manifest.json`, json(manifest)], [`${prefix}/samples.bin`, samples], [`${prefix}/provenance.json`, provenance],

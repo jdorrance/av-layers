@@ -176,6 +176,8 @@ Complete-build limits:
 Shared producer/consumer contract limits and storage constants:
 
 - `CELL_BYTES`: `5`.
+- `DEFAULT_PROBE_TIMEOUT_MS`: `30000`.
+- `DEFAULT_REQUEST_TIMEOUT_MS`: `15000`.
 - `MAX_COVERAGE_BITSET_BYTES`: `524288`.
 - `MAX_COVERAGE_DESCRIPTOR_BYTES`: `131072`.
 - `MAX_GRID_CELLS`: `4000000`.
@@ -196,7 +198,9 @@ Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):
 
 - `MAX_RASTER_WORKERS`: 3.
 - `MAX_RASTER_SHARED_INPUT_BYTES`: 67108864.
-- `RASTER_WORKER_RESERVE_BYTES`: 134217728; admission estimate per worker, not an operating-system memory limit.
+- `RASTER_WORKER_RESOURCE_LIMITS`: `{"maxOldGenerationSizeMb":64,"maxYoungGenerationSizeMb":16,"stackSizeMb":4}` (V8 heap/stack ceiling per worker).
+- `RASTER_WORKER_NATIVE_RESERVE_MB`: 44.
+- `RASTER_WORKER_RESERVE_BYTES`: 134217728; admission reserve per worker derived from the V8 heap/stack ceiling plus native allowance.
 
 ## API reference
 

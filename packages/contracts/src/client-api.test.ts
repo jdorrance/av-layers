@@ -73,7 +73,7 @@ describe('ApiClient.latest', () => {
   it('propagates structured problem details', async () => {
     const client = new ApiClient({
       baseUrl: 'https://api.test',
-      fetchImpl: (async () => jsonResponse({ type: 'not-retained', detail: 'expired', status: 404 }, 404)) as typeof fetch
+      fetchImpl: (async () => jsonResponse({ type: 'urn:windy-av:not-retained', title: 'not-retained', detail: 'expired', status: 404 }, 404)) as typeof fetch
     });
     await expect(client.latest('gfs')).rejects.toMatchObject({ status: 404, code: 'not-retained', message: 'expired' });
   });

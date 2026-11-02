@@ -6,7 +6,7 @@
   "createdAt": "2026-10-30T00:00:01.000Z",
   "expiresAt": "2026-11-06T00:00:01.000Z",
   "method": {
-    "id": "dry-lenschow-pbl-1p2-v1",
+    "id": "dry-lenschow-pbl-1p2-v1+trailing-precipitation-rate-v1",
     "hash": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "coverage": {
@@ -506,6 +506,8 @@
         "spatialSupport": "column",
         "parameters": {
           "sinkRateMps": 1.2,
+          "minimumThermalVelocityMps": 0,
+          "minimumSolarElevationDeg": -0.833,
           "lenschowScale": 4,
           "lenschowShape": 0.8,
           "lenschowPeakZeta": 0.3125,
@@ -533,6 +535,7 @@
         },
         "caveats": [
           "Dry parcel calculation; no moist parcel or cloud treatment.",
+          "Daylight-only derivation: cells where solar elevation remains at or below minimumSolarElevationDeg (-0.833 deg) across the flux interval and valid time emit no-usable-lift without column evaluation.",
           "Interval-mean surface fluxes are paired with the endpoint profile and PBL.",
           "PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.",
           "A profile without a resolved crossing is capped at its highest usable level and flagged.",
@@ -560,10 +563,12 @@
         ],
         "spatialSupport": "column",
         "parameters": {
-          "minimumRateMmPerHour": 0
+          "minimumRateMmPerHour": 0,
+          "minimumSolarElevationDeg": -0.833
         },
         "caveats": [
           "The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.",
+          "Daylight-only derivation: cells where solar elevation remains at or below minimumSolarElevationDeg (-0.833 deg) across the precipitation interval and valid time are marked unavailable.",
           "Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied."
         ]
       }

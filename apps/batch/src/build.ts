@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { getProduct, createProductDescriptors, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { deriveFrame, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
 import { getForecastProvider, type ForecastProvider, type ForecastSession } from './providers.js';
 import { buildIdentity } from './identity.js';
@@ -104,7 +104,7 @@ export async function buildForecast(options: BuildOptions & { product: ProductDe
       cycle,
       createdAt: created.toISOString(),
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),
-      method: { id: product.id, hash: identity.scienceHash },
+      method: { id: createProductMethodId(product), hash: identity.scienceHash },
       coverage: { id: product.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: product.maxNativeZoom },
       grid: product.grid,
       frames,

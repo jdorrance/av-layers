@@ -35,8 +35,21 @@ export function forecastWorkflowFindings(runs: readonly ObservedWorkflowRun[], e
   return latestCompleted && latestCompleted.conclusion !== 'success' ? [`publisher-or-cleanup-failure: ${latestCompleted.html_url}`] : [];
 }
 export function forecastScheduleFindings(runs: readonly ObservedWorkflowRun[], now: number): string[] {
-  const latest = runs.filter(run => run.event === 'schedule').sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-  return !latest || now - Date.parse(latest.created_at) > 14 * 3600000 ? ['missed-schedule: no scheduled forecast run within 14 hours'] : [];
+  const scheduled = runs.filter(run => run.event === 'schedule').sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const latest = scheduled[0];
+  const findings = !latest || now - Date.parse(latest.created_at) > 14 * 3600000 ? ['missed-schedule: no scheduled forecast run within 14 hours'] : [];
+  const latestCompleted = scheduled.find(run => run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000);
+  if (latestCompleted && latestCompleted.conclusion !== 'success') {
+    const recovered = runs.some(run =>
+      (run.display_title === 'Forecast production gfs' || (run.event === 'schedule' && run.display_title === 'Forecast')) &&
+      run.status === 'completed' &&
+      run.conclusion === 'success' &&
+      Date.parse(run.created_at) > Date.parse(latestCompleted.created_at) &&
+      now - Date.parse(run.created_at) <= 24 * 3600000
+    );
+    if (!recovered) findings.push(`publisher-or-cleanup-failure: ${latestCompleted.html_url}`);
+  }
+  return findings;
 }
 function workflowRuns(raw: unknown): ObservedWorkflowRun[] {
   const runs = (raw as { workflow_runs?: unknown })?.workflow_runs;
@@ -62,18 +75,27 @@ export async function monitor(baseUrl: string, model = 'gfs') {
     if (environment === 'production' && model === 'gfs') workflows.push('schedule');
     const observations = await Promise.allSettled(workflows.map(async workflow => {
       // A separate schedule query cannot be crowded out by staging/manual runs.
-      const query = workflow === 'schedule' ? 'event=schedule&branch=main&per_page=1' : workflow === 'forecast' ? 'branch=main&per_page=50' : 'event=workflow_dispatch&branch=main&per_page=50';
+      const query = workflow === 'schedule' ? 'event=schedule&branch=main&per_page=10' : workflow === 'forecast' ? 'branch=main&per_page=50' : 'event=workflow_dispatch&branch=main&per_page=50';
       const name = workflow === 'schedule' ? 'forecast' : workflow;
       const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/workflows/${name}.yml/runs?${query}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
       return workflowRuns(JSON.parse(stdout));
     }));
+    const forecastRuns: ObservedWorkflowRun[] = [];
+    const scheduleRuns: ObservedWorkflowRun[] = [];
     observations.forEach((observation, index) => {
       const workflow = workflows[index];
       if (observation.status === 'rejected') { findings.push(`workflow-observation (${workflow}): ${String(observation.reason)}`); return; }
       if (workflow === 'maintenance') findings.push(...maintenanceFindings(observation.value, environment, Date.now(), model));
-      else if (workflow === 'schedule') findings.push(...forecastScheduleFindings(observation.value, Date.now()));
-      else findings.push(...forecastWorkflowFindings(observation.value, environment, Date.now(), model));
+      else if (workflow === 'schedule') scheduleRuns.push(...observation.value);
+      else forecastRuns.push(...observation.value);
     });
+    const combinedForecastRuns = [...forecastRuns, ...scheduleRuns.filter(s => !forecastRuns.some(f => f.html_url === s.html_url))];
+    if (combinedForecastRuns.length) findings.push(...forecastWorkflowFindings(combinedForecastRuns, environment, Date.now(), model));
+    if (workflows.includes('schedule') && observations[workflows.indexOf('schedule')]?.status === 'fulfilled') {
+      for (const item of forecastScheduleFindings([...scheduleRuns, ...forecastRuns], Date.now())) {
+        if (!findings.includes(item)) findings.push(item);
+      }
+    }
   }
   return { version: 1, checkedAt, baseUrl, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#check-a-failure' };
 }

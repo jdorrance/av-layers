@@ -1,7 +1,7 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, getProduct, gridSchema, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type LayerId, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, createProductMethodId, getProduct, gridSchema, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type LayerId, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import { resolveCoverage } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
-import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 const POINTER_TTL_MS = 15_000;
 const NEGATIVE_POINTER_TTL_MS = 5_000;
@@ -13,17 +13,26 @@ const manifestCache = new WeakMap<R2Bucket, ByteCache<string, Manifest>>();
 const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: Manifest; bytes: number }>>();
 const artifactIndexes = new WeakMap<Manifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
 
+function isOperationalReadFailure(error: unknown, signal: AbortSignal): boolean {
+  if (signal.aborted) return true;
+  if (!(error instanceof ResourceLimitError)) return false;
+  return !/JSON|Object exceeds byte budget|Response exceeds byte budget/.test(error.message);
+}
+
 export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false, ctx?: WaitContext): Promise<ModelPointer> {
   let entries = pointerCache.get(bucket);
   if (!entries) { entries = new ByteCache(32, 1024 * 1024); pointerCache.set(bucket, entries); }
   const cached = entries.get(model);
-  if (cached && 'problem' in cached) { countCacheHit(ctx); throw cached.problem; }
-  // A membership miss queues a real refresh; it must not turn a newly discovered build into a false 404.
-  if (cached && !refresh) { countCacheHit(ctx); return cached.pointer; }
+  // A membership miss queues a real refresh; it must not reuse a cached entry or an older in-flight read.
+  if (cached && !refresh) {
+    countCacheHit(ctx);
+    if ('problem' in cached) throw cached.problem;
+    return cached.pointer;
+  }
   let reads = pointerReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(); pointerReads.set(bucket, reads); }
-  return reads.run(model, async signal => {
-    const delay = cached ? Math.max(0, cached.fetchedAt + MEMBERSHIP_REFRESH_MS - Date.now()) : 0;
+  return reads.run(refresh ? `${model}:refresh` : model, async signal => {
+    const delay = cached && 'fetchedAt' in cached ? Math.max(0, cached.fetchedAt + MEMBERSHIP_REFRESH_MS - Date.now()) : 0;
     if (refresh && delay) await new Promise<void>((resolve, reject) => {
       const abort = () => { clearTimeout(timer); reject(signal.reason); };
       const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, delay);
@@ -39,7 +48,10 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     }
     let decoded: Awaited<ReturnType<typeof readObjectJson>>;
     try { decoded = await readObjectJson(object, MAX_POINTER_BYTES, ctx, signal); }
-    catch { return fail(503, 'publication-invalid', 'Invalid or oversized model pointer'); }
+    catch (error) {
+      if (isOperationalReadFailure(error, signal)) throw error;
+      return fail(503, 'publication-invalid', 'Invalid or oversized model pointer');
+    }
     const result = modelPointerSchema.safeParse(decoded.value);
     if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
     entries!.set(model, { pointer: result.data, fetchedAt: Date.now() }, decoded.estimatedBytes, Date.now() + POINTER_TTL_MS);
@@ -84,7 +96,10 @@ export async function manifest(
       if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
       let decoded: Awaited<ReturnType<typeof readObjectJson>>;
       try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal); }
-      catch { return fail(503, 'publication-invalid', 'Invalid or oversized manifest'); }
+      catch (error) {
+        if (isOperationalReadFailure(error, signal)) throw error;
+        return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
+      }
       const parsed = manifestSchema.safeParse(decoded.value);
       if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
       return { manifest: parsed.data, bytes: decoded.estimatedBytes };
@@ -97,7 +112,7 @@ export async function manifest(
     fail(503, 'publication-invalid', 'Manifest does not match retained entry');
   }
   ensureLive(m.expiresAt);
-  if (!product || m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
+  if (!product || m.recipe.id !== product.id || m.method.id !== createProductMethodId(product) || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.coverage.id !== product.coverageId || m.coverage.maxZoom > product.maxNativeZoom
       || m.layers.some(layer => !product.layers.includes(layer)) || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid))) {

@@ -31,6 +31,9 @@ export const recipeIdentitySchema = z.object({
 export function createRecipeIdentity(product: ProductDefinition, hash: string, sourceRevision = 'fixture', sourceDirty = false, lockHash = hash): z.infer<typeof recipeIdentitySchema> {
   return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
 }
+export function createProductMethodId(product: Pick<ProductDefinition, 'layers'> = GFS_PRODUCT): string {
+  return [...new Set(product.layers.map(id => LAYERS[id].methodId))].join('+');
+}
 export function createProductDescriptors(product: ProductDefinition = GFS_PRODUCT): z.infer<typeof descriptorSchema> {
   return descriptorSchema.parse({
     layers: Object.fromEntries(product.layers.map(id => [id, LAYERS[id]])),

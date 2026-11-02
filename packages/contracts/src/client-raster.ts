@@ -1,4 +1,4 @@
-import { MAX_TILE_BYTES } from './format.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from './format.ts';
 
 /** Bounded raster transport shared by the two map adapters; one instance per mounted overlay. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }
@@ -18,7 +18,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error('Invalid raster API base');
   const prefix = `${base.pathname.replace(/\/+$/, '')}/tiles/`;
   const scheme = `av-raster-${crypto.randomUUID()}`, schemePrefix = `${scheme}://`;
-  const timeoutMs = options.timeoutMs ?? 10_000, retryDelayMs = options.retryDelayMs ?? 200;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, retryDelayMs = options.retryDelayMs ?? 200;
   const maxActive = options.maxActive ?? 2, maxQueued = options.maxQueued ?? 64;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0 || !Number.isInteger(maxActive) || maxActive < 1 || maxActive > 16 || !Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 512) throw new Error('Invalid raster request timing');
   const queued: TileTask[] = [], active = new Set<TileTask>();

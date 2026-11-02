@@ -195,9 +195,17 @@ importers:
         specifier: workspace:*
         version: link:../thermodynamics
 
-  packages/solar: {}
+  packages/solar:
+    dependencies:
+      '@av/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
-  packages/thermodynamics: {}
+  packages/thermodynamics:
+    dependencies:
+      '@av/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
 packages:
 
