@@ -195,6 +195,17 @@ it('preserves a loaded build across BFCache restoration and renews its raster ge
   expect(map().removed).toBe(false);
 });
 
+it('stops the previous freshness interval when a replacement load fails', async () => {
+  const schedule = vi.spyOn(win, 'setInterval'), cancel = vi.spyOn(win, 'clearInterval');
+  await start();
+  const interval = schedule.mock.results[0].value;
+  fetchMock.mockResolvedValueOnce(new Response('', { status: 400 }));
+  ui('model').dispatchEvent(new Event('change'));
+  expect(cancel).toHaveBeenCalledWith(interval);
+  await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
+  expect(vi.getTimerCount()).toBe(0);
+});
+
 it('allows retrying a point request interrupted by BFCache navigation', async () => {
   await start();
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });

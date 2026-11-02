@@ -301,20 +301,24 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/latest?expand=manifest')).status).toBe(503);
     expect((await call('/v1/models/gfs/runs/old-schema/provenance')).status).toBe(503);
   });
-  it('advertises transparent no-lift and invalidates old palette JSON and SVG validators', async () => {
+  it('advertises transparent no-lift and validates the exact palette JSON and SVG bytes', async () => {
     const latest = await (await call('/v1/models/gfs/latest?expand=manifest')).json() as { manifest: { descriptors: { palettes: { id: string; noLiftColor?: string }[] } } };
     expect(latest.manifest.descriptors.palettes.find(palette => palette.id === 'lift')?.noLiftColor).toBe('#00000000');
     for (const extension of ['json', 'svg']) {
       const path = `/v1/palettes/lift.${extension}`;
-      const result = await call(path, { headers: { 'if-none-match': '"palette-lift-v1"' } });
+      const result = await call(path, { headers: { 'if-none-match': '"palette-lift-v2"' } });
       expect(result.status).toBe(200);
-      expect(result.headers.get('etag')).toBe('"palette-lift-v2"');
-      if (extension === 'json') expect(await result.json()).toMatchObject({ noLiftColor: '#00000000' });
-      else expect(await result.text()).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
-      expect((await call(path, { headers: { 'if-none-match': '"palette-lift-v2"' } })).status).toBe(304);
-      const rain = await call(`/v1/palettes/rain.${extension}`, { headers: { 'if-none-match': '"palette-rain-v1"' } });
+      const text = await result.text(), etag = `"${createHash('sha256').update(text).digest('hex')}"`;
+      expect(result.headers.get('etag')).toBe(etag);
+      if (extension === 'json') expect(JSON.parse(text)).toMatchObject({ noLiftColor: '#00000000' });
+      else {
+        expect(text).toContain('font-size="12"');
+        expect(text).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
+      }
+      expect((await call(path, { headers: { 'if-none-match': etag } })).status).toBe(304);
+      const rain = await call(`/v1/palettes/rain.${extension}`, { headers: { 'if-none-match': '"palette-rain-v2"' } });
       expect(rain.status).toBe(200);
-      expect(rain.headers.get('etag')).toBe('"palette-rain-v2"');
+      expect(rain.headers.get('etag')).toBe(`"${createHash('sha256').update(await rain.text()).digest('hex')}"`);
     }
   });
   it('uses immutable palette descriptors for retained builds', async () => {

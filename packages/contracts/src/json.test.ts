@@ -17,3 +17,8 @@ it('rejects shallow wide containers and deeply nested graphs even below the byte
   const escaped = { text: '\\"[]{}:,' };
   expect(parseBoundedJson(encodeBoundedJson(escaped, 128))).toEqual(escaped);
 });
+
+it('preserves UTF-8 keys and values with escaped quotes, backslashes and structural punctuation', () => {
+  const value = { '雪🌦️': ['Ā\\\"[]{}:,', '\\', '"', '\ud800', { unicode: 'é🪂', escaped: '\\"{[,:]}' }] };
+  expect(parseBoundedJson(encodeBoundedJson(value, 1024))).toEqual(value);
+});

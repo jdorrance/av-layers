@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { CoverageError } from './coverage';
-import { countCacheHit, reserveAllocation, boundResponse, createBoundedResponse, forkResponseForCache, estimateJsonBytes, ResourceLimitError, type WaitContext } from './resources';
+import { countCacheHit, reserveAllocation, boundResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, type WaitContext } from './resources';
 
 const IMMUTABLE_TTL = 86400;
 
@@ -68,7 +68,10 @@ export function json(value: unknown, expiresAt?: string, etag?: string): Respons
 }
 
 export function finish(request: Request, res: Response, expiresAt?: string): Response {
-  if (expiresAt) ensureLive(expiresAt);
+  if (expiresAt) {
+    try { ensureLive(expiresAt); }
+    catch (error) { void res.body?.cancel().catch(() => {}); throw error; }
+  }
   const headers = new Headers(res.headers);
   if (expiresAt) headers.set('cache-control', `public, max-age=${ttl(expiresAt)}`);
   headers.set('access-control-allow-origin', '*');
@@ -86,7 +89,9 @@ export function finish(request: Request, res: Response, expiresAt?: string): Res
     return new Response(null, { status: 304, headers });
   }
   if (request.method === 'HEAD') void res.body?.cancel().catch(() => {});
-  return new Response(request.method === 'HEAD' ? null : res.body, { status: res.status, headers });
+  const out = new Response(request.method === 'HEAD' ? null : res.body, { status: res.status, headers });
+  transferBodyLease(res.body, out.body);
+  return out;
 }
 
 export async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>, representation?: string): Promise<Response> {
@@ -103,7 +108,8 @@ export async function cached(request: Request, expiresAt: string, ctx: WaitConte
   if (ctx.metrics) ctx.metrics.responseCache = hit ? 'hit' : 'miss';
   if (hit) { countCacheHit(ctx); return finish(request, boundResponse(hit), expiresAt); }
   let result = await build();
-  ensureLive(expiresAt);
+  try { ensureLive(expiresAt); }
+  catch (error) { void result.body?.cancel().catch(() => {}); throw error; }
   if (cache && result.status === 200 && ttl(expiresAt) > 0) {
     const branches = forkResponseForCache(result);
     result = branches.client;
@@ -139,5 +145,7 @@ export function handleError(error: Error, c: Context): Response {
   }
   const problem = error instanceof Problem ? error : error instanceof CoverageError ? new Problem(503, 'coverage-unavailable', error.message) : error instanceof ResourceLimitError ? new Problem(503, 'resource-limit', 'Serving resource budget exceeded') : new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
   const result = response(JSON.stringify({ type: `urn:windy-av:${problem.code}`, title: problem.code, status: problem.status, detail: problem.message }), 'application/problem+json; charset=utf-8');
-  return new Response(result.body, { status: problem.status, headers: result.headers });
+  const out = new Response(result.body, { status: problem.status, headers: result.headers });
+  transferBodyLease(result.body, out.body);
+  return out;
 }

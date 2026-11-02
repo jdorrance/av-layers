@@ -7,13 +7,13 @@ export async function putImmutable(store: ObjectStorage, key: string, bytes: Uin
   const md5 = createHash('md5').update(bytes).digest(), sha = createHash('sha256').update(bytes).digest('hex');
   const proveExisting = async (): Promise<boolean> => {
     signal?.throwIfAborted();
-    const head = await store.head(key);
+    const head = await store.head(key, signal);
     if (!head) return false;
     if (head.size !== bytes.byteLength) throw new Error(`Immutable object size mismatch: ${key}`);
     const hash = createHash('sha256');
     for (let offset = 0; offset < head.size; offset += 4 * 1024 * 1024) {
       signal?.throwIfAborted();
-      const length = Math.min(4 * 1024 * 1024, head.size - offset), part = await store.get(key, { offset, length });
+      const length = Math.min(4 * 1024 * 1024, head.size - offset), part = await store.get(key, { offset, length }, length, signal);
       signal?.throwIfAborted();
       if (!part || part.bytes.byteLength !== length || part.etag !== head.etag) throw new Error(`Immutable object read mismatch: ${key}`);
       hash.update(part.bytes);
@@ -30,9 +30,9 @@ export async function putImmutable(store: ObjectStorage, key: string, bytes: Uin
     throw error;
   }
   signal?.throwIfAborted();
-  const head = await store.head(key), etag = `"${md5.toString('hex')}"`;
+  const head = await store.head(key, signal), etag = `"${md5.toString('hex')}"`;
   if (!head || head.size !== bytes.byteLength || head.etag !== etag) throw new Error(`R2 single-PUT MD5 ETag or size mismatch: ${key}`);
-  const length = Math.min(bytes.byteLength, 32), tail = await store.get(key, { offset: bytes.byteLength - length, length });
+  const length = Math.min(bytes.byteLength, 32), tail = await store.get(key, { offset: bytes.byteLength - length, length }, length, signal);
   if (!tail || tail.etag !== etag || !Buffer.from(tail.bytes).equals(bytes.subarray(bytes.byteLength - length))) throw new Error(`R2 tail or ETag mismatch: ${key}`);
 }
 

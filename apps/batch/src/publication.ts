@@ -57,7 +57,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   if (options.validated) assertValidatedBuild(root, manifest, options.validated);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
-  const captured = await readPointer(store, manifest.model);
+  const captured = await readPointer(store, manifest.model, options.signal);
   const existing = captured.pointer?.retained.find(item => item.buildId === manifest.buildId);
   const alreadyRetained = !!existing;
   if (existing && (existing.manifestKey !== key || existing.cycle !== manifest.cycle || existing.expiresAt !== manifest.expiresAt)) throw new Error('Retained build identity mismatch');
@@ -99,10 +99,10 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   if (provenanceBytes.byteLength > MAX_PROVENANCE_BYTES || sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Local hash mismatch: ${provenance.key}`);
   parseProvenance(decode(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
   check(); await putImmutable(store, provenance.key, provenanceBytes, 'application/json', options.signal);
-  const uploadedProvenance = await store.get(provenance.key, undefined, MAX_PROVENANCE_BYTES);
+  const uploadedProvenance = await store.get(provenance.key, undefined, MAX_PROVENANCE_BYTES, options.signal);
   if (!uploadedProvenance || !Buffer.from(uploadedProvenance.bytes).equals(provenanceBytes)) throw new Error('Provenance readback mismatch');
   check(); await putImmutable(store, key, content, 'application/json', options.signal);
-  const uploadedManifest = await store.get(key, undefined, MAX_MANIFEST_BYTES);
+  const uploadedManifest = await store.get(key, undefined, MAX_MANIFEST_BYTES, options.signal);
   if (!uploadedManifest || !Buffer.from(uploadedManifest.bytes).equals(content)) throw new Error('Manifest readback mismatch');
   if (alreadyRetained) return;
   check();
@@ -141,7 +141,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   validateArtifactRecords(manifest);
   const coverageKey = `${coveragePrefix(manifest.coverage.hash)}/manifest.json`;
   if (manifest.coverage.maskKey !== coverageKey) throw new Error('Rollback coverage descriptor key mismatch');
-  const coverage = await store.get(coverageKey, undefined, 128 * 1024, options.signal);
+  const coverage = await store.get(coverageKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, options.signal);
   check();
   if (!coverage || sha256(coverage.bytes) !== manifest.coverage.hash) throw new Error('Rollback coverage descriptor missing or corrupt');
   const descriptor = coverageDescriptorSchema.parse(decode(coverage.bytes));

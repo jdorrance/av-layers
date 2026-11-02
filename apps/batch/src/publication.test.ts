@@ -87,6 +87,22 @@ describe('immutable publication', () => {
     expect(store.gets).toHaveLength(1);
   });
 
+  it('stops an ambiguous immutable upload on cancellation and proves it on resume', async () => {
+    const store = new MemoryStore(), bytes = Buffer.from('an immutable artifact'), controller = new AbortController();
+    const put = store.put.bind(store);
+    store.put = async (...args) => {
+      await put(...args);
+      controller.abort(new Error('cancelled upload'));
+      throw new Error('response lost after upload');
+    };
+    await expect(putImmutable(store, 'artifact', bytes, 'application/octet-stream', controller.signal)).rejects.toThrow('cancelled upload');
+    expect(store.gets).toHaveLength(0);
+    const writes = vi.fn(put); store.put = writes;
+    await expect(putImmutable(store, 'artifact', bytes, 'application/octet-stream')).resolves.toBeUndefined();
+    expect(writes).not.toHaveBeenCalled();
+    expect(store.gets).toHaveLength(1);
+  });
+
   it('rejects same-size corrupted existing bytes even when the reported ETag is unchanged', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });

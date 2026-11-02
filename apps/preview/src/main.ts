@@ -291,6 +291,10 @@ function startPreview(): void {
   async function loadModel(model: ModelId): Promise<void> {
     if (mapFailed) return;
     disposeExpiry();
+    if (expiryTimer !== null) {
+      window.clearInterval(expiryTimer);
+      expiryTimer = null;
+    }
     loadAbort?.abort();
     seriesAbort?.abort();
     seriesAbort = null;

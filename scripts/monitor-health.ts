@@ -18,7 +18,7 @@ export function forecastFindings(manifest: Manifest, now: number): string[] {
   return findings;
 }
 
-export interface ObservedWorkflowRun { status: string; conclusion: string | null; created_at: string; html_url: string; display_title: string }
+export interface ObservedWorkflowRun { status: string; conclusion: string | null; created_at: string; html_url: string; display_title: string; event: string }
 export function maintenanceFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model = 'gfs'): string[] {
   const findings: string[] = [];
   for (const action of ['cleanup', 'rollback']) {
@@ -28,9 +28,19 @@ export function maintenanceFindings(runs: readonly ObservedWorkflowRun[], enviro
   }
   return findings;
 }
+export function forecastWorkflowFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model = 'gfs'): string[] {
+  const matching = runs.filter(run => run.display_title === `Forecast ${environment} ${model}` || (environment === 'production' && model === 'gfs' && run.event === 'schedule' && run.display_title === 'Forecast'))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  const latestCompleted = matching.find(run => run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000);
+  return latestCompleted && latestCompleted.conclusion !== 'success' ? [`publisher-or-cleanup-failure: ${latestCompleted.html_url}`] : [];
+}
+export function forecastScheduleFindings(runs: readonly ObservedWorkflowRun[], now: number): string[] {
+  const latest = runs.filter(run => run.event === 'schedule').sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+  return !latest || now - Date.parse(latest.created_at) > 14 * 3600000 ? ['missed-schedule: no scheduled forecast run within 14 hours'] : [];
+}
 function workflowRuns(raw: unknown): ObservedWorkflowRun[] {
   const runs = (raw as { workflow_runs?: unknown })?.workflow_runs;
-  if (!Array.isArray(runs) || runs.length > 20 || runs.some(run => !run || typeof run.status !== 'string' || (run.conclusion !== null && typeof run.conclusion !== 'string') || !Number.isFinite(Date.parse(run.created_at)) || typeof run.html_url !== 'string' || typeof run.display_title !== 'string')) throw new Error('Invalid workflow observation');
+  if (!Array.isArray(runs) || runs.length > 100 || runs.some(run => !run || typeof run.status !== 'string' || (run.conclusion !== null && typeof run.conclusion !== 'string') || !Number.isFinite(Date.parse(run.created_at)) || typeof run.html_url !== 'string' || typeof run.display_title !== 'string' || typeof run.event !== 'string')) throw new Error('Invalid workflow observation');
   return runs;
 }
 
@@ -48,21 +58,21 @@ export async function monitor(baseUrl: string, model = 'gfs') {
   const repository = process.env.GITHUB_REPOSITORY;
   const environment = process.env.TARGET_ENV;
   if (repository && /^[\w.-]+\/[\w.-]+$/.test(repository) && (environment === 'production' || environment === 'staging')) {
-    const workflows = environment === 'production' && model === 'gfs' ? ['forecast', 'maintenance'] : ['maintenance'];
+    const workflows: Array<'forecast' | 'maintenance' | 'schedule'> = ['forecast', 'maintenance'];
+    if (environment === 'production' && model === 'gfs') workflows.push('schedule');
     const observations = await Promise.allSettled(workflows.map(async workflow => {
-      const query = workflow === 'forecast' ? 'event=schedule&branch=main&per_page=5' : 'event=workflow_dispatch&branch=main&per_page=20';
-      const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/workflows/${workflow}.yml/runs?${query}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+      // A separate schedule query cannot be crowded out by staging/manual runs.
+      const query = workflow === 'schedule' ? 'event=schedule&branch=main&per_page=1' : workflow === 'forecast' ? 'branch=main&per_page=50' : 'event=workflow_dispatch&branch=main&per_page=50';
+      const name = workflow === 'schedule' ? 'forecast' : workflow;
+      const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/workflows/${name}.yml/runs?${query}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
       return workflowRuns(JSON.parse(stdout));
     }));
     observations.forEach((observation, index) => {
       const workflow = workflows[index];
       if (observation.status === 'rejected') { findings.push(`workflow-observation (${workflow}): ${String(observation.reason)}`); return; }
       if (workflow === 'maintenance') findings.push(...maintenanceFindings(observation.value, environment, Date.now(), model));
-      else {
-        const last = observation.value[0];
-        if (!last || Date.now() - Date.parse(last.created_at) > 14 * 3600000) findings.push('missed-schedule: no scheduled forecast run within 14 hours');
-        else if (last.status === 'completed' && last.conclusion !== 'success') findings.push(`publisher-or-cleanup-failure: ${last.html_url}`);
-      }
+      else if (workflow === 'schedule') findings.push(...forecastScheduleFindings(observation.value, Date.now()));
+      else findings.push(...forecastWorkflowFindings(observation.value, environment, Date.now(), model));
     });
   }
   return { version: 1, checkedAt, baseUrl, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#check-a-failure' };

@@ -87,6 +87,23 @@ export async function verifyPagesRevision(options: RetryOptions & {
   }, options);
 }
 
+export async function verifyWindyPluginBundle(options: RetryOptions & {
+  url: string; expectedApiBaseUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number;
+}): Promise<void> {
+  const target = `${options.url.replace(/\/+$/, '')}/windy-plugin/plugin.min.js`;
+  await retryProbe('Windy plugin bundle', async () => {
+    const response = await (options.fetchImpl ?? fetch)(target, { headers: { accept: 'text/javascript,*/*' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000) });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`status ${response.status}`); }
+    if (response.headers.get('access-control-allow-origin') !== 'https://www.windy.com') {
+      await response.body?.cancel();
+      throw new Error('Windy plugin bundle is missing CORS header for https://www.windy.com');
+    }
+    const script = new TextDecoder().decode(await readResponseBytes(response, 512 * 1024));
+    if (!script.includes('windy-plugin-av-layer')) throw new Error('Windy plugin bundle does not contain windy-plugin-av-layer');
+    if (options.expectedApiBaseUrl && !script.includes(options.expectedApiBaseUrl)) throw new Error('Windy plugin bundle does not contain the expected API base URL');
+  }, options);
+}
+
 type Operation = 'deploy' | 'forecast' | 'maintenance';
 export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
   if (!['deploy', 'forecast', 'maintenance'].includes(command)) throw new Error('Usage: pnpm operations deploy|forecast|maintenance');
@@ -145,6 +162,7 @@ export async function runOperation(command: string): Promise<void> {
   await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? 'gfs', expectedDeploymentId: deploymentId });
   await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
   await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
+  await verifyWindyPluginBundle({ url: pages.url, expectedApiBaseUrl: cloud.apiBaseUrl });
   console.log(`Deployed ${cloud.targetEnv}: ${cloud.apiBaseUrl} and ${pages.url}`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Deployed ${cloud.targetEnv}\n\nAPI: ${cloud.apiBaseUrl}\n\nPages: ${pages.url}\n`);
 }

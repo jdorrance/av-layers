@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { deploymentMarker, verifyPagesRevision, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
+import { deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
 
 const account = '0123456789abcdef0123456789abcdef', pages = 'windy-av-preview-staging';
 const config: WranglerConfig = {
@@ -127,5 +127,22 @@ describe('Pages deployment revision verification', () => {
     });
     await expect(verifyPagesRevision({ url: 'https://preview.example/', expectedDeploymentId: deploymentId, fetchImpl, retries: 1, delayMs: 0, timeoutMs: 20 })).resolves.toBeUndefined();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('verifies deployed Windy plugin bundle, CORS header and embedded API base URL on Pages', async () => {
+    const ok = vi.fn(async () => new Response('export const name="windy-plugin-av-layer",base="https://api.example";', {
+      headers: { 'access-control-allow-origin': 'https://www.windy.com' }
+    }));
+    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', expectedApiBaseUrl: 'https://api.example', fetchImpl: ok, retries: 0 })).resolves.toBeUndefined();
+    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', expectedApiBaseUrl: 'https://other.example', fetchImpl: ok, retries: 0 })).rejects.toThrow(/expected API base URL/);
+    const missingCors = vi.fn(async () => new Response('export const name="windy-plugin-av-layer";'));
+    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', fetchImpl: missingCors, retries: 0 })).rejects.toThrow(/CORS header/);
+  });
+
+  it('cancels an unread plugin body when the CORS check fails', async () => {
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ cancel })));
+    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', fetchImpl, retries: 0 })).rejects.toThrow(/CORS header/);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

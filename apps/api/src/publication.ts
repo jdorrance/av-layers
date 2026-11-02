@@ -47,9 +47,9 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
   }, ctx);
 }
 
-export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext) {
+export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext, currentPointer?: ModelPointer) {
   validateId(build);
-  let current = await pointer(bucket, model, false, ctx);
+  let current = currentPointer ?? await pointer(bucket, model, false, ctx);
   let entry = current.retained.find(item => item.buildId === build);
   if (!entry) {
     current = await pointer(bucket, model, true, ctx);

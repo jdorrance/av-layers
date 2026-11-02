@@ -12,14 +12,15 @@ interface TileTask { controller: AbortController; start(): Promise<void> }
 const abortError = () => new DOMException('Tile request cancelled', 'AbortError');
 
 export function createRasterTileProtocol(baseUrl: string, options: {
-  fetchImpl?: typeof fetch; timeoutMs?: number; retryDelayMs?: number;
+  fetchImpl?: typeof fetch; timeoutMs?: number; retryDelayMs?: number; maxActive?: number; maxQueued?: number;
 } = {}): RasterTileProtocol {
   const base = new URL(baseUrl), fetchImpl = options.fetchImpl ?? fetch;
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error('Invalid raster API base');
   const prefix = `${base.pathname.replace(/\/+$/, '')}/tiles/`;
   const scheme = `av-raster-${crypto.randomUUID()}`, schemePrefix = `${scheme}://`;
   const timeoutMs = options.timeoutMs ?? 10_000, retryDelayMs = options.retryDelayMs ?? 200;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0) throw new Error('Invalid raster request timing');
+  const maxActive = options.maxActive ?? 2, maxQueued = options.maxQueued ?? 64;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0 || !Number.isInteger(maxActive) || maxActive < 1 || maxActive > 16 || !Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 512) throw new Error('Invalid raster request timing');
   const queued: TileTask[] = [], active = new Set<TileTask>();
   let disposed = false;
 
@@ -31,7 +32,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
     return url;
   }
   function pump(): void {
-    while (!disposed && active.size < 2 && queued.length) {
+    while (!disposed && active.size < maxActive && queued.length) {
       const task = queued.shift()!; active.add(task);
       void task.start();
     }
@@ -95,7 +96,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
       const url = validate(params.url.slice(schemePrefix.length), false);
       if (disposed) throw abortError();
       external.signal.throwIfAborted();
-      if (active.size >= 2 && queued.length >= 64) throw new Error('Raster request queue is full');
+      if (active.size >= maxActive && queued.length >= maxQueued) throw new Error('Raster request queue is full');
       return new Promise<RasterTileResponse>((resolve, reject) => {
         const controller = new AbortController();
         const abort = () => controller.abort(external.signal.reason ?? abortError());

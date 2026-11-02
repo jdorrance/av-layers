@@ -85,7 +85,8 @@ gh workflow run deploy.yml --ref main -f environment=staging
 ```
 
 Deployment runs CI, builds the clients, deploys the Worker, checks the live API,
-and then deploys Pages. It checks that both services serve the requested version.
+and then deploys Pages. It checks that both services serve the requested version,
+and that the Windy bundle is readable from Windy and points to the selected API.
 
 Pushes to `main` normally deploy production automatically. For an incompatible
 alpha release, pause that workflow before merging, publish matching data, then
@@ -130,6 +131,9 @@ repeating a cancelled operation, which may already have completed.
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
 checks the live forecast and recent jobs. Enable GitHub failure notifications.
+Production checks scheduled-run recency separately from publication results.
+A successful manual retry clears a publisher failure; it does not clear a missed
+schedule. Staging checks its own labelled runs and has no scheduled-run requirement.
 
 - **Missed schedule or publication:** inspect the latest forecast run and whether
   the workflow is enabled. If it was disabled unintentionally, run
