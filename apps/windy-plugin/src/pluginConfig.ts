@@ -8,6 +8,7 @@ const config = {
   repository: 'https://github.com/jdorrance/av-layers',
   desktopUI: 'rhpane',
   mobileUI: 'fullscreen',
+  listenToSingleclick: true,
   routerPath: '/av-layer',
   private: true
 } as const;

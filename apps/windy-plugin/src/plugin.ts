@@ -5,13 +5,14 @@ import { PluginPanel } from './view';
 import { WindyRasterLayer } from './raster-layer';
 
 const { map } = W.map;
+const { singleclick } = W.singleclick;
 const { store, broadcast: bcast } = W;
 const API_BASE = import.meta.env.AV_API_BASE || 'http://localhost:8787';
 const api = new ApiClient({ baseUrl: API_BASE });
 let panel: PluginPanel | null = null;
 let controller: PluginController | null = null;
 let seriesAbort: AbortController | null = null;
-let mapClickBound = false;
+let singleclickBound = false;
 let mountTarget: HTMLElement | null = null;
 
 const host: WindyHost = {
@@ -23,11 +24,10 @@ const host: WindyHost = {
   createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, options)
 };
 
-function onClick(event: { latlng?: { lat: number; lng: number } }): void {
-  if (!event.latlng) return;
+function onClick({ lat, lon }: WindySingleclickPoint): void {
   seriesAbort?.abort();
   seriesAbort = null;
-  const point = normalizePoint(event.latlng.lat, event.latlng.lng);
+  const point = normalizePoint(lat, lon);
   panel?.setClicked(point.lat, point.lon);
   panel?.setSeriesEnabled(controller?.state().phase === 'ready');
 }
@@ -144,9 +144,9 @@ async function startController(model: ModelId): Promise<void> {
 }
 
 export const onopen = (_params: unknown): void => {
-  if (!mapClickBound) {
-    map.on('click', onClick);
-    mapClickBound = true;
+  if (!singleclickBound) {
+    singleclick.on(__pluginConfig.name, onClick);
+    singleclickBound = true;
   }
   void startController('gfs');
 };
@@ -156,9 +156,9 @@ export function onclose(): void {
   seriesAbort = null;
   controller?.dispose();
   controller = null;
-  if (mapClickBound) {
-    map.off('click', onClick);
-    mapClickBound = false;
+  if (singleclickBound) {
+    singleclick.off(__pluginConfig.name, onClick);
+    singleclickBound = false;
   }
   panel?.setVisible(false);
 }

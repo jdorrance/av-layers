@@ -1,9 +1,12 @@
 /// <reference types="vite/client" />
 
+type WindySingleclickPoint = { lat: number; lon: number };
+
 declare const W: {
-  map: { map: import('./raster-layer').NativeRasterMap & {
-    on(event: 'click', listener: (event: { latlng?: { lat: number; lng: number } }) => void): unknown;
-    off(event: 'click', listener: (event: { latlng?: { lat: number; lng: number } }) => void): unknown;
+  map: { map: import('./raster-layer').NativeRasterMap };
+  singleclick: { singleclick: {
+    on(name: string, listener: (point: WindySingleclickPoint) => void): unknown;
+    off(name: string, listener: (point: WindySingleclickPoint) => void): unknown;
   } };
   store: import('./controller').HostStore;
   broadcast: { emit(name: string, ...args: unknown[]): void };
