@@ -4,7 +4,8 @@
 renderer and point API use the same rules for values, missing data, and coverage.
 This package does not download data or read storage.
 
-Run from the repository root after `pnpm install`:
+Follow the [root setup instructions](../../README.md#quick-start), then run from
+the repository root:
 
 ```sh
 pnpm test packages/forecast

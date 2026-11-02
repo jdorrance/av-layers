@@ -3,7 +3,8 @@
 `@av/contracts` contains the TypeScript types, validation rules, grid definitions,
 and palettes used by the batch job, API, and map clients.
 
-Run from the repository root after `pnpm install`:
+Follow the [root setup instructions](../../README.md#quick-start), then run from
+the repository root:
 
 ```sh
 pnpm test packages/contracts
