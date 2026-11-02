@@ -208,6 +208,50 @@ describe('PluginController', () => {
     controller.dispose();
   });
 
+  it('refreshes delayed deadlines after clock changes without reviving an expired or disposed view', async () => {
+    vi.useFakeTimers();
+    const horizon = Date.parse('2026-10-30T09:00:00.000Z');
+    vi.setSystemTime(horizon - 1000);
+    const stub = stubHost();
+    const onState = vi.fn();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, onState });
+    await controller.start();
+
+    // Change wall time without running the scheduled timeout, as on resume.
+    vi.setSystemTime(horizon + 60_000);
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: null }));
+    controller.refreshTime();
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({
+      phase: 'ready', horizonNotice: expect.stringContaining('Forecast ended')
+    }));
+    expect(stub.removed).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    // A backward clock change must restore the horizon deadline, replacing
+    // the later expiry timeout rather than retaining both timers.
+    vi.setSystemTime(horizon - 1000);
+    controller.refreshTime();
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: null }));
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: expect.stringContaining('Forecast ended') }));
+
+    vi.setSystemTime(Date.parse(expiresAt));
+    controller.refreshTime();
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ phase: 'expired', horizonNotice: null }));
+    expect(stub.removed).toHaveLength(1);
+    expect(stub.listeners.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    onState.mockClear();
+    controller.refreshTime();
+    expect(onState).not.toHaveBeenCalled();
+    controller.dispose();
+    onState.mockClear();
+    controller.refreshTime();
+    expect(onState).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('syncs an explicit frame to the host timestamp only inside the verified dataset range', async () => {
     const stub = stubHost();
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created), hostRange: () => ({ startMs: Date.parse(created), endMs: Date.parse('2026-10-30T07:00:00.000Z') }) });

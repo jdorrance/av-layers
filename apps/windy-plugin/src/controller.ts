@@ -288,6 +288,12 @@ export class PluginController {
     return false;
   }
 
+  refreshTime(): void {
+    if (this.phase !== 'ready' || this.checkExpiry()) return;
+    this.scheduleTimeCheck();
+    this.emit();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -331,10 +337,7 @@ export class PluginController {
     const delay = Math.max(0, nextChange - now) + 1;
     this.timeTimer = this.setTimer(() => {
       this.timeTimer = null;
-      if (!this.checkExpiry()) {
-        this.emit();
-        this.scheduleTimeCheck();
-      }
+      this.refreshTime();
     }, Math.min(delay, 2_147_000_000));
   }
 

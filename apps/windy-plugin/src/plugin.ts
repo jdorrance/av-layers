@@ -12,7 +12,7 @@ const api = new ApiClient({ baseUrl: API_BASE });
 let panel: PluginPanel | null = null;
 let controller: PluginController | null = null;
 let seriesAbort: AbortController | null = null;
-let singleclickBound = false;
+let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
 
 const host: WindyHost = {
@@ -30,6 +30,10 @@ function onClick({ lat, lon }: WindySingleclickPoint): void {
   const point = normalizePoint(lat, lon);
   panel?.setClicked(point.lat, point.lon);
   panel?.setSeriesEnabled(controller?.state().phase === 'ready');
+}
+
+function refreshTime(): void {
+  controller?.refreshTime();
 }
 
 async function requestSeries(): Promise<void> {
@@ -133,6 +137,7 @@ async function startController(model: ModelId): Promise<void> {
         ui.clearSeries();
       }
       ui.renderState(state);
+      if (seriesAbort) ui.setSeriesEnabled(false);
       if (state.phase === 'ready' && state.buildId) {
         const build = controller?.currentBuild;
         const remaining = build ? Math.max(0, build.expiresAtMs - Date.now()) : 0;
@@ -144,9 +149,11 @@ async function startController(model: ModelId): Promise<void> {
 }
 
 export const onopen = (_params: unknown): void => {
-  if (!singleclickBound) {
+  if (!listenersBound) {
     singleclick.on(__pluginConfig.name, onClick);
-    singleclickBound = true;
+    window.addEventListener('focus', refreshTime);
+    document.addEventListener('visibilitychange', refreshTime);
+    listenersBound = true;
   }
   void startController('gfs');
 };
@@ -156,9 +163,11 @@ export function onclose(): void {
   seriesAbort = null;
   controller?.dispose();
   controller = null;
-  if (singleclickBound) {
+  if (listenersBound) {
     singleclick.off(__pluginConfig.name, onClick);
-    singleclickBound = false;
+    window.removeEventListener('focus', refreshTime);
+    document.removeEventListener('visibilitychange', refreshTime);
+    listenersBound = false;
   }
   panel?.setVisible(false);
 }

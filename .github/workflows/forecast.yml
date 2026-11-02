@@ -26,7 +26,7 @@ on:
         type: boolean
         default: false
       resume-run-id:
-        description: Optional failed run ID whose complete artifact should be resumed within six hours
+        description: Finished run with complete artifacts to resume or promote within six hours
         type: string
         default: ''
       retain-full-artifacts:

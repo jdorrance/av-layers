@@ -1,14 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
 import { GFS_DISCOVERY_LAG_HOURS, GFS_FORECAST_HOURS } from '../apps/batch/src/noaa/constants';
 
 const fixture = (name: string): string => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const manifestFixture = () => manifestSchema.parse(JSON.parse(readFileSync(fixture('manifest.contract.json'), 'utf8')));
-const requireFromWrangler = createRequire(createRequire(import.meta.url).resolve('wrangler/package.json'));
-const yaml = requireFromWrangler('yaml') as { parse(source: string): unknown };
 const workflowText = (name: string): string => readFileSync(fileURLToPath(new URL(`../.github/workflows/${name}`, import.meta.url)), 'utf8');
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected object');
@@ -18,7 +16,7 @@ const list = (value: unknown): unknown[] => {
   if (!Array.isArray(value)) throw new Error('expected array');
   return value;
 };
-const workflow = (name: string): Record<string, unknown> => record(yaml.parse(workflowText(name)));
+const workflow = (name: string): Record<string, unknown> => record(parseYaml(workflowText(name)));
 describe('project runtime', () => {
   const project = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
     engines: { node: string };
