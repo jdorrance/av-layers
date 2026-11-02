@@ -99,5 +99,5 @@ constants. Grid geometry, Earth radius, bounds and wrap behavior come from the
 immutable version-3 manifest and its content-addressed coverage descriptor.
 Native Lambert-conformal grids are sampled through their declared projection;
 the available production forecast remains GFS. The sampler plans
-the contributing cells; the [numeric block layout](architecture.md#why-these-boundaries-exist)
+the contributing cells; the [numeric block layout](architecture.md#build-and-storage)
 maps them to one bounded range, including longitude-wrap cases.

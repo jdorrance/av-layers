@@ -18,11 +18,19 @@ the API you want to use; it is included in the bundle and defaults to
 Windy settings. The build creates `plugin.json` and the install package metadata
 from those settings.
 
+Windy owns pane sizing, scrolling, and mobile gestures. Map selection uses its
+`singleclick` event; closing the plugin releases subscriptions and pending requests.
+
 Serve the bundle over HTTPS and open it with
 [Windy's developer loader](https://www.windy.com/developer-mode).
 See [Windy's plugin guide](https://docs.windy-plugins.com/getting-started/debugging.html)
 for the loader's setup requirements. For everyday UI work without a Windy login,
 use the [standalone preview](../preview/README.md).
+
+When upgrading, open `plugin.min.js` through the developer loader in a fresh
+Windy page. **Install & open** on an existing page can retain the previous module.
+[Open the staging loader](https://www.windy.com/dev/windy-av-preview-staging.pages.dev/windy-plugin/plugin.min.js),
+then check the selected API/build.
 
 Useful files:
 

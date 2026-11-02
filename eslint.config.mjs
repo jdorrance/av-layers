@@ -1,7 +1,7 @@
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/node_modules/**', '**/dist/**', '**/.wrangler/**', 'output/**', '.cache/**', '.tools/**'] },
+  { ignores: ['**/node_modules/**', '**/dist/**', '**/.wrangler/**', '**/output/**', '**/.cache/**', '**/.tools/**'] },
   ...tseslint.configs.recommended,
   {
     files: ['**/*.ts'],

@@ -7,10 +7,11 @@ environment's published data at a time. Keep write credentials in GitHub.
 
 ## Set up an environment
 
-Create protected `staging` and `production` GitHub environments with:
+Store the shared `CLOUDFLARE_ACCOUNT_ID` as a repository secret. Create protected
+`staging` and `production` GitHub environments with:
 
-- Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
-  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. Scope R2 credentials to that
+- Secrets: `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`,
+  `R2_SECRET_ACCESS_KEY`. Scope R2 credentials to that
   environment's bucket. Deployment needs Workers Scripts Edit and Pages Edit.
 - Variables: `API_BASE_URL` and `PAGES_PROJECT_NAME` for that environment.
   The bucket comes from its `BUCKET` binding in [Wrangler configuration](../apps/api/wrangler.json).
@@ -52,7 +53,7 @@ If you deliberately want another build of the current cycle, add
 `-f retain-full-artifacts=true`. Build budgets are checked before publication;
 use `pnpm capacity` when planning changes to the workload.
 
-## Resume an interrupted upload
+## Resume or promote a build
 
 Use the original run's complete build files to retry without rebuilding tiles:
 
@@ -71,6 +72,11 @@ Resume checks the files and source workflow before uploading. It reuses matching
 remote files and can recover an upload whose final result was uncertain. A
 same-cycle replacement still needs `allow-same-cycle=true`. Rerunning the original
 job replaces that run's saved artifacts, so check them before choosing its ID.
+
+To promote tested staging data, build it with `retain-full-artifacts=true`, then
+use that successful run's ID in the same resume command with
+`environment=production`. This uploads the exact tested files; it does not build
+another forecast. The same code, configuration and freshness checks apply.
 
 ## Deploy the API and clients
 
@@ -122,10 +128,29 @@ is still eligible. A cleanup failure after `committed` does not undo publication
 `maintenance.json` records rollback or cleanup results; inspect it before
 repeating a cancelled operation, which may already have completed.
 
-The hourly health workflow checks the live forecast and recent jobs. Enable
-GitHub failure notifications. For stale weather, check source availability and
-the latest forecast run; for serving errors, check the deployed version and its
-forecast files. Schedules can be delayed, so check actual runs as well as cron.
+The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
+checks the live forecast and recent jobs. Enable GitHub failure notifications.
+
+- **Missed schedule or publication:** inspect the latest forecast run and whether
+  the workflow is enabled. If it was disabled unintentionally, run
+  `gh workflow enable forecast.yml`, then publish a fresh forecast through the
+  command above. Check actual runs as well as cron; schedules can be delayed.
+- **Upstream lag, shrinking horizon or expiry:** check for a complete source run,
+  then publish it. Editing an old build's expiry does not refresh its weather.
+- **Serving integrity:** compare the deployed version and forecast files. Restore
+  a compatible retained build or deploy matching code and fresh data.
+- **Publisher or maintenance failure:** inspect `publication.json`, `failure.json`
+  and `maintenance.json` before retrying. Resume an eligible interrupted upload;
+  rerun serialized cleanup for a failed cleanup or backlog.
+- **Workflow observation failure:** check GitHub API availability and the health
+  job's `actions: read` permission before rerunning it.
+
+After recovery, rerun the check for the affected environment:
+
+```sh
+gh workflow run health.yml --ref main -f environment=staging -f model=gfs
+gh run list --workflow health.yml --limit 5
+```
 
 Workflows call `pnpm operations` internally. For local work, see
 [Development](development.md). For implementation details, see

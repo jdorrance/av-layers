@@ -105,11 +105,17 @@ function startPreview(): void {
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
 
+  function clearSeries(): void {
+    seriesPanel.replaceChildren();
+    seriesPanel.tabIndex = -1;
+    seriesStatus.textContent = '';
+  }
+
   map.on('click', event => {
     if (mapFailed) return;
     seriesAbort?.abort();
     seriesAbort = null;
-    seriesPanel.replaceChildren();
+    clearSeries();
     clicked = normalizePoint(event.lngLat.lat, event.lngLat.lng);
     seriesButton.disabled = !build || expired;
     seriesStatus.textContent = `Clicked ${clicked.lat.toFixed(4)}, ${clicked.lon.toFixed(4)}`;
@@ -138,8 +144,7 @@ function startPreview(): void {
       pendingModel = null;
       resumeModel = null;
       clicked = null;
-      seriesPanel.replaceChildren();
-      seriesStatus.textContent = '';
+      clearSeries();
       disposeExpiry();
       if (expiryTimer !== null) window.clearInterval(expiryTimer);
       expiryTimer = null;
@@ -218,8 +223,7 @@ function startPreview(): void {
     loadAbort?.abort();
     seriesAbort?.abort();
     seriesAbort = null;
-    seriesPanel.replaceChildren();
-    seriesStatus.textContent = '';
+    clearSeries();
     removeOverlay();
     setControlsEnabled(false);
     seriesButton.disabled = true;
@@ -290,8 +294,7 @@ function startPreview(): void {
     loadAbort?.abort();
     seriesAbort?.abort();
     seriesAbort = null;
-    seriesPanel.replaceChildren();
-    seriesStatus.textContent = '';
+    clearSeries();
     const requestAbort = new AbortController();
     loadAbort = requestAbort;
     pendingModel = model;
@@ -379,6 +382,7 @@ function startPreview(): void {
       if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
       assertNotExpired(payload.expiresAt);
       renderSampleTable(seriesPanel, payload, layers, requestedBuild);
+      seriesPanel.tabIndex = 0;
       seriesStatus.textContent = formatSeriesSummary(payload, layers, requestedPoint);
     } catch (error) {
       if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint) || !ensureLive()) return;

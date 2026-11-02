@@ -14,5 +14,5 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["packages/**/*.ts", "apps/**/*.ts", "scripts/**/*.ts", "vitest.config.ts"],
-  "exclude": ["node_modules", "apps/api", "**/dist", "**/.wrangler", "output"]
+  "exclude": ["node_modules", "apps/api", "**/dist", "**/.wrangler", "**/output"]
 }
