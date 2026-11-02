@@ -9,6 +9,7 @@
     "@aws-sdk/client-s3": "3.1160.0",
     "@azohra/meteo.grib": "0.1.4",
     "pmtiles": "catalog:",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "zod": "catalog:"
   }
 }

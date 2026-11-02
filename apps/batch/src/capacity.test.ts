@@ -68,6 +68,11 @@ describe('build capacity admission and performance budgets', () => {
     for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames })).toThrow('Invalid capacity');
     expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { layers: 100 }).violations.join()).toContain('result budget');
   });
+  it.each([2_413_241, 2_427_607])('admits the measured hourly build duration %i ms', elapsedMs => {
+    const manifest = receipt();
+    manifest.metrics.elapsedMs = elapsedMs;
+    expect(checkPerformance(manifest).passed).toBe(true);
+  });
   it('gates post-build performance metrics against build admission budgets', () => {
     const result = checkPerformance(receipt());
     expect(result.passed).toBe(true);
@@ -81,6 +86,8 @@ describe('build capacity admission and performance budgets', () => {
       }
     }
     const manifest = receipt();
+    manifest.metrics.elapsedMs = BUILD_BUDGETS.elapsedMs;
+    expect(checkPerformance(manifest).passed).toBe(true);
     delete manifest.metrics.tiles;
     expect(checkPerformance(manifest).passed).toBe(false);
     manifest.metrics.tiles = [...Z7_TILES_BY_ZOOM.slice(0, -1), 5000];

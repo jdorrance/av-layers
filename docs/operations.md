@@ -43,6 +43,25 @@ add `-f cycle=YYYY-MM-DDTHH:00:00Z` using a 00, 06, 12 or 18 UTC cycle.
 Production also runs automatically at **05:17 and 17:17 UTC**. Scheduled runs
 skip a cycle already published; successful publication is followed by cleanup.
 
+The workflow runs `forecast-plan` once, `forecast-shard` on up to four workers,
+then `forecast` to assemble and publish. Planning pins one cycle and each worker
+processes a separate group of forecast hours. GitHub collects only artifacts in
+that plan’s namespace; the finalizer rejects missing or extra groups and checks
+their identities and hashes before publication. Workers have no R2 publication credentials.
+The workflow keeps the same environment/model exclusion through planning, computation,
+publication and cleanup. Its limits are 15 minutes for planning, 60 minutes per
+concurrent worker, and 60 minutes for assembly and publication.
+
+Each worker's receipt and failure/progress records are retained separately. A failed
+worker prevents publication; successful worker artifacts can be reused by GitHub's
+rerun-failed-jobs action if assembly can still finish within the original plan's
+50-minute elapsed-time budget. Worker startup, transfers and retry delays count
+toward that budget. Start a fresh run after it expires. The separate six-hour
+publication lifetime still applies to completed-build resume. A fresh planning
+attempt creates a separate artifact set, so workers from
+different plans cannot be combined. Complete-build resume below remains the recovery
+path after assembly or upload failures.
+
 Publishing requires a source cycle at most **18 hours old**, at least **six
 hours of forecast remaining**, and a build created within the last **six hours**.
 Files are retained for seven days; that does not make old weather current.

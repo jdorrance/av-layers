@@ -22,6 +22,13 @@ it('accepts explicit operations without ceremonial confirmation and rejects ambi
   expect(() => validateOperationInputs('bootstrap', base)).toThrow('Usage');
 });
 
+it('admits explicit forecast commands and bounded worker identities', () => {
+  for (const command of ['forecast-plan', 'forecast']) expect(() => validateOperationInputs(command, base)).not.toThrow();
+  for (const SHARD_ID of ['0', '1', '2', '3']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).not.toThrow();
+  for (const SHARD_ID of ['', '-1', '4', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).toThrow('SHARD_ID');
+  for (const command of ['forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
+});
+
 it('derives publication bucket from the selected Wrangler environment and needs one account ID', () => {
   const env = { ...base, R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'ignored-stale-variable' };
   expect(validatePublicationEnvironment(env, config)).toMatchObject({ accountId: account, r2Bucket: config.staging.bucket });

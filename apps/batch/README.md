@@ -21,6 +21,10 @@ Useful files:
 - [src/cli.ts](src/cli.ts): command entry point.
 - [src/commands.ts](src/commands.ts): command names and options.
 - [src/build.ts](src/build.ts): the forecast build steps.
+- [src/frame-build.ts](src/frame-build.ts): the shared acquisition, calculation,
+  packing and rendering path for a group of hours.
+- [src/parallel.ts](src/parallel.ts): frozen plans, independent workers and complete
+  build assembly; the hosted workflow runs the workers on separate runners.
 - [src/noaa](src/noaa/README.md): GFS downloads and decoding.
 - [src/render.ts](src/render.ts): map tile generation.
 - [pmtiles.json](pmtiles.json): PMTiles tool version and download checksums.

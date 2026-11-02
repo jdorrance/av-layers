@@ -7,11 +7,12 @@ export const BUILD_BUDGETS = {
   gridCells: MAX_GRID_CELLS,
   tiles: 300_000,
   samplePackBytes: 256 * 1024 * 1024,
-  elapsedMs: 20 * 60_000,
+  elapsedMs: 50 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
 } as const;
 
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
+export type PreparedBuild = ReturnType<typeof prepareBuild>;
 
 export interface CapacityScenario {
   frames?: number;

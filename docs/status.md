@@ -7,6 +7,21 @@ Open the [production map](https://windy-av-preview.pages.dev/),
 [Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
 or [API documentation](https://windy-av-api-production.jdorrance.workers.dev/docs).
 
+## Hourly build admission
+
+The 24-frame hourly GFS builds at `f36f395` completed validation but exceeded the
+previous 20-minute publication gate:
+[staging](https://github.com/jdorrance/av-layers/actions/runs/41508157166) took
+2,413,241 ms (40m13s), and
+[production](https://github.com/jdorrance/av-layers/actions/runs/41508126229) took
+2,427,607 ms (40m28s). Neither attempted publication. The hourly product has
+291,096 tile entries, three times the previous eight-frame product.
+
+These measurements support a 50-minute elapsed-time allowance in the
+[build budgets](../apps/batch/src/capacity.ts), with the existing memory, tile,
+and sample-pack limits. This admission change does not demonstrate a speedup;
+parallel execution needs its own runtime measurements.
+
 ## November 2 release
 
 The pending changes were reviewed, corrected, and merged with current main in

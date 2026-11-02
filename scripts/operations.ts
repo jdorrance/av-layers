@@ -2,9 +2,10 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { getProduct } from '@av/contracts';
+import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { r2Storage } from '../apps/batch/src/storage.js';
-import { assertCurrentMain, buildAndPublish, downloadForecastArtifact, resumePublication } from './publication-workflow.js';
+import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, resumePublication, runForecastShard } from './publication-workflow.js';
 import { probeApi, readResponseBytes, retryProbe, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
@@ -104,12 +105,18 @@ export async function verifyWindyPluginBundle(options: RetryOptions & {
   }, options);
 }
 
-type Operation = 'deploy' | 'forecast' | 'maintenance';
+const OPERATIONS = ['deploy', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
+type Operation = typeof OPERATIONS[number];
+const OPERATION_USAGE = `Usage: pnpm operations ${OPERATIONS.join('|')}`;
 export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
-  if (!['deploy', 'forecast', 'maintenance'].includes(command)) throw new Error('Usage: pnpm operations deploy|forecast|maintenance');
+  if (!(OPERATIONS as readonly string[]).includes(command)) throw new Error(OPERATION_USAGE);
   if (!['staging', 'production'].includes(env.TARGET_ENV ?? '')) throw new Error('TARGET_ENV must be staging or production');
   if (command !== 'deploy' && !getProduct(env.MODEL ?? 'gfs')) throw new Error('Unknown forecast model');
-  if (command === 'forecast' && env.RESUME_RUN_ID && !/^[1-9]\d{0,19}$/.test(env.RESUME_RUN_ID)) throw new Error('resume-run-id must be numeric');
+  if (command.startsWith('forecast') && env.RESUME_RUN_ID) {
+    if (command !== 'forecast') throw new Error('Only forecast accepts resume-run-id');
+    if (!/^[1-9]\d{0,19}$/.test(env.RESUME_RUN_ID)) throw new Error('resume-run-id must be numeric');
+  }
+  if (command === 'forecast-shard' && (!/^(0|[1-9]\d*)$/.test(env.SHARD_ID ?? '') || Number(env.SHARD_ID) >= MAX_FORECAST_SHARDS)) throw new Error(`SHARD_ID must identify one of at most ${MAX_FORECAST_SHARDS} forecast shards`);
   if (command === 'maintenance') {
     if (env.ACTION !== 'rollback' && env.ACTION !== 'cleanup') throw new Error('Maintenance action must be rollback or cleanup');
     if (env.ACTION === 'rollback' && !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(env.BUILD_ID ?? '')) throw new Error('Invalid rollback build ID');
@@ -140,12 +147,23 @@ async function pnpm(args: string[], env: NodeJS.ProcessEnv = process.env): Promi
 export async function runOperation(command: string): Promise<void> {
   validateOperationInputs(command);
   await assertCurrentMain();
-  if (command === 'forecast' || command === 'maintenance') {
+  if (command === 'forecast-shard') {
+    await pnpm(['tools:pmtiles']);
+    await runForecastShard(Number(process.env.SHARD_ID));
+    return;
+  }
+  if (command !== 'deploy') {
     const config = validatePublicationEnvironment(process.env);
     const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
-    if (command === 'forecast') {
+    if (command === 'forecast-plan') {
+      const shards = await planForecast(store);
+      if (process.env.GITHUB_OUTPUT) {
+        const artifact = `forecast-plan-${process.env.MODEL ?? 'gfs'}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
+        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${shards !== null}\nshards=${JSON.stringify(shards ?? [])}\nartifact=${artifact}\n`);
+      }
+    } else if (command === 'forecast') {
       if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID), store);
-      else { await pnpm(['tools:pmtiles']); await buildAndPublish(store); }
+      else await finalizeAndPublish(store);
     } else {
       const { maintenanceWorkflow } = await import('../apps/batch/src/maintenance.js');
       console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: process.env.MODEL ?? 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store })));
@@ -168,6 +186,6 @@ export async function runOperation(command: string): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3) { console.error('Usage: pnpm operations deploy|forecast|maintenance'); process.exitCode = 1; }
+  if (process.argv.length !== 3) { console.error(OPERATION_USAGE); process.exitCode = 1; }
   else runOperation(process.argv[2]!).catch(error => { console.error(error); process.exitCode = 1; });
 }
