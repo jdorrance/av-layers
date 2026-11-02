@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { computeFreshness, manifestSchema, type Manifest } from '@av/contracts';
-import { OVERLAY_LAYER_ID } from '@av/contracts/client';
+import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -60,7 +60,8 @@ class MapMock {
   removeLayer(id: string): void { this.layers.delete(id); }
   remove(): void { this.removed = true; }
 }
-vi.mock('maplibre-gl', () => ({ default: { Map: MapMock, NavigationControl: class {} } }));
+const protocols = new Map<string, RasterTileProtocol['load']>();
+vi.mock('maplibre-gl', () => ({ default: { Map: MapMock, NavigationControl: class {}, addProtocol: (name: string, load: RasterTileProtocol['load']) => protocols.set(name, load), removeProtocol: (name: string) => protocols.delete(name) } }));
 
 let doc: Document;
 let win: Window;
@@ -75,7 +76,7 @@ function latest() {
       buildId: manifest.buildId, manifestKey: `builds/gfs/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt
     }] },
     manifest,
-    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${layer}/{frame}/{z}/{x}/{y}.webp`])),
+    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
     bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
     freshness: computeFreshness(manifest)
   }));
@@ -92,7 +93,8 @@ async function start(): Promise<void> {
 }
 beforeEach(() => {
   vi.resetModules();
-  maps.length = 0;
+  maps.length = 0; protocols.clear();
+  vi.stubEnv('VITE_API_BASE', 'https://api.test');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
   manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
@@ -103,7 +105,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   page('pagehide', false);
-  vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals();
+  vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
 });
 
 it('keeps the incomplete-map warning until every failed tile recovers or leaves the viewport', async () => {
@@ -184,7 +186,7 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
   expect(ui('freshness').textContent).not.toContain('Loading');
 });
 
-it('preserves a loaded map across BFCache restoration and links its source receipts', async () => {
+it('preserves a loaded build across BFCache restoration and renews its raster generation', async () => {
   manifest.source.provenanceUrl = 'https://api.test/v1/models/gfs/runs/build/provenance';
   await start();
   const links = ui('meta').children.flatMap(child => child.children);
@@ -192,7 +194,7 @@ it('preserves a loaded map across BFCache restoration and links its source recei
   const currentSource = sourceId();
   page('pagehide', true); page('pageshow', true);
   expect(fetchMock).toHaveBeenCalledTimes(1);
-  expect(sourceId()).toBe(currentSource);
+  expect(sourceId()).not.toBe(currentSource);
   expect(map().removed).toBe(false);
 });
 
@@ -213,4 +215,40 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
   expect(ui('series-button').disabled).toBe(false);
   expect(ui('series-status').textContent).toContain('Point request interrupted');
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+
+it('cancels the old raster generation and removes protocols on replacement and BFCache suspension', async () => {
+  await start();
+  const url = (map().getSource(sourceId()) as { tiles: string[] }).tiles[0].replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
+  const scheme = url.split('://')[0], loader = protocols.get(scheme)!;
+  expect(protocols.size).toBe(1);
+  fetchMock.mockImplementationOnce(async (_url, init) => new Promise((_resolve, reject) => { init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }); }));
+  const pending = loader({ url }, new AbortController());
+  const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  ui('frame').value = manifest.frames[1].id; ui('frame').dispatchEvent(new Event('change'));
+  await cancelled;
+  expect(protocols.has(scheme)).toBe(false); expect(protocols.size).toBe(1);
+  page('pagehide', true); expect(protocols.size).toBe(0);
+  page('pageshow', true); expect(protocols.size).toBe(1);
+});
+
+it('cleans a partially mounted overlay and displays frame-change errors, then permits recovery', async () => {
+  await start();
+  const addLayer = map().addLayer.bind(map());
+  let failedProtocol: { load: RasterTileProtocol['load']; url: string };
+  vi.spyOn(map(), 'addLayer').mockImplementationOnce(layer => {
+    addLayer(layer);
+    const source = map().sources.get(layer.source!) as { tiles: string[] };
+    failedProtocol = { load: [...protocols.values()][0], url: source.tiles[0].replace(/\{[zxy]\}/g, '0') };
+    throw new Error('GPU context unavailable');
+  });
+  ui('frame').value = manifest.frames[1].id;
+  ui('frame').dispatchEvent(new Event('change'));
+  expect(protocols.size).toBe(0); expect(map().sources.size).toBe(0); expect(map().layers.size).toBe(0);
+  expect(ui('error').hidden).toBe(false); expect(ui('error').textContent).toContain('GPU context unavailable');
+  expect(ui('timestamp').textContent).toBe('Overlay unavailable');
+  await expect(failedProtocol!.load({ url: failedProtocol!.url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
+  ui('frame').value = manifest.frames[0].id; ui('frame').dispatchEvent(new Event('change'));
+  expect(protocols.size).toBe(1); expect(map().sources.size).toBe(1); expect(ui('error').hidden).toBe(true);
 });

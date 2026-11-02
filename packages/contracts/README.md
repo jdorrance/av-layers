@@ -11,6 +11,7 @@ Shared producer/consumer vocabulary: schemas, admitted product definitions, regu
 `@av/contracts/client` is the shared consumer entrypoint:
 
 - [client-api.ts](src/client-api.ts): pinned metadata/sample validation, a 10-second total request deadline, bounded 1 MiB JSON responses and at most one jittered retry for network/502/503/504 failures. Caller cancellation, invalid JSON/schema and 404 responses are not retried.
+- [client-raster.ts](src/client-raster.ts): one abortable raster protocol per overlay generation, two active requests, at most 64 queued requests, a 10-second total deadline and at most two jittered retries for network/502/503/504 failures. It admits only tile paths on the configured API origin, rejects redirects and caps WebP responses at 1 MiB. Disposal cancels queued requests, active bodies and retry delays; errors remain visible to the map adapter.
 - [client-types.ts](src/client-types.ts): consumer data shapes.
 - [client-time.ts](src/client-time.ts): frame matching, retention expiry and independent forecast-horizon warnings.
 - [client-view.ts](src/client-view.ts): pure legend/series/diagnostic models, descriptor-driven attribution and tile options.

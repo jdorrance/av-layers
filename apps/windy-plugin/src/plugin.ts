@@ -4,8 +4,9 @@ import store from '@windy/store';
 import type { LayerId, ModelId } from '@av/contracts';
 import { ApiClient, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
 import config, { API_BASE } from './pluginConfig';
-import { PluginController, type HostMap, type HostStore, type HostTileLayer, type WindyHost } from './controller';
+import { PluginController, type HostStore, type WindyHost } from './controller';
 import { PluginPanel } from './view';
+import { WindyRasterLayer, type NativeRasterMap } from './raster-layer';
 
 const api = new ApiClient({ baseUrl: API_BASE });
 let panel: PluginPanel | null = null;
@@ -14,12 +15,14 @@ let seriesAbort: AbortController | null = null;
 let mapClickBound = false;
 let mountTarget: HTMLElement | null = null;
 
-const hostMap = map as unknown as HostMap;
 const hostStore = store as unknown as HostStore;
 const host: WindyHost = {
-  map: hostMap,
+  map: {
+    addLayer: layer => (layer as WindyRasterLayer).addTo(map as unknown as NativeRasterMap),
+    removeLayer: layer => layer.remove?.()
+  },
   store: hostStore,
-  createTileLayer: (url, options) => L.tileLayer(url, options as unknown as Record<string, unknown>) as unknown as HostTileLayer
+  createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, options)
 };
 
 function onClick(event: { latlng?: { lat: number; lng: number } }): void {

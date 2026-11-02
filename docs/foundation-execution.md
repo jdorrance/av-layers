@@ -79,7 +79,13 @@ notices and the absence of a new public license grant are preserved.
 - **F09:** shared API/time/presentation modules and separate map/host
   controllers implemented. Desktop and mobile-layout browser checks cover
   keyboard controls, intervals, aborts, tile failures and expiry. Physical
-  mobile proof was explicitly deferred by the user; actual Windy-host evidence remains required.
+  mobile proof was explicitly deferred by the user. The first actual Windy 51
+  installation succeeded but exposed its different LeafletGL source events,
+  missing accessible control names and cold tile bursts exceeding the API's
+  four-operation admission limit. The adapters now use supported source events
+  and a shared cancellable tile protocol: two active requests, 64 queued,
+  three attempts, a ten-second total deadline and a 1-MiB response cap. The
+  Worker limits are unchanged. Corrected public-host proof remains required.
 - **F10:** `pnpm dev:fixture` uses a tiny, explicitly synthetic local-only
   product and one workerd seeding session. Fourteen identical fixture objects
   seeded in 0.852 s versus 7.800 s through serial CLI processes on macOS arm64.
@@ -92,6 +98,21 @@ notices and the absence of a new public license grant are preserved.
   claim is made while those gates are open.
 
 ## Evidence locations
+
+The first final-source Linux build passed the 20-minute/2-GiB gate in 993,065 ms
+with 1,150,156,800 bytes peak RSS. Its same-cycle publication was refused, then
+the exact artifact was successfully resumed with explicit replacement intent
+in run `41343492447`. Staging deployment `41343866352` and real R2 recovery drill
+`41343868747` passed; the drill removed its 60 temporary objects and proved its
+namespace empty. A subsequent fresh cycle built and published in run
+`41395096711`, with 558,661 ms build time and 1,233,801,216 bytes peak RSS.
+These individual runs use different inputs/runners and are not paired speedup
+claims. The original local repeated benchmark was interrupted by macOS
+low-power sleep before its first reference build completed. It is invalid as
+a completed performance observation; hosted matched-pair qualification is
+being prepared so it does not depend on laptop power. The client corrections
+change the conservative contracts-source recipe fingerprint, so the final
+revision still requires a fresh build and the affected deployed checks.
 
 Experiment scripts and tests are committed with their owning components. A [portable prequalification bundle](evidence/foundation-prequalification.json) preserves the principal local receipts, source hashes, methods and limitations. Raw
 local receipts live under ignored `output/evidence/foundation*`; release and
