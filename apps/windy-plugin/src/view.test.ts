@@ -6,6 +6,8 @@ import type { ControllerState } from './controller';
 
 class FakeElement {
   children: FakeElement[] = [];
+  parent: FakeElement | null = null;
+  listeners = new Map<string, ((event: Event) => void)[]>();
   style: { background?: string } = {};
   textContent = '';
   hidden = false;
@@ -18,10 +20,24 @@ class FakeElement {
   role = '';
   value = '';
   constructor(readonly tag: string) {}
-  append(...children: FakeElement[]): void { this.children.push(...children); }
-  replaceChildren(...children: FakeElement[]): void { this.children = children; }
-  add(option: FakeElement): void { this.children.push(option); }
-  addEventListener(): void {}
+  append(...children: FakeElement[]): void {
+    for (const child of children) child.parent = this;
+    this.children.push(...children);
+  }
+  replaceChildren(...children: FakeElement[]): void {
+    for (const child of this.children) child.parent = null;
+    this.children = [];
+    this.append(...children);
+  }
+  add(option: FakeElement): void { this.append(option); }
+  addEventListener(type: string, listener: (event: Event) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+  dispatchEvent(event: Event): boolean {
+    for (const listener of this.listeners.get(event.type) ?? []) listener(event);
+    if (event.bubbles && !event.cancelBubble) this.parent?.dispatchEvent(event);
+    return !event.defaultPrevented;
+  }
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -38,6 +54,47 @@ it('associates visible labels with each keyboard control and exposes failures as
   expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Layer', 'Frame', 'Opacity']);
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
+});
+
+it('keeps native panel control keys separate from page shortcuts while allowing Escape and Tab', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const callbacks = { onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() };
+  const panel = new PluginPanel(callbacks);
+  const body = new FakeElement('body'), map = new FakeElement('canvas');
+  body.append(panel.root as unknown as FakeElement, map);
+  const pageKeys: string[] = [];
+  let hostTime = 9;
+  body.addEventListener('keydown', event => {
+    const { key } = event as KeyboardEvent;
+    pageKeys.push(key);
+    if (key === 'ArrowRight') { hostTime++; event.preventDefault(); }
+  });
+  const keydown = (key: string) => Object.assign(new Event('keydown', { bubbles: true, cancelable: true }), { key });
+  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+  const nodes = visit(panel.root as unknown as FakeElement);
+  const controls = nodes.filter(element => ['select', 'input', 'button', 'summary'].includes(element.tag));
+  for (const control of controls) {
+    for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowDown', ' ', 'f', 'Home']) {
+      const event = keydown(key);
+      expect(control.dispatchEvent(event)).toBe(true);
+      expect(event.defaultPrevented).toBe(false);
+    }
+  }
+  expect(pageKeys).toEqual([]);
+  expect(hostTime).toBe(9);
+
+  // Native range changes remain allowed; its input event still reaches the panel callback.
+  const opacity = nodes.find(element => element.id === 'av-opacity')!;
+  opacity.value = '0.55';
+  opacity.dispatchEvent(new Event('input', { bubbles: true }));
+  expect(callbacks.onOpacity).toHaveBeenCalledWith(0.55);
+  for (const key of ['Escape', 'Tab']) expect(opacity.dispatchEvent(keydown(key))).toBe(true);
+  expect(pageKeys).toEqual(['Escape', 'Tab']);
+
+  // Keyboard use outside the panel still belongs to the host.
+  expect(map.dispatchEvent(keydown('ArrowRight'))).toBe(false);
+  expect(hostTime).toBe(10);
 });
 
 it('renders build-specific opaque or transparent no-lift legends and discloses diagnostics inside details', () => {

@@ -89,6 +89,10 @@ export class PluginPanel {
   constructor(callbacks: PanelCallbacks) {
     ensureStyles();
     this.root = node('div', 'av-panel');
+    this.root.addEventListener('keydown', event => {
+      // Keep control keys away from Windy's page shortcuts without canceling native actions.
+      if (event.key !== 'Escape' && event.key !== 'Tab') event.stopPropagation();
+    });
     const header = node('header', 'av-header');
     const title = node('h1', undefined, 'AV usable lift');
     const back = node('button', 'av-back', '← Menu');
