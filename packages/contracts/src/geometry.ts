@@ -39,6 +39,12 @@ export type RegularLatLonGrid = z.infer<typeof regularLatLonGridSchema>;
 export type LambertConformalGrid = z.infer<typeof lambertConformalGridSchema>;
 export type Grid = z.infer<typeof gridSchema>;
 
+/** Compare declared geometry, independent of JSON property insertion order. */
+export function sameGrid(left: Grid, right: Grid): boolean {
+  const a = gridSchema.safeParse(left), b = gridSchema.safeParse(right);
+  return a.success && b.success && JSON.stringify(a.data) === JSON.stringify(b.data);
+}
+
 export type GeographicBounds = readonly [west: number, south: number, east: number, north: number];
 export interface GridPoint { x: number; y: number }
 export interface GeographicPoint { lat: number; lon: number }

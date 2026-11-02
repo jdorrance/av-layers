@@ -1,3 +1,4 @@
+import { deriveFrame, type NormalizedFrame } from '@av/forecast';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,11 +8,11 @@ import { GFS_GRID, GFS_PRODUCT, MODEL_IDS, getProduct, gridSchema, manifestSchem
 import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, sampleGrid } from '@av/forecast';
 import fixture from '../../../packages/contracts/src/fixtures/lambert.json';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
-import { buildForecast, deriveFrame } from './build.js';
+import { buildForecast } from './build.js';
 import { readCoverage } from './coverage.js';
-import type { ForecastProvider, NormalizedFrame } from './providers.js';
+import type { ForecastProvider } from './providers.js';
 import { renderTileRgba } from './render.js';
-import { localPath, validateBuild } from './validate.js';
+import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
 import { decodeWebp } from './webp.js';
 
 const temporary: string[] = [];
@@ -41,7 +42,7 @@ describe('offline native-grid build integration', () => {
   ])('builds, packs, renders and validates the $name fixture without admitting a live provider', async scenario => {
     const root = await mkdtemp(join(tmpdir(), `av-native-${scenario.name}-`)); temporary.push(root);
     const product: ProductDefinition = {
-      ...GFS_PRODUCT, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-${scenario.name}`, configurationId: 'offline-analytic', domainId: scenario.name },
+      ...GFS_PRODUCT, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
       label: `Offline ${scenario.name} fixture`, attribution: 'Synthetic infrastructure fixture', coverageDescription: 'Synthetic native-grid cells only; no forecast claims',
       bounds: [-180, -85, 180, 85], grid: scenario.grid, coverageId: `fixture-${scenario.name}`, maxNativeZoom: 0,
       frameHours: scenario.hours, intervalHours: scenario.interval, layers: scenario.layers
@@ -60,7 +61,8 @@ describe('offline native-grid build integration', () => {
         };
       }
     };
-    const manifestPath = await buildForecast({ out: root, product, mask, provider });
+    const onValidated = vi.fn();
+    const manifestPath = await buildForecast({ out: root, product, mask, provider, onValidated });
     const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
     expect(closed).toBe(true);
     expect(manifest.frames).toHaveLength(scenario.hours.length);
@@ -68,7 +70,19 @@ describe('offline native-grid build integration', () => {
     expect(manifest.samples.channelCount).toBe(scenario.hours.length * scenario.layers.length);
     const loadedMask = await readCoverage(root, manifest.coverage.hash);
     expect({ ...loadedMask, output: new Uint8Array(loadedMask.output), halo: new Uint8Array(loadedMask.halo), tiles: new Uint8Array(loadedMask.tiles) }).toEqual(mask);
-    await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, product)).resolves.toMatchObject({ buildId: manifest.buildId });
+    const validated = await validateBuild(root, manifest, loadedMask, manifest.coverage.hash, product);
+    expect(validated.manifest.buildId).toBe(manifest.buildId);
+    expect(manifest.model).toBe(product.modelId);
+    expect(manifest.recipe.source.modelFamily).toBe('fixture-base-model');
+    expect(() => assertValidatedBuild(root, manifest, validated)).not.toThrow();
+    expect(onValidated).toHaveBeenCalledExactlyOnceWith(expect.any(Object), manifestPath);
+    expect(() => assertValidatedBuild(root, manifest, onValidated.mock.calls[0][0])).not.toThrow();
+    expect(() => assertValidatedBuild(root, manifest, JSON.parse(JSON.stringify(validated)))).toThrow('validation result');
+    expect(() => assertValidatedBuild(root, manifest, { ...validated })).toThrow('validation result');
+    expect(() => assertValidatedBuild(join(root, 'other'), manifest, validated)).toThrow('validation result');
+    expect(() => assertValidatedBuild(root, { ...manifest, cycle: '2026-11-01T06:00:00.000Z' }, validated)).toThrow('validation result');
+    await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, modelId: 'wrong-public-id' })).rejects.toThrow('Unsupported model');
+    await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, source: { ...product.source, modelFamily: 'wrong-family' } })).rejects.toThrow('Unsupported model');
     const alteredMask = { ...loadedMask, output: new Uint8Array(loadedMask.output) };
     alteredMask.output[0] ^= 1;
     await expect(validateBuild(root, manifest, alteredMask, manifest.coverage.hash, product)).rejects.toThrow('Coverage identity mismatch');
@@ -94,6 +108,6 @@ describe('offline native-grid build integration', () => {
       }
     }
     expect(MODEL_IDS).toEqual(['gfs']);
-    expect(getProduct(product.source.modelFamily)).toBeUndefined();
+    expect(getProduct(product.modelId)).toBeUndefined();
   }, 30000);
 });

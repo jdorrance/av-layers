@@ -1,100 +1,78 @@
 # Architecture
 
-The batch process turns admitted model inputs into immutable display and
-sampling artifacts. A read-only Worker serves those artifacts to any client that
-pins one build for the duration of a view.
+A batch job downloads weather data, calculates the forecast, and writes files.
+The API serves those files to the standalone map and Windy plugin. Each client
+uses one completed build until the user reloads it or its data expires.
 
 ```text
-Forecast providers → batch acquisition → science → tiles + numeric pack
-                                                   ↓ validate and publish
-                                              private R2 bucket
-                                                   ↓
-                                            read-only API Worker
-                                                   ↓
-                                   any map or API consumer (preview, apps, plugins)
+Source adapter → calculations → tiles + point data → private R2 bucket
+                                                         ↓
+                                                    API Worker
+                                                         ↓
+                                              preview / Windy / API clients
 ```
 
 ## Workspace map
 
-- [Contracts](../packages/contracts/README.md) owns shared schemas, identifiers,
-  palettes, coverage assets and client helpers (`@av/contracts/client`).
-- [Forecast](../packages/forecast/README.md) owns pure column calculations and
-  scalar sampling. Its callers supply inputs and handle storage.
-- [Batch](../apps/batch/README.md) owns provider acquisition, derivation,
-  rendering, validation and publication.
-- [API](../apps/api/README.md) owns HTTP validation, publication admission,
-  bounded reads and caching.
-- [Preview](../apps/preview/README.md) owns the standalone MapLibre map and
-  point-series interface.
-- [Windy plugin](../apps/windy-plugin/README.md) is one optional consumer that
-  adapts the shared client helpers to Windy's host map, timestamp store and
-  plugin lifecycle.
+- [contracts](../packages/contracts/README.md): model settings, shared schemas,
+  grids, layers, palettes, and client helpers.
+- [forecast](../packages/forecast/README.md): pure calculations, normalized input
+  arrays, interpolation, and sample-pack layout.
+- [batch](../apps/batch/README.md): downloads, file generation, validation,
+  publication, and cleanup.
+- [api](../apps/api/README.md): HTTP requests, storage reads, and caching.
+- [preview](../apps/preview/README.md): standalone MapLibre map.
+- [windy-plugin](../apps/windy-plugin/README.md): Windy's map and time controls.
 
-## Why these boundaries exist
+## Settings have an owner
 
-Each layer and forecast frame has a PMTiles archive for display. One numeric
-pack stores all frame/layer channels in spatial blocks, with neighboring cells
-duplicated at block edges. The Worker reads a point's contributors in one bounded
-range, including across longitude wrap. Numeric values and status flags remain
-independent of palette colours and display zoom. Rendering and point sampling
-share scalar interpolation logic. The [pack implementation](../packages/forecast/src/sample-pack.ts)
-owns ordering, offsets and reconstruction; the [capacity module](../apps/batch/src/capacity.ts)
-enforces build and point-range budgets.
-The [data contract](data.md) defines what those values and statuses mean.
+[GFS settings](../packages/contracts/config/gfs.json) define its grid, forecast
+hours, source fields, coverage, and freshness rules. TypeScript and the Python
+mask generator read the same file. The [product registry](../packages/contracts/src/products.ts)
+lists available models. A public model ID is separate from its upstream model
+family, configuration, and domain.
 
-A manifest identifies the artifacts, method, coverage, provenance and expiry of
-one build. Publication writes immutable artifacts before admitting the build
-through a conditional latest-pointer update. This keeps incomplete uploads out
-of discovery and gives concurrent publishers a single commit point. Retention,
-rollback and cache details belong to [operations](operations.md).
+[Methods](../packages/contracts/src/methods.ts) define calculation parameters and
+input units. [Build budgets](../apps/batch/src/capacity.ts) limit memory, tiles,
+point data, and build time. [Serving budgets](serving-budgets.md) describe API
+limits. [Wrangler settings](../apps/api/wrangler.json) own deployed bucket and
+Worker bindings. Node and pnpm versions live in [package.json](../package.json);
+the PMTiles version and download checksums live in [pmtiles.json](../apps/batch/pmtiles.json).
+Shared dependency versions use the pnpm catalog in
+[pnpm-workspace.yaml](../pnpm-workspace.yaml).
 
-Request handling reads published data; acquisition and scientific derivation
-remain batch responsibilities. Clients discover a build, use its explicit
-frames and stop presenting it after expiry. They need no provider credentials
-or knowledge of archive internals.
+## Build and storage
 
-GFS is the only supported live model. See [status](status.md) for current release
-work and [roadmap](roadmap.md) for possible additions.
+An adapter returns normalized arrays with units, missing-value flags, a grid,
+and explicit time intervals. The builder checks the full workload before
+opening the source session. Related lift outputs share one calculation. Tile
+encoding uses bounded concurrency and reuses geometry between frames.
 
-Trusted [product definitions](../packages/contracts/src/index.ts) own required
-frames, layers, grid and native zoom. Batch admission checks resource budgets
-before downloading inputs. Adding a product requires a provider and coverage
-proof; adding a layer does not require rerunning shared column science. Use
-`pnpm capacity` to inspect the current workload and model growth before raising
-limits. Deeper display zoom uses client overzoom rather than automatically
-expanding the native tile pyramid.
+Each layer and frame has a PMTiles archive. One numeric file holds point data
+for all frames and layers in spatial blocks. Block edges include neighboring
+cells so a point can be read in one storage range. Colors and display zoom do
+not alter the numeric results. Tiles and point results use the same interpolation.
 
-## Alpha contract and extension boundary
+Each build has a manifest containing its files, hashes, layers, method details,
+source records, and expiry. Coverage has a separate descriptor and bitsets for
+public output, supporting cells, and tiles. Its content hash names the files.
+Supporting cells and block padding do not extend public coverage.
 
-Manifest v3 is the only admitted format. Each build snapshots layer labels,
-units, vertical/time support, scientific method identifiers, palette edges and
-colors, attribution and query limits. Clients and the API read that snapshot;
-a later palette/registry edit cannot reinterpret an already published build.
-There is one current layer definition and one static production recipe registry.
+Publication uploads and checks every file before changing the latest-build
+pointer. That final write uses a storage condition, so concurrent publishers
+cannot silently overwrite each other. See [operations](operations.md) for
+deployment, retention, and rollback.
 
-A recipe separates model family, model configuration and native domain. Its
-content hash includes source components, lockfile, recipe configuration and the
-coverage identity; Git revision and dirty state are recorded separately. The
-provenance sidecar binds the exact build/cycle and source-frame receipts. Raw
-provider/GRIB details stop at the adapter. Normalized typed arrays have declared
-units, explicit missingness, time windows and a native grid.
+## Serving and clients
 
-The build core accepts that recipe/provider and a verified coverage mask. It
-preflights the complete working set, derives related lift outputs once, writes
-each channel directly into the final admitted pack, and renders selected layers
-together with one bounded encode queue. The official PMTiles writer remains.
-No generic task graph, plugin service, format registry or live-model router is
-introduced.
+The API reads completed builds. It checks storage membership and expiry, shares
+identical reads, and bounds requests, memory, read sizes, and timeouts. Forecast
+downloads and calculations stay in the batch job.
 
-Coverage lives at `coverage/{descriptor-sha256}/`: descriptor plus output, halo
-and tile bitsets. The descriptor binds geometry, geographic bounds, support
-policy and sample layout. Batch writes dependencies before latest publication;
-the Worker verifies hashes and resolves/cache-keys by content identity. Regular
-latitude/longitude sampling retains its separable path; Lambert uses explicit
-projection parameters and bounded prepared mappings. Neither introduces new
-forecast physics. See [extension recipes](extensions.md) for future admission.
+Clients use the selected build's layer names, units, colors, and available times.
+They share API, tile-request, and display helpers while keeping their map-specific
+lifecycle code separate. A local Worker entry point supplies synthetic data for
+development; production uses the live registry.
 
-The public client barrel exposes API, time and presentation helpers from small
-modules. MapLibre and Windy retain separate lifecycle controllers. A separate
-local-only Worker entrypoint admits the synthetic development product; it is
-not reachable through the production registry or Wrangler deployment entrypoint.
+GFS is the only live model. New models and products remain [deferred](roadmap.md).
+The [extension guide](extensions.md) describes the seams to use when adding them.

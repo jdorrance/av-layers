@@ -9,10 +9,11 @@ on:
         options: [staging, production]
         default: production
         required: true
-      simulate-failure:
-        description: Exercise monitor failure reporting without changing serving
-        type: boolean
-        default: false
+      model:
+        description: Registered forecast model
+        type: string
+        default: gfs
+        required: true
 permissions:
   contents: read
   actions: read
@@ -30,20 +31,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22.23.4
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: Check publication, horizon, serving and writer workflows
         env:
           TARGET_ENV: ${{ inputs.environment || 'production' }}
           API_BASE_URL: ${{ vars.API_BASE_URL }}
           GH_TOKEN: ${{ github.token }}
-          SIMULATE_FAILURE: ${{ inputs['simulate-failure'] || false }}
+          MODEL: ${{ inputs.model || 'gfs' }}
         run: pnpm health
       - uses: actions/upload-artifact@v4
         if: always()

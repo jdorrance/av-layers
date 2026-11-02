@@ -35,7 +35,7 @@ The mask intersects cell footprints with the source geometry. At model spacing,
 coastal and exclusion boundaries can differ from that geometry by roughly a
 cell diagonal. Additional halo cells support interpolation without extending
 the public domain. Source geometry, hashes and lookup metadata live
-in the [coverage manifest](../packages/contracts/coverage/manifest.json).
+in the [coverage source notes](../packages/contracts/coverage/source.json).
 
 The build manifest owns grid spacing and display limits. GFS uses its native
 quarter-degree sampling and native tile zoom 7; higher display zoom does not imply
@@ -60,7 +60,7 @@ expires. [Operations](operations.md) explains publication and expiry.
 
 ## Colour and interpolation
 
-The [palette registry](../packages/contracts/src/index.ts) supplies thresholds,
+The [palette definitions](../packages/contracts/src/layers.ts) supplies thresholds,
 colours and legend labels when a build is created. The immutable manifest then
 owns those descriptors for its samples, legend and clients. Lift uses observed XC MSL colours; reusing those
 colours for AGL is a product choice. Rain's palette remains provisional.

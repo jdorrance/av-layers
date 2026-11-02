@@ -1,16 +1,17 @@
+import { loadCoverage } from './coverage.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, createProductDescriptors, getBit, GFS_GRID, GFS_PRODUCT, isCovered, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { packCells, prepareSamplePackLayout, sampleGrid, unpackCells } from '@av/forecast';
-import { deriveFrame } from './build.js';
-import { writeCoverage } from './coverage.js';
-import type { NormalizedFrame } from './providers.js';
+import { deriveFrame } from '@av/forecast';
+import { describeCoverage, writeCoverage } from './coverage.js';
+import type { NormalizedFrame } from '@av/forecast';
 import { publish } from './publication.js';
 import { workflowAuthority } from './authority.js';
 import { createSamplePackBuilder } from './sample-pack.js';
-import { loadCoverage, runConcurrent, sha256, validateBuild, validateSamplePack, validateSamples, verifyCoverage } from './validate.js';
+import { runConcurrent, sha256, validateBuild, validateSamplePack, validateSamples } from './validate.js';
 
 async function writeTestSamplePack(output: string, inputs: string[], layout: ReturnType<typeof prepareSamplePackLayout>) {
   const builder = createSamplePackBuilder(layout, inputs.length);
@@ -22,7 +23,7 @@ describe('build provenance validation', () => {
   async function fixture() {
     const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
     const mask = await loadCoverage();
-    manifest.coverage.hash = await verifyCoverage(mask);
+    manifest.coverage.hash = describeCoverage(mask, GFS_PRODUCT).hash;
     manifest.coverage.maskKey = `coverage/${manifest.coverage.hash}/manifest.json`;
     manifest.createdAt = manifest.cycle;
     manifest.expiresAt = new Date(Date.parse(manifest.createdAt) + 7 * 86400000).toISOString();
@@ -71,7 +72,7 @@ describe('build provenance validation', () => {
         : { message: 'Provenance does not match manifest' };
       await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject(expected);
       const store = { get: vi.fn(async () => null), head: vi.fn(async () => null), put: vi.fn(async () => {}), list: vi.fn(async () => []), delete: vi.fn(async () => {}) };
-      await expect(publish(store, root, manifest, { authority: workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Forecast sample', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' }), now: () => Date.parse(manifest.createdAt) + 1000 })).rejects.toMatchObject(expected);
+      await expect(publish(store, root, manifest, { authority: workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' }), now: () => Date.parse(manifest.createdAt) + 1000 })).rejects.toMatchObject(expected);
       expect(store.put).not.toHaveBeenCalled();
       expect(store.head).not.toHaveBeenCalled();
       expect(store.get).toHaveBeenCalledExactlyOnceWith('catalog/gfs/latest.json', undefined, 128 * 1024, undefined);
@@ -124,7 +125,7 @@ describe('packed sample and concurrent archive validation', () => {
   });
 
   it('admits derived halo cells but rejects true outsiders and preserves public coverage', async () => {
-    const mask = await loadCoverage(), coverageHash = await verifyCoverage(mask);
+    const mask = await loadCoverage(), coverageHash = describeCoverage(mask, GFS_PRODUCT).hash;
     const hashes = [mask.output, mask.halo, mask.tiles].map(sha256);
     const { width, height } = GFS_GRID;
     let output = -1, halo = -1;
@@ -165,7 +166,7 @@ describe('packed sample and concurrent archive validation', () => {
       bytes[output * CELL_BYTES + 4] = STATUS_OUTSIDE;
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
       expect([mask.output, mask.halo, mask.tiles].map(sha256)).toEqual(hashes);
-      expect(await verifyCoverage(mask)).toBe(coverageHash);
+      expect(describeCoverage(mask, GFS_PRODUCT).hash).toBe(coverageHash);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 

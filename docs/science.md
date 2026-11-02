@@ -1,21 +1,21 @@
 # Science and sampling
 
-The forecast package derives lift from admitted model columns, then reconstructs
+The forecast package derives lift from model columns, then reconstructs
 those fields for samples and tiles. [Reading the forecast](data.md) defines their
 public meaning.
 
-## Admitted inputs
+## Input fields
 
 GFS acquisition uses model terrain and surface pressure, two-metre temperature
 and humidity, sensible and latent heat flux, PBL height, precipitation, and
 pressure-level height and temperature. The [field definitions](../apps/batch/src/noaa/fields.ts)
-and [constants](../apps/batch/src/noaa/constants.ts) own the exact product routing,
-pressure levels and forecast leads.
+and [GFS settings](../packages/contracts/config/gfs.json) define source products,
+pressure levels, and forecast hours.
 
-Admission checks decoded parameter, level, grid, initialization, packing and
+The adapter checks decoded parameter, level, grid, initialization, packing, and
 statistical-window metadata as well as inventory labels. Duplicate inventory
 matches are accepted only when every candidate is a bounded, complete,
-byte-identical GRIB message. Receipts retain all candidates; conflicting bytes
+byte-identical GRIB message. Source records retain all candidates; conflicting bytes
 remain an error. A required acquisition failure stops the build, while decoded
 per-cell missingness propagates through the affected layer.
 
@@ -24,12 +24,12 @@ The solver also accepts dew point through the same saturation formulation.
 Explicit pressure and humidity avoid sea-level-pressure and dry-air fallbacks.
 Below-ground levels are screened before column derivation; missing above-ground
 levels remain missing. [Acquisition](../apps/batch/src/noaa/acquire.ts) owns source
-admission and receipts. The [provider boundary](../apps/batch/src/providers.ts)
+validation and source records. The [provider boundary](../apps/batch/src/providers.ts)
 requires compact Float32 arrays in declared units, binary missing masks and a
 strictly descending pressure axis in hPa. Precipitation is normalized to mm/h. Nonfinite values require an explicit missing flag; invalid array
 types, shapes or active-index identity stop the build.
 
-[Batch derivation](../apps/batch/src/build.ts) performs below-ground screening and
+[Frame derivation](../packages/forecast/src/frame.ts) performs below-ground screening and
 unit conversion, then reuses a level scratch array with an explicit active count.
 Unused tail entries never enter the solver. Reuse changes allocation behavior,
 not profile selection, physical assumptions or branch tolerances.
@@ -69,7 +69,8 @@ lift. There is no heat-flux-only depth fallback, cloud cap or moist continuation
 Surface-density-consistent Deardorff velocity scales the Lenschow updraft curve.
 A peak below 1.2 m/s gives no usable lift; a top that meets the threshold retains
 that top; otherwise the descending threshold crossing sets the usable depth.
-[The solver](../packages/forecast/src/science.ts) owns numerical constants and
+[The solver](../packages/forecast/src/science.ts) uses the shared
+[method parameters](../packages/contracts/src/methods.ts), and
 [its tests](../packages/forecast/src/science.test.ts) cover branch boundaries.
 
 ## Reconstruction and storage
@@ -93,7 +94,7 @@ regrid a projected source or alter coverage-edge decisions.
 Each numeric record contains a little-endian `Float32` value followed by a
 status/support byte. The low two
 bits encode status; three further bits identify parcel crossing, profile top
-and PBL closure. [Contracts](../packages/contracts/src/index.ts) owns their
+and PBL closure. [Layer definitions](../packages/contracts/src/layers.ts) own their
 constants. Grid geometry, Earth radius, bounds and wrap behavior come from the
 immutable version-3 manifest and its content-addressed coverage descriptor.
 Native Lambert-conformal grids are sampled through their declared projection;

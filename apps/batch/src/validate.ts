@@ -1,37 +1,37 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, GFS_PRODUCT, manifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, RASTER_TILE_SIZE, MAX_TILE_BYTES, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, manifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
-import { describeCoverage } from './coverage.js';
+import { describeCoverage, loadCoverage } from './coverage.js';
 import { readLocalFile } from './local-file.js';
-
-const COVERAGE_DIR = fileURLToPath(new URL('../../../packages/contracts/coverage', import.meta.url));
 
 export const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
 
-const validated = new WeakMap<object, { root: string; hash: string }>();
+/** An in-process validation result, never a serialized trust token. Upload still rechecks each file. */
+const validationSeal = Symbol('ValidatedBuild');
+export interface ValidatedBuild { readonly [validationSeal]: true; readonly root: string; readonly manifest: Manifest; readonly hash: string }
 const manifestHash = (manifest: Manifest): string => sha256(Buffer.from(JSON.stringify(manifest)));
-
-export function wasValidatedInProcess(root: string, raw: unknown): boolean {
-  if (!raw || typeof raw !== 'object') return false;
-  const record = validated.get(raw);
-  return !!record && record.root === resolve(root) && record.hash === manifestHash(raw as Manifest);
+function validatedResult(root: string, manifest: Manifest): ValidatedBuild {
+  const result = { [validationSeal]: true as const, root: resolve(root), manifest, hash: manifestHash(manifest) };
+  Object.defineProperty(result, validationSeal, { enumerable: false });
+  return Object.freeze(result);
 }
 
-/** Attach post-validation timings without allowing any validated forecast metadata to change. */
-export function finalizeValidatedMetrics(root: string, manifest: Manifest, metrics: Manifest['metrics']): Manifest {
-  if (!wasValidatedInProcess(root, manifest)) throw new Error('Build validation result is missing or changed');
-  const result = manifestSchema.parse({ ...manifest, metrics: structuredClone(metrics) });
-  encodeBoundedJson(result, MAX_MANIFEST_BYTES);
-  validated.set(result, { root: resolve(root), hash: manifestHash(result) });
-  return result;
+export function assertValidatedBuild(root: string, manifest: Manifest, result: ValidatedBuild): void {
+  if (result[validationSeal] !== true || result.root !== resolve(root) || result.hash !== manifestHash(result.manifest) || result.hash !== manifestHash(manifest)) throw new Error('Build validation result is missing or changed');
+}
+
+/** Attach timings after validation while preserving the validated forecast metadata. */
+export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, metrics: Manifest['metrics']): ValidatedBuild {
+  assertValidatedBuild(root, result.manifest, result);
+  const manifest = manifestSchema.parse({ ...result.manifest, metrics: structuredClone(metrics) });
+  encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
+  return validatedResult(root, manifest);
 }
 
 export async function fileSha256(path: string): Promise<string> {
@@ -60,42 +60,17 @@ export async function runConcurrent<T>(items: readonly T[], concurrency: number,
   if (failed) throw failure;
 }
 
-export async function loadCoverage(): Promise<CoverageMask> {
-  const [output, halo, tiles] = await Promise.all(['output.bin', 'halo.bin', 'tiles.bin'].map(name => readFile(resolve(COVERAGE_DIR, name))));
-  const mask = { grid: GFS_PRODUCT.grid, bounds: GFS_PRODUCT.bounds, output, halo, tiles, maxZoom: GFS_PRODUCT.maxNativeZoom };
-  await verifyCoverage(mask);
-  return mask;
-}
-
-export async function verifyCoverage(mask: CoverageMask): Promise<string> {
-  const bytes = await readFile(resolve(COVERAGE_DIR, 'manifest.json'));
-  const metadata: unknown = JSON.parse(bytes.toString('utf8'));
-  if (!metadata || typeof metadata !== 'object') throw new Error('Invalid coverage manifest');
-  const record = metadata as Record<string, unknown>;
-  if (record.schemaVersion !== 1 || record.id !== GFS_PRODUCT.coverageId || mask.maxZoom !== GFS_PRODUCT.maxNativeZoom || JSON.stringify(mask.grid) !== JSON.stringify(GFS_PRODUCT.grid)) {
-    throw new Error('Coverage identity mismatch');
-  }
-  const expectedTileBytes = Math.ceil(((4 ** (GFS_PRODUCT.maxNativeZoom + 1) - 1) / 3) / 8);
-  for (const [name, data, length] of [['output', mask.output, 129780], ['halo', mask.halo, 129780], ['tiles', mask.tiles, expectedTileBytes]] as const) {
-    const item = record[name];
-    if (!item || typeof item !== 'object' || data.length !== length || (item as Record<string, unknown>).bytes !== length || (item as Record<string, unknown>).sha256 !== sha256(data)) {
-      throw new Error(`Coverage ${name} bitset hash mismatch`);
-    }
-  }
-  return describeCoverage(mask, GFS_PRODUCT).hash;
-}
-
 /** Bound digest identities; share pending decodes as well as successfully verified content. */
 export function createArchiveContentValidator(maxEntries = 1024) {
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 16_384) throw new RangeError('Invalid archive validation cache size');
   const verified = new Map<string, Promise<void>>();
   return async (bytes: Uint8Array): Promise<void> => {
-    if (bytes.byteLength < 25 || bytes.byteLength > 1024 * 1024) throw new Error('Invalid tile byte length');
+    if (bytes.byteLength < 25 || bytes.byteLength > MAX_TILE_BYTES) throw new Error('Invalid tile byte length');
     const key = sha256(bytes), prior = verified.get(key);
     if (prior) { verified.delete(key); verified.set(key, prior); return prior; }
     const work = (async () => {
       const dims = await decodeWebp(bytes);
-      if (dims.width !== 256 || dims.height !== 256) throw new Error('Invalid tile dimensions');
+      if (dims.width !== RASTER_TILE_SIZE || dims.height !== RASTER_TILE_SIZE) throw new Error('Invalid tile dimensions');
     })();
     verified.set(key, work);
     if (verified.size > maxEntries) verified.delete(verified.keys().next().value!);
@@ -164,18 +139,18 @@ export function validateSamples(samples: Buffer, mask: CoverageMask, layer: Laye
   validateSampleFlags(samples, mask.grid.width * mask.grid.height * CELL_BYTES, layer, mask, key);
 }
 
-export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition): Promise<Manifest> {
+export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition): Promise<ValidatedBuild> {
   const manifest = manifestSchema.parse(raw);
   encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
   const product = trustedProduct ?? getProduct(manifest.model);
-  if (!product || JSON.stringify(manifest.grid) !== JSON.stringify(product.grid) || manifest.coverage.maxZoom !== product.maxNativeZoom) {
+  if (!product || manifest.model !== product.modelId || manifest.recipe.id !== product.id || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key]) || !sameGrid(manifest.grid, product.grid) || manifest.coverage.maxZoom !== product.maxNativeZoom) {
     throw new Error('Unsupported model, grid or zoom');
   }
-  const admittedHash = expectedCoverageHash ?? await verifyCoverage(mask);
+  const admittedHash = expectedCoverageHash ?? describeCoverage(await loadCoverage(product), product).hash;
   if (manifest.coverage.id !== product.coverageId || manifest.coverage.hash !== admittedHash || describeCoverage(mask, product).hash !== admittedHash) {
     throw new Error('Coverage identity mismatch');
   }
-  if (manifest.coverage.maskKey !== `coverage/${manifest.coverage.hash}/manifest.json` || JSON.stringify(mask.grid) !== JSON.stringify(manifest.grid) || JSON.stringify(manifest.descriptors.bounds) !== JSON.stringify(mask.bounds ?? product.bounds)) throw new Error('Coverage descriptor binding mismatch');
+  if (manifest.coverage.maskKey !== `coverage/${manifest.coverage.hash}/manifest.json` || !sameGrid(mask.grid, manifest.grid) || JSON.stringify(manifest.descriptors.bounds) !== JSON.stringify(mask.bounds ?? product.bounds)) throw new Error('Coverage descriptor binding mismatch');
   const cycle = Date.parse(manifest.cycle), created = Date.parse(manifest.createdAt), expiry = Date.parse(manifest.expiresAt);
   if (!(created < expiry) || expiry > created + RETENTION_DAYS * 86400000 || !Number.isFinite(cycle)) throw new Error('Invalid build timestamps');
   const frames = product.frameHours.map(hour => `f${String(hour).padStart(3, '0')}`);
@@ -199,6 +174,5 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     if (await fileSha256(localPath(root, artifact.tilesKey)) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
     await validateArchive(localPath(root, artifact.tilesKey), mask);
   }
-  validated.set(manifest, { root: resolve(root), hash: manifestHash(manifest) });
-  return manifest;
+  return validatedResult(root, manifest);
 }

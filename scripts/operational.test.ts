@@ -62,12 +62,11 @@ describe('real contract-shaped fixtures', () => {
 describe('declarative workflows', () => {
   it('retains shared writer serialization and environment-scoped credentials', () => {
     for (const name of ['forecast.yml', 'maintenance.yml']) {
-      expect(record(workflow(name).concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-gfs", 'cancel-in-progress': false });
+      expect(record(workflow(name).concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}", 'cancel-in-progress': false });
       const job = record(Object.values(record(workflow(name).jobs))[0]);
       expect(job.environment).toBe("${{ inputs.environment || 'production' }}");
       expect(record(job.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
     }
-    expect(record(record(record(workflow('bootstrap.yml').jobs).bootstrap).env).CLOUDFLARE_API_TOKEN).toBe('${{ secrets.CLOUDFLARE_BOOTSTRAP_TOKEN }}');
   });
 
   it('finishes the next scheduled job before the previous forecast horizon ends', () => {

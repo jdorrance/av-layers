@@ -41,25 +41,33 @@ export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.m
 
 /** Share only completed plain values, never an R2 object, response or readable stream. */
 export class MaterializedReads<T> {
-  private pending = new Map<string, { promise: Promise<T>; waiters: number }>();
+  private pending = new Map<string, { promise: Promise<T>; waiters: number; deadlineError?: Error }>();
   private waiters = 0;
   constructor(readonly maxPending = 16, readonly timeoutMs = 15_000, readonly maxWaiters = 32) {}
   run(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext): Promise<T> {
     const existing = this.pending.get(key);
+    if (existing?.deadlineError) return Promise.reject(existing.deadlineError);
     if (this.waiters >= this.maxWaiters) return Promise.reject(new ResourceLimitError('Too many concurrent object waiters'));
     if (existing) { existing.waiters++; this.waiters++; if (ctx?.metrics) ctx.metrics.coalesced++; return existing.promise; }
     if (this.pending.size >= this.maxPending) return Promise.reject(new ResourceLimitError('Too many concurrent object reads'));
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => { const error = new ResourceLimitError('Object read deadline exceeded'); controller.abort(error); reject(error); }, this.timeoutMs); });
-    const operation = Promise.resolve().then(() => load(controller.signal));
+    const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => {
+      const error = new ResourceLimitError('Object read deadline exceeded');
+      entry.deadlineError = error;
+      controller.abort(error);
+      reject(error);
+    }, this.timeoutMs); });
+    // R2 get() cannot be cancelled. A caller deadline must not release its
+    // owner's admission slot while that underlying operation is still alive.
+    const operation = Promise.resolve().then(() => load(controller.signal)).finally(() => this.pending.delete(key));
     this.waiters++;
-    const entry: { promise: Promise<T>; waiters: number } = {
-      promise: Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); this.waiters -= entry.waiters; this.pending.delete(key); }),
+    const entry: { promise: Promise<T>; waiters: number; deadlineError?: Error } = {
+      promise: Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); this.waiters -= entry.waiters; }),
       waiters: 1
     };
     this.pending.set(key, entry);
-    ctx?.waitUntil(entry.promise.then(() => undefined, () => undefined));
+    ctx?.waitUntil(operation.then(() => undefined, () => undefined));
     return entry.promise;
   }
 }
@@ -111,13 +119,7 @@ export async function readObjectBytes(object: R2ObjectBody, limit: number, range
     await object.body?.cancel?.();
     throw new ResourceLimitError('Object exceeds byte budget');
   }
-  // The fallback supports in-memory storage test doubles; real R2 bodies are bounded while streaming.
-  const bytes = typeof object.body?.getReader === 'function'
-    ? await readBoundedStream(object.body, limit, ctx, { signal })
-    : new Uint8Array(await object.arrayBuffer());
-  if (bytes.byteLength > limit) throw new ResourceLimitError('Object exceeds byte budget');
-  if (ctx?.metrics && typeof object.body?.getReader !== 'function') ctx.metrics.r2Bytes += bytes.byteLength;
-  return bytes;
+  return readBoundedStream(object.body, limit, ctx, { signal });
 }
 
 export function estimateJsonBytes(value: unknown): number {

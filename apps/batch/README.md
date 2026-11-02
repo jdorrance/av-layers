@@ -23,6 +23,7 @@ Useful files:
 - [src/build.ts](src/build.ts): the forecast build steps.
 - [src/noaa](src/noaa/README.md): GFS downloads and decoding.
 - [src/render.ts](src/render.ts): map tile generation.
+- [pmtiles.json](pmtiles.json): PMTiles tool version and download checksums.
 
 Calculations live in [forecast](../../packages/forecast/README.md).
 See [operations](../../docs/operations.md) for uploads, deployment, and recovery.

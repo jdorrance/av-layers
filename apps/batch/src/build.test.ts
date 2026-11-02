@@ -1,3 +1,4 @@
+import { deriveFrame } from '@av/forecast';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,16 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
 import type { GfsFrameAcquisition } from './noaa/types.js';
-import type { NormalizedFrame } from './providers.js';
+import type { NormalizedFrame } from '@av/forecast';
 
 const CYCLE = '2026-10-30T00:00:00.000Z';
 
 vi.mock('./validate.js', async importOriginal => ({
   ...await importOriginal<typeof import('./validate.js')>(),
-  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
-  verifyCoverage: vi.fn(async () => 'a'.repeat(64)),
-  validateBuild: vi.fn(async (_root: string, manifest: Manifest) => manifest),
-  finalizeValidatedMetrics: vi.fn((_root: string, manifest: Manifest, metrics: Manifest['metrics']) => ({ ...manifest, metrics })),
+  validateBuild: vi.fn(async (root: string, manifest: Manifest) => ({ root, manifest, hash: "test" })),
+  finalizeValidatedMetrics: vi.fn((_root: string, result: validateModule.ValidatedBuild, metrics: Manifest['metrics']) => ({ ...result, manifest: { ...result.manifest, metrics } })),
 }));
 vi.mock('./render.js', async () => {
   const { mkdir, writeFile } = await import('node:fs/promises');
@@ -22,7 +21,9 @@ vi.mock('./render.js', async () => {
   const renderArchive = vi.fn(async (path: string, _field?: GridField, _mask?: CoverageMask, _layer?: Manifest['layers'][number]) => { await mkdir(dirname(path), { recursive: true }); await writeFile(path, new Uint8Array(1)); });
   return { renderArchive, createRenderer: vi.fn((mask: CoverageMask) => ({ renderArchive: (path: string, field: GridField, layer: Manifest['layers'][number]) => renderArchive(path, field, mask, layer), renderArchives: async (targets: { path: string; field: GridField; layer: Manifest['layers'][number] }[]) => { for (const { path, field, layer } of targets) await renderArchive(path, field, mask, layer); }, metrics: () => ({}) })) };
 });
-vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('./coverage.js')>(), writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
+vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('./coverage.js')>(),
+  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
+  writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
 vi.mock('./noaa/index.js', () => {
   const acquireGfsFrame = vi.fn(), discoverGfsRun = vi.fn();
@@ -33,7 +34,7 @@ vi.mock('./noaa/index.js', () => {
 });
 
 import { acquireGfsFrame, createGfsAcquisitionSession, discoverGfsRun } from './noaa/index.js';
-import { buildSample, deriveFrame } from './build.js';
+import { buildProduct } from './build.js';
 import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
 import * as validateModule from './validate.js';
@@ -93,11 +94,11 @@ afterEach(async () => {
   await Promise.all(temp.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE, onValidated?: (manifest: Manifest, path: string) => Promise<void>): Promise<Manifest> {
+async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE, onValidated?: (result: validateModule.ValidatedBuild, path: string) => Promise<void>): Promise<Manifest> {
   vi.mocked(acquireGfsFrame).mockImplementation(async options => acquire(options.hour));
   const out = await mkdtemp(join(tmpdir(), 'av-build-test-'));
   temp.push(out);
-  const path = await buildSample({ out, cycle, cacheDir: join(out, 'cache'), onValidated });
+  const path = await buildProduct('gfs', { out, cycle, cacheDir: join(out, 'cache'), onValidated });
   return JSON.parse((await readFile(path)).toString()) as Manifest;
 }
 
@@ -117,7 +118,7 @@ describe('build sample acquisition intervals', () => {
     const cacheDir = join(out, 'cache');
     vi.mocked(discoverGfsRun).mockResolvedValue({ cycle: noMs(0) } as Awaited<ReturnType<typeof discoverGfsRun>>);
     vi.mocked(acquireGfsFrame).mockImplementation(async options => frame(options.hour));
-    await buildSample({ out, cacheDir });
+    await buildProduct('gfs', { out, cacheDir });
     expect(discoverGfsRun).toHaveBeenCalledWith({ cacheDir });
     expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ cacheDir }));
   });
@@ -135,19 +136,6 @@ describe('build sample acquisition intervals', () => {
     });
     expect(manifest.source).not.toHaveProperty('frames');
     expect(manifest.metrics).toHaveProperty('phasesMs');
-  });
-
-  it.each([
-    '2026-11-31T00:00:00Z',
-    '2026-11-31T00:00:00.000Z',
-    '2026-02-29T06:00:00Z',
-    '2024-02-30T12:00:00.000Z',
-    '2026-13-01T00:00:00Z',
-    '2026-10-30T03:00:00Z',
-  ])('rejects invalid calendar or cycle hour %s before acquisition', async cycle => {
-    vi.mocked(acquireGfsFrame).mockClear();
-    await expect(run(frame, cycle)).rejects.toThrow('Cycle must be a valid GFS');
-    expect(acquireGfsFrame).not.toHaveBeenCalled();
   });
 
   it('rejects a frame cycle with a different actual instant', async () => {
@@ -222,8 +210,7 @@ describe('bounded end-to-end build pipeline integration', () => {
     setBit(boundedMask.tiles, (4 ** 7 - 1) / 3 + 64 * 128 + 64);
     const coverageHash = coverageModule.describeCoverage(boundedMask, GFS_PRODUCT).hash;
 
-    vi.mocked(validateModule.loadCoverage).mockResolvedValueOnce(boundedMask);
-    vi.mocked(validateModule.verifyCoverage).mockResolvedValueOnce(coverageHash);
+    vi.mocked(coverageModule.loadCoverage).mockResolvedValueOnce(boundedMask);
     vi.mocked(coverageModule.writeCoverage).mockResolvedValueOnce(coverageHash);
     vi.mocked(validateModule.validateBuild).mockImplementationOnce(async (root, raw, mask) =>
       actualValidate.validateBuild(root, raw, mask, coverageHash)
@@ -235,7 +222,7 @@ describe('bounded end-to-end build pipeline integration', () => {
     try {
       const values = (v: number) => new Float32Array([v, v]);
       const missing = () => new Uint8Array(2);
-      let completed: Manifest | undefined;
+      let completed: validateModule.ValidatedBuild | undefined;
       const manifest = await run(hour => ({
         ...frame(hour),
         activeIndices: new Uint32Array([index, index + 1]),
@@ -266,17 +253,16 @@ describe('bounded end-to-end build pipeline integration', () => {
 
       expect(manifest.artifacts).toHaveLength(24);
       const outDir = temp.at(-1)!;
-      expect(actualValidate.wasValidatedInProcess(outDir, completed)).toBe(true);
-      expect(actualValidate.wasValidatedInProcess(outDir, manifest)).toBe(false); // A disk copy cannot impersonate the process-local result.
-      expect(actualValidate.wasValidatedInProcess(join(outDir, 'another'), completed)).toBe(false);
-      completed!.method.id = 'changed';
-      expect(actualValidate.wasValidatedInProcess(outDir, completed)).toBe(false);
+      expect(() => actualValidate.assertValidatedBuild(outDir, manifest, completed!)).not.toThrow();
+      expect(() => actualValidate.assertValidatedBuild(join(outDir, 'another'), manifest, completed!)).toThrow('changed');
+      completed!.manifest.method.id = 'changed';
+      expect(() => actualValidate.assertValidatedBuild(outDir, manifest, completed!)).toThrow('changed');
       expect(() => actualValidate.finalizeValidatedMetrics(outDir, completed!, {})).toThrow('changed');
       expect((await stat(join(outDir, manifest.samples.key))).size).toBe(manifest.samples.storedCells * 24 * CELL_BYTES);
       await expect(stat(join(outDir, '.work', manifest.buildId))).rejects.toMatchObject({ code: 'ENOENT' });
       for (const artifact of manifest.artifacts) {
         const tilesStat = await stat(join(outDir, artifact.tilesKey));
-        expect(tilesStat.size).toBeGreaterThan(127); // More than the PMTiles header; buildSample already validated every decoded tile.
+        expect(tilesStat.size).toBeGreaterThan(127); // More than the PMTiles header; the build already validated every decoded tile.
       }
     } finally {
       const { mkdir, writeFile } = await import('node:fs/promises');

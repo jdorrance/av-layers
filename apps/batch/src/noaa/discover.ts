@@ -2,7 +2,7 @@ import {
   GFS_DISCOVERY_CANDIDATES,
   GFS_DISCOVERY_LAG_HOURS,
   GFS_FORECAST_HOURS,
-  GFS_PRODUCTS,
+  GFS_PRODUCTS, GFS_CYCLE_HOURS_UTC, GFS_INTERVAL_HOURS,
 } from './constants.ts';
 import { NoaaError } from './errors.ts';
 import { cycleStamp, gfsCompanionSpecs, gfsCurrentSpecs, gfsFileUrl, gfsWindowNeedsCompanion } from './fields.ts';
@@ -13,10 +13,13 @@ function candidateCycles(now: Date): string[] {
   if (!Number.isFinite(now.getTime())) throw new NoaaError('invalid-option', 'Invalid discovery clock');
   const shifted = new Date(now.getTime() - GFS_DISCOVERY_LAG_HOURS * 3_600_000);
   shifted.setUTCMinutes(0, 0, 0);
-  shifted.setUTCHours(Math.floor(shifted.getUTCHours() / 6) * 6);
-  return Array.from({ length: GFS_DISCOVERY_CANDIDATES }, (_, i) =>
-    new Date(shifted.getTime() - i * 6 * 3_600_000).toISOString().replace('.000Z', 'Z'),
-  );
+  if (!Number.isFinite(shifted.getTime())) throw new NoaaError('invalid-option', 'Invalid GFS discovery time');
+  const cycles: string[] = [];
+  for (let hours = 0; hours < 24 * GFS_DISCOVERY_CANDIDATES && cycles.length < GFS_DISCOVERY_CANDIDATES; hours++) {
+    if (GFS_CYCLE_HOURS_UTC.includes(shifted.getUTCHours())) cycles.push(shifted.toISOString().replace('.000Z', 'Z'));
+    shifted.setUTCHours(shifted.getUTCHours() - 1);
+  }
+  return cycles;
 }
 
 async function checkSpecList(
@@ -49,7 +52,7 @@ async function checkRun(cycle: string, transport: NoaaTransport, refresh = false
   for (const hour of GFS_FORECAST_HOURS) {
     await checkSpecList(cycle, transport, indexes, gfsCurrentSpecs(hour), hour, 'current', duplicates);
     if (gfsWindowNeedsCompanion(hour)) {
-      await checkSpecList(cycle, transport, indexes, gfsCompanionSpecs(hour), hour - 3, 'companion', duplicates);
+      await checkSpecList(cycle, transport, indexes, gfsCompanionSpecs(hour), hour - GFS_INTERVAL_HOURS, 'companion', duplicates);
     }
   }
   return {

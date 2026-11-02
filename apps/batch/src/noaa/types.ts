@@ -1,9 +1,9 @@
+import type { NormalizedFrame } from '@av/forecast';
 import type { IdxRecord } from '@azohra/meteo.grib';
 import type { NoaaTransportStats } from './transport.ts';
 import type { FieldSamplingStats } from './sampling.ts';
 
 export interface NoaaFetchOptions {
-  fetch?: typeof fetch;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
   retry?: { maxAttempts?: number; deadlineMs?: number; attemptTimeoutMs?: number; baseDelayMs?: number; maxDelayMs?: number };
@@ -38,7 +38,7 @@ export interface GfsAcquisitionSessionOptions extends NoaaFetchOptions {
   now?: Date;
   /** At most this many records fetched ahead; defaults to 2. */
   fetchConcurrency?: number;
-  /** Worker jobs are independently bounded to 1..4; defaults to at most two available CPUs. */
+  /** Worker jobs are independently bounded to 1..4; defaults to one. */
   decodeConcurrency?: number;
   /** Bound on compressed/transferred/decoded buffers plus estimated worker state; defaults to 128 MiB. */
   prefetchBytes?: number;
@@ -186,54 +186,9 @@ export interface DecodedFieldReceipt {
   unit: string;
 }
 
-export interface GfsFrameAcquisition {
+export interface GfsFrameAcquisition extends NormalizedFrame {
   schemaVersion: 1;
   model: 'gfs';
-  cycle: string;
-  hour: number;
-  validAt: string;
-  capturedAt: string;
-  grid: {
-    width: number;
-    height: number;
-    lon0: number;
-    lat0: number;
-    dx: number;
-    dy: number;
-    wrapLongitude: true;
-  };
-  activeIndices: Uint32Array;
-  terrainM: Float32Array;
-  surfacePressurePa: Float32Array;
-  temp2mK: Float32Array;
-  specificHumidity2mKgKg: Float32Array;
-  pblHeightM: Float32Array;
-  sensibleHeatFluxWm2: Float32Array;
-  latentHeatFluxWm2: Float32Array;
-  precipitationMmPerHour: Float32Array;
-  pressureLevelsHpa: readonly number[];
-  hgtM: Float32Array[];
-  tempK: Float32Array[];
-  missing: {
-    terrain: Uint8Array;
-    surfacePressure: Uint8Array;
-    temp2m: Uint8Array;
-    humidity2m: Uint8Array;
-    pbl: Uint8Array;
-    sensibleHeatFlux: Uint8Array;
-    latentHeatFlux: Uint8Array;
-    precipitation: Uint8Array;
-    hgt: Uint8Array[];
-    temp: Uint8Array[];
-  };
-  intervals: {
-    profileTime: string;
-    fluxWindow: { start: string; end: string };
-    precipitationWindow: { start: string; end: string };
-    fluxSourceWindow: { start: string; end: string };
-    precipitationSourceWindow: { start: string; end: string };
-    usedCompanion: boolean;
-  };
   receipt: {
     schemaVersion: 1;
     cycle: string;

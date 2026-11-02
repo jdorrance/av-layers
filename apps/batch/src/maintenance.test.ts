@@ -7,7 +7,7 @@ import type { ObjectStorage } from './storage.js';
 const fake = vi.hoisted(() => ({ rollback: vi.fn(), cleanup: vi.fn() }));
 vi.mock('./publication.js', () => fake);
 import { maintenanceWorkflow, type MaintenanceReceipt } from './maintenance.js';
-const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW: 'Forecast maintenance', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
+const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/maintenance.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
 let dir: string, receiptPath: string, listeners: number;
 const receipt = (): MaintenanceReceipt => JSON.parse(readFileSync(receiptPath, 'utf8'));
 const run = (action: 'rollback' | 'cleanup') => maintenanceWorkflow({ action, model: 'gfs', buildId: action === 'rollback' ? 'retained-build' : undefined, authority, store: {} as ObjectStorage, receiptPath });

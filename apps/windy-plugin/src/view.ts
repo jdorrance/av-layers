@@ -1,12 +1,10 @@
+import { renderBuildDiagnostics, renderPaletteLegend, renderSampleTable } from '@av/contracts/client/dom';
 import { type LayerId } from '@av/contracts';
 import {
-  activePalettes,
-  buildDiagnosticRows,
   coverageSummaryText,
+  DEFAULT_OPACITY,
   formatSeriesSummary,
   normalizePoint,
-  paletteLegend,
-  seriesTable,
   populateModelOptions,
   type FrameSample,
   type GeoPoint,
@@ -31,7 +29,7 @@ const CSS = `
 .av-header h1{margin:0;font-size:15px}
 .av-back,.av-button{padding:5px 8px;border:0;border-radius:4px;background:#1c6b8a;color:#fff;cursor:pointer;font-size:12px}
 .av-button:disabled{opacity:.45;cursor:default}
-.av-muted{color:#8fa4ad;font-size:11px;margin:6px 0}
+.av-muted,.av-palette-note{color:#8fa4ad;font-size:11px;margin:6px 0}
 .av-controls{display:grid;grid-template-columns:62px 1fr;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
 .av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
 .av-badge{margin:8px 0;padding:5px 7px;background:#1d2b31;border:1px solid #2f444d;border-radius:4px;font-size:11px}
@@ -82,7 +80,7 @@ export class PluginPanel {
   private readonly series = node('div', 'av-series');
   private readonly seriesButton = node('button', 'av-button', 'Sample clicked point');
   private renderedBuildId: string | null = null;
-  private renderedLegend: { buildId: string; layer: string | null; palettes: PinnedBuild['palettes'] } | null = null;
+  private renderedLegend: { buildId: string; layer: string | null } | null = null;
   private currentBuild: PinnedBuild | null = null;
   private clicked: GeoPoint | null = null;
 
@@ -110,7 +108,7 @@ export class PluginPanel {
     this.opacityInput.min = '0';
     this.opacityInput.max = '1';
     this.opacityInput.step = '0.05';
-    this.opacityInput.value = '0.5';
+    this.opacityInput.value = String(DEFAULT_OPACITY);
     this.opacityInput.addEventListener('input', () => callbacks.onOpacity(Number(this.opacityInput.value)));
     this.seriesButton.type = 'button';
     this.seriesButton.disabled = true;
@@ -174,62 +172,27 @@ export class PluginPanel {
   }
 
   renderBuild(build: PinnedBuild): void {
-    const key = `${build.model}:${build.manifest.buildId}`;
+    const key = `${build.manifest.model}:${build.manifest.buildId}`;
     this.currentBuild = build;
     if (this.renderedBuildId === key) {
       this.renderLegend(build, this.layerSelect.value);
       return;
     }
     this.renderedBuildId = key;
-    this.modelSelect.value = build.model;
+    this.modelSelect.value = build.manifest.model;
     this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(build.manifest.descriptors.layers[layer].label, layer)));
     this.layerSelect.value = build.manifest.layers[0] ?? '';
     this.frameSelect.replaceChildren(...build.manifest.frames.map(frame => new Option(`${frame.id} · ${frame.validTime}`, frame.id)));
     this.coverage.textContent = coverageSummaryText(build);
-    const rows = Array.isArray(build.bounds) && build.manifest.grid && build.manifest.method?.hash
-      ? buildDiagnosticRows(build)
-      : [
-          ['Build', build.manifest.buildId],
-          ['Method', build.manifest.method?.id ?? 'unknown'],
-          ['Expires', build.manifest.expiresAt]
-        ];
-    this.meta.replaceChildren(...rows.flatMap(([label, value]) => {
-      const detail = node('dd');
-      if (label === 'Provenance' && /^https?:\/\//i.test(value)) {
-        const link = node('a', undefined, value);
-        link.href = value;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-        detail.append(link);
-      } else detail.textContent = value;
-      return [node('dt', undefined, label), detail];
-    }));
+    renderBuildDiagnostics(this.meta, build);
     this.renderLegend(build, this.layerSelect.value);
   }
 
   private renderLegend(build: PinnedBuild, activeLayer: string | null): void {
-    const buildId = `${build.model}:${build.manifest.buildId}`;
-    const palettes = activePalettes(build.palettes, activeLayer, build.manifest.descriptors.layers);
-    const previous = this.renderedLegend;
-    if (previous?.buildId === buildId && previous.layer === activeLayer &&
-      previous.palettes.length === palettes.length && previous.palettes.every((palette, index) => palette === palettes[index])) return;
-    this.renderedLegend = { buildId, layer: activeLayer, palettes };
-    this.legend.replaceChildren();
-    for (const palette of palettes) {
-      const section = node('section');
-      const model = paletteLegend(palette);
-      section.append(node('h2', undefined, model.title));
-      model.rows.forEach(({ color, label }) => {
-        const row = node('div', 'av-legend-row');
-        const swatch = node('span', 'av-swatch');
-        swatch.style.background = color;
-        row.append(swatch, node('span', undefined, label));
-        section.append(row);
-      });
-      const noteText = model.note;
-      if (noteText) section.append(node('p', 'av-muted', noteText));
-      this.legend.append(section);
-    }
+    const buildId = `${build.manifest.model}:${build.manifest.buildId}`;
+    if (this.renderedLegend?.buildId === buildId && this.renderedLegend.layer === activeLayer) return;
+    this.renderedLegend = { buildId, layer: activeLayer };
+    renderPaletteLegend(this.legend, build, activeLayer);
   }
 
   renderState(state: ControllerState): void {
@@ -260,19 +223,8 @@ export class PluginPanel {
     layers: string[],
     point?: GeoPoint
   ): void {
-    const table = node('table');
-    const head = node('tr');
-    const model = seriesTable(payload, layers, this.currentBuild?.manifest.descriptors.layers);
-    for (const label of model.headings) {
-      head.append(node('th', undefined, label));
-    }
-    table.append(head);
-    for (const cells of model.rows) {
-      const row = node('tr');
-      for (const text of cells) row.append(node('td', undefined, text));
-      table.append(row);
-    }
-    this.series.replaceChildren(table);
+    if (!this.currentBuild) return;
+    renderSampleTable(this.series, payload, layers, this.currentBuild);
     const targetPoint = point ?? this.clicked ?? { lat: 0, lon: 0 };
     this.seriesStatus.textContent = formatSeriesSummary(payload, layers, targetPoint);
   }

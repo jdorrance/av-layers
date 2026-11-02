@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { computeFreshness, manifestSchema, type Manifest } from '@av/contracts';
+import { type Manifest } from '@av/contracts';
+import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
@@ -36,6 +37,9 @@ class Window extends EventTarget {
   setInterval = globalThis.setInterval;
   clearInterval = globalThis.clearInterval;
 }
+class GPUInitializationError extends Error {}
+let initializationError: Error | null = null;
+const setWorkerUrl = vi.fn();
 const maps: MapMock[] = [];
 const map = () => maps.at(-1)!;
 class MapMock {
@@ -43,7 +47,7 @@ class MapMock {
   sources = new Map<string, unknown>();
   layers = new Map<string, { id: string; source?: string }>();
   removed = false;
-  constructor() { maps.push(this); }
+  constructor() { if (initializationError) throw initializationError; maps.push(this); }
   on(name: string, listener: (event: Record<string, unknown>) => void): void {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(listener); this.handlers.set(name, handlers);
@@ -61,7 +65,8 @@ class MapMock {
   remove(): void { this.removed = true; }
 }
 const protocols = new Map<string, RasterTileProtocol['load']>();
-vi.mock('maplibre-gl', () => ({ default: { Map: MapMock, NavigationControl: class {}, addProtocol: (name: string, load: RasterTileProtocol['load']) => protocols.set(name, load), removeProtocol: (name: string) => protocols.delete(name) } }));
+vi.mock('maplibre-gl', () => ({ Map: MapMock, NavigationControl: class {}, GPUInitializationError, setWorkerUrl, addProtocol: (name: string, load: RasterTileProtocol['load']) => protocols.set(name, load), removeProtocol: (name: string) => protocols.delete(name) }));
+vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: '/assets/map-worker.js' }));
 
 let doc: Document;
 let win: Window;
@@ -70,17 +75,8 @@ let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
 const sourceId = () => map().layers.get(OVERLAY_LAYER_ID)!.source!;
-function latest() {
-  return new Response(JSON.stringify({
-    pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{
-      buildId: manifest.buildId, manifestKey: `builds/gfs/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt
-    }] },
-    manifest,
-    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-    bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
-    freshness: computeFreshness(manifest)
-  }));
-}
+function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
+
 function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
   const event = new Event(name);
   Object.defineProperty(event, 'persisted', { value: persisted });
@@ -93,11 +89,11 @@ async function start(): Promise<void> {
 }
 beforeEach(() => {
   vi.resetModules();
-  maps.length = 0; protocols.clear();
-  vi.stubEnv('VITE_API_BASE', 'https://api.test');
+  maps.length = 0; protocols.clear(); initializationError = null; setWorkerUrl.mockClear();
+  vi.stubEnv('AV_API_BASE', 'https://api.test');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  manifest = fixtureManifest();
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
   vi.stubGlobal('document', doc); vi.stubGlobal('window', win);
@@ -251,4 +247,41 @@ it('cleans a partially mounted overlay and displays frame-change errors, then pe
   await expect(failedProtocol!.load({ url: failedProtocol!.url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
   ui('frame').value = manifest.frames[0].id; ui('frame').dispatchEvent(new Event('change'));
   expect(protocols.size).toBe(1); expect(map().sources.size).toBe(1); expect(ui('error').hidden).toBe(true);
+});
+
+it('configures the bundled worker and reports unsupported graphics without starting requests', async () => {
+  initializationError = new GPUInitializationError('WebGL2 unavailable');
+  await import('./main');
+  expect(setWorkerUrl).toHaveBeenCalledWith('/assets/map-worker.js');
+  expect(ui('error').hidden).toBe(false);
+  expect(ui('error').textContent).toContain('WebGL2');
+  expect(ui('model').disabled).toBe(true);
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(protocols.size).toBe(0);
+});
+
+it('stops a pending point request and keeps sampling disabled after graphics recovery fails', async () => {
+  await start();
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  let sampleSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementationOnce((_url, init) => {
+    sampleSignal = init?.signal;
+    return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(sampleSignal?.reason)));
+  });
+  ui('series-button').dispatchEvent(new Event('click'));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  map().emit('error', { error: new GPUInitializationError('Context recreation failed') });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(sampleSignal?.aborted).toBe(true);
+  expect(ui('error').textContent).toContain('WebGL2');
+  expect(ui('frame').disabled).toBe(true);
+  expect(ui('series-button').disabled).toBe(true);
+  expect(map().removed).toBe(true);
+  expect(protocols.size).toBe(0);
+  page('pageshow', true);
+  map().emit('click', { lngLat: { lat: 33, lng: -117 } });
+  ui('series-button').dispatchEvent(new Event('click'));
+  expect(ui('series-button').disabled).toBe(true);
+  expect(protocols.size).toBe(0);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });

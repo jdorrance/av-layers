@@ -1,9 +1,8 @@
-import { getBit, setBit, type Grid } from '@av/contracts';
+import { MAX_GRID_CELLS, getBit, setBit, type Grid } from '@av/contracts';
 
 /** Row/column offsets on the same native mass grid, not metres or another grid's cells. */
 export type SupportOffset = readonly [row: number, column: number];
 export type SupportGrid = Pick<Grid, 'width' | 'height' | 'wrapLongitude'>;
-export const MAX_SUPPORT_CELLS = 4_000_000;
 const MAX_OFFSETS = 4096;
 const MAX_COMPOSITION_PAIRS = 1_000_000;
 const MAX_SUPPORT_VISITS = 64_000_000;
@@ -37,7 +36,7 @@ export function composeSupport(...stages: readonly (readonly SupportOffset[])[])
 
 function cellCount(grid: SupportGrid): number {
   const count = grid.width * grid.height;
-  if (![grid.width, grid.height, count].every(Number.isSafeInteger) || grid.width < 1 || grid.height < 1 || count > MAX_SUPPORT_CELLS) throw new RangeError('Support grid budget exceeded');
+  if (![grid.width, grid.height, count].every(Number.isSafeInteger) || grid.width < 1 || grid.height < 1 || count > MAX_GRID_CELLS) throw new RangeError('Support grid budget exceeded');
   return count;
 }
 

@@ -4,5 +4,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "rollup.config.mjs"]
+  "include": ["src/**/*.ts", "vite.config.ts"]
 }

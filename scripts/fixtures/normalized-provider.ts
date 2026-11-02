@@ -1,5 +1,5 @@
 import type { Grid } from '@av/contracts';
-import type { NormalizedFrame } from '../../apps/batch/src/providers.js';
+import type { NormalizedFrame } from '@av/forecast';
 
 /** Deterministic SI values shared by native-grid integration tests and the offline preview. */
 export function normalizedFixtureFrame(grid: Grid, activeIndices: Uint32Array, cycle: string, hour: number, intervalHours: number): NormalizedFrame {

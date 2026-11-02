@@ -1,7 +1,24 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { manifestSchema } from '@av/contracts';
-import { forecastFindings, maintenanceFindings, type ObservedWorkflowRun } from './monitor-health.js';
+import { forecastFindings, maintenanceFindings, monitor, type ObservedWorkflowRun } from './monitor-health.js';
+import * as serving from './smoke-api.js';
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+
+it('keeps forecast identity and expiry findings when a later serving probe fails', async () => {
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  manifest.expiresAt = new Date(0).toISOString();
+  vi.stubEnv('GITHUB_REPOSITORY', '');
+  vi.spyOn(serving, 'probeApi').mockImplementation(async options => {
+    options.observeManifest?.(manifest);
+    throw new Error('sample unavailable');
+  });
+  const result = await monitor('https://api.example');
+  expect(result).toMatchObject({ healthy: false, buildId: manifest.buildId });
+  expect(result.findings.join(';')).toContain('expired-publication');
+  expect(result.findings.join(';')).toContain('sample unavailable');
+});
 
 describe('forecast health decisions', () => {
   const fixture = () => manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
@@ -21,7 +38,7 @@ describe('forecast health decisions', () => {
 
 describe('maintenance workflow observations', () => {
   const now = Date.parse('2026-11-01T12:00:00Z');
-  const run = (overrides: Partial<ObservedWorkflowRun> = {}): ObservedWorkflowRun => ({ status: 'completed', conclusion: 'failure', created_at: '2026-11-01T11:00:00Z', html_url: 'https://github.com/owner/repo/actions/runs/1', display_title: 'Maintenance production cleanup', ...overrides });
+  const run = (overrides: Partial<ObservedWorkflowRun> = {}): ObservedWorkflowRun => ({ status: 'completed', conclusion: 'failure', created_at: '2026-11-01T11:00:00Z', html_url: 'https://github.com/owner/repo/actions/runs/1', display_title: 'Maintenance production gfs cleanup', ...overrides });
   it('reports recent cleanup failures for the correct environment without reading artifacts', () => {
     expect(maintenanceFindings([run()], 'production', now).join(';')).toContain('maintenance-workflow-failure (cleanup');
     expect(maintenanceFindings([run()], 'staging', now)).toEqual([]);
@@ -31,6 +48,6 @@ describe('maintenance workflow observations', () => {
     const retry = run({ status: 'in_progress', conclusion: null, created_at: '2026-11-01T11:30:00Z' });
     expect(maintenanceFindings([retry, run()], 'production', now)).toHaveLength(1);
     expect(maintenanceFindings([run({ ...retry, status: 'completed', conclusion: 'success' }), run()], 'production', now)).toEqual([]);
-    expect(maintenanceFindings([run({ ...retry, status: 'completed', conclusion: 'success', display_title: 'Maintenance production rollback' }), run()], 'production', now)).toHaveLength(1);
+    expect(maintenanceFindings([run({ ...retry, status: 'completed', conclusion: 'success', display_title: 'Maintenance production gfs rollback' }), run()], 'production', now)).toHaveLength(1);
   });
 });

@@ -1,0 +1,28 @@
+{
+  "modelId": "gfs",
+  "id": "gfs-soaring",
+  "source": { "modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global" },
+  "label": "GFS",
+  "attribution": "NOAA GFS · Aviation Forecast Layers",
+  "grid": { "kind": "regular-latlon", "width": 1440, "height": 721, "earthRadiusM": 6371229, "lon0": -180, "lat0": 90, "dx": 0.25, "dy": -0.25, "wrapLongitude": true },
+  "forecast": { "hours": [3, 6, 9, 12, 15, 18, 21, 24], "intervalHours": 3, "cycleHoursUtc": [0, 6, 12, 18], "statisticsResetHours": 6 },
+  "freshness": { "maxCycleAgeHours": 18, "minHorizonHours": 6 },
+  "coverage": {
+    "id": "soaring-land-v1",
+    "description": "Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.",
+    "west": -180, "south": -55, "east": 180, "north": 65,
+    "maxNativeZoom": 7,
+    "seaBufferMeters": 50000,
+    "excludedA3": ["RUS", "ATA", "GRL"],
+    "interpolationHaloCells": 1
+  },
+  "upstream": {
+    "baseUrl": "https://noaa-gfs-bdp-pds.s3.amazonaws.com",
+    "nativeLongitudeOrigin": 0,
+    "products": { "primary": "pgrb2.0p25", "secondary": "pgrb2b.0p25" },
+    "primaryPressureLevelsHpa": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400],
+    "secondaryPressureLevelsHpa": [875, 825, 775, 725, 675, 625],
+    "discoveryLagHours": 4,
+    "discoveryCandidates": 6
+  }
+}

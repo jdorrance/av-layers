@@ -7,25 +7,28 @@ environment's published data at a time. Keep write credentials in GitHub.
 
 ## Set up an environment
 
-Create protected `staging` and `production` GitHub environments with these values:
+Create protected `staging` and `production` GitHub environments with:
 
 - Secrets: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`,
-  `CLOUDFLARE_BOOTSTRAP_TOKEN`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
-  `R2_SECRET_ACCESS_KEY`. The two account IDs must match. Scope R2 credentials
-  to that environment's bucket. Normal deployment needs Workers Scripts Edit
-  and Pages Edit; resource creation uses the separate bootstrap token.
-- Variables: `API_BASE_URL`, `R2_BUCKET`, `PAGES_PROJECT_NAME`. Match the Worker
-  and bucket names in [Wrangler configuration](../apps/api/wrangler.jsonc).
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`. Scope R2 credentials to that
+  environment's bucket. Deployment needs Workers Scripts Edit and Pages Edit.
+- Variables: `API_BASE_URL` and `PAGES_PROJECT_NAME` for that environment.
+  The bucket comes from its `BUCKET` binding in [Wrangler configuration](../apps/api/wrangler.json).
 
-Keep the R2 bucket private, with public `r2.dev` and custom-domain access disabled.
-For a new environment, run **bootstrap, forecast, then deploy**, in that order:
+Create resources once with an authenticated Wrangler session. For staging:
 
 ```sh
-gh workflow run bootstrap.yml --ref main -f environment=staging \
-  -f confirm=bootstrap-private-cloudflare
+pnpm exec wrangler r2 bucket create windy-av-layer-staging
+pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
+pnpm exec wrangler r2 bucket domain list windy-av-layer-staging
+pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
-Wait for bootstrap to finish before publishing the first forecast.
+Use the production bucket and Pages project names when setting up production.
+Skip creation for existing resources. Keep `r2.dev` disabled and attach no public
+custom domains to either bucket. Record the Pages project's canonical hostname;
+Cloudflare may add a suffix when a name is already in use.
+Then publish a forecast before deploying the API and clients.
 
 ## Publish a forecast
 
@@ -33,6 +36,7 @@ Wait for bootstrap to finish before publishing the first forecast.
 gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs
 ```
 
+`model` defaults to `gfs`; only registered models with an implemented provider can build.
 Without `cycle`, the builder chooses a complete recent GFS run. To select one,
 add `-f cycle=YYYY-MM-DDTHH:00:00Z` using a 00, 06, 12 or 18 UTC cycle.
 Production also runs automatically at **05:17 and 17:17 UTC**. Scheduled runs
@@ -71,8 +75,7 @@ job replaces that run's saved artifacts, so check them before choosing its ID.
 ## Deploy the API and clients
 
 ```sh
-gh workflow run deploy.yml --ref main -f environment=staging \
-  -f confirm=deploy-read-only-worker
+gh workflow run deploy.yml --ref main -f environment=staging
 ```
 
 Deployment runs CI, builds the clients, deploys the Worker, checks the live API,
@@ -90,7 +93,7 @@ Choose a retained, unexpired build that still covers useful forecast times:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
-  -f action=rollback -f build-id=RETAINED_BUILD_ID -f confirm=serialized-maintenance
+  -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
 Rollback checks the saved files before changing the served build. To remove
@@ -98,7 +101,7 @@ unused builds without changing the current forecast:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
-  -f action=cleanup -f confirm=serialized-maintenance
+  -f action=cleanup
 ```
 
 Cleanup protects current and retained builds and applies a 24-hour grace period

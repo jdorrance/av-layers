@@ -6,18 +6,11 @@ import { getProduct, manifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type 
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
-import { workflowAuthority } from '../apps/batch/src/authority.js';
+import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
-import { discoverGfsRun } from '../apps/batch/src/noaa/discover.js';
-import { validateCycle } from '../apps/batch/src/noaa/acquire.js';
-import { r2Storage } from '../apps/batch/src/storage.js';
-import { wasValidatedInProcess } from '../apps/batch/src/validate.js';
-
-function workflowContext(): { repository: string; revision: string } {
-  const repository = process.env.GITHUB_REPOSITORY, revision = process.env.GITHUB_SHA;
-  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main' || !repository || !/^[\w.-]+\/[\w.-]+$/.test(repository) || !revision || !/^[a-f0-9]{40}$/.test(revision)) throw new Error('Operations require the GitHub workflow on main');
-  return { repository, revision };
-}
+import { getForecastProvider } from '../apps/batch/src/providers.js';
+import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
+import type { ValidatedBuild } from '../apps/batch/src/validate.js';
 
 /** Check at entry and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
@@ -31,34 +24,31 @@ export async function downloadForecastArtifact(runId: string, root = 'output'): 
   if (!/^[1-9]\d{0,19}$/.test(runId)) throw new Error('Invalid source artifact run ID');
   const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/runs/${runId}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
   const revision = forecastArtifactRevision(JSON.parse(stdout), repository, runId);
-  await promisify(execFile)('gh', ['run', 'download', runId, '--repo', repository, '--name', `forecast-gfs-${runId}`, '--dir', root], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
+  await promisify(execFile)('gh', ['run', 'download', runId, '--repo', repository, '--name', `forecast-${workflowAuthority().model}-${runId}`, '--dir', root], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
   return revision;
 }
 
 /** Build and artifact-resume use the same writer, cancellation and durable outcome protocol. */
 export async function publicationWorkflow(work: (run: {
-  root: string; signal: AbortSignal;
-  commit(manifest: Manifest, path: string, resumedFromRun?: string): Promise<void>;
-}) => Promise<void>): Promise<void> {
-  const repository = process.env.GITHUB_REPOSITORY, revision = process.env.GITHUB_SHA;
-  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main' || !repository || !/^[\w.-]+\/[\w.-]+$/.test(repository) || !revision || !/^[a-f0-9]{40}$/.test(revision) || process.env.MODEL !== 'gfs') {
-    throw new Error('This entry point requires the forecast workflow on main');
-  }
-  const authority = workflowAuthority(), root = 'output', controller = new AbortController();
+  root: string; signal: AbortSignal; store: ObjectStorage; model: string;
+  commit(manifest: Manifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild): Promise<void>;
+}) => Promise<void>, store?: ObjectStorage): Promise<void> {
+  const { revision } = workflowContext();
+  const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
   const abort = (): void => controller.abort(new Error('Publication interrupted'));
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
   let publicationPath: string | undefined, committed = false, publicationAttempted = false;
   try {
-    await work({ root, signal: controller.signal, async commit(manifest, path, resumedFromRun) {
+    await work({ root, signal: controller.signal, store: storage, model: authority.model, async commit(manifest, path, resumedFromRun, validated) {
       controller.signal.throwIfAborted();
       const budget = checkPerformance(manifest);
       await writeFile(join(dirname(path), 'performance.json'), JSON.stringify(budget, null, 2));
       if (!budget.passed) throw new Error(`Performance budget failed: ${budget.failures.join('; ')}`);
       await assertCurrentMain(controller.signal);
-      const started = Date.now(), store = r2Storage(), validationReused = wasValidatedInProcess(root, manifest);
+      const started = Date.now(), validationReused = validated !== undefined;
       publicationPath = join(dirname(path), 'publication.json');
       publicationAttempted = true;
-      await publish(store, root, manifest, { authority, signal: controller.signal, allowSameCycle: process.env.ALLOW_SAME_CYCLE === 'true' });
+      await publish(storage, root, manifest, { authority, signal: controller.signal, allowSameCycle: process.env.ALLOW_SAME_CYCLE === 'true', validated });
       committed = true;
       await writeFile(publicationPath, JSON.stringify({ version: 1, status: 'committed', buildId: manifest.buildId, resumedFromRun, elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024, validationReused }, null, 2));
       console.log(`Published ${manifest.buildId}`);
@@ -70,7 +60,7 @@ export async function publicationWorkflow(work: (run: {
       let summary: CleanupSummary | undefined;
       try {
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'running', publication: 'committed', summary: null, authority }, null, 2));
-        const deletedObjects = await cleanup(store, manifest.model, authority, Date.now(), report => { summary = report; }, controller.signal);
+        const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, controller.signal);
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', deletedObjects, summary: summary ?? null, authority }, null, 2));
       } catch (error) {
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', error: String(error), summary: summary ?? null, authority }, null, 2));
@@ -88,11 +78,11 @@ export async function publicationWorkflow(work: (run: {
 }
 
 /** The one writer workflow retains validation and owns exclusion through publication and cleanup. */
-export async function buildAndPublish(): Promise<void> {
-  await publicationWorkflow(async ({ root, signal, commit }) => {
-    const cacheDir = '.cache/gfs';
-    const cycle = validateCycle(process.env.CYCLE || (await discoverGfsRun({ cacheDir, signal })).cycle);
-    const { pointer } = await readPointer(r2Storage(), 'gfs', signal);
+export async function buildAndPublish(store?: ObjectStorage): Promise<void> {
+  await publicationWorkflow(async ({ root, signal, store, model, commit }) => {
+    const cacheDir = `.cache/${model}`;
+    const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });
+    const { pointer } = await readPointer(store, model, signal);
     signal.throwIfAborted();
     if (pointer) {
       // Use every retained cycle, just like publish(), including after rollback.
@@ -100,36 +90,34 @@ export async function buildAndPublish(): Promise<void> {
       if (Date.parse(cycle) < latestCycle) throw new Error('Older cycle cannot be published');
       if (Date.parse(cycle) === latestCycle && process.env.ALLOW_SAME_CYCLE !== 'true') {
         if (process.env.GITHUB_EVENT_NAME === 'schedule') {
-          console.log(`Skipped scheduled GFS build: cycle ${cycle} was already published. No new build was produced.`);
+          console.log(`Skipped scheduled ${model} build: cycle ${cycle} was already published. No new build was produced.`);
           return;
         }
         throw new Error('This cycle was already published; set allow-same-cycle=true for an intentional replacement');
       }
     }
-    const { buildSample } = await import('../apps/batch/src/build.js');
-    await buildSample({ out: root, signal, cycle, cacheDir, onValidated: commit });
-  });
+    const { buildProduct } = await import('../apps/batch/src/build.js');
+    await buildProduct(model, { out: root, signal, cycle, cacheDir, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated) });
+  }, store);
 }
 
-
 /** Revalidate an existing artifact under the same authority, without repeating acquisition or science. */
-export async function resumePublication(sourceRevision: string): Promise<void> {
-  await publicationWorkflow(async ({ root, signal, commit }) => {
+export async function resumePublication(sourceRevision: string, store?: ObjectStorage): Promise<void> {
+  await publicationWorkflow(async ({ root, signal, model, commit }) => {
     const runId = process.env.RESUME_RUN_ID;
     if (!/^\d+$/.test(runId ?? '')) throw new Error('Invalid resume workflow identity');
-    const builds = await readdir(join(root, 'builds', 'gfs'), { withFileTypes: true });
+    const builds = await readdir(join(root, 'builds', model), { withFileTypes: true });
     if (builds.length !== 1 || !builds[0].isDirectory() || !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(builds[0].name)) throw new Error('Resume artifact must contain exactly one build');
-    const path = join(root, 'builds', 'gfs', builds[0].name, 'manifest.json');
+    const path = join(root, 'builds', model, builds[0].name, 'manifest.json');
     const manifest = manifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
-    if (manifest.model !== 'gfs' || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
+    if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
     const product = getProduct(manifest.model);
     if (!product || manifest.recipe.hash !== (await buildIdentity(product, manifest.coverage.hash)).recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
     signal.throwIfAborted();
     await commit(manifest, path, runId);
-  });
+  }, store);
 }
-
 
 /** Artifact names alone do not establish that a build came from the authorized publisher. */
 export function forecastArtifactRevision(raw: unknown, repository: string, runId: string): string {

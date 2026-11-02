@@ -40,12 +40,12 @@ it.each([
   ['default', undefined]
 ])('loads the built Windy module with %s API base, shows stale horizons and tile errors, normalizes clicks, cancels stale requests, and expires a pending series', async (_name, configuredBase) => {
   const pluginDir = resolve(import.meta.dirname, '..');
-  const rollup = resolve(pluginDir, 'node_modules/rollup/dist/bin/rollup');
+  const vite = resolve(pluginDir, 'node_modules/vite/bin/vite.js');
   const base = configuredBase ?? 'http://localhost:8787';
   const env = { ...process.env };
   delete env.AV_API_BASE;
   if (configuredBase) env.AV_API_BASE = configuredBase;
-  execFileSync(process.execPath, [rollup, '-c'], { cwd: pluginDir, env, stdio: 'pipe' });
+  execFileSync(process.execPath, [vite, 'build'], { cwd: pluginDir, env, stdio: 'pipe' });
 
   const elements: FakeElement[] = [];
   const target = new FakeElement('target');
@@ -111,12 +111,14 @@ it.each([
     addProtocol: (scheme: string, handler: unknown) => { protocols.set(scheme, handler); },
     removeProtocol: (scheme: string) => { protocols.delete(scheme); }
   });
-  const regularUrl = `${pathToFileURL(resolve(pluginDir, 'dist/plugin.js')).href}?test=${_name}-${Date.now()}`;
-  const regular = await import(/* @vite-ignore */ regularUrl);
-  expect(typeof regular.default).toBe('function');
   const url = `${pathToFileURL(resolve(pluginDir, 'dist/plugin.min.js')).href}?test=${_name}-${Date.now()}`;
   const loaded = await import(/* @vite-ignore */ url);
   expect(loaded.__pluginConfig.name).toBe('windy-plugin-av-layer');
+  expect(typeof loaded.default).toBe('function');
+  const metadata = JSON.parse(readFileSync(resolve(pluginDir, 'dist/plugin.json'), 'utf8'));
+  const installPackage = JSON.parse(readFileSync(resolve(pluginDir, 'dist/package.json'), 'utf8'));
+  expect(metadata).toEqual(loaded.__pluginConfig);
+  expect(installPackage).toEqual({ name: metadata.name, version: metadata.version, type: 'module', main: 'plugin.min.js' });
   const app = new loaded.default({ target, anchor: target });
   expect(typeof app.onopen).toBe('function');
   expect(typeof app.$destroy).toBe('function');

@@ -1,5 +1,5 @@
 import {
-  GFS_CONTRACT_GRID,
+  GFS_GRID, GFS_NATIVE_GRID, GFS_CYCLE_HOURS_UTC, GFS_FORECAST_HOURS, GFS_INTERVAL_HOURS,
   GFS_PRESSURE_LEVELS_HPA,
   GFS_PRODUCTS,
 } from './constants.ts';
@@ -31,8 +31,8 @@ import type {
   GfsAcquisitionSession, GfsAcquisitionSessionOptions, GfsAcquisitionStats,
 } from './types.ts';
 
-const TOTAL_CELLS = GFS_CONTRACT_GRID.width * GFS_CONTRACT_GRID.height;
-const CONTRACT_TO_NATIVE_COLUMN_OFFSET = GFS_CONTRACT_GRID.width / 2;
+const TOTAL_CELLS = GFS_GRID.width * GFS_GRID.height;
+const CONTRACT_TO_NATIVE_COLUMN_OFFSET = (((GFS_GRID.lon0 - GFS_NATIVE_GRID.lon0) / GFS_GRID.dx) % GFS_GRID.width + GFS_GRID.width) % GFS_GRID.width;
 
 /** Conservative reservation per in-flight decode, including worker state, copied source/indices and result arrays.
  * Completed results retain this reservation until consumed; full-frame output storage is a separate build budget. */
@@ -48,7 +48,7 @@ function invalid(message: string, details?: Record<string, unknown>): never {
 export function validateCycle(cycle: string): string {
   const normalized = cycle.replace(/\.000Z$/, 'Z');
   if (
-    !/^\d{4}-\d{2}-\d{2}T(00|06|12|18):00:00Z$/.test(normalized) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/.test(normalized) || !GFS_CYCLE_HOURS_UTC.includes(new Date(normalized).getUTCHours()) ||
     !Number.isFinite(Date.parse(normalized)) || new Date(normalized).toISOString().replace('.000Z', 'Z') !== normalized
   ) {
     invalid('GFS cycle must be an exact ISO UTC one of 00/06/12/18Z', { cycle });
@@ -57,7 +57,7 @@ export function validateCycle(cycle: string): string {
 }
 
 export function validateHour(hour: number): void {
-  if (!Number.isInteger(hour) || hour < 3 || hour > 24 || hour % 3 !== 0) {
+  if (!Number.isInteger(hour) || !GFS_FORECAST_HOURS.includes(hour)) {
     invalid('GFS forecast hour must be an integer in 3..24 divisible by 3', { hour });
   }
 }
@@ -84,10 +84,10 @@ export function contractIndexToNativeIndex(index: number): number {
   if (!Number.isInteger(index) || index < 0 || index >= TOTAL_CELLS) {
     throw new NoaaError('invalid-option', `Contract index ${index} is outside the GFS grid`);
   }
-  const row = Math.floor(index / GFS_CONTRACT_GRID.width);
-  const column = index - row * GFS_CONTRACT_GRID.width;
-  const nativeColumn = (column + CONTRACT_TO_NATIVE_COLUMN_OFFSET) % GFS_CONTRACT_GRID.width;
-  return row * GFS_CONTRACT_GRID.width + nativeColumn;
+  const row = Math.floor(index / GFS_GRID.width);
+  const column = index - row * GFS_GRID.width;
+  const nativeColumn = (column + CONTRACT_TO_NATIVE_COLUMN_OFFSET) % GFS_GRID.width;
+  return row * GFS_GRID.width + nativeColumn;
 }
 
 interface LoadedField extends AdmittedGfsField {
@@ -192,7 +192,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
   ): Promise<LoadedField> => {
     transport.abort();
     const productName = gfsProductName(spec.product);
-    const url = gfsFileUrl(cycle, spec.role === 'companion' ? hour - 3 : hour, productName);
+    const url = gfsFileUrl(cycle, spec.role === 'companion' ? hour - GFS_INTERVAL_HOURS : hour, productName);
     const index = spec.role === 'companion'
       ? await transport.index(`${url}.idx`, stamp)
       : spec.product === 'primary' ? primaryIndex : secondaryIndex;
@@ -204,7 +204,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
       return { ...prior, receipt: { ...structuredClone(prior.receipt), role: 'companion' } };
     }
     return loadAndInspectGfsField(transport, {
-      cycle, spec, sourceHour: spec.role === 'companion' ? hour - 3 : hour, startHour, endHour,
+      cycle, spec, sourceHour: spec.role === 'companion' ? hour - GFS_INTERVAL_HOURS : hour, startHour, endHour,
       expectedGridKey, index, timings: context.stats,
     });
   };
@@ -283,11 +283,11 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
       if (needsCompanion) {
         const companionSpec = companionByKind.get(spec.kind);
         if (!companionSpec) throw new NoaaError('source-conflict', `Missing companion spec for ${spec.key}`);
-        companion = await load(companionSpec, currentStartHour, hour - 3, sourceGrid.gridKey);
+        companion = await load(companionSpec, currentStartHour, hour - GFS_INTERVAL_HOURS, sourceGrid.gridKey);
         companionSampled = await decode(companion, nativeIndices);
         receipts.push(companion.receipt);
         admitNoaaWindowPair(current.receipt, companion.receipt);
-      } else if (hoursInWindow(current.receipt) !== 3) {
+      } else if (hoursInWindow(current.receipt) !== GFS_INTERVAL_HOURS) {
         throw new NoaaError('source-conflict', `Direct GFS window is not three hours for ${spec.key}`);
       }
       const recovered = recoverTrailingWindow({
@@ -374,7 +374,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
       hour,
       validAt: validAt(cycle, hour),
       capturedAt,
-      grid: { ...GFS_CONTRACT_GRID, wrapLongitude: true },
+      grid: { ...GFS_GRID, wrapLongitude: true },
       activeIndices: new Uint32Array(activeIndices),
       terrainM: terrain.values,
       surfacePressurePa: surfacePressure.values,

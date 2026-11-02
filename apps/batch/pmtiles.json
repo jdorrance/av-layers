@@ -1,0 +1,21 @@
+{
+  "version": "1.31.2",
+  "targets": {
+    "darwin-arm64": {
+      "asset": "go-pmtiles-{version}_Darwin_arm64.zip",
+      "sha256": "40528f7f616fcbf91207cd48c8fc023d213f6d86c0cbf1f748732803d1880f3d"
+    },
+    "darwin-x64": {
+      "asset": "go-pmtiles-{version}_Darwin_x86_64.zip",
+      "sha256": "1f0dc02eee6c58312dd6c509faee1b5c32f0596568af1bf51f1b034e7a88a65b"
+    },
+    "linux-x64": {
+      "asset": "go-pmtiles_{version}_Linux_x86_64.tar.gz",
+      "sha256": "3ed7dbf4ec2e6dfe5e25b6f70d1ffc932729f93c86db353bf514dd71010a312f"
+    },
+    "linux-arm64": {
+      "asset": "go-pmtiles_{version}_Linux_arm64.tar.gz",
+      "sha256": "f8bd47e7ea866863489cad588fbaf2f31f42e5821f7a03f009b3769f05801cb1"
+    }
+  }
+}

@@ -1,4 +1,6 @@
-/** Bounded raster transport shared by the two map adapters; one instance per overlay generation. */
+import { MAX_TILE_BYTES } from './format.ts';
+
+/** Bounded raster transport shared by the two map adapters; one instance per mounted overlay. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }
 export interface RasterTileProtocol {
   scheme: string;
@@ -7,7 +9,6 @@ export interface RasterTileProtocol {
   dispose(): void;
 }
 interface TileTask { controller: AbortController; start(): Promise<void> }
-const MAX_TILE_BYTES = 1024 * 1024;
 const abortError = () => new DOMException('Tile request cancelled', 'AbortError');
 
 export function createRasterTileProtocol(baseUrl: string, options: {

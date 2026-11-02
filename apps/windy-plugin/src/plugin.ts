@@ -1,13 +1,12 @@
-import bcast from '@windy/broadcast';
-import { map } from '@windy/map';
-import store from '@windy/store';
 import type { LayerId, ModelId } from '@av/contracts';
 import { ApiClient, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
-import config, { API_BASE } from './pluginConfig';
-import { PluginController, type HostStore, type WindyHost } from './controller';
+import { PluginController, type WindyHost } from './controller';
 import { PluginPanel } from './view';
-import { WindyRasterLayer, type NativeRasterMap } from './raster-layer';
+import { WindyRasterLayer } from './raster-layer';
 
+const { map } = W.map;
+const { store, broadcast: bcast } = W;
+const API_BASE = import.meta.env.AV_API_BASE || 'http://localhost:8787';
 const api = new ApiClient({ baseUrl: API_BASE });
 let panel: PluginPanel | null = null;
 let controller: PluginController | null = null;
@@ -15,13 +14,12 @@ let seriesAbort: AbortController | null = null;
 let mapClickBound = false;
 let mountTarget: HTMLElement | null = null;
 
-const hostStore = store as unknown as HostStore;
 const host: WindyHost = {
   map: {
-    addLayer: layer => (layer as WindyRasterLayer).addTo(map as unknown as NativeRasterMap),
+    addLayer: layer => (layer as WindyRasterLayer).addTo(map),
     removeLayer: layer => layer.remove?.()
   },
-  store: hostStore,
+  store,
   createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, options)
 };
 
@@ -164,7 +162,8 @@ export function onclose(): void {
   panel?.setVisible(false);
 }
 
-export const title = config.title;
+export const __pluginConfig = __WINDY_CONFIG__;
+export const title = __pluginConfig.title;
 
 export default class ExternalApp {
   constructor(args: { target: HTMLElement; anchor?: HTMLElement }) {

@@ -5,12 +5,13 @@ import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { expectedTiles, LAYERS, type CoverageMask, type LayerId } from '@av/contracts';
+import { RASTER_TILE_SIZE, MAX_TILE_BYTES, expectedTiles, LAYERS, type CoverageMask, type LayerId } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import { createRasterizer, renderTileRgba } from './raster.js';
 export { mercatorPoint, renderTileRgba } from './raster.js';
 import { encodeWebp } from './webp.js';
 import { createRasterPool, MAX_RASTER_WORKERS, rasterWorkerCount, type RasterMetrics, type RasterPixels } from './raster-pool.js';
+import pmtiles from '../pmtiles.json' with { type: 'json' };
 
 export interface ArchiveTarget { path: string; field: GridField; layer: LayerId }
 
@@ -50,7 +51,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
 
   async function encode(rgba: Uint8Array): Promise<Buffer> {
     const started = performance.now();
-    try { return await encodeWebp(rgba, 256, 256); }
+    try { return await encodeWebp(rgba, RASTER_TILE_SIZE, RASTER_TILE_SIZE); }
     finally { stats.encodeWorkMs += performance.now() - started; }
   }
 
@@ -65,7 +66,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
   }
 
   // Reserve one raw tile plus the admitted maximum encoded tile per queued job.
-  const pendingTileBytes = 256 * 256 * 4 + 1024 * 1024;
+  const pendingTileBytes = RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES;
   let renderingArchives = false;
 
   async function writeMbtiles(paths: readonly string[], targets: readonly ArchiveTarget[]): Promise<void> {
@@ -83,7 +84,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
         const tile = tiles[Math.floor(next / targets.length)], target = targets[next % targets.length];
         const encoded = pool ? pool.render(Math.floor(next / targets.length), next % targets.length, tile.z, tile.x, tile.y).then(encodePixels) : renderTile(target.field, target.layer, tile.z, tile.x, tile.y);
         pending.push(encoded.then(bytes => {
-          if (bytes.byteLength > 1024 * 1024) throw new Error('Encoded tile exceeds byte budget');
+          if (bytes.byteLength > MAX_TILE_BYTES) throw new Error('Encoded tile exceeds byte budget');
           return { bytes };
         }).catch(error => { if (!hasFailure) { hasFailure = true; firstFailure = error; } return { error }; }));
         stats.peakPendingTiles = Math.max(stats.peakPendingTiles, pending.length);
@@ -139,7 +140,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
     try {
       if (!toolChecked) {
         const version = execFileSync(binary, ['version'], { encoding: 'utf8' });
-        if (!/\b1\.31\.2\b/.test(version)) throw new Error(`Expected official pmtiles 1.31.2, got ${version.trim()}`);
+        if (version.trim().split(/[\s,]+/)[1] !== pmtiles.version) throw new Error(`Expected official pmtiles ${pmtiles.version}, got ${version.trim()}`);
         toolChecked = true;
       }
       dir = await mkdtemp(join(tmpdir(), 'av-mbtiles-'));
@@ -173,7 +174,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
 }
 
 export function renderTile(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Promise<Buffer> {
-  return encodeWebp(renderTileRgba(field, mask, layer, z, x, y), 256, 256);
+  return encodeWebp(renderTileRgba(field, mask, layer, z, x, y), RASTER_TILE_SIZE, RASTER_TILE_SIZE);
 }
 export function renderArchive(path: string, field: GridField, mask: CoverageMask, layer: LayerId): Promise<void> {
   return createRenderer(mask).renderArchive(path, field, layer);

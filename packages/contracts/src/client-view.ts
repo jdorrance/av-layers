@@ -1,4 +1,4 @@
-import { LAYERS, MODEL_IDS, normalizeLon, paletteBinLabel, type LayerId, type Manifest } from './index.ts';
+import { MODEL_IDS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 
 export function noLiftLabel(color: string): string {
@@ -11,26 +11,12 @@ export function paletteNoteText(palette: PaletteSummary): string | null {
   return `Transparent below ${palette.transparentBelow} ${palette.units}; provisional palette.`;
 }
 
-export function activePalettes(palettes: readonly PaletteSummary[], layerId: LayerId | string | null, descriptors: Manifest['descriptors']['layers'] = LAYERS as unknown as Manifest['descriptors']['layers']): readonly PaletteSummary[] {
+export function activePalettes(palettes: readonly PaletteSummary[], layerId: string | null, descriptors: Manifest['descriptors']['layers']): readonly PaletteSummary[] {
   if (!layerId || !Object.hasOwn(descriptors, layerId)) return palettes;
   const targetId = descriptors[layerId].palette;
   const matched = palettes.filter(palette => palette.id === targetId);
   return matched.length > 0 ? matched : palettes;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 export function normalizePoint(lat: number, lon: number): GeoPoint {
   return { lat, lon: normalizeLon(lon) };
@@ -42,14 +28,14 @@ export function samePoint(a: GeoPoint | null | undefined, b: GeoPoint | null | u
 }
 
 export function coverageSummaryText(build: PinnedBuild): string {
-  return `Coverage ${build.coverage.id}: ${build.manifest.descriptors.coverageDescription}`;
+  return `Coverage ${build.manifest.coverage.id}: ${build.manifest.descriptors.coverageDescription}`;
 }
 
 export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]> {
   const manifest = build.manifest;
   const grid = manifest.grid;
   const source = manifest.source as Record<string, unknown>;
-  const model = typeof source.model === 'string' ? source.model : build.model.toUpperCase();
+  const model = typeof source.model === 'string' ? source.model : build.manifest.model.toUpperCase();
   const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native columns` : 'native model columns';
   const validTimes = manifest.frames.map(f => Date.parse(f.validTime)).filter(Number.isFinite);
   const horizonEnd = validTimes.length > 0 ? new Date(Math.max(...validTimes)).toISOString() : manifest.cycle;
@@ -59,7 +45,7 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Horizon', `${manifest.frames[0]?.validTime ?? manifest.cycle} → ${horizonEnd}`],
     ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
     ['Source', `${model} · ${native}`],
-    ['Display', `z0–${build.maxNativeZoom} · 256 px raster · overzoomed above z${build.maxNativeZoom}`],
+    ['Display', `z0–${build.manifest.coverage.maxZoom} · ${RASTER_TILE_SIZE} px raster · overzoomed above z${build.manifest.coverage.maxZoom}`],
     ['Grid', grid.kind === 'regular-latlon' ? `${grid.width} × ${grid.height} · ${grid.dx}° × ${Math.abs(grid.dy)}° regular latitude/longitude` : `${grid.width} × ${grid.height} · ${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m Lambert conformal`],
     ['Coverage', manifest.descriptors.coverageDescription],
     ['Recipe', `${manifest.recipe.id} · ${manifest.recipe.hash.slice(0, 12)}…`],
@@ -70,9 +56,9 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Expires', manifest.expiresAt]
   ];
   if (typeof source.provenanceUrl === 'string') {
-    rows.push(['Provenance', source.provenanceUrl]);
+    rows.push(['Source data', source.provenanceUrl]);
   } else if (typeof source.provenanceKey === 'string') {
-    rows.push(['Provenance', `${source.provenanceKey}${typeof source.provenanceSha256 === 'string' ? ` (${source.provenanceSha256.slice(0, 12)}…)` : ''}`]);
+    rows.push(['Source data', `${source.provenanceKey}${typeof source.provenanceSha256 === 'string' ? ` (${source.provenanceSha256.slice(0, 12)}…)` : ''}`]);
   }
   return rows;
 }
@@ -86,9 +72,9 @@ export function formatSampleStatus(sample: FrameSampleLayer): string {
 
 export function formatSupportFlags(support: number): string {
   const flags: string[] = [];
-  if (support & 4) flags.push('parcel');
-  if (support & 8) flags.push('top');
-  if (support & 16) flags.push('PBL');
+  if (support & SUPPORT_PARCEL_CROSSING) flags.push('parcel');
+  if (support & SUPPORT_PROFILE_TOP) flags.push('top');
+  if (support & SUPPORT_PBL_CLOSURE) flags.push('PBL');
   return flags.join('+') || '—';
 }
 
@@ -124,7 +110,6 @@ export function sampleRequestText(build: PinnedBuild, point: GeoPoint): string {
   return `Requesting ${build.manifest.frames.length} frames × ${build.manifest.layers.length} layers at ${point.lat.toFixed(4)}, ${point.lon.toFixed(4)}…`;
 }
 
-export const PREVIEW_TILE_SIZE = 256;
 export const DEFAULT_OPACITY = 0.5;
 export const OVERLAY_SOURCE_ID = 'av-overlay';
 export const OVERLAY_LAYER_ID = 'av-overlay-raster';
@@ -174,7 +159,7 @@ export function previewRasterSource(template: string, frame: string, maxNativeZo
   return {
     type: 'raster',
     tiles: [frameTileUrl(template, frame)],
-    tileSize: PREVIEW_TILE_SIZE,
+    tileSize: RASTER_TILE_SIZE,
     minzoom: 0,
     maxzoom: maxNativeZoom,
     attribution
@@ -196,7 +181,7 @@ export function previewRasterLayer(opacity = DEFAULT_OPACITY): PreviewRasterLaye
 export function windyTileOptions(maxNativeZoom: number, opacity = DEFAULT_OPACITY, attribution: string): WindyTileOptions {
   if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0) throw new RangeError('maxNativeZoom must be a non-negative integer');
   return {
-    tileSize: PREVIEW_TILE_SIZE,
+    tileSize: RASTER_TILE_SIZE,
     detectRetina: false,
     minZoom: 0,
     maxZoom: 18,

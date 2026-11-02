@@ -9,7 +9,7 @@ test data. See [setup](../../README.md) for the first install.
 To run this app against an existing API, or test and build it separately:
 
 ```sh
-VITE_API_BASE=http://127.0.0.1:8787 pnpm --filter @av/preview dev
+AV_API_BASE=http://127.0.0.1:8787 pnpm --filter @av/preview dev
 pnpm test apps/preview
 pnpm --filter @av/preview build
 ```
@@ -18,7 +18,7 @@ For the separate app command, the API must already have forecast data. Open the
 URL Vite prints, choose a layer and time, then click the map and select
 **Sample clicked point**.
 
-`VITE_API_BASE` defaults to `http://localhost:8787` and is also used when building.
+`AV_API_BASE` defaults to `http://localhost:8787` and is also used when building.
 Set `VITE_OFFLINE_FIXTURE=true` when using generated test data; this shows a test
 label and removes external basemap requests. See [local development](../../docs/development.md).
 

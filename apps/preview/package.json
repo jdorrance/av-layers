@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@av/contracts": "workspace:*",
-    "maplibre-gl": "5.10.0"
+    "maplibre-gl": "6.16.0"
   },
   "devDependencies": {
-    "typescript": "5.9.3",
-    "vite": "7.1.12"
+    "typescript": "catalog:",
+    "vite": "catalog:"
   }
 }

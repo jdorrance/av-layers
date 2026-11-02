@@ -1,432 +1,99 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
+import { getProduct } from '@av/contracts';
+import { workflowAuthority } from '../apps/batch/src/authority.js';
+import { r2Storage } from '../apps/batch/src/storage.js';
 import { assertCurrentMain, buildAndPublish, downloadForecastArtifact, resumePublication } from './publication-workflow.js';
-
-export const CLOUDFLARE_API_BASE = 'https://api.cloudflare.com/client/v4';
-export const R2_BUCKET_NOT_FOUND_CODE = 10006;
-export const PAGES_PROJECT_NOT_FOUND_CODE = 8000007;
-
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_RESPONSE_BYTES = 1024 * 1024;
+import { probeApi, readResponseBytes, retryProbe, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
-
+export type WranglerConfig = Record<EnvironmentName, { name: string; bucket: string }>;
 export interface CiEnvironment {
-  targetEnv: EnvironmentName;
-  accountId: string;
-  apiToken: string;
-  r2Bucket: string;
-  pagesProjectName: string;
-  apiBaseUrl: string;
+  targetEnv: EnvironmentName; accountId: string; apiToken: string;
+  pagesProjectName: string; apiBaseUrl: string;
 }
-
 export interface PublicationEnvironment {
-  targetEnv: EnvironmentName;
-  accountId: string;
-  r2Bucket: string;
-  r2AccessKeyId: string;
-  r2SecretAccessKey: string;
+  targetEnv: EnvironmentName; accountId: string; r2Bucket: string;
+  r2AccessKeyId: string; r2SecretAccessKey: string;
 }
-
-export interface WranglerEnvironment {
-  name: string;
-  bucket: string;
-}
-
-export type WranglerConfig = Record<EnvironmentName, WranglerEnvironment>;
-
-interface CloudflareEnvelope {
-  success?: unknown;
-  result?: unknown;
-  errors?: unknown;
-}
-
-interface CloudflareResult {
-  status: number;
-  body: CloudflareEnvelope;
-}
-
-interface ManagedDomain {
-  enabled: boolean;
-}
-
-interface PagesProject {
-  name: string;
-  subdomain: string;
-  production_branch: 'main';
-}
-
-export interface ProvisionSummary {
-  environment: EnvironmentName;
-  bucket: string;
-  bucketCreated: boolean;
-  bucketPublicDevUrlEnabled: boolean;
-  pagesProject: string;
-  pagesProjectCreated: boolean;
-  pagesUrl: string;
-}
-
-export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
-
-const required = (env: Record<string, string | undefined>, name: string): string => {
+const required = (env: NodeJS.ProcessEnv, name: string): string => {
   const value = env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
 };
-
-const sameValue = (actual: string, expected: string, name: string): void => {
-  if (actual !== expected) throw new Error(`${name} must equal ${expected}`);
-};
-
-const recordValue = (value: unknown, action: string): Record<string, unknown> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${action} returned a malformed result`);
-  return value as Record<string, unknown>;
-};
-
-function parseIpv4(host: string): number[] | null {
-  const parts = host.split('.');
-  if (parts.length !== 4) return null;
-  const values = parts.map(part => /^\d{1,3}$/.test(part) ? Number(part) : Number.NaN);
-  return values.every(value => Number.isInteger(value) && value >= 0 && value <= 255) ? values : null;
+function environment(env: NodeJS.ProcessEnv): { targetEnv: EnvironmentName; accountId: string } {
+  const targetEnv = env.TARGET_ENV;
+  if (targetEnv !== 'staging' && targetEnv !== 'production') throw new Error('TARGET_ENV must be staging or production');
+  const accountId = required(env, 'CLOUDFLARE_ACCOUNT_ID');
+  if (!/^[0-9a-f]{32}$/i.test(accountId)) throw new Error('CLOUDFLARE_ACCOUNT_ID must be a 32 character hex account ID');
+  return { targetEnv, accountId };
 }
 
-function isNonPublicIpv4(values: number[]): boolean {
-  const [first, second] = values;
-  return first === 0
-    || first === 10
-    || first === 127
-    || (first === 100 && second! >= 64 && second! <= 127)
-    || (first === 169 && second === 254)
-    || (first === 172 && second! >= 16 && second! <= 31)
-    || (first === 192 && (second === 0 || second === 168))
-    || (first === 198 && (second === 18 || second === 19))
-    || (first === 198 && second === 51)
-    || (first === 203 && second === 0)
-    || first! >= 224;
-}
-
-function isNonPublicIpv6(host: string): boolean {
-  const value = host.toLowerCase();
-  if (value.includes('%') || value === '::' || value === '::1') return true;
-  if (/^fe[89ab]/.test(value) || /^f[cd]/.test(value) || /^ff/.test(value)) return true;
-  if (value.startsWith('::ffff:')) return true;
-  const groups = value.split(':');
-  if (groups.length === 8) {
-    const numbers = groups.map(group => Number.parseInt(group || '0', 16));
-    if (numbers.slice(0, 7).every(number => number === 0) && (numbers[7] === 0 || numbers[7] === 1)) return true;
-  }
-  return false;
-}
-
-function validatePublicApiUrl(raw: string, workerName: string): string {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error('API_BASE_URL must be an absolute HTTPS URL');
-  }
-  if (url.protocol !== 'https:') throw new Error('API_BASE_URL must use HTTPS');
-  if (url.username || url.password) throw new Error('API_BASE_URL must not contain credentials');
-  if (url.search || url.hash) throw new Error('API_BASE_URL must not contain a query or fragment');
-  if (url.pathname !== '/') throw new Error('API_BASE_URL must be a root URL without a path');
-  const host = url.hostname.startsWith('[') && url.hostname.endsWith(']')
-    ? url.hostname.slice(1, -1)
-    : url.hostname;
-  const ipv4 = parseIpv4(host);
-  if (ipv4) {
-    if (isNonPublicIpv4(ipv4)) throw new Error('API_BASE_URL must not target a localhost, private, or loopback address');
-  } else if (host.includes(':')) {
-    if (isNonPublicIpv6(host)) throw new Error('API_BASE_URL must not target a localhost, private, or loopback address');
-  } else if (host === 'localhost' || host.endsWith('.localhost') || !host.includes('.')) {
-    throw new Error('API_BASE_URL must target a public host');
-  }
-  if (host.endsWith('.workers.dev')) {
-    const prefix = `${workerName.toLowerCase()}.`;
-    if (!host.startsWith(prefix)) throw new Error(`API_BASE_URL workers.dev host must start with ${prefix}`);
-    const accountSubdomain = host.slice(prefix.length, -'.workers.dev'.length);
-    if (!accountSubdomain || !/^[a-z0-9-]+$/.test(accountSubdomain)) {
-      throw new Error('API_BASE_URL workers.dev host must include a non-empty account subdomain');
-    }
-  }
-  return url.origin;
-}
-
-export function loadWranglerConfig(path = fileURLToPath(new URL('../apps/api/wrangler.jsonc', import.meta.url))): WranglerConfig {
+/** Deployment and publication use the same checked-in destination definitions as Wrangler. */
+export function loadWranglerConfig(path = fileURLToPath(new URL('../apps/api/wrangler.json', import.meta.url))): WranglerConfig {
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
     env?: Record<string, { name?: string; r2_buckets?: Array<{ binding?: string; bucket_name?: string }> }>;
   };
-  const environment = (name: EnvironmentName): WranglerEnvironment => {
-    const value = parsed.env?.[name];
-    const bucket = value?.r2_buckets?.find(item => item.binding === 'BUCKET')?.bucket_name;
-    if (!value?.name || !bucket) throw new Error(`wrangler.jsonc is missing ${name} name or BUCKET binding`);
+  const read = (name: EnvironmentName) => {
+    const value = parsed.env?.[name], bucket = value?.r2_buckets?.find(item => item.binding === 'BUCKET')?.bucket_name;
+    if (!value?.name || !bucket) throw new Error(`Wrangler configuration is missing ${name} name or BUCKET binding`);
     return { name: value.name, bucket };
   };
-  return { staging: environment('staging'), production: environment('production') };
+  return { staging: read('staging'), production: read('production') };
 }
 
-export function validateCiEnvironment(
-  env: Record<string, string | undefined>,
-  config: WranglerConfig = loadWranglerConfig()
-): CiEnvironment {
-  const targetEnv = required(env, 'TARGET_ENV');
-  if (targetEnv !== 'staging' && targetEnv !== 'production') throw new Error('TARGET_ENV must be staging or production');
-  const accountId = required(env, 'CLOUDFLARE_ACCOUNT_ID');
-  if (!/^[0-9a-f]{32}$/i.test(accountId)) throw new Error('CLOUDFLARE_ACCOUNT_ID must be a 32 character hex account ID');
-  const apiToken = required(env, 'CLOUDFLARE_API_TOKEN');
-  if (/[\s]/.test(apiToken)) throw new Error('CLOUDFLARE_API_TOKEN must not contain whitespace');
-  const r2Bucket = required(env, 'R2_BUCKET');
-  sameValue(r2Bucket, config[targetEnv].bucket, `R2_BUCKET for ${targetEnv}`);
-  if (!/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(r2Bucket)) throw new Error('R2_BUCKET must be a lowercase bucket slug');
+export function validateCiEnvironment(env: NodeJS.ProcessEnv, config = loadWranglerConfig()): CiEnvironment {
+  const common = environment(env), apiToken = required(env, 'CLOUDFLARE_API_TOKEN');
   const pagesProjectName = required(env, 'PAGES_PROJECT_NAME');
   if (!/^[a-z0-9](?:[a-z0-9-]{0,56}[a-z0-9])?$/.test(pagesProjectName)) throw new Error('PAGES_PROJECT_NAME must be a lowercase project slug');
-  if (targetEnv === 'staging' && !pagesProjectName.endsWith('-staging')) throw new Error('staging PAGES_PROJECT_NAME must end with -staging');
-  if (targetEnv === 'production' && pagesProjectName.endsWith('-staging')) throw new Error('production PAGES_PROJECT_NAME must not end with -staging');
-  const apiBaseUrl = validatePublicApiUrl(required(env, 'API_BASE_URL'), config[targetEnv].name);
-  return { targetEnv, accountId, apiToken, r2Bucket, pagesProjectName, apiBaseUrl };
+  const url = new URL(required(env, 'API_BASE_URL'));
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('API_BASE_URL must be a root HTTPS URL without credentials, query or fragment');
+  const workerName = config[common.targetEnv].name;
+  if (url.hostname.endsWith('.workers.dev') && !url.hostname.startsWith(`${workerName}.`)) throw new Error(`API_BASE_URL must name Worker ${workerName}`);
+  return { ...common, apiToken, pagesProjectName, apiBaseUrl: url.origin };
 }
 
-export function validatePublicationEnvironment(
-  env: Record<string, string | undefined>,
-  config: WranglerConfig = loadWranglerConfig()
-): PublicationEnvironment {
-  const targetEnv = required(env, 'TARGET_ENV');
-  if (targetEnv !== 'staging' && targetEnv !== 'production') throw new Error('TARGET_ENV must be staging or production');
-  const accountId = required(env, 'CLOUDFLARE_ACCOUNT_ID');
-  if (!/^[0-9a-f]{32}$/i.test(accountId)) throw new Error('CLOUDFLARE_ACCOUNT_ID must be a 32 character hex account ID');
-  const r2AccountId = required(env, 'R2_ACCOUNT_ID');
-  if (!/^[0-9a-f]{32}$/i.test(r2AccountId)) throw new Error('R2_ACCOUNT_ID must be a 32 character hex account ID');
-  sameValue(r2AccountId, accountId, 'R2_ACCOUNT_ID must match CLOUDFLARE_ACCOUNT_ID');
-  const r2Bucket = required(env, 'R2_BUCKET');
-  sameValue(r2Bucket, config[targetEnv].bucket, `R2_BUCKET for ${targetEnv}`);
-  const r2AccessKeyId = required(env, 'R2_ACCESS_KEY_ID');
-  if (/\s/.test(r2AccessKeyId)) throw new Error('R2_ACCESS_KEY_ID must not contain whitespace');
-  const r2SecretAccessKey = required(env, 'R2_SECRET_ACCESS_KEY');
-  if (/\s/.test(r2SecretAccessKey)) throw new Error('R2_SECRET_ACCESS_KEY must not contain whitespace');
-  return { targetEnv, accountId, r2Bucket, r2AccessKeyId, r2SecretAccessKey };
+export function validatePublicationEnvironment(env: NodeJS.ProcessEnv, config = loadWranglerConfig()): PublicationEnvironment {
+  const common = environment(env);
+  return { ...common, r2Bucket: config[common.targetEnv].bucket,
+    r2AccessKeyId: required(env, 'R2_ACCESS_KEY_ID'), r2SecretAccessKey: required(env, 'R2_SECRET_ACCESS_KEY') };
 }
 
-async function readResponseText(response: Response): Promise<string> {
-  const length = Number(response.headers.get('content-length') ?? '0');
-  if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) throw new Error('Cloudflare API response exceeded the size limit');
-  if (!response.body) return '';
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_RESPONSE_BYTES) {
-      await reader.cancel();
-      throw new Error('Cloudflare API response exceeded the size limit');
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
-}
-
-async function request(
-  fetchImpl: FetchLike,
-  path: string,
-  apiToken: string,
-  init: RequestInit = {}
-): Promise<CloudflareResult> {
-  const headers = new Headers(init.headers);
-  headers.set('authorization', `Bearer ${apiToken}`);
-  if (!headers.has('content-type')) headers.set('content-type', 'application/json');
-  const response = await fetchImpl(`${CLOUDFLARE_API_BASE}${path}`, {
-    ...init,
-    headers,
-    signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+/** Query the canonical Pages hostname, including Cloudflare's possible collision suffix. */
+export async function verifyPagesProduction(env: CiEnvironment, fetchImpl: typeof fetch = fetch): Promise<{ url: string }> {
+  const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${env.accountId}/pages/projects/${env.pagesProjectName}`, {
+    headers: { authorization: `Bearer ${env.apiToken}` }, signal: AbortSignal.timeout(30_000)
   });
-  const text = await readResponseText(response);
-  let body: CloudflareEnvelope = {};
-  if (text) {
-    try {
-      body = JSON.parse(text) as CloudflareEnvelope;
-    } catch {
-      throw new Error(`Cloudflare API returned non-JSON content with status ${response.status}`);
-    }
-  }
-  return { status: response.status, body };
-}
-
-function errorCodes(result: CloudflareResult): number[] {
-  if (!Array.isArray(result.body.errors)) return [];
-  return result.body.errors.flatMap(error => {
-    if (!error || typeof error !== 'object') return [];
-    const code = (error as { code?: unknown }).code;
-    return typeof code === 'number' ? [code] : [];
-  });
-}
-
-function failure(result: CloudflareResult, action: string): Error {
-  const codes = errorCodes(result);
-  return new Error(`${action} failed with status ${result.status}${codes.length ? ` (${codes.join(', ')})` : ''}`);
-}
-
-function assertSuccess<T>(result: CloudflareResult, action: string, validate: (value: unknown) => T): T {
-  if (result.status < 200 || result.status >= 300) throw failure(result, action);
-  if (result.body.success !== true) throw failure(result, action);
-  if (!('result' in result.body)) throw new Error(`${action} returned no result`);
-  return validate(result.body.result);
-}
-
-function isKnownNotFound(result: CloudflareResult, code: number): boolean {
-  const errors = result.body.errors;
-  if (result.status !== 404 || result.body.success !== false || !Array.isArray(errors) || errors.length !== 1) return false;
-  const error: unknown = errors[0];
-  return error !== null && typeof error === 'object' && !Array.isArray(error) && 'code' in error && error.code === code;
-}
-
-function validateBucket(value: unknown, env: CiEnvironment): void {
-  const bucket = recordValue(value, `R2 bucket ${env.r2Bucket}`);
-  if (bucket.name !== env.r2Bucket) throw new Error(`R2 bucket result did not name ${env.r2Bucket}`);
-}
-
-function validateManagedDomain(value: unknown): ManagedDomain {
-  const domain = recordValue(value, 'R2 managed domain');
-  if (typeof domain.enabled !== 'boolean') throw new Error('R2 managed domain result omitted the enabled boolean');
-  return { enabled: domain.enabled };
-}
-
-function validateCustomDomains(value: unknown, env: CiEnvironment): void {
-  const custom = recordValue(value, `R2 custom domains for ${env.r2Bucket}`);
-  if (!Array.isArray(custom.domains)) throw new Error('R2 custom domains result omitted the domains array');
-  custom.domains.forEach((item, index) => {
-    const domain = recordValue(item, `R2 custom domain ${index}`);
-    if (typeof domain.enabled !== 'boolean') throw new Error(`R2 custom domain ${index} omitted the enabled boolean`);
-    if (domain.enabled) throw new Error(`R2 bucket ${env.r2Bucket} has enabled public custom domain access`);
-  });
-}
-
-function validatePagesProject(value: unknown, env: CiEnvironment): PagesProject {
-  const project = recordValue(value, `Pages project ${env.pagesProjectName}`);
-  if (project.name !== env.pagesProjectName) throw new Error(`Pages project result did not name ${env.pagesProjectName}`);
-  if (project.production_branch !== 'main') throw new Error(`Pages project ${env.pagesProjectName} must use main as its production branch`);
-  if (typeof project.subdomain !== 'string') throw new Error(`Pages project ${env.pagesProjectName} omitted its subdomain`);
-  if (project.subdomain !== project.subdomain.trim() || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.pages\.dev$/.test(project.subdomain)) {
-    throw new Error(`Pages project ${env.pagesProjectName} subdomain must be a valid production pages.dev hostname`);
-  }
-  return { name: project.name, production_branch: 'main', subdomain: project.subdomain };
-}
-
-async function ensurePrivateBucket(env: CiEnvironment, fetchImpl: FetchLike): Promise<{ created: boolean; publicDevUrlEnabled: boolean }> {
-  const bucketPath = `/accounts/${env.accountId}/r2/buckets/${encodeURIComponent(env.r2Bucket)}`;
-  const existing = await request(fetchImpl, bucketPath, env.apiToken);
-  let created = false;
-  if (isKnownNotFound(existing, R2_BUCKET_NOT_FOUND_CODE)) {
-    const createdResult = await request(fetchImpl, `/accounts/${env.accountId}/r2/buckets`, env.apiToken, {
-      method: 'POST',
-      body: JSON.stringify({ name: env.r2Bucket })
-    });
-    assertSuccess(createdResult, `Creating R2 bucket ${env.r2Bucket}`, value => validateBucket(value, env));
-    created = true;
-  } else {
-    assertSuccess(existing, `Reading R2 bucket ${env.r2Bucket}`, value => validateBucket(value, env));
-  }
-
-  const managed = await request(fetchImpl, `${bucketPath}/domains/managed`, env.apiToken);
-  const managedDomain = assertSuccess(managed, `Reading public access for R2 bucket ${env.r2Bucket}`, validateManagedDomain);
-  if (managedDomain.enabled) throw new Error(`R2 bucket ${env.r2Bucket} has the public r2.dev URL enabled; disable it before bootstrap`);
-
-  const custom = await request(fetchImpl, `${bucketPath}/domains/custom`, env.apiToken);
-  assertSuccess(custom, `Reading custom domains for R2 bucket ${env.r2Bucket}`, value => validateCustomDomains(value, env));
-  return { created, publicDevUrlEnabled: false };
-}
-
-async function ensurePagesProject(env: CiEnvironment, fetchImpl: FetchLike): Promise<{ created: boolean; url: string }> {
-  const projectPath = `/accounts/${env.accountId}/pages/projects/${encodeURIComponent(env.pagesProjectName)}`;
-  const existing = await request(fetchImpl, projectPath, env.apiToken);
-  if (isKnownNotFound(existing, PAGES_PROJECT_NOT_FOUND_CODE)) {
-    const createdResult = await request(fetchImpl, `/accounts/${env.accountId}/pages/projects`, env.apiToken, {
-      method: 'POST',
-      body: JSON.stringify({ name: env.pagesProjectName, production_branch: 'main' })
-    });
-    const project = assertSuccess(createdResult, `Creating Pages project ${env.pagesProjectName}`, value => validatePagesProject(value, env));
-    return { created: true, url: `https://${project.subdomain}` };
-  }
-  const project = assertSuccess(existing, `Reading Pages project ${env.pagesProjectName}`, value => validatePagesProject(value, env));
-  return { created: false, url: `https://${project.subdomain}` };
-}
-
-export async function verifyPagesProduction(env: CiEnvironment, fetchImpl: FetchLike = fetch): Promise<{ url: string }> {
-  const projectPath = `/accounts/${env.accountId}/pages/projects/${encodeURIComponent(env.pagesProjectName)}`;
-  const result = await request(fetchImpl, projectPath, env.apiToken);
-  const project = assertSuccess(result, `Reading Pages project ${env.pagesProjectName}`, value => validatePagesProject(value, env));
+  if (!response.ok) { await response.body?.cancel(); throw new Error(`Reading Pages project failed with status ${response.status}`); }
+  const body = JSON.parse(new TextDecoder().decode(await readResponseBytes(response))) as { success?: boolean; result?: { name?: string; production_branch?: string; subdomain?: string } };
+  const project = body.result;
+  if (body.success !== true || project?.name !== env.pagesProjectName || project.production_branch !== 'main' || typeof project.subdomain !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.pages\.dev$/.test(project.subdomain)) throw new Error('Pages project must match the configured name, main branch and canonical pages.dev hostname');
   return { url: `https://${project.subdomain}` };
-}
-
-export async function provisionCloudflare(env: CiEnvironment, fetchImpl: FetchLike = fetch): Promise<ProvisionSummary> {
-  const bucket = await ensurePrivateBucket(env, fetchImpl);
-  const pages = await ensurePagesProject(env, fetchImpl);
-  return {
-    environment: env.targetEnv,
-    bucket: env.r2Bucket,
-    bucketCreated: bucket.created,
-    bucketPublicDevUrlEnabled: bucket.publicDevUrlEnabled,
-    pagesProject: env.pagesProjectName,
-    pagesProjectCreated: pages.created,
-    pagesUrl: pages.url
-  };
-}
-
-
-export interface PagesRevisionOptions {
-  url: string;
-  expectedDeploymentId: string;
-  fetchImpl?: typeof fetch;
-  retries?: number;
-  delayMs?: number;
-  timeoutMs?: number;
 }
 
 export function deploymentMarker(expectedDeploymentId: string): string {
   if (!/^[0-9a-f]{40}-\d{1,20}-\d{1,10}$/i.test(expectedDeploymentId)) throw new Error('EXPECTED_DEPLOYMENT_ID must be a commit SHA, run ID and run attempt');
   return `name="build-deployment" content="${expectedDeploymentId}"`;
 }
-
-export async function verifyPagesRevision(options: PagesRevisionOptions): Promise<void> {
+export async function verifyPagesRevision(options: RetryOptions & {
+  url: string; expectedDeploymentId: string; fetchImpl?: typeof fetch; timeoutMs?: number;
+}): Promise<void> {
   const marker = deploymentMarker(options.expectedDeploymentId);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const retries = options.retries ?? 3;
-  const delay = options.delayMs ?? 5000;
-  let last = '';
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    try {
-      const response = await fetchImpl(options.url, {
-        headers: { accept: 'text/html' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000)
-      });
-      if (!response.ok) {
-        last = `status ${response.status}`;
-        await response.body?.cancel();
-        continue;
-      }
-      const html = await response.text();
-      if (html.includes(marker)) return;
-      last = 'served HTML does not contain the expected revision marker';
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error);
-    }
-  }
-  throw new Error(`Pages revision verification failed: ${last}`);
+  await retryProbe('Pages revision', async () => {
+    const response = await (options.fetchImpl ?? fetch)(options.url, { headers: { accept: 'text/html' }, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000) });
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`status ${response.status}`); }
+    if (!new TextDecoder().decode(await readResponseBytes(response)).includes(marker)) throw new Error('served HTML does not contain the expected revision marker');
+  }, options);
 }
 
-type Operation = 'bootstrap' | 'deploy' | 'forecast' | 'maintenance';
-
+type Operation = 'deploy' | 'forecast' | 'maintenance';
 export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
-  if (!['bootstrap', 'deploy', 'forecast', 'maintenance'].includes(command)) throw new Error('Usage: pnpm operations bootstrap|deploy|forecast|maintenance');
+  if (!['deploy', 'forecast', 'maintenance'].includes(command)) throw new Error('Usage: pnpm operations deploy|forecast|maintenance');
   if (!['staging', 'production'].includes(env.TARGET_ENV ?? '')) throw new Error('TARGET_ENV must be staging or production');
-  if (command === 'bootstrap' && env.CONFIRM !== 'bootstrap-private-cloudflare') throw new Error('Confirm bootstrap-private-cloudflare');
-  if (command === 'deploy' && env.GITHUB_EVENT_NAME === 'workflow_dispatch' && env.CONFIRM !== 'deploy-read-only-worker') throw new Error('Confirm deploy-read-only-worker');
-  if (command === 'forecast' || command === 'maintenance') {
-    if (env.MODEL !== 'gfs') throw new Error('Only the gfs model is admitted');
-  }
+  if (command !== 'deploy' && !getProduct(env.MODEL ?? 'gfs')) throw new Error('Unknown forecast model');
   if (command === 'forecast' && env.RESUME_RUN_ID && !/^[1-9]\d{0,19}$/.test(env.RESUME_RUN_ID)) throw new Error('resume-run-id must be numeric');
   if (command === 'maintenance') {
-    if (env.CONFIRM !== 'serialized-maintenance') throw new Error('Confirm serialized-maintenance');
     if (env.ACTION !== 'rollback' && env.ACTION !== 'cleanup') throw new Error('Maintenance action must be rollback or cleanup');
     if (env.ACTION === 'rollback' && !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(env.BUILD_ID ?? '')) throw new Error('Invalid rollback build ID');
     if (env.ACTION === 'cleanup' && env.BUILD_ID) throw new Error('Only rollback accepts a build ID');
@@ -455,36 +122,27 @@ async function pnpm(args: string[], env: NodeJS.ProcessEnv = process.env): Promi
 
 export async function runOperation(command: string): Promise<void> {
   validateOperationInputs(command);
-  const env = command === 'bootstrap' || command === 'deploy' ? validateCiEnvironment(process.env) : validatePublicationEnvironment(process.env);
   await assertCurrentMain();
-  if (command === 'forecast') {
-    if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID));
-    else {
-      await pnpm(['tools:pmtiles']);
-      await buildAndPublish();
+  if (command === 'forecast' || command === 'maintenance') {
+    const config = validatePublicationEnvironment(process.env);
+    const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
+    if (command === 'forecast') {
+      if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID), store);
+      else { await pnpm(['tools:pmtiles']); await buildAndPublish(store); }
+    } else {
+      const { maintenanceWorkflow } = await import('../apps/batch/src/maintenance.js');
+      console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: process.env.MODEL ?? 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store })));
     }
     return;
   }
-  if (command === 'maintenance') {
-    const [{ maintenanceWorkflow }, { workflowAuthority }, { r2Storage }] = await Promise.all([
-      import('../apps/batch/src/maintenance.js'), import('../apps/batch/src/authority.js'), import('../apps/batch/src/storage.js')
-    ]);
-    console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store: r2Storage() })));
-    return;
-  }
-  const cloud = env as CiEnvironment;
-  if (command === 'bootstrap') {
-    console.log(JSON.stringify(await provisionCloudflare(cloud)));
-    return;
-  }
+  const cloud = validateCiEnvironment(process.env);
   const deploymentId = `${required(process.env, 'GITHUB_SHA')}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
   deploymentMarker(deploymentId);
-  // Check destination configuration before changing either application.
   const pages = await verifyPagesProduction(cloud);
-  await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
+  await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
   await assertCurrentMain();
   await pnpm(['--filter', '@av/api', 'exec', 'wrangler', 'deploy', '--env', cloud.targetEnv, '--var', `AV_DEPLOYMENT_ID:${deploymentId}`]);
-  await pnpm(['exec', 'tsx', 'scripts/smoke-api.ts', '--base-url', cloud.apiBaseUrl, '--model', 'gfs', '--expected-deployment-id', deploymentId]);
+  await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? 'gfs', expectedDeploymentId: deploymentId });
   await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
   await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
   console.log(`Deployed ${cloud.targetEnv}: ${cloud.apiBaseUrl} and ${pages.url}`);
@@ -492,7 +150,6 @@ export async function runOperation(command: string): Promise<void> {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  if (process.argv.length !== 3) { console.error('Usage: pnpm operations bootstrap|deploy|forecast|maintenance'); process.exitCode = 1; }
+  if (process.argv.length !== 3) { console.error('Usage: pnpm operations deploy|forecast|maintenance'); process.exitCode = 1; }
   else runOperation(process.argv[2]!).catch(error => { console.error(error); process.exitCode = 1; });
 }
-

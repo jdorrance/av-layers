@@ -2,7 +2,7 @@ import {
   GFS_PRESSURE_LEVELS_HPA,
   GFS_PRIMARY_LEVELS_HPA,
   GFS_SECONDARY_LEVELS_HPA,
-  GFS_PRODUCTS,
+  GFS_PRODUCTS, GFS_INTERVAL_HOURS, type GfsProductName,
   NOAA_GFS_BASE_URL,
 } from './constants.ts';
 import { gfsWindowStart } from './intervals.ts';
@@ -34,14 +34,14 @@ export function cycleStamp(cycle: string): string {
 export function gfsFileUrl(
   cycle: string,
   hour: number,
-  productName: 'pgrb2.0p25' | 'pgrb2b.0p25',
+  productName: GfsProductName,
 ): string {
   const date = cycle.slice(0, 10).replaceAll('-', '');
   const cycleHour = cycle.slice(11, 13);
   return `${NOAA_GFS_BASE_URL}/gfs.${date}/${cycleHour}/atmos/gfs.t${cycleHour}z.${productName}.f${String(hour).padStart(3, '0')}`;
 }
 
-export function gfsProductName(product: GfsFieldSpec['product']): 'pgrb2.0p25' | 'pgrb2b.0p25' {
+export function gfsProductName(product: GfsFieldSpec['product']): GfsProductName {
   return GFS_PRODUCTS[product];
 }
 
@@ -127,7 +127,7 @@ export function gfsCurrentSpecs(hour: number): GfsFieldSpec[] {
 
 export function gfsCompanionSpecs(hour: number): GfsFieldSpec[] {
   const start = gfsWindowStart(hour);
-  const end = hour - 3;
+  const end = hour - GFS_INTERVAL_HOURS;
   if (start === end) return [];
   return [
     window('sensibleHeatFlux', 'sensible-flux', 'SHTFL', 'surface', 'primary', start, end, 'mean', 'companion'),
@@ -137,5 +137,5 @@ export function gfsCompanionSpecs(hour: number): GfsFieldSpec[] {
 }
 
 export function gfsWindowNeedsCompanion(hour: number): boolean {
-  return gfsWindowStart(hour) !== hour - 3;
+  return gfsWindowStart(hour) !== hour - GFS_INTERVAL_HOURS;
 }

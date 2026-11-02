@@ -1,5 +1,5 @@
 import { SUPPORT_MASK, getProvenanceReference, latestSchema, sampleResponseSchema, validateArtifactRecords, type LayerId, type Manifest, type ModelId } from './index.ts';
-import type { PinnedBuild, SamplePayload, CoverageSummary } from './client-types.ts';
+import type { PinnedBuild, SamplePayload } from './client-types.ts';
 
 export interface RequestOptions {
   signal?: AbortSignal;
@@ -82,11 +82,6 @@ function requireObject(value: unknown, name: string): Record<string, unknown> {
 
 function requireString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) throw new InvalidApiResponseError(`${name} must be a non-empty string`);
-  return value;
-}
-
-function requireNumber(value: unknown, name: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) throw new InvalidApiResponseError(`${name} must be a finite number`);
   return value;
 }
 
@@ -177,35 +172,9 @@ export class ApiClient {
     for (const layer of manifestRaw.layers) {
       templates[layer] = requireString(templateRaw[layer], `templates.${layer}`);
     }
-    const boundsRaw = raw.bounds;
-    if (!Array.isArray(boundsRaw) || boundsRaw.length !== 4 || boundsRaw.some(value => typeof value !== 'number')) {
-      throw new InvalidApiResponseError('bounds must be four numbers');
-    }
-    const maxNativeZoom = requireNumber(raw.maxNativeZoom ?? manifestRaw.coverage.maxZoom, 'maxNativeZoom');
-    if (JSON.stringify(boundsRaw) !== JSON.stringify(manifestRaw.descriptors.bounds) || maxNativeZoom !== manifestRaw.coverage.maxZoom) throw new InvalidApiResponseError('display bounds or zoom disagree with pinned manifest');
-    const palettes = manifestRaw.descriptors.palettes;
-    const coverage: CoverageSummary = raw.coverage ?? manifestRaw.coverage;
-    for (const key of Object.keys(manifestRaw.coverage) as (keyof Manifest['coverage'])[]) {
-      if (coverage[key] !== manifestRaw.coverage[key]) throw new InvalidApiResponseError('expanded coverage disagrees with pinned manifest');
-    }
-    if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0 || maxNativeZoom > 8) throw new InvalidApiResponseError('Unsupported native tile zoom');
-    if (coverage.tileBits) {
-      const count = (4 ** (maxNativeZoom + 1) - 1) / 3;
-      const paddingMask = count % 8 ? ~((1 << (count % 8)) - 1) : 0;
-      if (coverage.tileBits.length !== Math.ceil(count / 8) || coverage.tileBits.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255) || (coverage.tileBits.at(-1)! & paddingMask) !== 0) throw new InvalidApiResponseError('Invalid expanded coverage tile bitset');
-    }
     return {
-      baseUrl: this.baseUrl,
-      model,
-      pointer,
       manifest: manifestRaw,
       templates,
-      bounds: boundsRaw as [number, number, number, number],
-      maxNativeZoom,
-      palettes,
-      coverage,
-      freshness: raw.freshness,
-      fetchedAtMs: this.now(),
       expiresAtMs: expiryTime(manifestRaw.expiresAt)
     };
   }
@@ -228,13 +197,13 @@ export class ApiClient {
       frame: frames === 'all' ? 'all' : frames.join(','),
       layers: layers.join(',')
     });
-    const path = `/v1/models/${encodeURIComponent(build.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/sample?${params.toString()}`;
+    const path = `/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/sample?${params.toString()}`;
     const raw = await this.getJson(path, request.signal);
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
     const parsed = sampleResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
-    if (payload.model !== build.model || payload.buildId !== build.manifest.buildId) {
+    if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId) {
       throw new InvalidApiResponseError('sample does not match pinned build');
     }
     if (payload.lat !== request.lat || payload.lon !== request.lon) throw new InvalidApiResponseError('sample coordinates do not match requested point');

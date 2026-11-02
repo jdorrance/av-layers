@@ -1,4 +1,4 @@
-import { GFS_CONTRACT_GRID, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
+import { GFS_GRID, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
 import { acquireGfsFrame, contractIndexToNativeIndex, validateActiveIndices, validateCycle, validateHour } from './acquire.ts';
 import { discoverGfsRun } from './discover.ts';
 import { NoaaError } from './errors.ts';
@@ -17,9 +17,9 @@ import type {
 } from './types.ts';
 
 const DEFAULT_PROOF_INDEX = (() => {
-  const row = Math.round((GFS_CONTRACT_GRID.lat0 - 40) / -GFS_CONTRACT_GRID.dy);
-  const column = Math.round((-105 - GFS_CONTRACT_GRID.lon0) / GFS_CONTRACT_GRID.dx);
-  return row * GFS_CONTRACT_GRID.width + column;
+  const row = Math.round((GFS_GRID.lat0 - 40) / -GFS_GRID.dy);
+  const column = Math.round((-105 - GFS_GRID.lon0) / GFS_GRID.dx);
+  return row * GFS_GRID.width + column;
 })();
 
 function sum(values: Uint8Array): number {
@@ -82,7 +82,6 @@ export async function proveGfsInputs(options: ProveGfsInputsOptions | DiagnoseGf
     ? null
     : await discoverGfsRun({
         now: options.now,
-        fetch: options.fetch,
         fetchImpl: options.fetchImpl,
         signal: options.signal,
         cacheDir: options.cacheDir,
@@ -93,7 +92,6 @@ export async function proveGfsInputs(options: ProveGfsInputsOptions | DiagnoseGf
     hour,
     activeIndices,
     cacheDir: options.cacheDir,
-    fetch: options.fetch,
     fetchImpl: options.fetchImpl,
     signal: options.signal,
   }, stats);
