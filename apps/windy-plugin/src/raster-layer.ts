@@ -83,18 +83,9 @@ export class WindyRasterLayer implements HostTileLayer {
 
   setUrl(url: string): void {
     if (!this.protocol) return;
-    const previous = this.protocol;
-    const next = this.createProtocol();
-    try {
-      this.native.setUrl(next.url(url));
-      this.protocol = next;
-    } catch (error) {
-      next.dispose();
-      this.api.removeProtocol(next.scheme);
-      throw error;
-    }
-    previous.dispose();
-    this.api.removeProtocol(previous.scheme);
+    // LeafletGL aborts superseded tiles, but its asynchronous source update can
+    // still request the previous URL. Keep its protocol registered until removal.
+    this.native.setUrl(this.protocol.url(url));
   }
   setOpacity(opacity: number): void { this.native.setOpacity(opacity); }
   on(event: HostTileEventName, listener: (event: HostTileEvent) => void): void {

@@ -46,31 +46,32 @@ it('bridges actual LeafletGL source events without assuming classic Leaflet tile
   layer.remove();
 });
 
-it('updates native URLs/opacity and detaches the exact source listeners on close', () => {
+it('keeps one protocol across native URL changes and detaches the exact source listeners on close', () => {
   const { layer, listeners, map, native, source, api } = fixture();
   const error = vi.fn();
   layer.on('tileerror', error);
   layer.addTo(map);
   const lateError = listeners.get('error')!;
-  layer.setUrl('https://tiles.example/tiles/gfs/build-1/precip-rate/f006/{z}/{x}/{y}.webp');
+  const scheme = api.addProtocol.mock.calls[0][0];
+  for (const frame of ['f006', 'f009', 'f012']) {
+    const url = `https://tiles.example/tiles/gfs/build-1/precip-rate/${frame}/{z}/{x}/{y}.webp`;
+    layer.setUrl(url);
+    expect(native.setUrl).toHaveBeenLastCalledWith(`${scheme}://${url}`);
+  }
   layer.setOpacity(0.7);
-  expect(api.addProtocol).toHaveBeenCalledTimes(2);
-  const initialScheme = api.addProtocol.mock.calls[0][0];
-  const currentScheme = api.addProtocol.mock.calls[1][0];
-  expect(currentScheme).not.toBe(initialScheme);
-  expect(native.setUrl.mock.calls[0][0]).toMatch(new RegExp(`^${currentScheme}://`));
-  expect(api.removeProtocol).toHaveBeenCalledWith(initialScheme);
+  expect(api.addProtocol).toHaveBeenCalledTimes(1);
+  expect(api.removeProtocol).not.toHaveBeenCalled();
   expect(native.setOpacity).toHaveBeenCalledWith(0.7);
   layer.remove();
   expect(listeners.size).toBe(0);
   expect(source.off).toHaveBeenCalledTimes(4);
   expect(map.removeLayer).toHaveBeenCalledWith(native);
-  expect(api.removeProtocol).toHaveBeenCalledWith(currentScheme);
+  expect(api.removeProtocol).toHaveBeenCalledWith(scheme);
   lateError({ tile: {} });
   expect(error).not.toHaveBeenCalled();
   layer.remove();
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
-  expect(api.removeProtocol).toHaveBeenCalledTimes(2);
+  expect(api.removeProtocol).toHaveBeenCalledTimes(1);
   expect(() => layer.addTo(map)).toThrow('disposed');
 });
 
@@ -86,31 +87,59 @@ it('cleans up a partially mounted host layer when the required source API is una
   expect(api.removeProtocol).toHaveBeenCalledTimes(1);
 });
 
-it('cancels queued and active requests when replacing the native source generation or closing it', async () => {
+it('honors native cancellation and shares the request bound with deferred previous URLs until close', async () => {
   const signals: AbortSignal[] = [];
   vi.stubGlobal('fetch', vi.fn<typeof fetch>((_url, init) => new Promise((_resolve, reject) => {
     const signal = init!.signal!;
     signals.push(signal);
     signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   })));
-  const { layer, api, create, native } = fixture();
-  const oldHandler = api.addProtocol.mock.calls[0][1];
+  const { layer, api, create, native, map } = fixture();
+  layer.addTo(map);
+  const handler = api.addProtocol.mock.calls[0][1];
   const template = create.mock.calls[0][0];
   const tileUrl = template.replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
-  const pending = Promise.allSettled(Array.from({ length: 3 }, () => oldHandler({ url: tileUrl }, new AbortController())));
-  expect(signals).toHaveLength(2); // One request remains in the shared bounded queue.
-  layer.setUrl('https://tiles.example/tiles/gfs/build-1/precip-rate/f006/{z}/{x}/{y}.webp');
-  expect(signals.every(signal => signal.aborted)).toBe(true);
-  expect((await pending).map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
-  expect(signals).toHaveLength(2); // The cancelled queued request never fetched.
+  const nativeControllers = Array.from({ length: 3 }, () => new AbortController());
+  // LeafletGL clearTiles aborts the controllers supplied to the protocol.
+  native.setUrl.mockImplementation(() => nativeControllers.forEach(controller => controller.abort()));
+  const pending = Promise.allSettled(nativeControllers.map(controller => handler({ url: tileUrl }, controller)));
+  let final: Promise<PromiseSettledResult<unknown>[]> = Promise.resolve([]);
+  try {
+    expect(signals).toHaveLength(2); // One request remains in the shared bounded queue.
+    layer.setUrl('https://tiles.example/tiles/gfs/build-1/precip-rate/f006/{z}/{x}/{y}.webp');
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect((await pending).map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    expect(signals).toHaveLength(2); // The cancelled queued request never fetched.
 
-  const newHandler = api.addProtocol.mock.calls[1][1];
-  const currentUrl = native.setUrl.mock.calls[0][0].replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
-  const final = Promise.allSettled([newHandler({ url: currentUrl }, new AbortController())]);
-  expect(signals).toHaveLength(3);
-  expect(signals[2].aborted).toBe(false);
+    const currentUrl = native.setUrl.mock.calls[0][0].replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
+    // A deferred old URL still resolves through the registered protocol while
+    // native metadata catches up. Both URLs use the same two-request limit.
+    final = Promise.allSettled([currentUrl, tileUrl, currentUrl].map(url => handler({ url }, new AbortController())));
+    expect(signals).toHaveLength(4);
+    expect(signals.slice(2).every(signal => !signal.aborted)).toBe(true);
+    expect(fetch).toHaveBeenLastCalledWith('https://tiles.example/tiles/gfs/build-1/precip-rate/f003/0/0/0.webp', expect.any(Object));
+    expect(api.addProtocol).toHaveBeenCalledTimes(1);
+    expect(api.removeProtocol).not.toHaveBeenCalled();
+    layer.remove();
+    expect(signals.every(signal => signal.aborted)).toBe(true);
+    expect((await final).map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected']);
+    expect(signals).toHaveLength(4);
+    expect(api.removeProtocol).toHaveBeenCalledTimes(1);
+  } finally {
+    layer.remove();
+    await pending;
+    await final;
+  }
+});
+
+it('preserves the registered protocol after a native URL update fails and cleans it up on close', () => {
+  const { layer, api, native, map } = fixture();
+  layer.addTo(map);
+  native.setUrl.mockImplementationOnce(() => { throw new Error('native update failed'); });
+  expect(() => layer.setUrl('https://tiles.example/tiles/gfs/build-1/precip-rate/f006/{z}/{x}/{y}.webp')).toThrow('native update failed');
+  expect(api.addProtocol).toHaveBeenCalledTimes(1);
+  expect(api.removeProtocol).not.toHaveBeenCalled();
   layer.remove();
-  expect(signals[2].aborted).toBe(true);
-  expect((await final)[0].status).toBe('rejected');
-  expect(api.removeProtocol).toHaveBeenCalledTimes(2);
+  expect(api.removeProtocol).toHaveBeenCalledTimes(1);
+  expect(map.removeLayer).toHaveBeenCalledTimes(1);
 });
