@@ -6,13 +6,11 @@ Generated from the source files linked below. After editing them, run:
 pnpm docs:generate
 ```
 
-`pnpm docs:check` rejects stale generated references. No live forecast, storage credentials or network access is required to generate them.
-
-These are the current settings. Published builds include their own methods, units, and legends.
+`pnpm docs:check` verifies that generated files and Markdown links are up to date.
 
 ## Batch CLI
 
-Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.
+Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. See [development](development.md) for local usage and [operations](operations.md) for GitHub workflows.
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
@@ -23,7 +21,7 @@ Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](
 
 ## Terrain CLI
 
-Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.
+Run `pnpm terrain COMMAND`. `--out` is required. See the [terrain guide](../apps/batch/src/terrain/README.md).
 
 Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
 
@@ -34,7 +32,7 @@ Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
 - `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
 - `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
 
-Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:
+Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
 
 - `maxCachedPixels`: `8000000`.
 - `maxDecodedPixels`: `64000000`.
@@ -45,14 +43,14 @@ Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers m
 
 ## Refinement grids
 
-Run `pnpm refinement` to inspect the grids selected by the shared polygon configuration. This command performs no network or storage operations. See [refinement](../apps/batch/src/refinement/README.md) for configuration and examples.
+Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).
 
 - `--model <string>`.
 - `--zones <string>`.
 
 ## Configured models
 
-Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [deployments](status.md) links to the live applications and build history.
+Source: [product registry](../packages/contracts/src/products.ts). See [deployments](status.md) for live applications and runs.
 
 ### GFS (gfs-soaring)
 
@@ -86,7 +84,7 @@ Source: [product registry](../packages/contracts/src/products.ts). Test fixtures
 
 ## Scalar quantities and units
 
-Source: [layer definitions](../packages/contracts/src/layers.ts). The method below is the isobaric default; each configured product selects the method for its vertical coordinate. Published layers link to their selected descriptors. Interpret values and absence using [the data guide](data.md).
+Source: [layer definitions](../packages/contracts/src/layers.ts). Each product selects the method matching its vertical coordinate. See [the data guide](data.md).
 
 ### Precipitation rate (precip-rate)
 
@@ -116,7 +114,7 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). The method bel
 
 Public sample statuses: `valid`, `no-usable-lift`, `unavailable`, `outside-domain`.
 
-The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. The layer settings above determine which flags a result can contain.
+Packed status and support bitmasks from [layer definitions](../packages/contracts/src/layers.ts):
 
 - `STATUS_MASK`: `3`.
 - `STATUS_NO_LIFT`: `1`.
@@ -130,7 +128,7 @@ The packed status and support constants below come from the same [layer definiti
 
 ## Methods and normalized inputs
 
-Source: [method definitions](../packages/contracts/src/methods.ts). The descriptors record the defaults used by the science packages. Adapters supply the units listed below; frame calculations convert temperature to Celsius and pressure to hPa for the column solver. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.
+Source: [method definitions](../packages/contracts/src/methods.ts). See [science](science.md) and [extensions](extensions.md).
 
 ### dry-lenschow-pbl-1p2-model-levels-v1
 
@@ -273,7 +271,7 @@ Caveats:
 
 ## Resource limits
 
-These are configured limits. [capacity.ts](../apps/batch/src/capacity.ts) checks build limits; [serving budgets](serving-budgets.md) describes API memory and load checks.
+Configured limits from [capacity.ts](../apps/batch/src/capacity.ts) and [serving budgets](serving-budgets.md).
 
 Complete-build limits:
 
@@ -314,7 +312,7 @@ Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):
 
 ## API reference
 
-The checked-in [OpenAPI document](reference/openapi.json) is generated by invoking the actual Worker’s `GET /openapi.json` route without R2. The running service exposes the same schema at `/openapi.json`, with its interactive viewer at `/docs`. These route definitions describe structure; retained build descriptors supply available layers, frames, units and methods.
+The checked-in [OpenAPI document](reference/openapi.json) is generated from the Worker’s `GET /openapi.json` route and served interactively at `/docs`.
 
 - `GET /docs`.
 - `GET /healthz`.

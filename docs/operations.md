@@ -1,136 +1,84 @@
 # Operations
 
-Run production changes through GitHub Actions on current `main`. Start with
-`staging`; use `production` after checking the map, samples and Windy plugin.
-Forecast and maintenance jobs for the same environment and model wait for each
-other. Different models can build and publish independently. Keep write
-credentials in GitHub.
-
-Forecast and maintenance through `pnpm operations` require an explicit registered `MODEL`; their
-workflows set it from the selection. Health defaults to all registered models in
-Actions. Local preview reads the model from its manifest, while `pnpm dev` creates
-the separate synthetic fixture without downloading any model.
+Run production and staging operations through GitHub Actions on `main`.
+Concurrency locks are scoped per environment and model (`forecast-<env>-<model>`),
+so different models build and publish in parallel while same-model runs and
+maintenance serialize.
 
 ## Set up an environment
 
-Store the shared `CLOUDFLARE_ACCOUNT_ID` as a repository secret. Create protected
+Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
 `staging` and `production` GitHub environments with:
 
-- Secrets: `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`,
-  `R2_SECRET_ACCESS_KEY`. Scope R2 credentials to that
-  environment's bucket. Deployment needs Workers Scripts Edit and Pages Edit.
-- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and the finalized
-  `TERRAIN_CATALOG_REF` described under [terrain data](#terrain-data).
-  The bucket comes from its `BUCKET` binding in [Wrangler configuration](../apps/api/wrangler.json).
+- Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit),
+  `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` scoped to that environment's
+  bucket.
+- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and the pinned
+  `TERRAIN_CATALOG_REF` from [terrain import](#terrain-data). Bucket names come
+  from [wrangler.json](../apps/api/wrangler.json).
 
-Create resources once with an authenticated Wrangler session. For staging:
+Create the R2 bucket (with `r2.dev` disabled) and Cloudflare Pages project once
+per environment:
 
 ```sh
 pnpm exec wrangler r2 bucket create windy-av-layer-staging
 pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
-pnpm exec wrangler r2 bucket domain list windy-av-layer-staging
 pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
-Use the production bucket and Pages project names when setting up production.
-Skip creation for existing resources. Keep `r2.dev` disabled and attach no public
-custom domains to either bucket. Record the Pages project's canonical hostname;
-Cloudflare may add a suffix when a name is already in use.
-Then publish a forecast before deploying the API and clients. In a new
-environment without an API, the files commit successfully but the serving check
-fails. Confirm `publication.json` records the commit, deploy the API and clients,
-then [resume that saved build](#resume-or-promote-a-build) to complete serving
-verification. The forecast does not need to be rebuilt.
+For a new environment, import terrain and set its catalog pin, run the Forecast
+workflow (which commits to R2 before the serving check), deploy the API and
+Pages, then [resume that build](#resume-or-promote-a-build) to complete serving
+verification.
 
 ## Publish a forecast
 
-For an existing environment, deploy API changes before publishing forecasts with
-new method IDs. Retained builds continue to use their embedded method descriptors.
-
-Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow's model dropdown,
-or run:
+Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow, or run:
 
 ```sh
 gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
-`all` is the default and expands to the registered models. Without `cycle`, each
-model discovers its latest complete run independently. To select one shared
-initialization time, add `-f cycle=YYYY-MM-DDTHH:00:00Z`; both current models
-accept 00, 06, 12 or 18 UTC. Production runs all models automatically at
-**05:17 and 17:17 UTC**. Both manual and scheduled runs skip a model whose cycle
-is already published. An `all` retry builds only the models with new cycles;
-skipped models need no batches or publication. Successful publication is followed
-by cleanup.
+`all` expands to `MODEL_IDS` (`gfs`, `icon-eu`). Production runs `all` on
+schedule at **05:17 and 17:17 UTC**. Without `cycle`, each model discovers its
+latest complete upstream run (`00`, `06`, `12`, or `18` UTC). Already-published
+cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
+`-f retain-full-artifacts=true` to retain full build artifacts after a
+successful run.
 
-Selected models run concurrently as GitHub runners and account limits allow.
-Each runs `forecast-plan`, up to four parallel `forecast-shard` jobs, then
-`forecast` to assemble and publish. Planning fixes that model's cycle and frame
-list, including its daylight filtering, and prepares the configured refinement
-grids from the pinned global terrain catalog. Masks and terrain arrays travel
-with the immutable plan; workers load them locally without catalog access.
-Job names list the actual `fXXX` hours in
-each batch; the planning summary also shows their UTC valid times. GFS and ICON-EU
-can have different cycles, hour lists, and batch sizes.
+Each selected model runs `forecast-plan` (15m timeout), up to four parallel
+`forecast-shard` jobs (60m timeout), and `forecast` (`build-publish`, 60m
+timeout) to merge, validate, publish to R2, clean up expired builds, and verify
+live API serving. If a shard fails, `gh run rerun <run_id> --failed` reuses
+completed shard artifacts while the plan remains within the 50-minute build
+elapsed-time budget.
 
-Each model holds its own environment/model lock through planning, computation,
-publication, and cleanup. A single-model dispatch and an `all` dispatch therefore
-cannot publish the same model concurrently. A failed model or batch does not
-cancel the other model. GitHub collects only artifacts in that model and plan's
-namespace; finalization rejects missing or extra groups and checks their
-identities and hashes. Compute workers have no R2 publication credentials.
+Planning stages each configured grid's coverage and terrain arrays in the frozen
+plan artifact. Workers load them locally and derive patches from the same native
+weather frames. Assembly requires every grid's complete shard set before
+validating and publishing the build.
 
-The model selector has a five-minute limit. Each model allows 15 minutes for
-planning, 60 minutes per concurrent worker, and 60 minutes for assembly and
-publication. These job timeouts do not replace the measured build budget below.
-
-Each worker's receipt and failure/progress records are retained separately. A failed
-worker prevents publication; successful worker artifacts can be reused by GitHub's
-rerun-failed-jobs action if assembly can still finish within the original plan's
-50-minute elapsed-time budget. Worker startup, transfers and retry delays count
-toward that budget. Start a fresh run after it expires. The separate six-hour
-publication lifetime still applies to completed-build resume. A fresh planning
-attempt creates a separate artifact set, so workers from
-different plans cannot be combined. Complete-build resume below remains the recovery
-path after assembly or upload failures.
-
-Publishing requires a source cycle at most **18 hours old**, at least **six
-hours of forecast remaining**, and a build created within the last **six hours**.
-Files are retained for seven days; that does not make old weather current.
-An older source cycle cannot replace a newer one through normal publication.
-
-If you deliberately want another build of the current cycle, add
-`-f allow-same-cycle=true`. To keep complete files after a successful run, add
-`-f retain-full-artifacts=true`. Build budgets are checked before publication;
-use `pnpm capacity` when planning changes to the workload.
+Admission requires a source cycle at most **18 hours old**, at least **6 hours
+of remaining forecast coverage**, and a build created within the last **6 hours**.
+Published builds are retained for 7 days.
 
 ## Resume or promote a build
 
-Use the original run's complete build files to retry without rebuilding tiles:
+Retry an interrupted upload or promote a retained staging build (`retain-full-artifacts=true`)
+without rebuilding tiles:
 
 ```sh
 gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
   -f resume-run-id=RUN_ID
 ```
 
-Resume needs a finished run with one complete saved build for each selected
-model. Use `model=all` when that run retained complete artifacts for every
-registered model; each resumes independently from its own artifact. If only one
-model needs recovery, select it explicitly. A missing or incomplete artifact
-fails that model's resume without rebuilding it or cancelling another model.
-The six-hour limit starts when the build was created, not when its upload failed.
-The current build code and configuration must still match, and the freshness
-rules above still apply. Otherwise, start a fresh forecast.
+Resume verifies the source workflow run on `main`, checks recipe and coverage
+hashes, uploads any missing R2 objects, commits the pointer, and verifies live
+serving.
 
-Resume checks the files and source workflow before uploading. It reuses matching
-remote files and can recover an upload whose final result was uncertain. A
-same-cycle replacement still needs `allow-same-cycle=true`. Rerunning the original
-job replaces that run's saved artifacts, so check them before choosing its ID.
-
-To promote tested staging data, build it with `retain-full-artifacts=true`, then
-use that successful run's ID in the same resume command with
-`environment=production`. This uploads the exact tested files; it does not build
-another forecast. The same code, configuration and freshness checks apply.
+Refined builds retain `plan.json` with their full artifacts. Resume checks its
+original grid and terrain references against the manifest and recipe; it does
+not resolve current catalog defaults or prepare terrain again.
 
 ## Deploy the API and clients
 
@@ -138,75 +86,50 @@ another forecast. The same code, configuration and freshness checks apply.
 gh workflow run deploy.yml --ref main -f environment=staging
 ```
 
-Deployment runs CI, builds the clients, deploys the Worker, checks the live API,
-and then deploys Pages. It checks that both services serve the requested version,
-and that the Windy bundle is readable from Windy and points to the selected API.
+Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
+`@av/preview` and `@av/windy-plugin`, deploys the API Worker, probes `/healthz`
+and `/v1/catalog`, deploys Cloudflare Pages, and verifies the deployed revision
+marker and Windy plugin CORS headers.
 
-A forecast publication does not rebuild Pages. The map loads the selected model's
-latest manifest, layers, and hours when opened or when a model is selected.
-Reload an open browser page to see a new publication; the API's
-[pointer cache](serving-budgets.md) can delay discovery by up to 15 seconds.
-
-The publisher checks that the live API serves the exact new build and its
-frame/layer lists, with a one-minute deadline for cache refresh. `serving.json`
-records the result. This verifies API data visibility; Pages deployment and
-rendered UI checks are separate.
-
-Pushes to `main` normally deploy production automatically. For an incompatible
-alpha release, pause that workflow before merging, publish matching data, then
-re-enable deployment and check staging before production. Keep a usable previous
-build available for rollback. A run rejects a superseded `main` revision; start
-another run from current `main` if that happens.
+Clients fetch the selected model's latest manifest from the API on load or model
+switch; reload the page to pick up a newly published build (subject to the API's
+15-second [pointer cache](serving-budgets.md)).
 
 ## Roll back or clean up
 
-The Maintenance model dropdown lists individual models. Rollback requires one
-model's retained build ID, so there is no `all` option. Choose a retained,
-unexpired build that still covers useful forecast times:
+Point a model back to an unexpired retained build:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
-Rollback checks the saved files before changing the served build. To remove
-unused builds without changing the current forecast:
+Delete unreferenced build objects older than the 24-hour grace period:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=cleanup
 ```
 
-Cleanup protects current and retained builds and applies a 24-hour grace period
-to unreferenced files. Let this workflow manage deletion; separate bucket expiry
-rules can remove files still in use.
-
 ## Terrain data
 
-Global DEM ingestion uses the separate [Global terrain workflow](../.github/workflows/terrain.yml).
-Select its environment and run from `main`, as required by the existing storage
-environment branch policies. It verifies the complete inventory before publishing
-a catalog and retains verified receipts for retries. Dataset versions are
-outside forecast cleanup. The [terrain guide](../apps/batch/src/terrain/README.md)
-covers references, bounded reads and reusable preparations.
+Run the [Global terrain workflow](../.github/workflows/terrain.yml) from `main`
+to import and verify the Copernicus GLO-90 catalog in R2. See the
+[terrain guide](../apps/batch/src/terrain/README.md) for CLI commands and grid
+preparations.
 
-After the import succeeds, set the environment variable `TERRAIN_CATALOG_REF`
-to the complete JSON reference from its `terrain-catalog-ref.json` artifact:
-`key`, `sha256`, and `bytes`. The referenced catalog and its tiles must exist in
-that environment's bucket. Both weather models use this one pin and the shared
-[polygon configuration](../packages/contracts/config/refinement.json).
+Set the environment's `TERRAIN_CATALOG_REF` variable to the complete JSON
+reference in the import's `terrain-catalog-ref.json` artifact. The catalog and
+tiles must exist in that environment's bucket. Both weather models use this pin
+and the shared [polygon configuration](../packages/contracts/config/refinement.json).
 
-The Forecast workflow accepts `terrain-catalog-ref` to override that default for
-one run. Only its preparation job receives the input. Configured zones require
-a pin; a missing or corrupt catalog fails preparation before weather acquisition.
-An empty configuration, or one outside a model's domain, needs no catalog and
-keeps the native output. A completed refined build retains `plan.json` with its
-full artifacts so resume can verify the original inputs without consulting new
-catalog defaults or preparing terrain again.
+The Forecast workflow's `terrain-catalog-ref` input overrides the default for
+one run and reaches only the preparation job. Configured zones require a pin;
+missing or corrupt catalogs fail preparation. Empty or out-of-domain zone
+configurations keep native output without catalog access.
 
-The older `terrain-inputs` model map remains available for staging already
-prepared native-grid arrays. It does not replace the catalog used by configured
-refinements.
+The existing `terrain-inputs` model map remains available for staging prepared
+native-grid arrays alongside configured refinements.
 
 ## Check a failure
 
@@ -215,50 +138,32 @@ gh run list --workflow forecast.yml --limit 5
 gh run view RUN_ID --log-failed
 ```
 
-Download the run's result artifacts from GitHub Actions. `publication.json`
-records a published build; `failure.json` distinguishes `not-attempted`,
-`unconfirmed`, and `committed`. For `unconfirmed`, resume the exact build if it
-is still eligible. A cleanup or serving-check failure after `committed` does not
-undo publication. `serving.json` identifies a publication that the API could not
-yet serve; check the API deployment and run Forecast health before rebuilding.
-`maintenance.json` records rollback or cleanup results; inspect it before
-repeating a cancelled operation, which may already have completed.
+Inspect the run's uploaded receipt artifacts:
+
+- `publication.json`: records a committed pointer update.
+- `failure.json`: reports `not-attempted`, `unconfirmed`, or `committed`. Resume
+  `unconfirmed` runs with `resume-run-id`.
+- `maintenance.json`: records cleanup or rollback status.
+- `serving.json`: records live API verification after commit.
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
-checks every registered model's live forecast and recent jobs. Its model dropdown
-also supports `all`. Each model gets an independent check and artifact; an ICON-EU
-failure in an all-model run does not mark a successful GFS publication as failed.
-Enable GitHub failure notifications. For models that omit nighttime hours, the
-horizon warning follows the source forecast window. Health still alerts when
-the published daylight hours run out; publication validates that no expected
-daylight hours are missing.
+checks each model's live API responses, remaining horizon, and recent workflow
+runs:
 
-Production checks scheduled-run recency separately from publication results.
-A successful manual retry clears a publisher failure; it does not clear a missed
-schedule. Staging checks its own labelled runs and has no scheduled-run requirement.
+- **Missed schedule or publication:** verify `forecast.yml` is enabled and
+  trigger a run if needed.
+- **Upstream lag, shrinking horizon, or expiry:** publish a newer upstream cycle.
+- **Serving integrity:** check Worker deployment and retained R2 build objects,
+  or roll back to a verified retained build.
+- **Publisher or maintenance failure:** inspect `publication.json`,
+  `failure.json`, and `maintenance.json`; resume interrupted uploads or rerun
+  `cleanup`.
+- **Workflow observation failure:** check GitHub API status and `actions: read`
+  permissions.
 
-- **Missed schedule or publication:** inspect the latest forecast run and whether
-  the workflow is enabled. If it was disabled unintentionally, run
-  `gh workflow enable forecast.yml`, then publish a fresh forecast through the
-  command above. Check actual runs as well as cron; schedules can be delayed.
-- **Upstream lag, shrinking horizon or expiry:** check for a complete source run,
-  then publish it. Editing an old build's expiry does not refresh its weather.
-- **Serving integrity:** compare the deployed version and forecast files. Restore
-  a compatible retained build or deploy matching code and fresh data.
-- **Publisher or maintenance failure:** inspect `publication.json`, `failure.json`
-  and `maintenance.json` before retrying. Resume an eligible interrupted upload;
-  rerun serialized cleanup for a failed cleanup or backlog.
-- **Workflow observation failure:** check GitHub API availability and the health
-  job's `actions: read` permission before rerunning it.
-
-After recovery, rerun the check for the affected environment:
+Re-verify after recovery:
 
 ```sh
 gh workflow run health.yml --ref main -f environment=staging -f model=gfs
 gh run list --workflow health.yml --limit 5
 ```
-
-Workflows call `pnpm operations` internally. For local work, see
-[Development](development.md). For implementation details, see
-[Architecture](architecture.md), [operations](../scripts/operations.ts), and
-[publication](../apps/batch/src/publication.ts).

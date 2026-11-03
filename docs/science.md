@@ -1,177 +1,111 @@
 # Science and sampling
 
-Lift is calculated from each model column using
 [`@av/soaring`](../packages/soaring/README.md) and
-[`@av/thermodynamics`](../packages/thermodynamics/README.md).
-[`@av/forecast`](../packages/forecast/README.md) applies the calculation across a
-grid, checks daylight with [`@av/solar`](../packages/solar/README.md), and samples
-the results for maps and point queries. See [data](data.md) for output units and
-status meanings.
+[`@av/thermodynamics`](../packages/thermodynamics/README.md) solve dry thermal
+lift for a single atmospheric column. [`@av/forecast`](../packages/forecast/README.md)
+runs the column solver across a grid, gates daylight cells with
+[`@av/solar`](../packages/solar/README.md), and interpolates values for tiles and
+point queries. See [data](data.md) for output units and status meanings.
 
 ## Input fields
 
-GFS acquisition uses model terrain and surface pressure, two-metre temperature
-and humidity, sensible and latent heat flux, PBL height, precipitation, and
-pressure-level height and temperature. The [field definitions](../apps/batch/src/gfs/fields.ts)
-and [GFS settings](../packages/contracts/config/gfs.json) define source products,
-pressure levels, and forecast hours.
+- **GFS** ([fields.ts](../apps/batch/src/gfs/fields.ts), [gfs.json](../packages/contracts/config/gfs.json)):
+  model terrain, surface pressure, 2 m temperature and specific humidity,
+  sensible and latent heat flux, PBL height, precipitation rate, and
+  isobaric-level geopotential height and temperature (`pressureLevelsHpa`).
+- **ICON-EU** ([icon/README.md](../apps/batch/src/icon/README.md), [icon-eu.json](../packages/contracts/config/icon-eu.json)):
+  DWD's 0.0625° regular latitude/longitude grid, surface fields (`HSURF`, `PS`,
+  `T_2M`, `QV_2M`, `MH`, `ASHFL_S`, `ALHFL_S`), static half-level heights `HHL`
+  (`45..75`, midpoint-averaged into full-level heights and verified against
+  `HSURF` at half-level `75`), and per-column pressure `P` and temperature `T`
+  on model levels `45..74`.
 
-ICON-EU uses DWD's regular grid, surface fields and the lowest 30 model levels.
-Pressure comes from each column's `P` fields in Pa, with temperature from `T`.
-Adjacent static `HHL` interfaces supply full-level midpoint heights; the bottom
-interface must agree with `HSURF` terrain. The [ICON adapter](../apps/batch/src/icon/README.md) reads the fields listed in
-[ICON settings](../packages/contracts/config/icon-eu.json). The adapter retains
-native model inputs and performs no reconstruction of hybrid-coordinate pressure.
-Terrain clearance is calculated separately from the resulting native lift ceiling.
-
-Both adapters check decoded parameter, level, grid, initialization, packing and
-statistical-window metadata. GFS also checks inventory labels. Duplicate inventory
-matches are accepted only when every candidate is a bounded, complete,
-byte-identical GRIB message. Source records retain all candidates; conflicting bytes
-remain an error. A required acquisition failure stops the build, while decoded
-per-cell missingness propagates through the affected layer.
-
-Specific humidity is converted directly to mixing ratio, `r = q / (1 - q)`.
-The solver also accepts dew point through the same saturation formulation.
-Explicit pressure and humidity avoid sea-level-pressure and dry-air fallbacks.
-Below-ground levels are screened before column derivation. A missing pressure
-observation cannot establish that a level is below ground; it remains an invalid
-observation rather than allowing interpolation across an unknown inversion.
-A [normalized frame](../packages/forecast/src/inputs.ts) stores each field in a
-compact Float32 array with a binary missing-value mask. A frame carries either
-GFS's strictly descending shared isobaric axis in hPa or ICON's per-column Pa
-arrays and pressure masks, according to its product capabilities. Precipitation
-arrays are required only for products that publish rain and are normalized to
-mm/h. Nonfinite values require an explicit missing flag; invalid array types,
-shapes or active-index identity stop the build.
+Specific humidity converts to mixing ratio via $r = q / (1 - q)$. Below-ground
+profile levels are screened before column derivation; levels with missing
+pressure are marked invalid. A [normalized frame](../packages/forecast/src/inputs.ts)
+stores each field as a `Float32Array` paired with a binary `Uint8Array`
+missingness mask.
 
 [Frame derivation](../packages/forecast/src/frame.ts) evaluates solar elevation
 across each cell's trailing interval and valid time using
-[`@av/solar/grid`](../packages/solar/src/grid.ts) (`minimumSolarElevationDeg = -0.833°`),
-skipping nighttime cells before profile extraction (`STATUS_NO_LIFT` for lift layers
-and `STATUS_UNAVAILABLE` for precipitation). For daytime cells, it performs below-ground
-screening and unit conversion, then reuses a level scratch array with an explicit active
-count. Unused tail entries never enter the solver. Reuse changes allocation behavior,
-not profile selection, physical assumptions or branch tolerances.
-
-For ICON-EU, [frame selection](../packages/forecast/src/daylight.ts) also checks
-regional daylight before acquisition, dropping a candidate hour when no covered
-output cell is sunlit at its interval start, midpoint or end. The configured
-candidate horizon remains hourly +1 through +24, including tomorrow's daylight
-when a run starts at night. This does not remove the preceding-hour flux
-companions needed to recover a retained hour. GFS keeps all candidate frames.
-If no candidate has daylight at all, selection retains the candidate list so
-the product can publish explicit nighttime no-lift values instead of an empty
-build.
+[`@av/solar/grid`](../packages/solar/src/grid.ts) (`minimumSolarElevationDeg = -0.833°`).
+Dark cells emit `STATUS_NO_LIFT` on lift layers and `STATUS_UNAVAILABLE` on
+`precip-rate`. For `regional-daylight` products (ICON-EU),
+[daylight frame selection](../packages/forecast/src/daylight.ts) also filters out
+candidate forecast hours before acquisition when no covered output cell is sunlit
+at the interval start, midpoint, or end.
 
 ## Statistical windows
 
-The GFS adapter verifies continuous statistical intervals from decoded GRIB
-metadata across 1-hour forecast steps (`+1h..+24h`). For two means sharing start `a`,
-it recovers the trailing mean as
-`((t2-a) × mean(a,t2) - (t1-a) × mean(a,t1)) / (t2-t1)`.
-Block resets are respected; a later lead is not necessarily an
-initialization-to-lead mean. Compatible accumulation differences become rain
-rates after division by the interval duration. ICON's `ASHFL_S` and `ALHFL_S`
-are initialization-to-lead downward means. Their consecutive-hour difference
-uses the same trailing-mean calculation and reverses the sign to upward; hour 1
-uses its own mean directly without requiring an hour-0 companion.
+The [GFS](../apps/batch/src/gfs/intervals.ts) and
+[ICON](../apps/batch/src/icon/acquire.ts) adapters verify continuous statistical
+windows in GRIB2 metadata and pass them to
+[`@av/forecast/intervals`](../packages/forecast/src/intervals.ts):
 
-Small negative precipitation differences within the combined GRIB packing-error
-tolerance become zero; larger negatives become unavailable. Cooling flux remains
-signed. The [NOAA](../apps/batch/src/gfs/intervals.ts) and
-[ICON](../apps/batch/src/icon/grib.ts) adapters check runs, grids, windows and
-processing semantics before differencing.
-[`@av/forecast/intervals`](../packages/forecast/src/intervals.ts) then calculates
-the trailing values and applies the quantization tolerance.
-GFS cumulative/mean companions remain Float64 until recovery, then compact to
-Float32. ICON retains its decoded Float32 fields. Lift combines interval flux
-with the endpoint profile and PBL, an explicit temporal approximation recorded
-in the manifest. Both products start at `f001`, without prior-cycle substitution
-or temporal interpolation.
+- For two means sharing start $a$, the trailing `[t1, t2]` mean is
+  $\frac{(t_2 - a)\,\overline{X}_{[a,t_2]} - (t_1 - a)\,\overline{X}_{[a,t_1]}}{t_2 - t_1}$.
+- ICON-EU `ASHFL_S` and `ALHFL_S` are run-averaged (`0..h`) downward fluxes;
+  differencing consecutive hours and negating yields the preceding-hour upward
+  flux (`f001` negates its `0..1h` mean directly).
+- Small negative precipitation differences within combined GRIB packing error
+  clamp to `0`; larger negative rates become `unavailable`.
+- Lift pairs the trailing-interval surface heat fluxes with the valid-time
+  temperature profile and PBL depth.
 
 ## Lift depth and usable top
 
-Method `dry-lenschow-pbl-1p2-v1` follows a dry parcel from the surface using a
-configurable dry-adiabatic lapse rate (`dryLapseRateKperM = 0.0098 K/m` in
-[`@av/thermodynamics/constants`](../packages/thermodynamics/src/constants.ts)). Profiles have
-ascending above-ground heights and at most 1,000 m gaps, including the first
-observation. A positive-to-nonpositive parcel temperature excess gives an
-interpolated crossing. If the profile ends first, the result is limited to its
-observed top.
+`dry-lenschow-pbl-1p2-v1` (isobaric) and `dry-lenschow-pbl-1p2-model-levels-v1`
+(model levels) lift a dry parcel from the surface at `dryLapseRateKperM = 0.0098 K/m`
+([`@av/thermodynamics/constants`](../packages/thermodynamics/src/constants.ts)).
+Profiles require ascending heights above ground with gaps $\le 1,000\text{ m}$.
+Where parcel temperature excess crosses from positive to nonpositive, linear
+interpolation gives the thermal top; if the profile remains buoyant at the top
+resolved level, depth caps at that level (`SUPPORT_CAPPED`). When surface
+buoyancy flux is positive and the first profile level is neutral or stable,
+depth closes to $\min(z_1, \text{PBL})$ (`SUPPORT_PBL`).
 
-PBL closes only the first-layer case: with positive buoyancy flux and a
-nonpositive first-level excess, depth is the smaller of first-level height and
-positive model PBL depth. Missing PBL invalidates that branch alone; resolved
-crossings above PBL remain intact. Verified nonpositive buoyancy flux gives no
-lift. There is no heat-flux-only depth fallback, cloud cap or moist continuation.
-
-Surface-density-consistent Deardorff velocity $w_*$ (`m/s`) scales the Lenschow
-updraft curve in [`@av/soaring`](../packages/soaring/src/index.ts). All velocity
-thresholds in `m/s` (`sinkRateMps = 1.2 m/s`, `minimumThermalVelocityMps = 0 m/s`,
-and aircraft presets `SINK_RATE_PRESETS_MPS`) are defined in
-[soaring parameters](../packages/soaring/src/parameters.ts) and the
-[velocity module](../packages/soaring/src/velocity.ts), and are overridable per call.
-[Method descriptors](../packages/contracts/src/methods.ts) publish the operational defaults.
-A peak below `sinkRateMps` gives no usable lift; a top that meets the threshold
-retains that top; otherwise the descending threshold crossing sets the usable depth.
-[The solver](../packages/soaring/src/column.ts) uses those defaults, and
-[its tests](../packages/forecast/src/science.test.ts) cover branch boundaries.
+Deardorff convective velocity $w_*$ (`m/s`) scales the Lenschow updraft profile
+in [`@av/soaring/velocity`](../packages/soaring/src/velocity.ts). Usable lift
+requires updraft velocity to exceed `sinkRateMps` (`1.2 m/s` default in
+[`@av/soaring/parameters`](../packages/soaring/src/parameters.ts)); the upper
+crossing with `sinkRateMps` sets the usable thermal depth ([column.ts](../packages/soaring/src/column.ts)).
 
 ## Terrain clearance
 
 Method `native-lift-terrain-clearance-v1` derives fine AGL in the configured
 polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
-compiles native neighbors and weights once for each target grid. For every
-frame, all positive-weight neighbors must be present and agree on valid lift
-versus no lift. Valid lift gives `max(0, interpolated MSL ceiling − DEM elevation)`;
-all-no-lift neighbors give zero. Mixed lift/no-lift neighborhoods, missing DEM
-and missing native support remain unavailable. Zero-weight neighbors do not
-affect the result, and there is no nearest-valid or renormalized fallback in
-this calculation.
+compiles native neighbors and weights once per target grid. Each target cell
+requires every positive-weight native neighbor to have known, matching lift status.
+Valid lift gives `max(0, interpolated MSL ceiling − DEM elevation)`; all-no-lift
+neighbors give zero. Mixed lift/no-lift neighborhoods, missing DEM and missing
+native support remain unavailable.
 
 Daylight follows the same interval as the parent frame. A dark cell with valid
 terrain and complete native geometric support emits no lift without evaluating
 the atmospheric values. Missing terrain or geometric support stays unavailable.
-The method keeps the native MSL forecast and does not rerun a parcel from the
-DEM surface. A detailed ground-clearance map therefore is not a higher-resolution
-atmospheric prediction. Each patch records the DEM datum and surface type;
-the calculation applies no vertical-datum transformation.
+MSL and atmospheric column calculations remain native. Clearance can include
+space below model ground; it does not establish thermals originating at the
+local DEM surface. Each patch records the DEM datum and surface type. The
+calculation applies no vertical-datum transformation.
 
 ## Reconstruction and storage
 
-The [shared sampler](../packages/forecast/src/sampler.ts) first applies output
-coverage. It snaps coordinates within `1e-10` grid steps of a node, wraps periodic
-longitude and ignores zero-weight neighbours. All contributing cells must be
-known for bilinear interpolation. Otherwise the nearest contributor supplies
-its value and status; ties prefer the lower row, then wrapped column. There is
-no renormalization, substitute neighbour or nonperiodic edge extrapolation.
+[`@av/forecast/sampler`](../packages/forecast/src/sampler.ts) checks coverage
+membership, snaps coordinates within $10^{-10}$ grid steps, wraps periodic
+longitudes, and ignores zero-weight neighbors. Known contributors interpolate
+bilinearly, using `0` AGL / model-terrain MSL for no-lift cells; public no-lift
+results follow [data](data.md#layers-and-missing-values). If a contributing cell
+is `unavailable` or `outside-domain`, the nearest contributing cell supplies
+the value and status.
 
-Internally, no-lift contributes zero AGL and model terrain MSL. Public all-no-lift
-results follow [the missing-value rules](data.md#layers-and-missing-values).
-Support flags union only the actual contributors. Rendering samples four fixed
-quarter-pixel offsets in global Web Mercator coordinates, palettes each scalar,
-and averages premultiplied colour before encoding straight alpha.
-Each zoom is evaluated independently. Grouping a frame's layers by tile only
-shares prepared geometry; it does not average child colours into parent tiles,
-regrid a projected source or alter coverage-edge decisions.
-
-Each numeric record contains a little-endian `Float32` value followed by a
-status/support byte. The low two
-bits encode status; three further bits identify parcel crossing, profile top
-and PBL closure. [layers.ts](../packages/contracts/src/layers.ts) defines these constants. Grid geometry, Earth radius, bounds and wrap behavior come from the
-immutable manifest and its content-addressed coverage descriptor. Version 4
-adds a separate numeric pack and descriptor for each internal refinement grid.
-Native Lambert-conformal grids are sampled through their declared projection;
-the current GFS and ICON-EU providers both supply regular latitude/longitude
-grids. The sampler finds the contributing cells; the [numeric block layout](architecture.md#build-and-storage)
-maps them to one bounded range, including longitude-wrap cases.
+Tile rendering evaluates four quarter-pixel subsamples in Web Mercator, applies
+the layer palette, and averages premultiplied RGBA before encoding lossless
+WebP. Point samples are stored in 5-byte records (`Float32` value + 1-byte
+status/support bitmask defined in [layers.ts](../packages/contracts/src/layers.ts))
+arranged in $16 \times 16$ cell blocks with a 1-cell halo ([architecture](architecture.md#build-and-storage)).
 
 ## Algorithm sources
 
-The solar, thermodynamic and dry-lift calculations were adapted from Windgrams.
-[provenance.json](../packages/forecast/provenance.json) lists the source revision
-and files. The implementations here use the dry-column method described above;
-they do not include Windgrams' cloud caps or estimates for missing pressure and
-humidity. Source-data and dependency licences are listed in
-[THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.txt).
+The solar, thermodynamic, and dry-lift equations are adapted from Windgrams
+([provenance.json](../packages/forecast/provenance.json)). Source-data and
+third-party licenses are in [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt).

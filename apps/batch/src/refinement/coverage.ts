@@ -1,7 +1,7 @@
 import { getBit, prepareCoverageTester, prepareGridGeometry, type CoverageMask } from '@av/contracts';
 import { containsRefinement } from '@av/contracts/refinement';
 
-/** Fine interiors remain inside the base publication and have complete interpolation support. */
+/** Require polygon/base coverage and a one-cell halo around each fine output cell. */
 export function validateRefinementCoverage(base: CoverageMask, mask: CoverageMask, patch: Parameters<typeof containsRefinement>[0]): void {
   const geometry = prepareGridGeometry(mask.grid), withinBase = prepareCoverageTester(base), { width, height } = mask.grid;
   let outputs = 0;

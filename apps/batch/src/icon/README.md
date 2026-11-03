@@ -1,19 +1,17 @@
 # DWD ICON-EU input
 
-Downloads DWD's regular latitude/longitude ICON-EU fields and converts them to
+Downloads DWD's regridded 0.0625° regular latitude/longitude ICON-EU `.grib2.bz2`
+files, decompresses and decodes them in pure TypeScript, and normalizes
 model-level columns for the [batch builder](../../README.md).
 
-Run from the repository root after [setup](../../../../docs/development.md#setup):
+Verify a single upstream frame from the repository root:
 
 ```sh
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
 ```
 
-This downloads and checks one frame, then prints its input report. The
-[forecast command](../../../../docs/development.md#build-a-real-forecast) builds
-lift tiles and point data with the configured terrain refinements. Both commands
-reuse downloaded files; the development guide covers catalog access, cycle
-selection and local preview.
+See [development](../../../../docs/development.md#build-a-real-forecast) to build
+map tiles and point samples with the configured terrain refinements.
 
 ## Offline checks
 
@@ -21,45 +19,23 @@ selection and local preview.
 pnpm test apps/batch/src/icon
 ```
 
-The default suite runs without network access. Synthetic GRIB messages exercise
-packing, row order, missingness, statistical metadata and acquisition.
-The CCSDS test includes a nonconstant libaec 1.1.3 reference payload and its
-encoding options. Zero-bit 5.0/5.42 fixtures were cross-checked with ecCodes 2.50.0
-for both row orders, bitmaps, and nonzero decimal scale factors. The bzip2 fixture
-is generated independently by Python's standard library. These reference tools
-are not required to run the suite.
+Runs offline against synthetic and reference GRIB2 payloads (including `libaec`
+1.1.3 CCSDS DRT 5.42, `ecCodes` 2.50.0 zero-bit 5.0/5.42, and `bzip2` fixtures).
 
-If you have the retained 2026-10-08 00Z Skyjuice ICON probe, run this additional
-check. It reads six fields, verifies their bytes against `manifest.json`, and
-compares one sampled cell with retained reference values:
+To run the optional check against a retained 6-field DWD probe directory:
 
 ```sh
 ICON_DWD_PROBE_DIR=/path/to/icon-probe pnpm test apps/batch/src/icon/icon.test.ts
 ```
 
-Without `ICON_DWD_PROBE_DIR`, this check is skipped. A supplied missing or
-incomplete directory fails. The probe's manifest records source URLs, digests,
-and attribution; the weather files are not committed here.
-
 ## Source layout
 
-- [provider.ts](provider.ts): discovery, input proof, and acquisition entry points
-  used by the shared builder. Downloads and decoders load only when needed.
-- [acquire.ts](acquire.ts): acquisition options, sessions, cached geometry, and
-  hourly normalization. Acquire frames sequentially and close the session in
-  `finally` to cancel pending downloads and release its caches. Closing waits for
-  active acquisition to finish; a closed session cannot acquire another frame. Static
-  geometry is decoded once per session; each returned frame receives its own
-  buffers so caller edits cannot change later forecasts.
-- [fields.ts](fields.ts): field selection, URLs, and metadata checks.
-- [ICON-EU settings](../../../../packages/contracts/config/icon-eu.json): grid,
-  levels, and forecast schedule.
-- [grib.ts](grib.ts): decoding and north-to-south row ordering. The private
-  [bzip2](codec/bzip2.ts) and [CCSDS 5.42](codec/ccsds.ts) codecs handle formats
-  unsupported by the pinned `@azohra/meteo.grib` decoder; other packing and GRIB
-  section parsing use that library.
-- [discover.ts](discover.ts) and [prove.ts](prove.ts): run discovery and input checks.
+- [provider.ts](provider.ts): cycle discovery, `input:proof`, and lazy session loader.
+- [acquire.ts](acquire.ts): session lifecycle, cached static `HSURF`/`HHL` geometry, and hourly flux de-averaging (`ASHFL_S`, `ALHFL_S`).
+- [fields.ts](fields.ts) & [icon-eu.json](../../../../packages/contracts/config/icon-eu.json): DWD URLs, GRIB2 discipline/category/number selectors, model levels (`45..74`), and metadata verification.
+- [grib.ts](grib.ts), [codec/bzip2.ts](codec/bzip2.ts), [codec/ccsds.ts](codec/ccsds.ts): pure-TypeScript `bzip2` decompression, CCSDS 121.0-B-2 (`DRT 5.42`) decoding, and South-to-North (`+j`) to North-to-South (`-j`) row reordering.
+- [discover.ts](discover.ts) & [prove.ts](prove.ts): upstream cycle discovery and single-frame input proof.
 
-[Science](../../../../docs/science.md#input-fields) explains model-level heights,
-pressures, and flux conversion. Source adaptations and dependency notices are in
-[THIRD_PARTY_NOTICES](../../../../THIRD_PARTY_NOTICES.txt).
+See [science](../../../../docs/science.md#input-fields) for midpoint height and
+flux equations, and [THIRD_PARTY_NOTICES.txt](../../../../THIRD_PARTY_NOTICES.txt)
+for DWD attribution.

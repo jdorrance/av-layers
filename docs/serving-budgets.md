@@ -1,37 +1,61 @@
 # Serving resource budgets
 
-The API limits concurrent work, storage reads, cache size, and response size.
-Budgets apply to each request as a whole, including all selected numeric grids.
-Scheduled builds select the registered models; synthetic tests use a local Worker entry point.
+The API bounds concurrent requests, R2 range reads, cache memory, and response
+allocations in [apps/api/src/resources.ts](../apps/api/src/resources.ts). Latest
+validation measurements are recorded in [project status](status.md). Limits
+apply to the combined work across all grids selected by a request.
 
 ## Cache and in-flight limits
 
-- Pointer cache: 32 entries and 1 MiB accounted decoded bytes; positive TTL 15 s, unavailable-publication TTL 5 s. A membership miss queues/coalesces a real pointer refresh, waiting at most the remaining one-second throttle window. A cached miss is never treated as definitive solely to save a refresh.
-- Manifest cache: 64 entries and 4 MiB accounted decoded bytes, bounded by build expiry; four simultaneous distinct cold manifest loads. Pointer and manifest JSON accounting estimates strings, keys, values, array slots and object overhead instead of multiplying serialized bytes.
-- Coverage cache: 16 entries and 8 MiB accounted bitsets, layout indexes and descriptor overhead; two distinct concurrent loads. Descriptor identity and each bitset digest are verified before caching; publication geometry is rechecked on cache hits.
-- PMTiles directory cache: 256 entries and 4 MiB accounted storage, using 96 bytes per decoded directory entry. Four distinct tile operations can be in flight. Directory entry count is capped at 16,384 before the library creates entry objects.
-- Binary sample/source-record reads: eight concurrent distinct loads; identical reads share materialized bytes. No R2 body or Response stream is shared between requests.
-- All streaming object reads/decompression and active source-record verification share a 32 MiB allocation pool. Reads use one preallocated buffer plus its bounded result; source-record verification holds a 12 MiB reservation through hash and schema checks. Outgoing responses have a separate 16 MiB pool, reserving four times body size for payload, serialization and cache/response copies before body construction, held until both client and Cache API branches consume, cancel or reach their deadline. JSON serialization also reserves from the shared allocation pool before allocating its string. HEAD/304 paths cancel discarded bodies. Each coalescing group admits at most 32 owners/joiners across all its keys. The pointer membership-refresh delay creates one shared timer per operation. New operations and body reads time out after 15 s and abort pending stream consumption. An underlying read that cannot be cancelled keeps its concurrency slot until it settles; timed-out work cannot create extra slots. Exceeding a limit returns uncached 503; it does not enqueue an unbounded backlog.
+- **Pointer cache:** 32 entries, 1 MiB max; 15 s positive TTL, 5 s unavailable
+  TTL. A build-ID miss coalesces a pointer refresh throttled to 1 req/s.
+- **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
+  concurrent cold loads.
+- **Coverage cache:** 16 entries, 8 MiB max; 2 concurrent cold loads. Verifies
+  descriptor and bitset SHA-256 digests on load.
+- **PMTiles directory cache:** 256 entries, 4 MiB max (96 B/entry, max 16,384
+  entries/directory); 4 concurrent tile reads.
+- **Binary sample & provenance reads:** 8 concurrent loads; identical range
+  reads coalesce and share materialized `Uint8Array` bytes.
+- **Memory & response pools:** 32 MiB shared stream/verification pool (12 MiB
+  reserved per active provenance check) and 16 MiB outgoing response pool (4×
+  body size reserved until client and Cache API streams settle). Coalescing
+  groups cap at 32 waiters per group, and operations time out after 15 s.
+  Requests exceeding any pool or concurrency limit return uncached HTTP 503.
 
-Object limits: pointer 128 KiB, manifest 512 KiB, coverage descriptor 128 KiB, each coverage bitset 512 KiB, source-record 4 MiB, compressed or decompressed archive range 1 MiB, sample range 256 KiB. Before parsing, metadata JSON permits 8,192 structural tokens; source-record permits 262,144 to admit 24-frame hourly GFS source records. Both cap nesting at 32 and each object/array at 256 entries. The request URL cap is 16 KiB. Selection limits come from immutable descriptors, bounded by the shared contract ceiling.
+Per-object byte caps: pointer 128 KiB, manifest 512 KiB, coverage descriptor
+128 KiB, coverage bitset 512 KiB, provenance 4 MiB, PMTiles range 1 MiB, sample
+range 256 KiB. JSON structural token caps: 8,192 for metadata, 262,144 for
+provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
+at 16 KiB.
 
-Point requests group layers by their owning grid and read one bounded range per
-group. Base MSL plus refined AGL requires two numeric reads; their combined range
-size remains capped at 256 KiB. Coverage is loaded lazily for matching polygons,
-and shares the same coverage cache and concurrency limits as the base grid.
+Point requests group layers by grid and read one range per group. Base MSL plus
+refined AGL uses two reads whose combined size is capped by the sample range
+budget. Matching polygon masks load lazily through the shared coverage cache.
 
-## Memory estimate
+## Memory envelope
 
-For the supported GFS workload and the load-test cap of 20 concurrent requests, reserve 17 MiB for all configured caches, 32 MiB for simultaneous stream buffers, and 24 MiB for outgoing response permits (16 MiB) and transient parsed metadata/coverage/directory overhead (8 MiB). Source-record verification is already reserved inside the shared 32 MiB pool. Reserve a further 22 MiB for the Worker runtime, stacks and unmodeled allocation overhead. Total modeled envelope: **95 MiB**, below the 96 MiB local surrogate gate and the 128 MiB platform limit. Decoded object estimates are assumptions; the profile must validate them. Cache capacity is a ceiling, not a promise that every archive remains resident. Arbitrary adversarial payloads must hit resource limits; the measured supported-workload envelope is not a universal heap bound.
+For 20 concurrent requests, the modeled Worker footprint is **95 MiB** (below
+the 96 MiB local test gate and 128 MiB Cloudflare Workers limit):
 
-Local memory experiments sample `Runtime.getHeapUsage` every 100 ms without forced GC while load runs. Record allocated JavaScript heap, backing storage and embedder heap where available. This is a sampled **local workerd surrogate**, not deployed-isolate peak memory; disclose unavailable metrics. Keep experiment code and raw measurements in ignored output directories.
+- 17 MiB caches (pointer, manifest, coverage, PMTiles directories)
+- 32 MiB active stream and verification buffers
+- 16 MiB outgoing response reservations
+- 8 MiB transient parsed metadata and directory structures
+- 22 MiB Worker runtime and stack headroom
 
-## Runtime and external load checks
+## Runtime and load checks
 
-The ordinary `pnpm test` suite includes a disposable local R2/workerd test: eight overlapping requests must share one R2 read and complete when the initiating client disconnects. It never accesses a remote bucket.
+`pnpm test` includes a local `workerd` coalescing test verifying that 8
+concurrent requests share a single R2 read and complete if the initiating client
+disconnects.
 
-For live investigations, record first-observed, warm, conditional, outside-coverage and unknown-build behavior. First observed does not imply a fresh isolate. The per-request `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`, `X-Av-Coalesced` and `X-Av-Response-Cache` headers expose actual serving work. `Server-Timing: worker` is elapsed time including I/O, not CPU. Enable `AV_REQUEST_METRICS=true` for aggregate structured request logs; application logs omit point coordinates and use coarse route categories. Cloudflare request logs and traces remove query strings.
+Response headers `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`,
+`X-Av-Coalesced`, `X-Av-Response-Cache`, and `Server-Timing: worker` report
+per-request storage and cache activity. Set `AV_REQUEST_METRICS=true` for
+structured route logs.
 
-The declared sustained-load comparison uses five minutes per cache mode, 10 requests/s, 90% tile / 4% sample / 6% metadata and at most 20 concurrent requests. Each mode has 3,000 requests including 120 samples. Compare the same staging code with response caching disabled (`AV_RESPONSE_CACHE=off`) against the normal cache configuration, keeping metadata warm and preloading all 24 archives. This is a deployment binding; clients cannot bypass caches through queries or headers. Use at most two sample warmups and leave a minute between sample loads from the same IP. Record code revision and deployment configuration separately, and restore normal caching afterward.
-
-Record full response-body latency, cache evidence, failures, dropped scheduling slots and p50/p95. CPU requires platform telemetry. Local fixtures, sustained deployed load and actual Windy-host behavior establish different things; report their limits. One-time experiments are not additional CI or release-runner infrastructure.
+Sustained load tests run for 5 minutes per cache mode (`AV_RESPONSE_CACHE=on` vs
+`off`) at 10 req/s (90% tiles, 4% samples, 6% metadata, max 20 concurrent,
+3,000 total requests), recording p50/p95 latency, cache hit rates, and local
+`Runtime.getHeapUsage` samples every 100 ms.
