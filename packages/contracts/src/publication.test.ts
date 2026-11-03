@@ -33,7 +33,7 @@ describe('refined forecast publications', () => {
     expect(manifestSchema.safeParse({ ...manifest, patches: new Array(17).fill(manifest.patches![0]) }).success).toBe(false);
   });
 
-  it.each(['layers', 'path', 'channels', 'bytes', 'zoom', 'coverage', 'method', 'limit'] as const)('rejects a patch with mismatched %s before reading assets', defect => {
+  it.each(['layers', 'path', 'channels', 'bytes', 'zoom', 'coverage', 'method', 'method-hash', 'limit'] as const)('rejects a patch with mismatched %s before reading assets', defect => {
     const manifest = refined(), patch = manifest.patches![0];
     if (defect === 'layers') patch.layers.push('usable-lift-agl');
     if (defect === 'path') patch.samples.key = manifest.samples.key;
@@ -42,6 +42,7 @@ describe('refined forecast publications', () => {
     if (defect === 'zoom') patch.coverage.maxZoom--;
     if (defect === 'coverage') patch.coverage.maskKey = manifest.coverage.maskKey;
     if (defect === 'method') patch.method.id = manifest.method.id;
+    if (defect === 'method-hash') patch.method.hash = 'e'.repeat(64);
     if (defect === 'limit') patch.descriptors.maxSampleValues = 1;
     expect(() => validateArtifactRecords(manifest)).toThrow(/refinement/i);
   });

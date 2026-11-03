@@ -2,9 +2,14 @@ import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { MODEL_IDS, getProduct, manifestSchema } from '@av/contracts';
+import { MODEL_IDS, getProduct, manifestSchema, sampleResponseSchema, setBit, type CoverageMask } from '@av/contracts';
+import { prepareSamplePackLayout } from '@av/forecast';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
+import { readCoverage, writeCoverage } from '../apps/batch/src/coverage.js';
+import { createSamplePackBuilder } from '../apps/batch/src/sample-pack.js';
+import { fixturePatch } from '../tests/forecast-fixture.js';
 import { generateOfflineFixture } from './dev-fixture.js';
 import { openLocalPreviewStore, seedLocalBuild, type LocalPreviewStore } from './sample-preview.js';
 
@@ -30,6 +35,31 @@ async function fixture() {
   const manifestPath = join(root, relativeManifest), persistTo = join(root, 'state');
   const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
   return { root, manifest, manifestPath, persistTo };
+}
+
+async function refinedFixture() {
+  const local = await fixture(), patch = fixturePatch(local.manifest);
+  patch.grid = { ...patch.grid, kind: 'lambert-conformal', centralMeridianDeg: -100, latitudeOfOriginDeg: 40,
+    standardParallel1Deg: 40, standardParallel2Deg: 40, x0M: -1000, y0M: 1000, dxM: 1000, dyM: -1000, wrapLongitude: false };
+  patch.descriptors.bounds = [-100.008, 39.992, -99.992, 40.008];
+  patch.geometry = { type: 'Polygon', coordinates: [[[-100.008, 39.992], [-99.992, 39.992], [-99.992, 40.008], [-100.008, 40.008], [-100.008, 39.992]]] };
+  const baseMask = await readCoverage(local.root, local.manifest.coverage.hash);
+  const mask: CoverageMask = { grid: patch.grid, bounds: patch.descriptors.bounds, output: new Uint8Array(2),
+    halo: Uint8Array.of(255, 1), tiles: baseMask.tiles, maxZoom: baseMask.maxZoom };
+  setBit(mask.output, 4); setBit(mask.halo, 4, false);
+  const hash = await writeCoverage(local.root, mask, { coverageId: patch.coverage.id,
+    coverageDescription: 'Synthetic refinement with one output cell and interpolation halo', bounds: patch.descriptors.bounds, supportHaloCells: 1 });
+  patch.coverage = { ...patch.coverage, hash, maskKey: `coverage/${hash}/manifest.json` };
+  const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo), pack = createSamplePackBuilder(layout, local.manifest.frames.length);
+  try {
+    for (let channel = 0; channel < local.manifest.frames.length; channel++) {
+      pack.writeChannel(channel, { values: new Float32Array(9).fill(900 + channel * 100), flags: new Uint8Array(9) });
+    }
+    patch.samples = { ...patch.samples, storedCells: layout.storedCells, ...await pack.finish(join(local.root, patch.samples.key)) };
+  } finally { pack.close(); }
+  local.manifest = manifestSchema.parse({ ...local.manifest, version: 4, patches: [patch] });
+  await writeFile(local.manifestPath, JSON.stringify(local.manifest));
+  return local;
 }
 
 function memoryStore() {
@@ -127,5 +157,50 @@ describe('offline fixture and local seeding', () => {
       expect(await reopened.head('catalog/gfs/latest.json')).not.toBeNull();
       expect((await reopened.head(local.manifest.samples.key))?.size).toBe(local.manifest.samples.bytes);
     } finally { await reopened.dispose(); }
+  });
+
+  it('seeds and repairs every refined coverage dependency before updating the local pointer', async () => {
+    const local = await refinedFixture(), memory = memoryStore(), patch = local.manifest.patches![0];
+    await seedLocalBuild(local, memory.open);
+    const prefix = `coverage/${patch.coverage.hash}`;
+    for (const name of ['manifest.json', 'output.bin', 'halo.bin', 'tiles.bin']) {
+      expect(memory.objects.has(`${prefix}/${name}`)).toBe(true);
+      expect(memory.writes.indexOf(`${prefix}/${name}`)).toBeLessThan(memory.writes.indexOf(relativeManifest));
+    }
+    const missing = `${prefix}/output.bin`;
+    memory.objects.delete(missing); memory.writes.length = 0;
+    await seedLocalBuild(local, memory.open);
+    expect(memory.writes).toEqual([missing, 'catalog/gfs/latest.json']);
+  });
+
+  it.each(['missing', 'corrupt', 'mismatched-bounds'])('rejects %s patch coverage before opening local R2', async problem => {
+    const local = await refinedFixture(), memory = memoryStore(), patch = local.manifest.patches![0];
+    if (problem === 'missing') await rm(join(local.root, patch.coverage.maskKey));
+    else if (problem === 'corrupt') await writeFile(join(local.root, `coverage/${patch.coverage.hash}/output.bin`), Uint8Array.of(0, 0));
+    else { patch.descriptors.bounds[0] -= 0.001; await writeFile(local.manifestPath, JSON.stringify(local.manifest)); }
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow(/ENOENT|bitset|binding/);
+    expect(memory.open).not.toHaveBeenCalled();
+  });
+
+  it('serves a fine-zone sample through the real local Worker after seeding a v4 build', async () => {
+    const local = await refinedFixture();
+    await seedLocalBuild(local);
+    const { unstable_dev } = await import('wrangler');
+    const worker = await unstable_dev(fileURLToPath(new URL('../apps/api/test/fixture-worker.ts', import.meta.url)), {
+      config: fileURLToPath(new URL('../apps/api/wrangler.json', import.meta.url)),
+      local: true, ip: '127.0.0.1', port: 0, inspectorPort: 0, persist: true, persistTo: local.persistTo,
+      vars: { AV_LOCAL_DEVELOPMENT: 'true' }, envFiles: [], logLevel: 'error',
+      experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, enableContainers: false }
+    });
+    try {
+      const response = await fetch(`http://${worker.address}:${worker.port}/v1/models/gfs/runs/${local.manifest.buildId}/sample?lat=40&lon=-100&frame=all&layers=usable-lift-agl,precip-rate`);
+      expect(response.status).toBe(200);
+      const result = sampleResponseSchema.parse(await response.json());
+      expect(result.frames.map(frame => frame.layers['usable-lift-agl'])).toEqual([900, 1000].map(value => ({
+        value, status: 'valid', support: 0, interpolated: false, patchId: local.manifest.patches![0].id
+      })));
+      expect(result.frames[0].layers['precip-rate'].value).toBe(2.75);
+      expect(result.frames[0].layers['precip-rate'].patchId).toBeUndefined();
+    } finally { await worker.stop(); }
   });
 });

@@ -226,7 +226,7 @@ export function validateArtifactRecords(manifest: Manifest): void {
       if (!spec || spec.id !== layer || !patch.descriptors.palettes.some(p => p.id === spec.palette)) throw new Error('Incomplete refinement descriptors');
       selectedMethods.add(spec.methodId);
     }
-    if (patch.method.id !== [...selectedMethods].join('+')) throw new Error('Refinement method identity mismatch');
+    if (patch.method.id !== [...selectedMethods].join('+') || patch.method.hash !== manifest.method.hash) throw new Error('Refinement method identity mismatch');
   }
   for (const artifact of manifest.artifacts) {
     if (!frames.has(artifact.frame)) throw new Error(`unknown artifact frame ${artifact.frame}`);
