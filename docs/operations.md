@@ -14,7 +14,7 @@ Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
   `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` scoped to that environment's
   bucket.
 - Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
-  `TERRAIN_CATALOG_REF` to enable [terrain refinement](#terrain-data). Bucket names come
+  `TERRAIN_CATALOG_REF` to select a [terrain catalog](#terrain-data). Bucket names come
   from [wrangler.json](../apps/api/wrangler.json).
 
 Create the R2 bucket (with `r2.dev` disabled) and Cloudflare Pages project once
@@ -118,16 +118,19 @@ to import and verify the Copernicus GLO-90 catalog in R2. See the
 [terrain guide](../apps/batch/src/terrain/README.md) for CLI commands and grid
 preparations.
 
-Deploy compatible API and clients, then set the environment's `TERRAIN_CATALOG_REF`
-variable to the complete JSON
-reference in the import's `terrain-catalog-ref.json` artifact. The catalog and
-tiles must exist in that environment's bucket. Both weather models use this pin
-and the shared [polygon configuration](../packages/contracts/config/refinement.json).
+Production forecasts use the catalog pinned in the
+[model workflow](../.github/workflows/forecast-model.yml). Both weather models
+use this catalog and the shared
+[polygon configuration](../packages/contracts/config/refinement.json).
 
-The Forecast workflow's `terrain-catalog-ref` input overrides the default for
-one run and reaches only the preparation job. Without a catalog setting,
-forecasts use their native grids. A supplied missing or corrupt catalog fails
-preparation. Empty or out-of-domain zone configurations keep native output.
+The Forecast workflow's `terrain-catalog-ref` input overrides the environment's
+`TERRAIN_CATALOG_REF`, which overrides the production pin. For staging, set the
+variable to the complete JSON reference in that environment's import artifact,
+`terrain-catalog-ref.json`. The catalog and tiles must exist in the selected
+environment's bucket. Catalog selection reaches only the preparation job;
+workers use the frozen plan. Staging forecasts without a catalog use native
+grids. A supplied missing or corrupt catalog fails preparation. Empty or
+out-of-domain zone configurations keep native output.
 
 The existing `terrain-inputs` model map remains available for staging prepared
 native-grid arrays alongside configured refinements.
