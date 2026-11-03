@@ -281,14 +281,17 @@ function startPreview(): void {
     frameSelect.disabled = false;
   }
 
-  function populateLayers(buildValue: PinnedBuild): void {
+  function populateLayers(buildValue: PinnedBuild, preferredLayer?: string): void {
     layerSelect.replaceChildren(...buildValue.manifest.layers.map(layer => new Option(buildValue.manifest.descriptors.layers[layer].label, layer)));
-    layerSelect.value = buildValue.manifest.layers[0] ?? '';
+    layerSelect.value = preferredLayer && buildValue.manifest.layers.includes(preferredLayer as LayerId)
+      ? preferredLayer
+      : (buildValue.manifest.layers[0] ?? '');
     layerSelect.disabled = false;
   }
 
   async function loadModel(model: ModelId): Promise<void> {
     if (mapFailed) return;
+    const previousLayer = layerSelect.value;
     disposeExpiry();
     if (expiryTimer !== null) {
       window.clearInterval(expiryTimer);
@@ -324,7 +327,7 @@ function startPreview(): void {
       const next = await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
-      populateLayers(next);
+      populateLayers(next, previousLayer);
       populateFrames(next);
       coverageNote.textContent = coverageSummaryText(next);
       renderBuildDiagnostics(meta, next);

@@ -322,8 +322,10 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
-it('loads ICON layers and hourly frames directly from its published manifest', async () => {
+it('loads ICON layers and hourly frames directly from its published manifest and preserves a shared layer', async () => {
   await start();
+  ui('layer').value = 'usable-lift-agl';
+  ui('layer').dispatchEvent(new Event('change'));
   manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...ICON_EU_PRODUCT.layers],
     grid: ICON_EU_PRODUCT.grid, descriptors: createProductDescriptors(ICON_EU_PRODUCT),
     frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
@@ -334,6 +336,7 @@ it('loads ICON layers and hourly frames directly from its published manifest', a
   ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
   expect(ui('layer').children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
+  expect(ui('layer').value).toBe('usable-lift-agl');
   expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f007']);
   expect(fetchMock.mock.calls.at(-1)![0]).toContain('/models/icon-eu/latest?');
 });

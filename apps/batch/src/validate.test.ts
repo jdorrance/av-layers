@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, GFS_GRID, GFS_PRODUCT, ICON_EU_PRODUCT, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
-import { packCells, prepareSamplePackLayout, sampleGrid, unpackCells } from '@av/forecast';
+import { packCells, prepareSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
 import { describeCoverage, writeCoverage } from './coverage.js';
 import type { NormalizedFrame } from '@av/forecast';
@@ -37,7 +37,8 @@ describe('build provenance validation', () => {
     manifest.createdAt = manifest.cycle;
     manifest.expiresAt = new Date(Date.parse(manifest.createdAt) + 7 * 86400000).toISOString();
     const cycleMs = Date.parse(manifest.cycle);
-    manifest.frames = product.frameHours.map(hour => ({
+    const expectedHours = resolveProductFrameHours(product, mask, manifest.cycle);
+    manifest.frames = expectedHours.map(hour => ({
       id: `f${String(hour).padStart(3, '0')}`,
       validTime: new Date(cycleMs + hour * 3600000).toISOString(),
       intervalStart: new Date(cycleMs + (hour - product.intervalHours) * 3600000).toISOString(),
@@ -138,6 +139,20 @@ describe('build provenance validation', () => {
       await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.samples.key) });
       manifest.method.id = 'unrelated-method-v1';
       await expect(validateBuild(root, manifest, mask)).rejects.toThrow('published descriptor snapshots');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects unfiltered night frames for a regional-daylight product', async () => {
+    const { root, manifest, mask } = await fixture(ICON_EU_PRODUCT);
+    try {
+      const cycleMs = Date.parse(manifest.cycle);
+      manifest.frames = ICON_EU_PRODUCT.frameHours.map(hour => ({
+        id: `f${String(hour).padStart(3, '0')}`,
+        validTime: new Date(cycleMs + hour * 3600000).toISOString(),
+        intervalStart: new Date(cycleMs + (hour - ICON_EU_PRODUCT.intervalHours) * 3600000).toISOString(),
+        intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
+      }));
+      await expect(validateBuild(root, manifest, mask)).rejects.toThrow('Incomplete frame or layer set');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

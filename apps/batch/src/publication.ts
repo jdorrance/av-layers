@@ -49,7 +49,11 @@ export function assertUsefulHorizon(manifest: Manifest, now: number): void {
   if (!product) throw new Error('No trusted publication recipe');
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
   const horizonHours = (Math.max(...manifest.frames.map(frame => Date.parse(frame.validTime))) - now) / 3600000;
-  if (cycleAgeHours < 0 || cycleAgeHours > product.freshness.maxCycleAgeHours || horizonHours < product.freshness.minHorizonHours) throw new Error('Build lacks the required useful forecast horizon');
+  const daylightFiltered = product.capabilities.daylightFrames === 'regional-daylight';
+  const coverageHours = daylightFiltered ? product.frameHours.at(-1)! - cycleAgeHours : horizonHours;
+  if (cycleAgeHours < 0 || cycleAgeHours > product.freshness.maxCycleAgeHours || coverageHours < product.freshness.minHorizonHours || horizonHours <= 0) {
+    throw new Error('Build lacks the required useful forecast horizon');
+  }
 }
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild }): Promise<void> {

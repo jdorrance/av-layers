@@ -49,8 +49,14 @@ export function forecastWorkflowFindings(runs: readonly ObservedWorkflowRun[], e
   const latest = latestCompletedForecast(runs, environment, now, model);
   if (!latest) return [];
   if (latest.display_title === `Forecast ${environment} all`) {
-    const jobs = latest.jobs?.filter(job => job.name.startsWith(`Forecast ${model} / `));
-    if (!jobs?.length || jobs.some(job => job.status !== 'completed')) return [`workflow-observation (forecast): missing completed ${model} jobs: ${latest.html_url}`];
+    if (!latest.jobs) return [`workflow-observation (forecast): missing completed ${model} jobs: ${latest.html_url}`];
+    const jobs = latest.jobs.filter(job => job.name.startsWith(`Forecast ${model} / `));
+    if (!jobs.length) {
+      return [latest.conclusion && latest.conclusion !== 'success'
+        ? `publisher-or-cleanup-failure: ${latest.html_url}`
+        : `workflow-observation (forecast): missing completed ${model} jobs: ${latest.html_url}`];
+    }
+    if (jobs.some(job => job.status !== 'completed')) return [`workflow-observation (forecast): missing completed ${model} jobs: ${latest.html_url}`];
     if (jobs.some(job => job.conclusion !== 'success' && job.conclusion !== 'skipped')) return [`publisher-or-cleanup-failure: ${latest.html_url}`];
     // A successful plan may skip an already-published cycle; a resume may skip planning.
     if (!jobs.some(job => job.conclusion === 'success')) return [`workflow-observation (forecast): no completed ${model} work: ${latest.html_url}`];
@@ -73,12 +79,24 @@ function workflowRuns(raw: unknown): ObservedWorkflowRun[] {
 
 async function observeModelJobs(run: ObservedWorkflowRun, repository: string): Promise<void> {
   if (!Number.isSafeInteger(run.id) || run.id! < 1) throw new Error('Invalid forecast run ID');
-  const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
-  const result = JSON.parse(stdout) as { jobs?: ObservedWorkflowJob[]; total_count?: number };
-  const jobs = result.jobs;
-  if (!Array.isArray(jobs) || jobs.length > 100 || result.total_count !== jobs.length
-      || jobs.some(job => !job || typeof job.name !== 'string' || typeof job.status !== 'string' || (job.conclusion !== null && typeof job.conclusion !== 'string'))) throw new Error('Incomplete or invalid forecast job observation');
-  run.jobs = jobs;
+  const collected: ObservedWorkflowJob[] = [];
+  for (let page = 1; page <= 5; page++) {
+    const suffix = page === 1 ? '' : `&page=${page}`;
+    const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100${suffix}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+    const result = JSON.parse(stdout) as { jobs?: ObservedWorkflowJob[]; total_count?: number };
+    const jobs = result.jobs;
+    if (!Array.isArray(jobs) || jobs.length > 100 || !Number.isSafeInteger(result.total_count) || result.total_count! < jobs.length || result.total_count! > 500
+        || jobs.some(job => !job || typeof job.name !== 'string' || typeof job.status !== 'string' || (job.conclusion !== null && typeof job.conclusion !== 'string'))) {
+      throw new Error('Incomplete or invalid forecast job observation');
+    }
+    collected.push(...jobs);
+    if (collected.length >= result.total_count! || jobs.length === 0) {
+      if (collected.length !== result.total_count) throw new Error('Incomplete or invalid forecast job observation');
+      run.jobs = collected;
+      return;
+    }
+  }
+  throw new Error('Incomplete or invalid forecast job observation');
 }
 
 /** Read-only checks. A failed workflow is the alert; successful unchanged checks send no messages. */

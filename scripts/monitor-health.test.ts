@@ -59,10 +59,17 @@ describe('forecast health decisions', () => {
       const published = computeFreshness(manifest, Date.parse(manifest.createdAt));
       expect(published.horizonRemainingSeconds).toBeGreaterThanOrEqual(product.freshness.minHorizonHours * 3600);
       expect(() => assertUsefulHorizon(manifest, Date.parse(manifest.createdAt))).not.toThrow();
-      const admissionDeadline = Date.parse(published.latestValidTime) - product.freshness.minHorizonHours * 3600000;
+      const admissionDeadline = Math.min(
+        Date.parse(cycle) + (product.frameHours.at(-1)! - product.freshness.minHorizonHours) * 3600000,
+        Date.parse(published.latestValidTime) - 1
+      );
       expect(() => assertUsefulHorizon(manifest, admissionDeadline)).not.toThrow();
       expect(() => assertUsefulHorizon(manifest, admissionDeadline + 1)).toThrow('useful forecast horizon');
-      for (const age of [13.5, 17.5]) expect(forecastFindings(manifest, Date.parse(cycle) + age * 3600000)).toEqual([]);
+      expect(() => assertUsefulHorizon(manifest, Date.parse(published.latestValidTime))).toThrow('useful forecast horizon');
+      for (const age of [13.5, 17.5]) {
+        expect(() => assertUsefulHorizon(manifest, Date.parse(cycle) + age * 3600000)).not.toThrow();
+        expect(forecastFindings(manifest, Date.parse(cycle) + age * 3600000)).toEqual([]);
+      }
       expect(forecastFindings(manifest, Date.parse(published.latestValidTime))).toContain('exhausted-horizon: no published forecast times remain');
     }
   });
@@ -141,10 +148,12 @@ describe('maintenance and forecast workflow observations', () => {
     const all = run({ display_title: 'Forecast production all', event: 'schedule', jobs: [...modelJobs('gfs', 'success', true), ...modelJobs('icon-eu', 'failure')] });
     expect(forecastScheduleFindings([all], now, 'gfs')).toEqual([]);
   });
-  it('keeps missing model work visible instead of trusting an all-run conclusion', () => {
+  it('keeps missing model work visible instead of trusting an all-run conclusion, and reports pre-matrix failures as publisher failures', () => {
     const all = run({ display_title: 'Forecast production all', conclusion: 'success', jobs: modelJobs('gfs', 'success') });
     expect(forecastWorkflowFindings([all], 'production', now, 'icon-eu').join(';')).toContain('workflow-observation');
     expect(forecastWorkflowFindings([{ ...all, jobs: undefined }], 'production', now).join(';')).toContain('workflow-observation');
+    const preMatrixFailure = run({ display_title: 'Forecast production all', conclusion: 'failure', jobs: [{ name: 'select', status: 'completed', conclusion: 'failure' }] });
+    expect(forecastWorkflowFindings([preMatrixFailure], 'production', now, 'icon-eu')).toEqual([`publisher-or-cleanup-failure: ${preMatrixFailure.html_url}`]);
     const skipped = { ...all, jobs: [{ name: 'Forecast icon-eu / Publish icon-eu', status: 'completed', conclusion: 'skipped' }] };
     expect(forecastWorkflowFindings([skipped], 'production', now, 'icon-eu').join(';')).toContain('no completed icon-eu work');
   });
