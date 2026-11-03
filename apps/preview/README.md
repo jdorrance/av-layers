@@ -18,6 +18,12 @@ For the separate app command, the API must already have forecast data. Open the
 URL Vite prints, choose a layer and time, then click the map and select
 **Sample clicked point**.
 
+The map loads the latest forecast when opened or when a model is selected.
+Reload the browser page to see a new publication. Forecast data comes from the
+API, so publishing it does not require a Pages deployment. The API's
+[latest-pointer cache](../../docs/serving-budgets.md) can delay discovery by up to
+15 seconds.
+
 `AV_API_BASE` defaults to `http://localhost:8787` and is also used when building.
 Set `VITE_OFFLINE_FIXTURE=true` when using generated test data; this shows a test
 label and removes external basemap requests. See [local development](../../docs/development.md).

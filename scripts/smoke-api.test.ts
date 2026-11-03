@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { manifestSchema } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
-import { probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
+import { verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -108,6 +108,23 @@ describe('Worker readiness after deployment', () => {
 });
 
 
+it('bounds the complete publication check even when nested readiness retries keep failing', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error('Probe deadline reached')), milliseconds);
+    return controller.signal;
+  });
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response('offline', { status: 503 }));
+  const result = expect(verifyPublishedForecast({ baseUrl: 'https://api.example', manifest, fetchImpl })).rejects.toThrow('Probe deadline reached');
+  await vi.advanceTimersByTimeAsync(60_000);
+  await result;
+  const calls = fetchImpl.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(fetchImpl).toHaveBeenCalledTimes(calls);
+});
+
 it('rejects oversized declared or streamed probe bodies and cancels the stream', async () => {
   const cancel = vi.fn();
   const declared = new Response(new ReadableStream({ cancel }), { headers: { 'content-length': '17' } });
@@ -124,6 +141,10 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   const latest = vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
   const sample = vi.spyOn(ApiClient.prototype, 'sample').mockResolvedValue({ model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt, frames: [] });
   let corruptTile = false;
+  await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl: async input => {
+    const path = new URL(String(input)).pathname;
+    return Response.json(path === '/healthz' ? { ok: true } : { models: [{ model: manifest.model, available: true }] });
+  }, expectedModels: [manifest.model, 'another-model'] })).rejects.toThrow('Catalog omitted');
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true, deploymentId });
@@ -134,13 +155,22 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   });
   const options = { baseUrl: 'https://api.example', model: manifest.model, expectedDeploymentId: deploymentId, fetchImpl };
   expect(await probeApi(options)).toBe(manifest);
+  await expect(probeApi({ ...options, expectedBuild: { ...manifest, buildId: 'newer-build' } })).rejects.toThrow('Latest API build');
+  await expect(probeApi({ ...options, expectedBuild: { ...manifest, frames: manifest.frames.slice(1) } })).rejects.toThrow('frame or layer');
+  await expect(probeApi({ ...options, expectedBuild: { ...manifest, layers: ['usable-lift-agl'] } })).rejects.toThrow('frame or layer');
+  latest.mockResolvedValueOnce({ ...build, manifest: { ...manifest, buildId: 'previous-build' } });
+  await expect(verifyPublishedForecast({ ...options, manifest, retries: 1, delayMs: 0 })).resolves.toBeUndefined();
+  const cancelled = AbortSignal.abort(new Error('Publication interrupted'));
+  const calls = fetchImpl.mock.calls.length;
+  await expect(verifyPublishedForecast({ ...options, manifest, signal: cancelled })).rejects.toThrow('Publication interrupted');
+  expect(fetchImpl.mock.calls.length).toBe(calls);
   expect(latest).toHaveBeenCalledWith(manifest.model, { requireLive: true });
-  expect(sample).toHaveBeenCalledWith(build, { lat: 32.9, lon: -117.25, frames: [manifest.frames[0].id] });
+  expect(sample).toHaveBeenCalledWith(build, { lat: (manifest.descriptors.bounds[1] + manifest.descriptors.bounds[3]) / 2, lon: (manifest.descriptors.bounds[0] + manifest.descriptors.bounds[2]) / 2, frames: [manifest.frames[0].id], signal: undefined });
   corruptTile = true;
   const observeManifest = vi.fn();
   await expect(probeApi({ ...options, requireLive: false, observeManifest })).rejects.toThrow('not WebP');
   expect(observeManifest).toHaveBeenCalledWith(manifest);
-  expect(latest).toHaveBeenLastCalledWith(manifest.model, { requireLive: false });
+  expect(latest).toHaveBeenLastCalledWith(manifest.model, { requireLive: false, signal: undefined });
   sample.mockRejectedValueOnce(new Error('sample unavailable'));
   await expect(probeApi(options)).rejects.toThrow('sample unavailable');
 });

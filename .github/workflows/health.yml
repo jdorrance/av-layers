@@ -11,18 +11,41 @@ on:
         required: true
       model:
         description: Registered forecast model
-        type: string
-        default: gfs
+        type: choice
+        options: [all, gfs, icon-eu]
+        default: all
         required: true
 permissions:
   contents: read
   actions: read
-concurrency:
-  group: health-${{ inputs.environment || 'production' }}
-  cancel-in-progress: false
 jobs:
-  check:
+  select:
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      models: ${{ steps.models.outputs.models }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Select forecast models
+        id: models
+        env:
+          MODEL_SELECTION: ${{ inputs.model || 'all' }}
+        run: node --import tsx scripts/workflow-models.ts
+  check:
+    name: Check ${{ matrix.model }}
+    needs: select
+    strategy:
+      fail-fast: false
+      matrix:
+        model: ${{ fromJSON(needs.select.outputs.models) }}
+    concurrency:
+      group: health-${{ inputs.environment || 'production' }}-${{ matrix.model }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: ${{ inputs.environment || 'production' }}
@@ -37,12 +60,12 @@ jobs:
           TARGET_ENV: ${{ inputs.environment || 'production' }}
           API_BASE_URL: ${{ vars.API_BASE_URL }}
           GH_TOKEN: ${{ github.token }}
-          MODEL: ${{ inputs.model || 'gfs' }}
+          MODEL: ${{ matrix.model }}
         run: pnpm health
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: health-${{ inputs.environment || 'production' }}-${{ github.run_id }}
+          name: health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}
           overwrite: true
           path: output/health/
           retention-days: 14

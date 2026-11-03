@@ -55,28 +55,35 @@ for the [forecast calculations](../../packages/forecast/README.md).
 
 ## Parallel builds
 
-The hosted [forecast workflow](../../.github/workflows/forecast.yml) resolves one
-cycle and writes a plan before starting workers. Each worker processes a group
-of hours using the same acquisition, calculation, packing, and rendering code
-as a sequential build.
+The hosted [forecast workflow](../../.github/workflows/forecast.yml) accepts
+`all`, `gfs`, or `icon-eu`. It selects models from the product registry and runs
+them concurrently as GitHub runners and account limits allow. Each uses the same
+[model workflow](../../.github/workflows/forecast-model.yml), with its own cycle,
+daylight-filtered hours, and up to four parallel hour batches. Job names list
+the included hours; the planning summary includes their UTC valid times.
 
 ```mermaid
 flowchart TB
-  plan["Plan: cycle, frames,<br/>coverage and build identity"]
-  plan --> a["Worker: hour group A"]
-  plan --> b["Worker: hour group B"]
-  plan --> rest["Other planned groups"]
-  a --> assembly["Check receipts and hashes;<br/>merge point data"]
-  b --> assembly
-  rest --> assembly
-  assembly --> validate["Validate complete build"]
-  validate --> upload["Upload and verify files in R2"]
-  upload --> latest["Conditionally update latest-build pointer"]
+  selection["Select one model or all registered models"]
+  selection --> gfs["GFS: resolve cycle and hours"]
+  selection --> icon["ICON-EU: resolve cycle and daylight hours"]
+  gfs --> gfsBatches["Parallel GFS hour batches"]
+  icon --> iconBatches["Parallel ICON-EU hour batches"]
+  gfsBatches --> gfsPublish["Assemble, validate, and publish GFS"]
+  iconBatches --> iconPublish["Assemble, validate, and publish ICON-EU"]
+  gfsPublish --> api["Verify each model's new build through the API"]
+  iconPublish --> api
+  api --> pages["Pages reads each published manifest and hour list"]
 ```
 
-Hours run sequentially within each worker; the planned groups run in parallel.
-Every worker opens and closes its own provider session, including any earlier
-source fields needed for interval calculations. Finalization rejects missing,
-extra, or mismatched groups. The [capacity checks](src/capacity.ts) and
-[parallel planner](src/parallel.ts) bound the work; [operations](../../docs/operations.md)
-covers publication and recovery.
+Hours run sequentially within a batch. Each worker opens and closes its own
+provider session, including any earlier source fields needed for interval
+calculations. Finalization rejects missing, extra, or mismatched batches. One
+model's failure does not cancel the other model's work.
+
+A model holds its environment/model lock through planning, computation,
+publication, and cleanup. A manual single-model run, an `all` run, and maintenance
+cannot publish that same model simultaneously. Artifacts are named by model and
+plan, so batches from different models or attempts cannot be mixed. The
+[capacity checks](src/capacity.ts) and [parallel planner](src/parallel.ts) bound
+the work; [operations](../../docs/operations.md) covers publication and recovery.

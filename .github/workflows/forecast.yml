@@ -1,5 +1,5 @@
 name: Forecast
-run-name: Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }}
+run-name: Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}
 on:
   schedule:
     - cron: '17 5,17 * * *'
@@ -8,18 +8,17 @@ on:
       environment:
         description: Target Cloudflare environment
         type: choice
-        options:
-          - staging
-          - production
+        options: [staging, production]
         default: production
         required: true
       model:
         description: Forecast model
-        type: string
-        default: gfs
+        type: choice
+        options: [all, gfs, icon-eu]
+        default: all
         required: true
       cycle:
-        description: Optional upstream cycle (ISO 8601 UTC); empty discovers the latest admissible run
+        description: Optional upstream UTC cycle; empty discovers each model's latest run
         type: string
         default: ''
       allow-same-cycle:
@@ -27,169 +26,50 @@ on:
         type: boolean
         default: false
       resume-run-id:
-        description: Finished run with complete artifacts to resume or promote within six hours
+        description: Finished run with complete artifacts for every selected model
         type: string
         default: ''
       retain-full-artifacts:
-        description: Upload full binary tile/sample build output to GitHub Actions artifacts even when R2 publication succeeds
+        description: Retain complete forecast files even after successful R2 publication
         type: boolean
         default: false
 permissions:
   contents: read
   actions: read
-concurrency:
-  group: forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}
-  cancel-in-progress: false
-env:
-  GH_TOKEN: ${{ github.token }}
-  TARGET_ENV: ${{ inputs.environment || 'production' }}
-  MODEL: ${{ inputs.model || 'gfs' }}
-  CYCLE: ${{ inputs.cycle || '' }}
-  ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
-  RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
-  RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
 jobs:
-  prepare:
-    if: ${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}
+  select:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: ${{ inputs.environment || 'production' }}
+    timeout-minutes: 5
     outputs:
-      ready: ${{ steps.plan.outputs.ready }}
-      shards: ${{ steps.plan.outputs.shards }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      models: ${{ steps.models.outputs.models }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Admit cycle and plan forecast
-        id: plan
-        run: pnpm operations forecast-plan
-      - name: Share immutable build plan
-        uses: actions/upload-artifact@v4
-        if: steps.plan.outputs.ready == 'true'
-        with:
-          name: ${{ steps.plan.outputs.artifact }}
-          path: |
-            output/plan.json
-            output/coverage/
-          if-no-files-found: error
-          retention-days: 1
-      - name: Upload planning failure
-        uses: actions/upload-artifact@v4
-        if: failure() || cancelled()
-        with:
-          name: forecast-plan-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/failure.json
-          if-no-files-found: warn
-          retention-days: 7
-  shard:
-    needs: prepare
-    if: needs.prepare.outputs.ready == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+      - name: Select forecast models
+        id: models
+        env:
+          MODEL_SELECTION: ${{ inputs.model || 'all' }}
+        run: node --import tsx scripts/workflow-models.ts
+  forecast:
+    name: Forecast ${{ matrix.model }}
+    needs: select
     strategy:
       fail-fast: false
-      max-parallel: 4
       matrix:
-        shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
-    env:
-      SHARD_ID: ${{ matrix.shard }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact }}
-          path: output
-      - name: Build forecast shard
-        run: pnpm operations forecast-shard
-      - name: Upload completed shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact }}-shard-${{ matrix.shard }}
-          overwrite: true
-          path: |
-            output/builds/
-            output/shards/
-          if-no-files-found: error
-          retention-days: 1
-      - name: Upload shard diagnostics
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: forecast-shard-records-${{ env.MODEL }}-${{ github.run_id }}-${{ matrix.shard }}
-          overwrite: true
-          path: |
-            output/shards/*/*.json
-            output/failure.json
-          if-no-files-found: warn
-          retention-days: 7
-  build-publish:
-    needs: [prepare, shard]
-    if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (inputs['resume-run-id'] || (needs.prepare.outputs.ready == 'true' && needs.shard.result == 'success')) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    environment: ${{ inputs.environment || 'production' }}
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - name: Download build plan
-        uses: actions/download-artifact@v4
-        if: ${{ !inputs['resume-run-id'] }}
-        with:
-          name: ${{ needs.prepare.outputs.artifact }}
-          path: output
-      - name: Download forecast shards
-        uses: actions/download-artifact@v4
-        if: ${{ !inputs['resume-run-id'] }}
-        with:
-          pattern: ${{ needs.prepare.outputs.artifact }}-shard-*
-          merge-multiple: true
-          path: output
-      - name: Publish forecast
-        run: pnpm operations forecast
-      - name: Upload build records
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: forecast-receipts-${{ env.MODEL }}-${{ github.run_id }}
-          overwrite: true
-          path: |
-            output/builds/*/*/manifest.json
-            output/builds/*/*/provenance.json
-            output/builds/*/*/performance.json
-            output/builds/*/*/publication.json
-            output/builds/*/*/maintenance.json
-            output/failure.json
-            output/builds/*/*/progress.json
-            output/builds/*/*/failure.json
-          if-no-files-found: warn
-          retention-days: 7
-      - name: Upload full build artifacts on failure or explicit request
-        uses: actions/upload-artifact@v4
-        if: ${{ failure() || cancelled() || env.RETAIN_FULL_ARTIFACTS == 'true' }}
-        with:
-          name: forecast-${{ env.MODEL }}-${{ github.run_id }}
-          overwrite: true
-          path: |
-            output/builds/
-            output/coverage/
-          if-no-files-found: warn
-          retention-days: 7
+        model: ${{ fromJSON(needs.select.outputs.models) }}
+    concurrency:
+      group: forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}
+      cancel-in-progress: false
+    uses: ./.github/workflows/forecast-model.yml
+    with:
+      environment: ${{ inputs.environment || 'production' }}
+      model: ${{ matrix.model }}
+      cycle: ${{ inputs.cycle || '' }}
+      allow-same-cycle: ${{ inputs['allow-same-cycle'] || false }}
+      resume-run-id: ${{ inputs['resume-run-id'] || '' }}
+      retain-full-artifacts: ${{ inputs['retain-full-artifacts'] || false }}
+    secrets: inherit

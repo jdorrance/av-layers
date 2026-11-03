@@ -1,9 +1,9 @@
 # Development
 
 Run commands from the repository root. The alpha builder supports GFS and
-ICON-EU; the scheduled forecast workflow selects GFS. Local ICON-EU support does
-not establish a deployed forecast. See [status](status.md) for release evidence
-and [the project layout](architecture.md#workspace-map) for code ownership.
+ICON-EU. Scheduled forecasts select both models; manual runs can select either
+model or both. See [status](status.md) for release evidence and
+[the project layout](architecture.md#workspace-map) for code ownership.
 
 ## Setup
 

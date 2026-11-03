@@ -169,9 +169,8 @@ async function inputsFor(modelId: string): Promise<ForecastInputs> {
 async function readPlan(path: string): Promise<BuildPlan> {
   return planSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
 }
-export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<number[]> {
-  const plan = await createBuildPlan({ ...options, ...await inputsFor(modelId) });
-  return plan.groups.map((_, i) => i);
+export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<BuildPlan> {
+  return createBuildPlan({ ...options, ...await inputsFor(modelId) });
 }
 export async function buildForecastShard(planPath: string, shard: number, options: Pick<BuildOptions, 'out' | 'cacheDir' | 'signal'>): Promise<string> {
   const plan = await readPlan(planPath);

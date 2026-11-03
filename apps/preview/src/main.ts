@@ -192,7 +192,7 @@ function startPreview(): void {
   }
 
   function setControlsEnabled(enabled: boolean): void {
-    modelSelect.disabled = !enabled;
+    modelSelect.disabled = mapFailed || pendingModel !== null;
     layerSelect.disabled = !enabled;
     frameSelect.disabled = !enabled;
     opacityInput.disabled = !enabled;
@@ -308,6 +308,11 @@ function startPreview(): void {
     horizonNotice.hidden = true;
     horizonNotice.textContent = '';
     build = null;
+    selectedFrame = null;
+    layerSelect.replaceChildren();
+    frameSelect.replaceChildren();
+    legend.replaceChildren();
+    meta.replaceChildren();
     clicked = null;
     setControlsEnabled(false);
     removeOverlay();
@@ -347,6 +352,7 @@ function startPreview(): void {
       if (loadAbort === requestAbort) {
         loadAbort = null;
         pendingModel = null;
+        modelSelect.disabled = mapFailed;
       }
     }
   }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { type Manifest } from '@av/contracts';
+import { createProductDescriptors, ICON_EU_PRODUCT, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
@@ -204,6 +204,9 @@ it('stops the previous freshness interval when a replacement load fails', async 
   expect(cancel).toHaveBeenCalledWith(interval);
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
   expect(vi.getTimerCount()).toBe(0);
+  expect(ui('model').disabled).toBe(false);
+  expect(ui('frame').children).toHaveLength(0);
+  expect(ui('frame').disabled).toBe(true);
 });
 
 it('allows retrying a point request interrupted by BFCache navigation', async () => {
@@ -317,4 +320,42 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
   expect(ui('series-button').disabled).toBe(true);
   expect(protocols.size).toBe(0);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('loads ICON layers and hourly frames directly from its published manifest', async () => {
+  await start();
+  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...ICON_EU_PRODUCT.layers],
+    grid: ICON_EU_PRODUCT.grid, descriptors: createProductDescriptors(ICON_EU_PRODUCT),
+    frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
+      validTime: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z`,
+      intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
+      intervalEnd: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z` }))
+  });
+  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
+  expect(ui('layer').children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
+  expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f007']);
+  expect(fetchMock.mock.calls.at(-1)![0]).toContain('/models/icon-eu/latest?');
+});
+
+it('lets a user switch back to GFS when ICON has no publication yet', async () => {
+  await start();
+  fetchMock.mockImplementation(async url => String(url).includes('/icon-eu/')
+    ? new Response(JSON.stringify({ detail: 'No publication available for icon-eu' }), { status: 503 }) : latest());
+  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('error').textContent).toContain('No publication available'));
+  expect(ui('model').disabled).toBe(false);
+  expect(ui('frame').children).toHaveLength(0);
+  ui('model').value = 'gfs'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('frame').disabled).toBe(false));
+  expect(ui('error').hidden).toBe(true);
+  expect(ui('frame').children.map(option => option.value)).toEqual(manifest.frames.map(frame => frame.id));
+});
+
+it('keeps the selected forecast without background requests on focus or elapsed time', async () => {
+  await start();
+  win.dispatchEvent(new Event('focus'));
+  doc.dispatchEvent(new Event('visibilitychange'));
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });

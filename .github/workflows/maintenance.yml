@@ -20,7 +20,8 @@ on:
         required: true
       model:
         description: Model pointer to maintain
-        type: string
+        type: choice
+        options: [gfs, icon-eu]
         default: gfs
         required: true
       build-id:

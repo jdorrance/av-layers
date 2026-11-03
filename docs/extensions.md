@@ -75,8 +75,13 @@ pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL
 The first three commands are offline. The proof and forecast download weather
 data. [capacity.ts](../apps/batch/src/capacity.ts) defines build limits; use
 measurements before raising them. Record source licensing and attribution in
-[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt). Registration makes a model
-selectable; the scheduled workflow continues to use GFS until changed explicitly.
+[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt). The scheduled workflow's
+`all` selection expands from the product registry. Update the static GitHub
+model dropdowns in forecast, health, and maintenance workflows when registering
+a model; [workflow tests](../scripts/workflow-models.test.ts) check them against
+the registry. The reusable model workflow and hour batching need no model-specific
+branches. Registration on main also enables scheduled production builds; collect
+local real-input evidence first, then record staging and production run results.
 
 ### Adapter output
 

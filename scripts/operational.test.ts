@@ -59,19 +59,22 @@ describe('real contract-shaped fixtures', () => {
 });
 
 describe('declarative workflows', () => {
-  it('retains shared writer serialization and environment-scoped credentials', () => {
-    expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }}");
+  it('scopes planning, publication and maintenance credentials to the selected environment', () => {
+    expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}");
     expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}");
-    for (const name of ['forecast.yml', 'maintenance.yml']) {
-      expect(record(workflow(name).concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}", 'cancel-in-progress': false });
-      const job = record(Object.values(record(workflow(name).jobs))[0]);
-      expect(job.environment).toBe("${{ inputs.environment || 'production' }}");
+    const forecastJobs = record(workflow('forecast-model.yml').jobs);
+    for (const name of ['prepare', 'build-publish']) {
+      const job = record(forecastJobs[name]);
+      expect(job.environment).toBe('${{ inputs.environment }}');
       expect(record(job.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
     }
+    const maintenance = record(record(workflow('maintenance.yml').jobs).maintain);
+    expect(maintenance.environment).toBe("${{ inputs.environment || 'production' }}");
+    expect(record(maintenance.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
   });
 
   it('isolates four compute workers from publication credentials and preserves the resume path', () => {
-    const forecast = workflow('forecast.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
+    const forecast = workflow('forecast-model.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
     expect(record(shard.strategy)['max-parallel']).toBe(MAX_FORECAST_SHARDS);
     expect(record(shard.strategy)['fail-fast']).toBe(false);
     expect(shard.needs).toBe('prepare');
@@ -92,13 +95,14 @@ describe('declarative workflows', () => {
     }
   });
 
-  it('finishes the next scheduled job before the previous forecast horizon ends', () => {
+  it('leaves room for workflow timeouts before the previous GFS forecast horizon ends', () => {
     const forecast = workflow('forecast.yml');
     const [minute, hours, day, month, weekday] = String(record(list(record(forecast.on).schedule)[0]).cron).split(' ');
     expect([day, month, weekday]).toEqual(['*', '*', '*']);
     const starts = hours!.split(',').map(hour => Number(hour) * 60 + Number(minute)).sort((a, b) => a - b);
-    const jobs = record(forecast.jobs);
-    const budget = ['prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), 0);
+    const jobs = record(workflow('forecast-model.yml').jobs);
+    const selectionMinutes = Number(record(record(forecast.jobs).select)['timeout-minutes']);
+    const budget = ['prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), selectionMinutes);
     for (let i = 0; i < starts.length; i++) {
       const cycle = Math.floor((starts[i]! - GFS_DISCOVERY_LAG_HOURS * 60) / 360) * 360;
       const nextStart = starts[(i + 1) % starts.length]! + (i + 1 === starts.length ? 1440 : 0);

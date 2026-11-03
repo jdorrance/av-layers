@@ -1,9 +1,10 @@
 # Project status
 
-The project is in alpha. GFS is the scheduled live model, with usable lift above
-sea level, usable lift above model ground, and precipitation rate. The local
-builder and registry also support ICON-EU lift MSL/AGL; that implementation is
-not evidence of an ICON-EU production publication.
+The project is in alpha. GFS has recorded live publications with lift MSL/AGL
+and precipitation rate. The builder also supports ICON-EU lift MSL/AGL. The
+forecast and health workflows now select all registered models by default,
+with individual models available in their dropdowns. Workflow support is not
+evidence of a completed ICON-EU production publication.
 
 Open the [production map](https://windy-av-preview.pages.dev/),
 [Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
@@ -22,7 +23,14 @@ A full real ICON-EU forecast on the intended runner, cold/warm timings, observed
 peak RSS and publication/client qualification remain outstanding. No new full-run
 performance or forecast-skill result is claimed. Follow the
 [development commands](development.md#build-a-real-forecast) and
-[extension guide](extensions.md#add-a-weather-model) before scheduling it.
+[extension guide](extensions.md#add-a-weather-model) for real-run validation.
+
+The all-model workflow runs independent model pipelines and parallel hour
+batches. Each model publishes and verifies its own API-visible build and hour
+list. API and Pages code deploy automatically from main; publishing forecast
+data does not rebuild Pages. These code paths have local regression coverage,
+but hosted timing, full ICON-EU publication, and live client results still need
+to be recorded.
 
 ## Hourly build admission
 

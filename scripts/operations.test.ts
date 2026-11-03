@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
+import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
 
 const account = '0123456789abcdef0123456789abcdef', pages = 'windy-av-preview-staging';
 const config: WranglerConfig = {
@@ -152,4 +152,12 @@ describe('Pages deployment revision verification', () => {
     await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', fetchImpl, retries: 0 })).rejects.toThrow(/CORS header/);
     expect(cancel).toHaveBeenCalledOnce();
   });
+});
+
+it('lists exact model-specific hour batches and UTC times, including gaps and omitted nights', () => {
+  const report = forecastPlanReport({ model: 'icon-eu', cycle: '2026-11-03T00:00:00.000Z', groups: [[7, 8], [12, 16]] }, 'icon-eu');
+  expect(report.shards).toEqual([{ id: 0, hours: 'f007, f008' }, { id: 1, hours: 'f012, f016' }]);
+  expect(report.summary).toContain('2026-11-03T16:00:00.000Z');
+  expect(report.summary).not.toContain('f001');
+  expect(forecastPlanReport(null, 'gfs')).toEqual({ shards: [], summary: expect.stringContaining('already published') });
 });

@@ -2,8 +2,9 @@
 
 Run production changes through GitHub Actions on current `main`. Start with
 `staging`; use `production` after checking the map, samples and Windy plugin.
-Forecast and maintenance jobs wait for each other, so only one changes an
-environment's published data at a time. Keep write credentials in GitHub.
+Forecast and maintenance jobs for the same environment and model wait for each
+other. Different models can build and publish independently. Keep write
+credentials in GitHub.
 
 ## Set up an environment
 
@@ -29,28 +30,45 @@ Use the production bucket and Pages project names when setting up production.
 Skip creation for existing resources. Keep `r2.dev` disabled and attach no public
 custom domains to either bucket. Record the Pages project's canonical hostname;
 Cloudflare may add a suffix when a name is already in use.
-Then publish a forecast before deploying the API and clients.
+Then publish a forecast before deploying the API and clients. In a new
+environment without an API, the files commit successfully but the serving check
+fails. Confirm `publication.json` records the commit, deploy the API and clients,
+then [resume that saved build](#resume-or-promote-a-build) to complete serving
+verification. The forecast does not need to be rebuilt.
 
 ## Publish a forecast
 
+Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow's model dropdown,
+or run:
+
 ```sh
-gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs
+gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
-`model` defaults to `gfs`; only registered models with an implemented provider can build.
-Without `cycle`, the builder chooses a complete recent GFS run. To select one,
-add `-f cycle=YYYY-MM-DDTHH:00:00Z` using a 00, 06, 12 or 18 UTC cycle.
-Production also runs automatically at **05:17 and 17:17 UTC**. Scheduled runs
-skip a cycle already published; successful publication is followed by cleanup.
+`all` is the default and expands to the registered models. Without `cycle`, each
+model discovers its latest complete run independently. To select one shared
+initialization time, add `-f cycle=YYYY-MM-DDTHH:00:00Z`; both current models
+accept 00, 06, 12 or 18 UTC. Production runs all models automatically at
+**05:17 and 17:17 UTC**. A model skips a cycle already published, and successful
+publication is followed by cleanup.
 
-The workflow runs `forecast-plan` once, `forecast-shard` on up to four workers,
-then `forecast` to assemble and publish. Planning pins one cycle and each worker
-processes a separate group of forecast hours. GitHub collects only artifacts in
-that plan’s namespace; the finalizer rejects missing or extra groups and checks
-their identities and hashes before publication. Workers have no R2 publication credentials.
-The workflow keeps the same environment/model exclusion through planning, computation,
-publication and cleanup. Its limits are 15 minutes for planning, 60 minutes per
-concurrent worker, and 60 minutes for assembly and publication.
+Selected models run concurrently as GitHub runners and account limits allow.
+Each runs `forecast-plan`, up to four parallel `forecast-shard` jobs, then
+`forecast` to assemble and publish. Planning fixes that model's cycle and frame
+list, including its daylight filtering. Job names list the actual `fXXX` hours in
+each batch; the planning summary also shows their UTC valid times. GFS and ICON-EU
+can have different cycles, hour lists, and batch sizes.
+
+Each model holds its own environment/model lock through planning, computation,
+publication, and cleanup. A single-model dispatch and an `all` dispatch therefore
+cannot publish the same model concurrently. A failed model or batch does not
+cancel the other model. GitHub collects only artifacts in that model and plan's
+namespace; finalization rejects missing or extra groups and checks their
+identities and hashes. Compute workers have no R2 publication credentials.
+
+The model selector has a five-minute limit. Each model allows 15 minutes for
+planning, 60 minutes per concurrent worker, and 60 minutes for assembly and
+publication. These job timeouts do not replace the measured build budget below.
 
 Each worker's receipt and failure/progress records are retained separately. A failed
 worker prevents publication; successful worker artifacts can be reused by GitHub's
@@ -81,8 +99,11 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
   -f resume-run-id=RUN_ID
 ```
 
-Resume needs a finished run with one complete saved build. An early build
-failure may not leave enough files to resume.
+Resume needs a finished run with one complete saved build for each selected
+model. Use `model=all` when that run retained complete artifacts for every
+registered model; each resumes independently from its own artifact. If only one
+model needs recovery, select it explicitly. A missing or incomplete artifact
+fails that model's resume without rebuilding it or cancelling another model.
 The six-hour limit starts when the build was created, not when its upload failed.
 The current build code and configuration must still match, and the freshness
 rules above still apply. Otherwise, start a fresh forecast.
@@ -107,6 +128,16 @@ Deployment runs CI, builds the clients, deploys the Worker, checks the live API,
 and then deploys Pages. It checks that both services serve the requested version,
 and that the Windy bundle is readable from Windy and points to the selected API.
 
+A forecast publication does not rebuild Pages. The map loads the selected model's
+latest manifest, layers, and hours when opened or when a model is selected.
+Reload an open browser page to see a new publication; the API's
+[pointer cache](serving-budgets.md) can delay discovery by up to 15 seconds.
+
+The publisher checks that the live API serves the exact new build and its
+frame/layer lists, with a one-minute deadline for cache refresh. `serving.json`
+records the result. This verifies API data visibility; Pages deployment and
+rendered UI checks are separate.
+
 Pushes to `main` normally deploy production automatically. For an incompatible
 alpha release, pause that workflow before merging, publish matching data, then
 re-enable deployment and check staging before production. Keep a usable previous
@@ -115,7 +146,9 @@ another run from current `main` if that happens.
 
 ## Roll back or clean up
 
-Choose a retained, unexpired build that still covers useful forecast times:
+The Maintenance model dropdown lists individual models. Rollback requires one
+model's retained build ID, so there is no `all` option. Choose a retained,
+unexpired build that still covers useful forecast times:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
@@ -144,12 +177,21 @@ gh run view RUN_ID --log-failed
 Download the run's result artifacts from GitHub Actions. `publication.json`
 records a published build; `failure.json` distinguishes `not-attempted`,
 `unconfirmed`, and `committed`. For `unconfirmed`, resume the exact build if it
-is still eligible. A cleanup failure after `committed` does not undo publication.
+is still eligible. A cleanup or serving-check failure after `committed` does not
+undo publication. `serving.json` identifies a publication that the API could not
+yet serve; check the API deployment and run Forecast health before rebuilding.
 `maintenance.json` records rollback or cleanup results; inspect it before
 repeating a cancelled operation, which may already have completed.
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
-checks the live forecast and recent jobs. Enable GitHub failure notifications.
+checks every registered model's live forecast and recent jobs. Its model dropdown
+also supports `all`. Each model gets an independent check and artifact; an ICON-EU
+failure in an all-model run does not mark a successful GFS publication as failed.
+Enable GitHub failure notifications. For models that omit nighttime hours, the
+horizon warning follows the source forecast window. Health still alerts when
+the published daylight hours run out; publication validates that no expected
+daylight hours are missing.
+
 Production checks scheduled-run recency separately from publication results.
 A successful manual retry clears a publisher failure; it does not clear a missed
 schedule. Staging checks its own labelled runs and has no scheduled-run requirement.
