@@ -7,7 +7,7 @@ import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
 import { WEBP_ENCODER } from './webp.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
-import { prepareBuild, type PreparedBuild } from './capacity.js';
+import { estimateCapacity, prepareBuild, type PreparedBuild } from './capacity.js';
 import { failureReason } from './failure.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
@@ -27,11 +27,11 @@ export async function buildProduct(modelId: string, options: BuildOptions): Prom
 /** Local sequential execution and distributed workers share the same frame implementation. */
 export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
   const stamp = createBuildStamp();
-  const prepared = prepareBuild(options.mask, options.product, { maxLevels: options.provider.maxLevels });
+  const prepared = prepareBuild(options.mask, options.product, options.provider);
   const coverageHash = await writeCoverage(resolve(options.out), options.mask, options.product);
   const identity = await buildIdentity(options.product, coverageHash);
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
-  const result = await buildFrames({ ...options, ...stamp, prepared, hours: options.product.frameHours, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
+  const result = await buildFrames({ ...options, ...stamp, prepared, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
   return finishForecast({ ...options, ...stamp, prepared, coverageHash, identity, result });
 }
 
@@ -41,9 +41,13 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
 }): Promise<string> {
   const { product, mask, provider, buildId, createdAt, coverageHash, identity, result } = options;
   const root = resolve(options.out), started = Date.parse(createdAt), prefix = `builds/${product.modelId}/${buildId}`;
-  const { layout, capacity, indices } = options.prepared;
+  const { layout, capacity: initialCapacity, indices } = options.prepared;
   const { frames, artifacts, receipts, samples: packed, cycle } = result, samplesKey = packed.key;
-  const channelCount = product.frameHours.length * product.layers.length;
+  const channelCount = frames.length * product.layers.length;
+  const capacity = frames.length === product.frameHours.length ? initialCapacity : {
+    ...initialCapacity,
+    ...estimateCapacity(mask, product, layout.storedCells, { frames: frames.length })
+  };
   const descriptors = createProductDescriptors(product);
   await mkdir(localPath(root, prefix), { recursive: true });
   let phase = 'provenance';

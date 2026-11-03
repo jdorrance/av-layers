@@ -1,6 +1,6 @@
 import z from 'zod';
 import { LIFT_METHOD, PRECIPITATION_METHOD, methodIdSchema } from './methods.js';
-import { LAYER_IDS, type LayerId } from './products.js';
+import { LAYER_IDS, type LayerId } from './product.js';
 import { CELL_BYTES } from './format.js';
 import { getBit, type CoverageMask } from './coverage.js';
 

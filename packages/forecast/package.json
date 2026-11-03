@@ -12,7 +12,8 @@
     "./sample-pack": "./src/sample-pack.ts",
     "./support": "./src/support.ts",
     "./inputs": "./src/inputs.ts",
-    "./provenance.json": "./provenance.json"
+    "./provenance.json": "./provenance.json",
+    "./intervals": "./src/intervals.ts"
   },
   "dependencies": {
     "@av/contracts": "workspace:*",

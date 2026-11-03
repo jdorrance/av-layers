@@ -1,8 +1,9 @@
 # Development
 
-Run commands from the repository root. The project is in alpha and currently
-supports GFS only. See [the project layout](architecture.md#workspace-map) to find
-the code for each app and package.
+Run commands from the repository root. The alpha builder supports GFS and
+ICON-EU; the scheduled forecast workflow selects GFS. Local ICON-EU support does
+not establish a deployed forecast. See [status](status.md) for release evidence
+and [the project layout](architecture.md#workspace-map) for code ownership.
 
 ## Setup
 
@@ -37,23 +38,37 @@ API data under `.wrangler/fixture-state`. Nothing is uploaded. Use
 `pnpm dev --generate-only` to write files without starting servers, or
 `pnpm dev --seed-only` to also copy them into local storage.
 
-## Build a real GFS forecast
+## Build a real forecast
 
 ```sh
 pnpm forecast --model gfs --out output --cache-dir .cache/gfs
 ```
 
-This downloads a complete GFS run and can take a while. Repeated builds reuse
-`.cache/gfs`. To choose a run, add `--cycle` with an available GFS 00, 06, 12, or
-18 UTC timestamp. Without it, the builder finds a complete recent run.
+This downloads the fields for the configured GFS horizon and can take a while.
+Repeated builds reuse `.cache/gfs`. For regional ICON-EU lift, first inspect the
+resource estimate, optionally prove one input frame, then build:
+
+```sh
+pnpm capacity --model icon-eu
+pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
+pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu
+```
+
+Capacity is offline; the proof and forecast commands download weather data.
+The ICON-EU proof checks one frame's acquisition and normalized inputs; it does
+not build all forecast hours or prove forecast skill. Both models accept `--cycle`
+with an available 00, 06, 12, or 18 UTC initialization. Without it, the adapter
+discovers a recent admissible run. The [CLI reference](reference.md#batch-cli) owns the
+supported options.
 
 The build records its commit and any uncommitted producer or runtime-config
 changes. Commit those changes before publishing.
 
-Copy the printed manifest path into the following command, replacing `BUILD_ID`:
+Copy the printed manifest path into the following command, replacing `MODEL`
+and `BUILD_ID`:
 
 ```sh
-pnpm sample-preview --manifest output/builds/gfs/BUILD_ID/manifest.json
+pnpm sample-preview --manifest output/builds/MODEL/BUILD_ID/manifest.json
 ```
 
 This validates the build, copies it into local storage, and starts the API and map.
@@ -66,6 +81,10 @@ for units, coverage, and forecast times, and [science](science.md) for calculati
 `pnpm test` runs the tests without downloading weather data. Add a path to focus
 on one area, such as `pnpm test packages/forecast` or `pnpm test apps/api`.
 The suite includes a disposable local Worker test; it does not use remote R2.
+ICON's portable decoder and acquisition fixtures run without sibling repositories.
+Its [optional retained-data check](../apps/batch/src/icon/README.md#offline-checks)
+uses `ICON_DWD_PROBE_DIR` to locate six historical DWD fields and their manifest;
+it never searches local sibling directories implicitly.
 
 Shared dependency versions live in the catalog in `pnpm-workspace.yaml`.
 After changing them, run `pnpm install` and commit the updated lockfile.

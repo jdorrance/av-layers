@@ -5,10 +5,11 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./parameters": "./src/parameters.ts",
+    "./velocity": "./src/velocity.ts"
   },
   "dependencies": {
-    "@av/contracts": "workspace:*",
     "@av/thermodynamics": "workspace:*"
   }
 }

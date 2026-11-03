@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import type { CoverageMask } from '@av/contracts';
 import { buildForecast } from '../apps/batch/src/build.js';
-import type { ForecastProvider } from '../apps/batch/src/providers.js';
+import type { ForecastProvider } from '../apps/batch/src/provider.js';
 import { normalizedFixtureFrame } from './fixtures/normalized-provider.js';
 import { previewBuild } from './sample-preview.js';
 

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
-import type { GfsFrameAcquisition } from './noaa/types.js';
+import type { GfsFrameAcquisition } from './gfs/types.js';
 import type { NormalizedFrame } from '@av/forecast';
 
 const CYCLE = '2026-10-30T00:00:00.000Z';
@@ -25,15 +25,18 @@ vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<type
   loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
   writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
-vi.mock('./noaa/index.js', () => {
-  const acquireGfsFrame = vi.fn(), discoverGfsRun = vi.fn();
+vi.mock('./gfs/discover.js', () => ({ discoverGfsRun: vi.fn() }));
+vi.mock('./gfs/acquire.js', async () => {
+  const { discoverGfsRun } = await import('./gfs/discover.js');
+  const acquireGfsFrame = vi.fn();
   return { acquireGfsFrame, discoverGfsRun, createGfsAcquisitionSession: vi.fn(async (options: { cycle?: string; cacheDir?: string; activeIndices: Uint32Array }) => {
     const cycle = options.cycle ?? (await discoverGfsRun({ cacheDir: options.cacheDir })).cycle;
     return { cycle, acquire: (hour: number) => acquireGfsFrame({ ...options, cycle, hour }), close: vi.fn(async () => {}), stats: {} };
   }) };
 });
 
-import { acquireGfsFrame, createGfsAcquisitionSession, discoverGfsRun } from './noaa/index.js';
+import { acquireGfsFrame, createGfsAcquisitionSession } from './gfs/acquire.js';
+import { discoverGfsRun } from './gfs/discover.js';
 import { buildProduct } from './build.js';
 import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
@@ -173,40 +176,40 @@ describe('frame derivation', () => {
 
   it('derives halo contributors without publishing halo-only points', () => {
     const { input, mask, index } = fixture(12), fields = deriveFrame(input, mask);
-    expect(fields['precip-rate'].flags[index + 1]).toBe(STATUS_VALID);
-    expect(fields['usable-lift-agl'].flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
-    const sample = sampleGrid(GFS_GRID, fields['precip-rate'], 0, 0.1, 'precip-rate', mask);
+    expect(fields['precip-rate']!.flags[index + 1]).toBe(STATUS_VALID);
+    expect(fields['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
+    const sample = sampleGrid(GFS_GRID, fields['precip-rate']!, 0, 0.1, 'precip-rate', mask);
     expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
     expect(sample.value).toBeCloseTo(2.8);
-    expect(sampleGrid(GFS_GRID, fields['precip-rate'], 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(GFS_GRID, fields['precip-rate']!, 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
   });
 
   it('drops finite subterranean heights but not missing profile levels', () => {
     const { input, mask, index } = fixture(12);
-    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_VALID);
-    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_VALID);
+    expect(deriveFrame(input, mask)['usable-lift-agl']!.flags[index] & STATUS_MASK).toBe(STATUS_VALID);
+    expect(deriveFrame(input, mask)['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).toBe(STATUS_VALID);
     input.missing.hgt[1][0] = 1;
     input.missing.temp[1][1] = 1;
-    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
-    expect(deriveFrame(input, mask)['usable-lift-agl'].flags[index + 1] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+    expect(deriveFrame(input, mask)['usable-lift-agl']!.flags[index] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+    expect(deriveFrame(input, mask)['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
   });
 
   it('skips both lift and precipitation derivation outside of daytime', () => {
     // At 03:00 UTC, (lat=0, lon=0) is in nighttime darkness
     const { input, mask, index } = fixture(3);
     const nightFields = deriveFrame(input, mask);
-    expect(nightFields['usable-lift-msl'].flags[index]).toBe(STATUS_NO_LIFT);
-    expect(nightFields['usable-lift-msl'].values[index]).toBe(100);
-    expect(nightFields['usable-lift-agl'].flags[index]).toBe(STATUS_NO_LIFT);
-    expect(nightFields['usable-lift-agl'].values[index]).toBe(0);
-    expect(nightFields['precip-rate'].flags[index]).toBe(STATUS_UNAVAILABLE);
-    expect(Number.isNaN(nightFields['precip-rate'].values[index])).toBe(true);
+    expect(nightFields['usable-lift-msl']!.flags[index]).toBe(STATUS_NO_LIFT);
+    expect(nightFields['usable-lift-msl']!.values[index]).toBe(100);
+    expect(nightFields['usable-lift-agl']!.flags[index]).toBe(STATUS_NO_LIFT);
+    expect(nightFields['usable-lift-agl']!.values[index]).toBe(0);
+    expect(nightFields['precip-rate']!.flags[index]).toBe(STATUS_UNAVAILABLE);
+    expect(Number.isNaN(nightFields['precip-rate']!.values[index])).toBe(true);
 
     // Explicitly disabling daylightOnly evaluates column physics and precipitation at night
     const unGatedFields = deriveFrame(input, mask, { daylightOnly: false });
-    expect(unGatedFields['usable-lift-agl'].flags[index] & STATUS_MASK).toBe(STATUS_VALID);
-    expect(unGatedFields['precip-rate'].flags[index]).toBe(STATUS_VALID);
-    expect(unGatedFields['precip-rate'].values[index]).toBe(2);
+    expect(unGatedFields['usable-lift-agl']!.flags[index] & STATUS_MASK).toBe(STATUS_VALID);
+    expect(unGatedFields['precip-rate']!.flags[index]).toBe(STATUS_VALID);
+    expect(unGatedFields['precip-rate']!.values[index]).toBe(2);
   });
 });
 

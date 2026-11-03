@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "id": "icon-eu-land-v1",
+  "kind": "coverage-mask",
+  "maxZoom": 8,
+  "crs": "EPSG:4326",
+  "source": {
+    "dataset": "Natural Earth 1:50m Admin 0 Countries",
+    "release": "5.1.1",
+    "url": "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip",
+    "sha256": "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139",
+    "archiveBytes": 799734,
+    "license": "public-domain",
+    "attributes": {
+      "excludeField": "ADM0_A3",
+      "excludeValues": [
+        "RUS",
+        "ATA",
+        "GRL"
+      ],
+      "isoFallback": "ISO_A3_EH",
+      "isoExceptionRows": [
+        {
+          "admin": "Ashmore and Cartier Islands",
+          "adm0_a3": "ATC",
+          "iso_a3": "-99",
+          "iso_a3_eh": "AUS",
+          "iso_a2": "-99",
+          "iso_a2_eh": "AU"
+        },
+        {
+          "admin": "Northern Cyprus",
+          "adm0_a3": "CYN",
+          "iso_a3": "-99",
+          "iso_a3_eh": "-99",
+          "iso_a2": "-99",
+          "iso_a2_eh": "-99"
+        },
+        {
+          "admin": "France",
+          "adm0_a3": "FRA",
+          "iso_a3": "-99",
+          "iso_a3_eh": "FRA",
+          "iso_a2": "-99",
+          "iso_a2_eh": "FR"
+        },
+        {
+          "admin": "Indian Ocean Territories",
+          "adm0_a3": "IOA",
+          "iso_a3": "-99",
+          "iso_a3_eh": "AUS",
+          "iso_a2": "-99",
+          "iso_a2_eh": "AU"
+        },
+        {
+          "admin": "Siachen Glacier",
+          "adm0_a3": "KAS",
+          "iso_a3": "-99",
+          "iso_a3_eh": "-99",
+          "iso_a2": "-99",
+          "iso_a2_eh": "-99"
+        },
+        {
+          "admin": "Kosovo",
+          "adm0_a3": "KOS",
+          "iso_a3": "-99",
+          "iso_a3_eh": "-99",
+          "iso_a2": "-99",
+          "iso_a2_eh": "XK"
+        },
+        {
+          "admin": "Norway",
+          "adm0_a3": "NOR",
+          "iso_a3": "-99",
+          "iso_a3_eh": "NOR",
+          "iso_a2": "-99",
+          "iso_a2_eh": "NO"
+        },
+        {
+          "admin": "Somaliland",
+          "adm0_a3": "SOL",
+          "iso_a3": "-99",
+          "iso_a3_eh": "-99",
+          "iso_a2": "-99",
+          "iso_a2_eh": "-99"
+        }
+      ]
+    }
+  },
+  "policy": {
+    "id": "icon-eu-land-v1",
+    "latMin": 29.5,
+    "latMax": 70.5,
+    "seaBufferMeters": 50000,
+    "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core.",
+    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
+    "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
+    "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.03125deg, latitude center +/-0.03125deg, clipped to bounds [-23.5, 29.5, 62.5, 70.5].",
+    "tileRule": "A z0-8 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
+    "outputDomain": "union of admitted nearest-cell footprints clipped to the coverage bounds"
+  },
+  "grid": {
+    "name": "dwd-icon-eu-regular-0p0625",
+    "lon0": -23.5,
+    "lat0": 70.5,
+    "width": 1377,
+    "height": 657,
+    "dx": 0.0625,
+    "dy": -0.0625,
+    "lonPeriodic": false,
+    "rowMajor": "north-to-south",
+    "columns": "west-to-east",
+    "bitOrder": "lsb0: index = row*width + col; byte = index >> 3; bit = index & 7; bit value = 1 << bit.",
+    "cellCount": 904689,
+    "bitsetBytes": 113087
+  },
+  "files": {
+    "output": "output.bin",
+    "halo": "halo.bin",
+    "tiles": "tiles.bin"
+  },
+  "output": {
+    "file": "output.bin",
+    "encoding": "bitpacked-lsb0",
+    "bytes": 113087,
+    "counts": {
+      "totalCells": 904689,
+      "activeCellsBeforeExclusion": 470005,
+      "clearedByExcludedFootprint": 15169,
+      "activeCells": 454836,
+      "inactiveCells": 449853
+    },
+    "sha256": "143de9c9ffc8f83eb0b2f9d37985cd12773f4946efed5ca39ff81566ac6f139d"
+  },
+  "halo": {
+    "file": "halo.bin",
+    "encoding": "bitpacked-lsb0",
+    "bytes": 113087,
+    "definition": "Input-only one-cell Chebyshev ring (8-neighbour) around output-active cells, excluding output-active cells.",
+    "counts": {
+      "haloOnlyCells": 10723,
+      "activePlusHaloCells": 465559,
+      "haloOverheadRatio": 0.023576
+    },
+    "sha256": "ee79b84f3151149254e6c46fd055249ca9acd2d8a5cb5625a2624892e81d7065"
+  },
+  "tiles": {
+    "file": "tiles.bin",
+    "encoding": "bitpacked-lsb0",
+    "zooms": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "offsets": {
+      "0": 0,
+      "1": 1,
+      "2": 5,
+      "3": 21,
+      "4": 85,
+      "5": 341,
+      "6": 1365,
+      "7": 5461,
+      "8": 21845
+    },
+    "tileCounts": {
+      "0": 1,
+      "1": 4,
+      "2": 16,
+      "3": 64,
+      "4": 256,
+      "5": 1024,
+      "6": 4096,
+      "7": 16384,
+      "8": 65536
+    },
+    "totalBits": 87381,
+    "bytes": 10923,
+    "countsByZoom": {
+      "0": 1,
+      "1": 2,
+      "2": 4,
+      "3": 8,
+      "4": 16,
+      "5": 45,
+      "6": 143,
+      "7": 485,
+      "8": 1691
+    },
+    "activeZ5Tiles": [
+      "5/13/7",
+      "5/13/8",
+      "5/14/7",
+      "5/14/8",
+      "5/14/12",
+      "5/14/13",
+      "5/15/7",
+      "5/15/8",
+      "5/15/9",
+      "5/15/10",
+      "5/15/11",
+      "5/15/12",
+      "5/15/13",
+      "5/16/8",
+      "5/16/9",
+      "5/16/10",
+      "5/16/11",
+      "5/16/12",
+      "5/16/13",
+      "5/17/7",
+      "5/17/8",
+      "5/17/9",
+      "5/17/10",
+      "5/17/11",
+      "5/17/12",
+      "5/17/13",
+      "5/18/7",
+      "5/18/8",
+      "5/18/9",
+      "5/18/10",
+      "5/18/11",
+      "5/18/12",
+      "5/18/13",
+      "5/19/10",
+      "5/19/11",
+      "5/19/12",
+      "5/19/13",
+      "5/20/10",
+      "5/20/11",
+      "5/20/12",
+      "5/20/13",
+      "5/21/10",
+      "5/21/11",
+      "5/21/12",
+      "5/21/13"
+    ],
+    "sha256": "89dbaf0fde46662986435bf9224cdfc5ba92a4d80d6e07cca8a3c83c258600a0"
+  },
+  "approximation": {
+    "cellDiagonalDegrees": 0.088388,
+    "cellDiagonalMetersAtEquator": 9806.5,
+    "statement": "Natural Earth 1:50m geometry is generalized; the 50 km buffer is source-geometry seaward buffering, not an exact pixel coastline."
+  },
+  "tinyIslandInspection": {
+    "requiredTestIslandsCovered": [],
+    "knownNaturalEarth50mOmission": "Lord Howe Island is absent from this Natural Earth 1:50m admin-0 release and is not a required v1 test case.",
+    "versionedGeometryCorrection": null
+  },
+  "tests": {
+    "cases": [
+      {
+        "name": "armenia_yerevan",
+        "lat": 40.179,
+        "lon": 44.499,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 485,
+          "col": 1088,
+          "centerLat": 40.1875,
+          "centerLon": 44.5
+        }
+      },
+      {
+        "name": "alps_chamonix",
+        "lat": 45.9237,
+        "lon": 6.8694,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 393,
+          "col": 486,
+          "centerLat": 45.9375,
+          "centerLon": 6.875
+        }
+      },
+      {
+        "name": "pyrenees_ager",
+        "lat": 42.0,
+        "lon": 0.762,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 456,
+          "col": 388,
+          "centerLat": 42.0,
+          "centerLon": 0.75
+        }
+      },
+      {
+        "name": "dolomites_marmolada",
+        "lat": 46.4336,
+        "lon": 11.8511,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 385,
+          "col": 566,
+          "centerLat": 46.4375,
+          "centerLon": 11.875
+        }
+      },
+      {
+        "name": "exclude_russia_moscow",
+        "lat": 55.7558,
+        "lon": 37.6173,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 236,
+          "col": 978,
+          "centerLat": 55.75,
+          "centerLon": 37.625
+        }
+      },
+      {
+        "name": "open_ocean_atlantic",
+        "lat": 45.0,
+        "lon": -20.0,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 408,
+          "col": 56,
+          "centerLat": 45.0,
+          "centerLon": -20.0
+        }
+      }
+    ],
+    "datelineShiftSelfChecks": [
+      {
+        "name": "east_179_9_into_west_tile",
+        "sourceLonRange": [
+          179.9,
+          179.95000000000002
+        ],
+        "tileCoreLon": [
+          -180.0,
+          -170.0
+        ],
+        "probeLon": -179.8,
+        "expected": true,
+        "observed": true
+      },
+      {
+        "name": "west_neg179_9_into_east_tile",
+        "sourceLonRange": [
+          -179.95,
+          -179.89999999999998
+        ],
+        "tileCoreLon": [
+          170.0,
+          180.0
+        ],
+        "probeLon": 179.8,
+        "expected": true,
+        "observed": true
+      }
+    ],
+    "xyzTileProbe": {
+      "tile": "2/2/1",
+      "expected": true,
+      "observed": true
+    }
+  },
+  "regional": {},
+  "regeneration": {
+    "tooling": "scripts/masks/build_masks.py",
+    "toolingSha256": "1327179e3835aa5323357352522c35207f964c7a5421d010fdfcb6555a92d067",
+    "python": "3.12.14",
+    "pythonVersion": "3.12.14",
+    "pythonImplementation": "CPython",
+    "platform": "macOS-15.8-arm64-arm-64bit",
+    "machine": "arm64",
+    "nativeLibraries": {
+      "GEOS": "3.14.1",
+      "PROJ": "9.8.1"
+    },
+    "pythonPackages": {
+      "shapely": "2.1.2",
+      "pyproj": "3.8.0",
+      "geopandas": "1.2.0",
+      "pyogrio": "0.13.0"
+    },
+    "command": "python scripts/masks/build_masks.py --config packages/contracts/config/icon-eu.json --source ne_50m_admin_0_countries.zip --output packages/contracts/coverage/icon-eu-land-v1 --allow-local-libs",
+    "scheduledBuildGIS": false
+  }
+}

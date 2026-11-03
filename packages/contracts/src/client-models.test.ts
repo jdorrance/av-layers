@@ -11,5 +11,8 @@ it('lists only implemented production models', () => {
   vi.stubGlobal('Option', FakeOption);
   const options: FakeOption[] = [];
   populateModelOptions({ add: (option: FakeOption) => options.push(option) } as unknown as HTMLSelectElement);
-  expect(options.map(option => [option.value, option.disabled, option.text])).toEqual([['gfs', false, 'GFS']]);
+  expect(options.map(option => [option.value, option.disabled, option.text])).toEqual([
+    ['gfs', false, 'GFS'],
+    ['icon-eu', false, 'ICON-EU']
+  ]);
 });

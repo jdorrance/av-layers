@@ -54,7 +54,7 @@ describe('offline fixture and local seeding', () => {
     expect(Date.parse(manifest.expiresAt)).toBeGreaterThan(Date.now());
     expect(Math.abs(Date.parse(manifest.cycle) - Date.now())).toBeLessThan(86_400_000);
     expect((manifest.metrics.frames as Record<string, Record<string, { valid: number }>>).f001['precip-rate'].valid).toBe(40);
-    expect(MODEL_IDS).toEqual(['gfs']);
+    expect(MODEL_IDS).toEqual(['gfs', 'icon-eu']);
     expect(getProduct('gfs')!.id).not.toBe(OFFLINE_PRODUCT.id);
   });
 

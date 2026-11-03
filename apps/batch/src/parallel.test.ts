@@ -8,7 +8,7 @@ import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-pro
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { buildShard, createBuildPlan, finalizeBuild, type BuildPlan } from './parallel.js';
-import type { ForecastProvider } from './providers.js';
+import type { ForecastProvider } from './provider.js';
 import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
 import { decodeWebp } from './webp.js';
 
@@ -206,6 +206,66 @@ describe('forecast hour-group builds', () => {
     for (const phase of ['acquireMs', 'deriveMs', 'renderMs']) expect(phases[phase]).toBe(workerMetrics.reduce((sum, worker) => sum + worker.phasesMs[phase], 0));
     expect(phases.packMs).toBeGreaterThanOrEqual(workerMetrics.reduce((sum, worker) => sum + worker.phasesMs.packMs, 0));
   });
+
+  it('keeps regional model-level lift builds identical while omitting dark-hour acquisition', async () => {
+    const regional: ProductDefinition = {
+      ...product,
+      modelId: 'regional-fixture', id: 'regional-fixture-recipe',
+      coverageId: 'regional-fixture-coverage', bounds: [-2, -2, 2, 2],
+      grid: { kind: 'regular-latlon', width: 3, height: 3, earthRadiusM: 6371229, lon0: -2, lat0: 2, dx: 2, dy: -2, wrapLongitude: false },
+      frameHours: [2, 8, 14, 22], layers: ['usable-lift-msl', 'usable-lift-agl'],
+      capabilities: { verticalCoordinate: 'model-levels', maxVerticalLevels: 3, daylightFrames: 'regional-daylight' }
+    };
+    const regionalMask: CoverageMask = {
+      grid: regional.grid, bounds: regional.bounds, maxZoom: 0,
+      output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1)
+    };
+    const acquire = vi.fn();
+    const provider: ForecastProvider = {
+      id: regional.source.configurationId, provider: 'Synthetic model-level fixture', maxLevels: 3,
+      async open({ cycle = CYCLE, activeIndices }) {
+        return {
+          cycle, stats: {},
+          async acquire(hour) {
+            acquire(hour);
+            const frame = normalizedFixtureFrame(regional.grid, activeIndices, cycle, hour, regional.intervalHours);
+            for (let index = 0; index < activeIndices.length; index++) frame.temp2mK[index] += hour * 0.25 + activeIndices[index] * 0.05;
+            const pressurePa = frame.pressureLevelsHpa.map(pressure => new Float32Array(activeIndices.length).fill(pressure * 100));
+            delete frame.precipitationMmPerHour;
+            delete frame.missing.precipitation;
+            delete frame.intervals.precipitationWindow;
+            delete frame.intervals.precipitationSourceWindow;
+            return { ...frame, pressureLevelsHpa: undefined, pressurePa, missing: { ...frame.missing, pressure: pressurePa.map(() => new Uint8Array(activeIndices.length)) } };
+          },
+          async close() {}
+        };
+      }
+    };
+    const root = await temporaryRoot(), localOut = join(root, 'local'), parallelOut = join(root, 'parallel');
+    const inputs = { cycle: CYCLE, product: regional, mask: regionalMask, provider };
+    const local = await readManifest(await buildForecast({ ...inputs, out: localOut }));
+    expect(acquire.mock.calls.map(([hour]) => hour)).toEqual([8, 14]);
+    acquire.mockClear();
+    const regionalPlan = await createBuildPlan({ ...inputs, out: parallelOut, shards: 2 });
+    expect(regionalPlan.groups).toEqual([[8], [14]]);
+    expect(acquire).not.toHaveBeenCalled();
+    await Promise.all(regionalPlan.groups.map((_, shard) => buildShard({ ...inputs, plan: regionalPlan, shard, out: parallelOut })));
+    const parallel = await readManifest(await finalizeBuild({ ...inputs, plan: regionalPlan, out: parallelOut }));
+    expect(acquire.mock.calls.map(([hour]) => hour).sort((a, b) => a - b)).toEqual([8, 14]);
+    expect(local.frames.map(frame => frame.id)).toEqual(['f008', 'f014']);
+    expect(parallel.frames).toEqual(local.frames);
+    expect(parallel.layers).toEqual(regional.layers);
+    expect(parallel.descriptors).toEqual(local.descriptors);
+    expect(parallel.method).toEqual(local.method);
+    expect(parallel.samples.channelCount).toBe(4);
+    expect(parallel.samples.sha256).toBe(local.samples.sha256);
+    expect(await readFile(localPath(parallelOut, parallel.samples.key))).toEqual(await readFile(localPath(localOut, local.samples.key)));
+    expect(parallel.artifacts.map(({ layer, frame }) => ({ layer, frame }))).toEqual(local.artifacts.map(({ layer, frame }) => ({ layer, frame })));
+    expect(parallel.metrics.frames).toEqual(local.metrics.frames);
+    for (const frame of Object.values(local.metrics.frames as Record<string, Record<string, { valid: number }>>)) {
+      for (const layer of regional.layers) expect(frame[layer].valid).toBe(9);
+    }
+  }, 60_000);
 
   it('refuses to finalize when an expected group receipt is missing', async () => {
     const out = await copyCompleted(), onValidated = vi.fn();

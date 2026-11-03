@@ -170,6 +170,15 @@ importers:
 
   packages/contracts:
     dependencies:
+      '@av/soaring':
+        specifier: workspace:*
+        version: link:../soaring
+      '@av/solar':
+        specifier: workspace:*
+        version: link:../solar
+      '@av/thermodynamics':
+        specifier: workspace:*
+        version: link:../thermodynamics
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -191,24 +200,13 @@ importers:
 
   packages/soaring:
     dependencies:
-      '@av/contracts':
-        specifier: workspace:*
-        version: link:../contracts
       '@av/thermodynamics':
         specifier: workspace:*
         version: link:../thermodynamics
 
-  packages/solar:
-    dependencies:
-      '@av/contracts':
-        specifier: workspace:*
-        version: link:../contracts
+  packages/solar: {}
 
-  packages/thermodynamics:
-    dependencies:
-      '@av/contracts':
-        specifier: workspace:*
-        version: link:../contracts
+  packages/thermodynamics: {}
 
 packages:
 

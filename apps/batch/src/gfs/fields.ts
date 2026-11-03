@@ -1,10 +1,12 @@
 import {
   GFS_PRESSURE_LEVELS_HPA,
+  GFS_CYCLE_HOURS_UTC,
   GFS_PRIMARY_LEVELS_HPA,
   GFS_SECONDARY_LEVELS_HPA,
   GFS_PRODUCTS, GFS_INTERVAL_HOURS, type GfsProductName,
   NOAA_GFS_BASE_URL,
 } from './constants.ts';
+import { NoaaError } from './errors.ts';
 import { gfsWindowStart } from './intervals.ts';
 import type { GfsFieldSpec } from './types.ts';
 
@@ -25,6 +27,17 @@ export function gfsFirstFixedSurface(level: string): readonly [number, number] {
   const pressure = /^(\d+) mb$/.exec(level);
   if (pressure) return [100, Number(pressure[1]) * 100];
   throw new Error(`Unsupported GFS fixed surface: ${level}`);
+}
+
+export function validateCycle(cycle: string): string {
+  const normalized = cycle.replace(/\.000Z$/, 'Z');
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/.test(normalized) || !GFS_CYCLE_HOURS_UTC.includes(new Date(normalized).getUTCHours()) ||
+    !Number.isFinite(Date.parse(normalized)) || new Date(normalized).toISOString().replace('.000Z', 'Z') !== normalized
+  ) {
+    throw new NoaaError('invalid-option', 'GFS cycle must be an exact ISO UTC one of 00/06/12/18Z', { cycle });
+  }
+  return normalized;
 }
 
 export function cycleStamp(cycle: string): string {

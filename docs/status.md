@@ -1,11 +1,28 @@
 # Project status
 
-The project is in alpha. GFS is the only live model, with usable lift above sea
-level, usable lift above model ground, and precipitation rate.
+The project is in alpha. GFS is the scheduled live model, with usable lift above
+sea level, usable lift above model ground, and precipitation rate. The local
+builder and registry also support ICON-EU lift MSL/AGL; that implementation is
+not evidence of an ICON-EU production publication.
 
 Open the [production map](https://windy-av-preview.pages.dev/),
 [Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
 or [API documentation](https://windy-av-api-production.jdorrance.workers.dev/docs).
+
+## ICON-EU qualification
+
+The branch implements hourly candidates with regional daylight selection,
+per-column pressure, DWD flux normalization and bounded pure-TypeScript decoding.
+Synthetic builds exercise shared serial/parallel publication with regional,
+Lambert and model-level inputs. Portable codec fixtures run in the normal suite;
+an explicit retained-file probe checks six historical DWD fields. The science
+kernels remain dry, at model terrain and atmospheric resolution.
+
+A full real ICON-EU forecast on the intended runner, cold/warm timings, observed
+peak RSS and publication/client qualification remain outstanding. No new full-run
+performance or forecast-skill result is claimed. Follow the
+[development commands](development.md#build-a-real-forecast) and
+[extension guide](extensions.md#add-a-weather-model) before scheduling it.
 
 ## Hourly build admission
 
@@ -74,7 +91,8 @@ same-cycle skips do not count. The normal forecast and health schedules remain
 enabled; no extra follow-up automation was created for this wrap-up.
 
 Physical-device testing is deferred. Desktop mobile-layout checks do not replace
-it. New models, enhanced WRF, profiles, and other products remain deferred.
+it. ICON-EU qualification is described above; additional sources, enhanced WRF,
+profiles, terrain corrections and other products remain future work.
 
 See [development](development.md), [operations](operations.md), and
 [the roadmap](roadmap.md) for the next time work resumes.

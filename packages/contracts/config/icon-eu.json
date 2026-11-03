@@ -1,0 +1,78 @@
+{
+  "modelId": "icon-eu",
+  "id": "icon-eu-soaring",
+  "configPath": "packages/contracts/config/icon-eu.json",
+  "coverageDir": "coverage/icon-eu-land-v1",
+  "source": {
+    "modelFamily": "icon",
+    "configurationId": "dwd-icon-eu-regular-0p0625",
+    "domainId": "europe"
+  },
+  "label": "ICON-EU",
+  "attribution": "DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers",
+  "layers": ["usable-lift-msl", "usable-lift-agl"],
+  "capabilities": {
+    "verticalCoordinate": "model-levels",
+    "maxVerticalLevels": 30,
+    "daylightFrames": "regional-daylight"
+  },
+  "grid": {
+    "kind": "regular-latlon",
+    "width": 1377,
+    "height": 657,
+    "earthRadiusM": 6371229,
+    "lon0": -23.5,
+    "lat0": 70.5,
+    "dx": 0.0625,
+    "dy": -0.0625,
+    "wrapLongitude": false
+  },
+  "forecast": {
+    "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+    "intervalHours": 1,
+    "cycleHoursUtc": [0, 6, 12, 18],
+    "statisticsResetHours": 24
+  },
+  "freshness": { "maxCycleAgeHours": 18, "minHorizonHours": 6 },
+  "coverage": {
+    "id": "icon-eu-land-v1",
+    "description": "Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, Greenland and Antarctica excluded.",
+    "west": -23.5,
+    "south": 29.5,
+    "east": 62.5,
+    "north": 70.5,
+    "maxNativeZoom": 8,
+    "seaBufferMeters": 50000,
+    "excludedA3": ["RUS", "ATA", "GRL"],
+    "interpolationHaloCells": 1
+  },
+  "upstream": {
+    "baseUrl": "https://opendata.dwd.de/weather/nwp/icon-eu/grib",
+    "gridToken": "europe_regular-lat-lon",
+    "nativeScanningMode": 64,
+    "modelLevels": [
+      45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+      55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+      65, 66, 67, 68, 69, 70, 71, 72, 73, 74
+    ],
+    "halfLevels": [
+      45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+      55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+      65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75
+    ],
+    "fields": {
+      "staticTerrain": "HSURF",
+      "halfLevelHeight": "HHL",
+      "surfacePressure": "PS",
+      "temperature2m": "T_2M",
+      "specificHumidity2m": "QV_2M",
+      "mixingHeight": "MH",
+      "sensibleHeatFlux": "ASHFL_S",
+      "latentHeatFlux": "ALHFL_S",
+      "temperature": "T",
+      "pressure": "P"
+    },
+    "discoveryLagHours": 3,
+    "discoveryCandidates": 4
+  }
+}

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, PRECIPITATION_METHOD, createProductDescriptors, descriptorSchema } from './index.js';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, createProductDescriptors, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
-    const descriptors = createProductDescriptors();
+    const descriptors = createProductDescriptors(GFS_PRODUCT);
     expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-v1', 'trailing-precipitation-rate-v1']);
     expect(descriptors.layers['usable-lift-msl'].methodId).toBe(descriptors.layers['usable-lift-agl'].methodId);
     const lift = descriptors.methods['dry-lenschow-pbl-1p2-v1']!;
@@ -16,6 +16,24 @@ describe('implemented method snapshots', () => {
     expect(Object.isFrozen(LIFT_METHOD.inputs.terrainM)).toBe(true);
   });
 
+  it('describes per-column model-level pressure and omits precipitation for ICON-EU lift-only product', () => {
+    const descriptors = createProductDescriptors(ICON_EU_PRODUCT);
+    expect(Object.keys(descriptors.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
+    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-v1']);
+    const lift = descriptors.methods['dry-lenschow-pbl-1p2-v1']!;
+    expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressurePa', 'hgtM', 'tempK']);
+    expect(lift.inputs.pressurePa).toEqual({
+      id: 'pressurePa',
+      quantity: 'air-pressure',
+      units: 'Pa',
+      dimensions: 'level-cell',
+      verticalReference: 'terrain-following model levels',
+      timeSupport: 'valid-time',
+      missingness: 'explicit-cell-mask'
+    });
+    expect(Object.isFrozen(MODEL_LEVEL_LIFT_METHOD.requiredInputs)).toBe(true);
+  });
+
   it('admits only the needed precipitation definition for a precipitation-only product', () => {
     const descriptors = createProductDescriptors({ ...GFS_PRODUCT, layers: ['precip-rate'] });
     expect(Object.keys(descriptors.methods)).toEqual(['trailing-precipitation-rate-v1']);
@@ -26,7 +44,7 @@ describe('implemented method snapshots', () => {
   });
 
   it('reads a retained definition without requiring current constants, normalization or an executable kernel', () => {
-    const stored = createProductDescriptors(), previous = stored.methods[LIFT_METHOD.id];
+    const stored = createProductDescriptors(GFS_PRODUCT), previous = stored.methods[LIFT_METHOD.id];
     previous.parameters.sinkRateMps = 1.3;
     previous.parameters.kelvinOffset = 0;
     previous.inputs.temp2mK.units = 'degC';
@@ -42,7 +60,7 @@ describe('implemented method snapshots', () => {
 
   it('rejects absent, misbound, incomplete or structurally invalid method descriptors', () => {
     const invalid = (mutate: (value: ReturnType<typeof JSON.parse>) => void) => {
-      const descriptor = JSON.parse(JSON.stringify(createProductDescriptors()));
+      const descriptor = JSON.parse(JSON.stringify(createProductDescriptors(GFS_PRODUCT)));
       mutate(descriptor);
       expect(descriptorSchema.safeParse(descriptor).success).toBe(false);
     };

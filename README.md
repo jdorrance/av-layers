@@ -4,9 +4,9 @@ Maps and point forecasts for usable lift above sea level, usable lift above mode
 terrain, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
-This project is in alpha. NOAA GFS is the only supported weather model. More
-models, WRF, and additional forecast products are future work. These are estimates
-at model resolution; zooming in does not add local weather or terrain detail.
+This project is in alpha. The builder supports NOAA GFS and regional DWD ICON-EU;
+the scheduled workflow publishes GFS. ICON-EU can be built locally and is still being tested for deployment.
+Forecasts use model resolution; zooming in does not add local weather or terrain detail.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ pnpm dev
 
 This starts both the API and map with generated test data. Open the URL printed
 by the development server. The test map needs no NOAA downloads or Cloudflare
-account. For a real forecast, follow [the GFS setup guide](docs/development.md#build-a-real-gfs-forecast).
+account. For a real forecast, follow [the forecast setup guide](docs/development.md#build-a-real-forecast).
 
 ## Development checks
 
@@ -33,15 +33,15 @@ server options.
 
 ## Project layout
 
-- [apps/batch](apps/batch/README.md): downloads GFS data and builds forecast files.
+- [apps/batch](apps/batch/README.md): adapts weather sources and builds forecast files.
 - [apps/api](apps/api/README.md): serves forecast details, tiles, and point results.
 - [apps/preview](apps/preview/README.md): standalone map.
 - [apps/windy-plugin](apps/windy-plugin/README.md): Windy integration.
 - [packages/contracts](packages/contracts/README.md): shared types and API helpers.
 - [packages/forecast](packages/forecast/README.md): frame derivation, grid sampling, and sample-pack layout.
-- [packages/solar](packages/solar/README.md): NOAA solar ephemeris, sunrise/sunset, and separable grid daylight checks.
+- [packages/solar](packages/solar/README.md): solar position, sunrise/sunset, and grid daylight checks.
 - [packages/thermodynamics](packages/thermodynamics/README.md): dry-air thermodynamics and parcel equations.
-- [packages/soaring](packages/soaring/README.md): dry convective depth, Deardorff $w_*$ (`m/s`), Lenschow updraft profile, and configurable sink-rate thresholds (`m/s`).
+- [packages/soaring](packages/soaring/README.md): thermal lift depth and updraft calculations.
 
 ## More information
 

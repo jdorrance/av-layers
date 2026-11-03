@@ -1,3 +1,4 @@
+import { recoverTrailingWindow as recoverInterval, type CompactTrailingWindowInput, type CompactTrailingWindowResult } from '@av/forecast/intervals';
 import { parseProduct, type Identification } from '@azohra/meteo.grib';
 import { GFS_INTERVAL_HOURS, GFS_STATISTICS_RESET_HOURS } from './constants.ts';
 import { NoaaError } from './errors.ts';
@@ -214,86 +215,15 @@ export function admitNoaaWindowPair(
   return { currentHours, previousHours, start: a.start, end: a.end };
 }
 
-export type TrailingStatistic = 'mean' | 'accumulation';
-
-export interface CompactTrailingWindowInput {
-  currentValues: Float64Array;
-  currentMissing: Uint8Array;
-  companionValues: Float64Array | null;
-  companionMissing: Uint8Array | null;
-  currentHours: number;
-  previousHours: number;
-  statistic: TrailingStatistic;
-  packingErrorCurrent: number;
-  packingErrorPrevious: number;
-}
-
-export interface CompactTrailingWindowResult {
-  values: Float32Array;
-  missing: Uint8Array;
-  missingCount: number;
-  derivedHours: number;
-  quantizationTolerance: number;
-}
-
+/** GFS cumulative companions must retain their decoded Float64 precision. */
 export function recoverTrailingWindow(input: CompactTrailingWindowInput): CompactTrailingWindowResult {
-  const {
-    currentValues,
-    companionValues,
-    currentHours,
-    previousHours,
-    statistic,
-    packingErrorCurrent,
-    packingErrorPrevious,
-  } = input;
-  if (!Number.isFinite(currentHours) || currentHours <= 0) {
-    throw new NoaaError('source-conflict', 'Invalid current statistical window length');
+  if (!(input.currentValues instanceof Float64Array) ||
+      (input.companionValues !== null && !(input.companionValues instanceof Float64Array))) {
+    throw new NoaaError('source-conflict', 'Window recovery requires Float64 source values');
   }
-  if (companionValues && (!Number.isFinite(previousHours) || previousHours <= 0 || currentHours <= previousHours)) {
-    throw new NoaaError('source-conflict', 'Invalid companion statistical window length');
+  try { return recoverInterval(input); }
+  catch (error) {
+    if (error instanceof RangeError) throw new NoaaError('source-conflict', error.message);
+    throw error;
   }
-  if (companionValues && companionValues.length !== currentValues.length) {
-    throw new NoaaError('source-conflict', 'Companion window has a different active-cell count');
-  }
-  if (!(currentValues instanceof Float64Array) || (companionValues !== null && !(companionValues instanceof Float64Array))) throw new NoaaError('source-conflict', 'Window recovery requires Float64 source values');
-  if (!(input.currentMissing instanceof Uint8Array) || input.currentMissing.length !== currentValues.length ||
-      (companionValues ? !input.companionMissing || input.companionMissing.length !== currentValues.length : input.companionMissing !== null)) {
-    throw new NoaaError('source-conflict', 'Window missing mask has a different active-cell count');
-  }
-  if (
-    !Number.isFinite(packingErrorCurrent) ||
-    packingErrorCurrent < 0 ||
-    !Number.isFinite(packingErrorPrevious) ||
-    packingErrorPrevious < 0
-  ) {
-    throw new NoaaError('source-conflict', 'Invalid GRIB packing error');
-  }
-  const derivedHours = companionValues ? currentHours - previousHours : currentHours;
-  const quantizationTolerance = packingErrorCurrent + packingErrorPrevious + 1e-9;
-  const values = new Float32Array(currentValues.length);
-  const missing = new Uint8Array(currentValues.length);
-  let missingCount = 0;
-  for (let i = 0; i < currentValues.length; i++) {
-    const value = currentValues[i];
-    const previous = companionValues?.[i];
-    let result = Number.NaN;
-    if (value !== null && value !== undefined && Number.isFinite(value) && !input.currentMissing[i] &&
-        (!companionValues || (previous !== null && previous !== undefined && Number.isFinite(previous) && !input.companionMissing![i]))) {
-      if (statistic === 'mean') {
-        result = companionValues ? (currentHours * value - previousHours * previous!) / derivedHours : value;
-      } else {
-        const amount = companionValues ? value - previous! : value;
-        if (Number.isFinite(amount) && amount >= -quantizationTolerance) result = (amount < 0 ? 0 : amount) / derivedHours;
-      }
-    }
-    if (Number.isFinite(result)) result = Math.fround(result);
-    if (!Number.isFinite(result)) {
-      missing[i] = 1;
-      missingCount++;
-      values[i] = Number.NaN;
-    } else {
-      values[i] = result;
-    }
-  }
-  return { values, missing, missingCount, derivedHours, quantizationTolerance };
 }

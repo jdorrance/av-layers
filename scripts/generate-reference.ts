@@ -47,7 +47,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [command, options] of entries(CLI_COMMANDS)) {
     lines.push(`- ${code(command)}: ${options.map((option: keyof typeof CLI_OPTIONS) => code(`--${option}${CLI_OPTIONS[option].type === 'string' ? ' <string>' : ''}`)).join(', ')}.`);
   }
-  lines.push('', '## Live models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate.', '');
+  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
@@ -58,9 +58,11 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Bounds [west, south, east, north]: ${code(product.bounds)}.`,
       `- Coverage: ${code(product.coverageId)}. ${product.coverageDescription}`,
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
-      `- Forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours.`,
+      `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
+      `- Vertical coordinate: ${code(product.capabilities.verticalCoordinate)}; maximum levels: ${product.capabilities.maxVerticalLevels}.`,
+      `- Required calculation inputs: ${[...new Set(Object.values(contracts.createProductDescriptors(product).methods).flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
       `- Layers: ${product.layers.map(code).join(', ')}.`,
-      `- Publishing freshness: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
+      `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
   }
   lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {
@@ -68,15 +70,15 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,
       `- Vertical reference: ${code(layer.verticalReference)}; time support: ${code(layer.timeSupport)}.`,
       `- Method: ${code(layer.methodId)}; palette: ${code(layer.palette)}.`,
-      `- Admits physical no-lift status: ${layer.supportsNoLift}; public no-lift value: ${code(layer.noLiftSampleValue)}; admits lift support flags: ${layer.supportsLiftFlags}.`,
+      `- Supports no-lift status: ${layer.supportsNoLift}; public no-lift value: ${code(layer.noLiftSampleValue)}; supports lift flags: ${layer.supportsLiftFlags}.`,
       `- Zero on no-lift interpolation: ${layer.zeroOnNoLiftInterpolation}; hide nonpositive rendered values: ${layer.hideNonPositiveValues}.`, '');
   }
   lines.push('## Status and support encodings', '',
     `Public sample statuses: ${contracts.SAMPLE_STATUSES.map(code).join(', ')}.`, '',
-    'The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.', '');
+    'The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. The layer settings above determine which flags a result can contain.', '');
   for (const [name, value] of entries(contracts).filter(([name]) => /^(STATUS_|SUPPORT_)/.test(name))) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Methods and normalized inputs', '',
-    'Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.', '');
+    'Source: [method definitions](../packages/contracts/src/methods.ts). The descriptors record the defaults used by the science packages. Adapters supply the units listed below; frame calculations convert temperature to Celsius and pressure to hPa for the column solver. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.', '');
   for (const [id, method] of entries(contracts.METHODS)) {
     lines.push(`### ${id}`, '',
       `- Outputs: ${method.outputs.map(code).join(', ')}.`,
@@ -92,17 +94,17 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     lines.push(`- ${code(id)}: ${code(input.quantity)}; units ${code(input.units)}; dimensions ${code(input.dimensions)}; vertical reference ${code(input.verticalReference)}; time support ${code(input.timeSupport)}; missingness ${code(input.missingness)}.`);
   }
   lines.push('', '## Resource limits', '',
-    'These are configured limits. [Capacity checks](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) describes API memory and load checks.', '',
+    'These are configured limits. [capacity.ts](../apps/batch/src/capacity.ts) checks build limits; [serving budgets](serving-budgets.md) describes API memory and load checks.', '',
     'Complete-build limits:', '');
   for (const [name, value] of entries(BUILD_BUDGETS)) lines.push(`- ${code(name)}: ${code(value)}.`);
-  lines.push('', 'Shared producer/consumer contract limits and storage constants:', '');
+  lines.push('', 'Shared limits and storage constants:', '');
   for (const [name, value] of entries(contracts).filter(([name, value]) => typeof value === 'number' && /^(MAX_|DEFAULT_|CELL_BYTES$|SAMPLE_BLOCK_SIZE$|RETENTION_DAYS$)/.test(name))) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', 'Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):', '',
     `- ${code('MAX_RASTER_WORKERS')}: ${MAX_RASTER_WORKERS}.`,
     `- ${code('MAX_RASTER_SHARED_INPUT_BYTES')}: ${MAX_RASTER_SHARED_INPUT_BYTES}.`,
     `- ${code('RASTER_WORKER_RESOURCE_LIMITS')}: ${code(RASTER_WORKER_RESOURCE_LIMITS)} (V8 heap/stack ceiling per worker).`,
     `- ${code('RASTER_WORKER_NATIVE_RESERVE_MB')}: ${RASTER_WORKER_NATIVE_RESERVE_MB}.`,
-    `- ${code('RASTER_WORKER_RESERVE_BYTES')}: ${RASTER_WORKER_RESERVE_BYTES}; admission reserve per worker derived from the V8 heap/stack ceiling plus native allowance.`, '',
+    `- ${code('RASTER_WORKER_RESERVE_BYTES')}: ${RASTER_WORKER_RESERVE_BYTES}; memory reserved per worker derived from the V8 heap/stack ceiling plus native allowance.`, '',
     '## API reference', '',
     'The checked-in [OpenAPI document](reference/openapi.json) is generated by invoking the actual Worker’s `GET /openapi.json` route without R2. The running service exposes the same schema at `/openapi.json`, with its interactive viewer at `/docs`. These route definitions describe structure; retained build descriptors supply available layers, frames, units and methods.', '');
   for (const [path, operations] of entries(api.paths)) for (const method of Object.keys(operations).sort()) {

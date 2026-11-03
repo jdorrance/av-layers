@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "component": "apps/batch/src/noaa",
+  "component": "apps/batch/src/gfs",
   "generatedAt": "2026-10-30T07:49:00Z",
   "purpose": "Minimal GFS primary/secondary acquisition, exact-range decoding, interval differencing, per-cell missingness and proof helper.",
   "sources": [
@@ -69,21 +69,21 @@
   ],
   "testFixtures": [
     {
-      "path": "apps/batch/src/noaa/fixtures/gfs-shtfl-ave-0-6h.grib2",
+      "path": "apps/batch/src/gfs/fixtures/gfs-shtfl-ave-0-6h.grib2",
       "sha256": "339f72fa3583cf673c60e1ed023c4ca14f1cdfcca840aabd0c2505d4a8c9ef41",
       "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures/gfs-shtfl-ave-0-6h.grib2",
       "oracle": "ecCodes 2.48.0 expectation sidecar retained beside the fixture",
       "covers": "GFS DRT 5.3, global 0.25 degree regular lat-lon, PDT 4.8 mean window 0-6 h"
     },
     {
-      "path": "apps/batch/src/noaa/fixtures/gfs-tmp-850mb.grib2",
+      "path": "apps/batch/src/gfs/fixtures/gfs-tmp-850mb.grib2",
       "sha256": "81a42e9010cc1e00f52bd759aa959424ed08da5d2a7ff575c379ce4e87d2a74c",
       "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures/gfs-tmp-850mb.grib2",
       "oracle": "ecCodes 2.48.0 expectation sidecar retained beside the fixture",
       "covers": "GFS DRT 5.3 instantaneous pressure temperature on the global regular grid"
     },
     {
-      "path": "apps/batch/src/noaa/fixtures/gfs.t12z.pgrb2.0p25.f021.excerpt.idx",
+      "path": "apps/batch/src/gfs/fixtures/gfs.t12z.pgrb2.0p25.f021.excerpt.idx",
       "sha256": "1de8e90838cd7c6c1fb736a357d1a04368d811aa4182b5cf3df7ccaf0a8518e7",
       "source": "/Users/johndorrance/projects/flying/meteo/grib/test/fixtures-idx/gfs.t12z.pgrb2.0p25.f021.excerpt.idx",
       "covers": "Real GFS idx labels including APCP 0-21 and 18-21 duplicate-family disambiguation"

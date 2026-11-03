@@ -1,148 +1,152 @@
 # Extending the project
 
-Start with [development](development.md). GFS and the three existing scalar
-layers are the current scope. Use synthetic data to test an extension before
-connecting a new weather source.
+Follow [development](development.md) for setup and
+[architecture](architecture.md) to find the relevant package. GFS and ICON-EU
+are examples of two sources feeding the same forecast, rendering, and serving
+code. Start new source work with small synthetic frames, then check real input
+files before building a full forecast.
 
-## Change settings
+## Change existing settings
 
-- Edit [GFS settings](../packages/contracts/config/gfs.json) for forecast hours,
-  pressure levels, grid, coverage, and freshness rules.
-- Edit [methods](../packages/contracts/src/methods.ts) for calculation parameters
-  and input definitions. Keep formulas in [forecast](../packages/forecast/README.md).
-- Edit [capacity](../apps/batch/src/capacity.ts) for build limits, with measured
-  evidence for any increase. Run `pnpm capacity` before a larger build.
-- Edit [Wrangler settings](../apps/api/wrangler.json) for deployment bindings.
-  Workflow setup reads the Node and pnpm versions from the root package.
+Edit [gfs.json](../packages/contracts/config/gfs.json) or
+[icon-eu.json](../packages/contracts/config/icon-eu.json) for model settings.
+[product.ts](../packages/contracts/src/product.ts) validates the shared fields;
+the source adapter reads any source-specific settings. Numerical defaults live
+in the relevant [solar](../packages/solar/README.md),
+[thermodynamics](../packages/thermodynamics/README.md), or
+[soaring](../packages/soaring/README.md) package and are imported into the
+published [method descriptors](../packages/contracts/src/methods.ts).
+For numerical experiments, call `deriveFrame` or the math packages directly.
+Builds use the recorded method defaults; their only calculation option is the
+daylight switch used by the synthetic development fixture.
 
-After a GFS grid or coverage change, run `pnpm masks:build` and build a new forecast.
-That generator handles the global regular GFS grid; other grids need their own
-offline mask generation.
-Changes to calculations, layers, or timing also require fresh forecast files.
-Run `pnpm verify` before deployment.
-
-## Add a source adapter
-
-[ForecastProvider](../apps/batch/src/providers.ts) is the source boundary. Its
-session opens with the required native cell indices, acquires one frame, and
-closes even after failure. Keep source discovery, downloads, file decoding, and
-source-specific conversions inside the adapter. Declare `maxLevels` for resource
-admission. A production binding also implements `resolveCycle` for scheduled and
-manually selected runs.
-
-The hosted planner resolves one cycle and partitions the product's declared frame
-hours. Each worker opens an independent session with that explicit cycle and may
-start partway through the forecast. Fetch any earlier source records needed to
-recover interval fluxes inside the adapter; a worker never depends on another
-worker's calculated output. Product selection and partitioning stay in the shared
-[parallel builder](../apps/batch/src/parallel.ts). The
-[parallel fixture](../apps/batch/src/parallel.test.ts) checks serial agreement for
-a different model and non-hourly frame spacing.
-
-Return a [NormalizedFrame](../packages/forecast/src/inputs.ts) with the requested
-indices in exactly the same order. Inputs declare their units and missing-value
-arrays. In particular, surface pressure is Pa, temperatures are K, specific humidity is
-kg/kg, heights are metres, fluxes are upward W/m², and precipitation is mm/h.
-Pressure levels are descending hPa. Do not turn missing inputs into zero.
-
-Record how source times, interval averages, accumulated rain, height references,
-and signs become those normalized inputs. Validate the conversions against an
-independent decoder and representative real files before enabling the adapter.
-
-Add its product definition to [products.ts](../packages/contracts/src/products.ts)
-and its provider binding to [providers.ts](../apps/batch/src/providers.ts).
-`modelId` identifies the public catalog and URLs; `source` separately identifies
-the upstream family, configuration, and domain. Two domains can share a family.
-Each product declares its own grid, frames, layers, and coverage.
-Bind its verified coverage assets in [coverage.ts](../apps/batch/src/coverage.ts);
-the current `loadCoverage` reads the single bundled GFS mask. Test-only builds
-can pass their mask directly to `buildForecast`.
-
-The [synthetic provider](../scripts/fixtures/normalized-provider.ts) and
-[native build test](../apps/batch/src/native-build.integration.test.ts) are working
-examples. They run the actual calculations, packing, rendering, and validation
-with different grids and frame/layer selections:
+After a grid or coverage change, regenerate its masks. For example:
 
 ```sh
-pnpm test apps/batch/src/native-build.integration.test.ts
-pnpm dev --generate-only
+pnpm masks:build --config packages/contracts/config/icon-eu.json
 ```
 
-Cover missing data, invalid intervals, wrong array dimensions, cancellation,
-cleanup, and the maximum working set. Check source rights and attribution before
-adding a live source. Keep test-only products outside the production registry.
+The [generator](../scripts/masks/build_masks.py) currently handles the GFS and
+ICON-EU coverage policies on regular latitude/longitude grids. Add geographic
+regression probes when adding a policy; another grid layout needs a matching
+generator. Build fresh forecast files after changing coverage, calculations,
+layers, or timing, and refresh generated documentation with `pnpm docs:generate`.
+
+## Add a weather model
+
+1. Add a JSON file under `packages/contracts/config/`, call `defineProduct` in
+   [products.ts](../packages/contracts/src/products.ts), and include it in
+   `PRODUCTS`. Set the grid, forecast hours, layer subset, vertical coordinate,
+   daylight policy, and coverage paths. `modelId` is the public URL/catalog name;
+   `source` identifies the upstream model, configuration, and domain.
+2. Add an adapter directory under `apps/batch/src/`, using
+   [gfs](../apps/batch/src/gfs/README.md) or
+   [icon](../apps/batch/src/icon/README.md) as a reference. Implement its local
+   `provider.ts` using [ResolvableForecastProvider](../apps/batch/src/provider.ts):
+   cycle discovery, input proof, and a session with `acquire(hour)` and `close()`.
+   Keep downloads, caching, decoding, field selection, and unit/time conversion
+   together in the adapter. The caller acquires frames sequentially and closes
+   the session in `finally`.
+3. Register that provider in [providers.ts](../apps/batch/src/providers.ts), keyed
+   by the source configuration. Keep lazy imports for discovery, proof, and
+   acquisition inside the adapter so selecting a model does not load decoders.
+   Set `maxLevels` and `retainedGeometryFields` to include any cached terrain or
+   height arrays in the memory estimate.
+4. Keep provider-loading tests, decoder fixtures, and acquisition tests in the
+   adapter directory. Compare representative fields against an independent
+   decoder, including units, flux signs, source time
+   windows, grid order, and missing values. Exercise bad dimensions, invalid
+   intervals, masked pressure, cancellation, and session cleanup.
+5. Run synthetic serial and parallel builds, then the real input proof and
+   forecast commands below. Measure cold/warm runtime and peak RSS on the
+   intended runner before publishing. Check the resulting tiles and point
+   values through the API and both clients using [operations](operations.md).
+
+Run from the repository root, replacing `MODEL` with the registered ID:
+
+```sh
+pnpm test packages/forecast/src/inputs.test.ts apps/batch/src/providers.test.ts
+pnpm test apps/batch/src/native-build.integration.test.ts apps/batch/src/parallel.test.ts
+pnpm capacity --model MODEL
+pnpm input:proof --model MODEL --cache-dir .cache/MODEL
+pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL
+```
+
+The first three commands are offline. The proof and forecast download weather
+data. [capacity.ts](../apps/batch/src/capacity.ts) defines build limits; use
+measurements before raising them. Record source licensing and attribution in
+[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt). Registration makes a model
+selectable; the scheduled workflow continues to use GFS until changed explicitly.
+
+### Adapter output
+
+Return a [NormalizedFrame](../packages/forecast/src/inputs.ts) with cells in the
+exact requested `activeIndices` order. Surface pressure is Pa, temperatures are
+K, specific humidity is kg/kg, terrain and profile heights are metres MSL, PBL
+depth is metres above model terrain, and surface fluxes are upward W/m². Keep
+missing values explicitly masked.
+
+Use one pressure representation: a strictly descending shared hPa axis for
+`IsobaricFrame`, or per-column Pa arrays and pressure masks for `ModelLevelFrame`.
+Order height/temperature levels from lowest to highest after source conversion.
+Precipitation arrays, masks, and intervals are needed when the product includes
+`precip-rate`. [Method definitions](../packages/contracts/src/methods.ts) describe
+each normalized field.
+
+Supply the actual profile time and source/derived interval windows. The shared
+[interval helpers](../packages/forecast/src/intervals.ts) recover trailing means
+and rates from validated source windows. A parallel worker can begin partway
+through the forecast, so its adapter must fetch earlier companion records when
+needed. Hourly output needs hourly source fields; temporal interpolation is not
+implemented.
+
+Use the [synthetic provider](../scripts/fixtures/normalized-provider.ts) and
+[native-grid integration test](../apps/batch/src/native-build.integration.test.ts)
+to exercise the full build with small inputs. These tests cover different grids,
+vertical representations, frame spacing, and layer subsets without adding test
+models to the production registry.
 
 ## Add a scalar calculation
 
-Add its ID to `LAYER_IDS` in [products.ts](../packages/contracts/src/products.ts).
-Define its layer, units, height reference, time interval, missing-value behavior,
-palette, and interpolation rules in [layers.ts](../packages/contracts/src/layers.ts).
-Declare required inputs and numeric parameters in
-[methods.ts](../packages/contracts/src/methods.ts). Give a changed scientific
-method its own identifier.
+1. Add its ID to `LAYER_IDS` in
+   [product.ts](../packages/contracts/src/product.ts). Define its units, vertical
+   reference, time interval, missing-value behavior, palette, and interpolation
+   settings in [layers.ts](../packages/contracts/src/layers.ts).
+2. Add the method's required inputs and parameters in
+   [methods.ts](../packages/contracts/src/methods.ts). Extend
+   [inputs.ts](../packages/forecast/src/inputs.ts) and the adapters if new input
+   fields are needed. Give a changed scientific method its own identifier.
+3. Implement equations in the relevant pure math package, translate results and
+   status flags in [science.ts](../packages/forecast/src/science.ts), and wire the
+   layer into [frame.ts](../packages/forecast/src/frame.ts). Share calculations
+   between related outputs, as the two lift layers do.
+4. Select the layer in each model JSON that will publish it. Test independent
+   expected values and missing-data cases, then verify point results, tiles,
+   and legends with a synthetic build.
 
-Implement the pure calculation in [forecast](../packages/forecast/README.md)
-and connect it once in [frame.ts](../packages/forecast/src/frame.ts). Products
-choose their layer subset; review that selection explicitly because GFS currently
-selects all `LAYER_IDS`. Shared calculations should produce related outputs
-together, as the existing MSL and AGL lift layers do.
-
-Test independent expected values and flags, then point results and legends.
-Account for added input arrays, output channels, tile count, and point-read size.
-The stored build includes its method and display definitions, so a later code
-change cannot silently relabel its values.
+Recheck build capacity and [serving budgets](serving-budgets.md) for the extra
+input arrays, numeric channels, tiles, and point-read size. Builds store their
+method and display definitions, so existing files retain their original labels
+and meaning.
 
 ## Add a grid or neighboring-cell calculation
 
 [geometry.ts](../packages/contracts/src/geometry.ts) supports regular
-latitude/longitude and spherical Lambert grids. The
-[Lambert fixture](../packages/contracts/src/fixtures/lambert.json) supplies
-independent PROJ control points. Extend geometry with independent fixtures for
-its Earth model, projection, signed axes, and longitude wrapping.
+latitude/longitude and spherical Lambert conformal grids. New geometry needs
+independent coordinate fixtures, including the Earth model, signed axes, and
+longitude wrapping. The existing
+[Lambert fixture](../packages/contracts/src/fixtures/lambert.json) uses PROJ
+control points.
 
-Use [support.ts](../packages/forecast/src/support.ts) to plan the cells each
-input needs. Interpolation and a derivative may need different neighbors.
-Offsets are grid cells; a physical derivative also needs local distances and
-the correct vector basis. Missing off-domain support makes the result unavailable.
+[support.ts](../packages/forecast/src/support.ts) selects neighboring cells for
+calculations. A physical derivative also needs local distances and the correct
+vector basis; cell offsets alone are insufficient. Missing off-domain support
+makes the result unavailable. Keep calculation neighbors and stored block
+padding separate from public coverage in
+[coverage.ts](../apps/batch/src/coverage.ts). Test boundaries, seams, and agreement
+between tile and point sampling.
 
-Keep public coverage, calculation support, stored sample blocks, and tile
-coverage distinct. Write masks through [coverage.ts](../apps/batch/src/coverage.ts).
-Test boundaries, seams, padding, hash checks, and agreement between tile and
-point sampling. Recheck capacity before acquiring data.
-
-## Deferred work
-
-An approved profile product should start with the nearest native column and
-declare its location, model elevation, time/level/variable axes, units, quality,
-method, missing values and query limits. It needs its own storage layout and budgets.
-
-For a hypothetical eight-frame, 21-level, 210,237-point product, five Int16 fields
-(height, temperature, dew point, U and V) take **1,680 bytes per point**, or
-**353,198,160 bytes** before status, indexes, headers or padding. That exceeds the
-current 256 MiB scalar-pack/upload limit. Those five fields omit pressure: an
-exact shared pressure axis must be stored separately when the source supports it.
-
-Specify each Int16 field's scale, offset, missing sentinel, rounding, valid range
-and overflow behavior. Measure compression and read amplification. A single
-1,680-byte read assumes contiguous, uncompressed data and already available
-metadata/indexes. The scalar layout adds block padding and neighboring cells;
-profile storage must account for those costs or choose a different layout.
-
-WRF needs independent fixtures for perturbation/base pressure, potential/actual
-temperature, geopotential height, water-vapor mixing ratio versus specific
-humidity, flux signs and accumulated-rain resets. Treat destaggering, earth-relative
-wind rotation and projection metrics as separate operations. Native pressure can
-vary by column, level and time; extend the input contract for that case. Lambert
-geometry covers one WRF projection. Other projections need their own fixtures.
-Define nested or moving domains and terrain references explicitly.
-Use [NCAR's field definitions](https://www2.mmm.ucar.edu/wrf/site/documentation/users_guide/output_variables.html)
-when implementing those conversions. See [roadmap](roadmap.md) for the deferred
-models and products.
-
-## Alpha deployments
-
-There is no compatibility layer for discarded alpha formats. For a format
-change, rebuild data and deploy the matching publisher, API, and clients.
-Rollback must restore a compatible code-and-data set. Follow
-[operations](operations.md), then check metadata, point results, and rendered
-tiles in both clients.
+Finish with `pnpm docs:generate` and `pnpm verify`. Format changes need fresh data
+and matching publisher, API, and client deployments; follow
+[operations](operations.md) for rollout and rollback. Profiles, additional
+diagnostics, and other future products are tracked in [the roadmap](roadmap.md).

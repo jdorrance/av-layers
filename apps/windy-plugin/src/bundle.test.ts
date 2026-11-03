@@ -220,7 +220,10 @@ it.each([
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
-  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([['gfs', false, 'GFS']]);
+  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([
+    ['gfs', false, 'GFS'],
+    ['icon-eu', false, 'ICON-EU']
+  ]);
   expect(selects[2].value).toBe('f006');
   selects[2].value = 'f003';
   selects[2].dispatch('change');

@@ -1,0 +1,18 @@
+/** Dry-column validation and Lenschow defaults shared with method descriptors. */
+export const DEFAULT_SOARING_PARAMETERS = Object.freeze({
+  sinkRateMps: 1.2,
+  minimumThermalVelocityMps: 0,
+  lenschowScale: 4,
+  lenschowShape: 0.8,
+  lenschowPeakZeta: 0.3125,
+  saturationRelativeTolerance: 1e-6,
+  minimumSurfaceTemperatureC: -100,
+  maximumSurfaceTemperatureC: 60,
+  minimumSurfacePressureHpa: 100,
+  maximumSurfacePressureHpa: 1100,
+  minimumProfileTemperatureC: -120,
+  maximumProfileTemperatureC: 60,
+  maximumProfileGapM: 1000,
+  crossingEpsilonMultiplier: 8,
+  maximumBisectionIterations: 60
+} as const);

@@ -1,9 +1,15 @@
 import { coverageIndices, LAYER_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP, type CoverageMask, type LayerId } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 
-export function summarizeFields(fields: Record<LayerId, GridField>, mask: CoverageMask, outputIndices = coverageIndices(mask).output) {
-  return Object.fromEntries(LAYER_IDS.map(layer => {
+export function summarizeFields(
+  fields: Partial<Record<LayerId, GridField>>,
+  mask: CoverageMask,
+  outputIndices = coverageIndices(mask).output,
+  layers: readonly LayerId[] = LAYER_IDS.filter(layer => fields[layer] !== undefined)
+) {
+  return Object.fromEntries(layers.map(layer => {
     const field = fields[layer];
+    if (!field) throw new Error(`Missing derived field for layer ${layer}`);
     const counts = { valid: 0, noLift: 0, unavailable: 0, outside: 0, parcelCrossing: 0, profileTop: 0, pblClosure: 0 };
     let min = Infinity, max = -Infinity, total = 0;
     for (const i of outputIndices) {

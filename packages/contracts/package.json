@@ -10,6 +10,10 @@
     "./fixture-product": "./src/fixture-product.ts"
   },
   "dependencies": {
-    "zod": "catalog:"
-  }
+    "zod": "catalog:",
+    "@av/thermodynamics": "workspace:*",
+    "@av/soaring": "workspace:*",
+    "@av/solar": "workspace:*"
+  },
+  "sideEffects": false
 }
