@@ -46,9 +46,9 @@ ingestion; runtime pins and packing settings live in [ingest.ts](ingest.ts).
 pnpm terrain inspect --catalog-ref output/terrain-catalog-ref.json \
   --bounds 43.99,40.49,44.01,40.51 --out output/terrain-read.json
 pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json \
-  --grid scripts/fixtures/terrain-armenia-grid.json --out output/terrain-prepared-ref.json
+  --grid scripts/fixtures/terrain-grid.json --out output/terrain-prepared-ref.json
 pnpm terrain stage --prepared-ref output/terrain-prepared-ref.json \
-  --grid scripts/fixtures/terrain-armenia-grid.json --out output
+  --grid scripts/fixtures/terrain-grid.json --out output
 ```
 
 Bounds are west,south,east,north; west greater than east crosses the dateline.

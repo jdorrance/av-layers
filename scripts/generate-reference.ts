@@ -6,6 +6,7 @@ import * as contracts from '@av/contracts';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { CLI_COMMANDS, CLI_OPTIONS } from '../apps/batch/src/commands.js';
 import { TERRAIN_COMMANDS } from '../apps/batch/src/terrain/cli.js';
+import { REFINEMENT_OPTIONS } from '../apps/batch/src/refinement/cli.js';
 import { TERRAIN_READ_LIMITS } from '../apps/batch/src/terrain/reader.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_NATIVE_RESERVE_MB, RASTER_WORKER_RESERVE_BYTES, RASTER_WORKER_RESOURCE_LIMITS } from '../apps/batch/src/raster-pool.js';
 
@@ -53,6 +54,9 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [command, options] of Object.entries(TERRAIN_COMMANDS)) lines.push(`- ${code(command)}: ${options.map(option => code(`--${option} <string>`)).join(', ')}.`);
   lines.push('', 'Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:', '');
   for (const [name, value] of entries(TERRAIN_READ_LIMITS)) lines.push(`- ${code(name)}: ${code(value)}.`);
+  lines.push('', '## Refinement grids', '',
+    'Run `pnpm refinement` to inspect the grids selected by the shared polygon configuration. This command performs no network or storage operations. See [refinement](../apps/batch/src/refinement/README.md) for configuration and examples.', '',
+    ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
   lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);

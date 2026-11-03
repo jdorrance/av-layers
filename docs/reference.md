@@ -43,6 +43,13 @@ Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers m
 - `maxRangeBytes`: `8388608`.
 - `maxReadBytes`: `268435456`.
 
+## Refinement grids
+
+Run `pnpm refinement` to inspect the grids selected by the shared polygon configuration. This command performs no network or storage operations. See [refinement](../apps/batch/src/refinement/README.md) for configuration and examples.
+
+- `--model <string>`.
+- `--zones <string>`.
+
 ## Configured models
 
 Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.

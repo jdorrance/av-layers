@@ -46,6 +46,25 @@ and layer references; retained manifests use their embedded descriptors.
 These workspace packages export TypeScript directly; each app bundles the code
 it imports. See [extensions](../../docs/extensions.md) for adding a model or layer.
 
+## Refinement zones
+
+[refinement.json](config/refinement.json) contains GeoJSON polygon features with
+unique string IDs and empty properties. Add a `Polygon` or `MultiPolygon` in
+longitude/latitude coordinates; close each ring by repeating its first position.
+Inner rings are holes. Zones and components must not overlap or touch.
+
+[refinement.ts](src/refinement.ts) validates the configuration and plans a bounded
+Lambert grid at shared 1,000 m projected spacing, with the caller's halo. Planning
+clips ownership to the source's admitted bounds and native grid-center extent;
+holes remain excluded. Its returned source bounds also constrain later weather
+interpolation. Grid halos are computational support, not published coverage.
+
+The planner admits at most 16 features, 256 positions per ring, 1,024 total positions, 20 degrees per
+axis per feature, and latitudes within ±80°. Split dateline-crossing polygons;
+crossing edges and wrapped source bounds are rejected. The existing grid-cell
+budget applies to the sum of all planned grids, including their halos. Planning
+does not allocate forecast fields or change a published forecast.
+
 Run tests from the repository root:
 
 ```sh

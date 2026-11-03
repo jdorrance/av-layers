@@ -48,6 +48,8 @@ use `pnpm forecast` to generate forecast data.
 - [src/render.ts](src/render.ts): map tile generation.
 - [src/terrain](src/terrain/README.md): global native DEM ingestion, bounded reads
   and reusable prepared inputs.
+- [src/refinement](src/refinement/README.md): polygon configuration and bounded
+  calculation-grid planning.
 - [pmtiles.json](pmtiles.json): PMTiles tool version and download checksums.
 
 The adapters return [normalized arrays](../../packages/forecast/src/inputs.ts)
