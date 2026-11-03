@@ -48,7 +48,7 @@ export function fixturePatch(manifest: Manifest, overrides: Partial<RefinementPa
     descriptors: { ...structuredClone(manifest.descriptors), bounds,
       layers: { 'usable-lift-agl': { ...baseLayer, methodId: method.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' } },
       methods: { [method.id]: method }, palettes: manifest.descriptors.palettes.filter(palette => palette.id === baseLayer.palette) },
-    layers: ['usable-lift-agl'], method: { id: method.id, hash },
+    layers: ['usable-lift-agl'], method: { id: method.id, hash: manifest.method.hash },
     samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 9, channelCount: manifest.frames.length, bytes: 9 * manifest.frames.length * CELL_BYTES, key: `builds/${manifest.model}/${manifest.buildId}/refinements/${id}/samples.bin`, sha256: hash },
     terrain: { dataId: 'c'.repeat(64), key: `terrain/prepared/${hash}/manifest.json`, sha256: hash, verticalDatum: 'EGM2008', surface: 'DSM' },
     ...overrides
