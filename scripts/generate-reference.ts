@@ -5,6 +5,8 @@ import { parseArgs } from 'node:util';
 import * as contracts from '@av/contracts';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { CLI_COMMANDS, CLI_OPTIONS } from '../apps/batch/src/commands.js';
+import { TERRAIN_COMMANDS } from '../apps/batch/src/terrain/cli.js';
+import { TERRAIN_READ_LIMITS } from '../apps/batch/src/terrain/reader.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_NATIVE_RESERVE_MB, RASTER_WORKER_RESERVE_BYTES, RASTER_WORKER_RESOURCE_LIMITS } from '../apps/batch/src/raster-pool.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
@@ -47,6 +49,10 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [command, options] of entries(CLI_COMMANDS)) {
     lines.push(`- ${code(command)}: ${options.map((option: keyof typeof CLI_OPTIONS) => code(`--${option}${CLI_OPTIONS[option].type === 'string' ? ' <string>' : ''}`)).join(', ')}.`);
   }
+  lines.push('', '## Terrain CLI', '', 'Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.', '', 'Source: [terrain commands](../apps/batch/src/terrain/cli.ts).', '');
+  for (const [command, options] of Object.entries(TERRAIN_COMMANDS)) lines.push(`- ${code(command)}: ${options.map(option => code(`--${option} <string>`)).join(', ')}.`);
+  lines.push('', 'Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:', '');
+  for (const [name, value] of entries(TERRAIN_READ_LIMITS)) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);

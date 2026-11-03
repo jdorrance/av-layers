@@ -78,6 +78,16 @@ describe('build capacity admission and performance budgets', () => {
       expect(() => prepareBuild(mask, ICON_EU_PRODUCT, { ...provider, retainedGeometryFields })).toThrow('retained geometry budget');
     }
   });
+  it('reserves prepared terrain validation and resident arrays only when requested', async () => {
+    const mask = await loadCoverage(GFS_PRODUCT), provider = getForecastProvider('gfs');
+    const baseline = prepareBuild(mask, GFS_PRODUCT, provider).capacity;
+    const staged = prepareBuild(mask, GFS_PRODUCT, { ...provider, terrainBytes: 5120 }).capacity;
+    expect(baseline.workingSet.preparedTerrain).toBe(0);
+    expect(staged.estimatedPeakBytes - baseline.estimatedPeakBytes).toBe(10240);
+    for (const terrainBytes of [-1, 0.5, NaN, 20_000_001]) {
+      expect(() => prepareBuild(mask, GFS_PRODUCT, { ...provider, terrainBytes })).toThrow('prepared terrain byte budget');
+    }
+  });
   it('rejects invalid scenarios and oversized point products', async () => {
     const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames })).toThrow('Invalid capacity');

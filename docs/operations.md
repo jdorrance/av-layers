@@ -169,6 +169,15 @@ Cleanup protects current and retained builds and applies a 24-hour grace period
 to unreferenced files. Let this workflow manage deletion; separate bucket expiry
 rules can remove files still in use.
 
+## Terrain data
+
+Global DEM ingestion uses the separate [Global terrain workflow](../.github/workflows/terrain.yml).
+Select its environment and run from `main`, as required by the existing storage
+environment branch policies. It verifies the complete inventory before publishing
+a catalog and retains verified receipts for retries. Dataset versions are
+outside forecast cleanup. The [terrain guide](../apps/batch/src/terrain/README.md)
+covers references, bounded reads, preparations and optional forecast inputs.
+
 ## Check a failure
 
 ```sh

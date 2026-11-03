@@ -105,7 +105,13 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       }
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
-    return createForecastPlan(model, { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal });
+    let terrain;
+    if (process.env.TERRAIN_INPUTS) {
+      const { terrainInputForModel } = await import('./terrain-inputs.js');
+      const ref = terrainInputForModel(process.env.TERRAIN_INPUTS, model);
+      if (ref) terrain = { ref, storage: store };
+    }
+    return createForecastPlan(model, { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain } : {}) });
   }, store);
 }
 
@@ -150,7 +156,12 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
     const product = getProduct(manifest.model);
-    if (!product || manifest.recipe.hash !== (await buildIdentity(product, manifest.coverage.hash)).recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
+    let terrain;
+    if (manifest.source.terrain !== undefined) {
+      const { preparedTerrainRefSchema } = await import('../apps/batch/src/terrain/prepare.js');
+      terrain = preparedTerrainRefSchema.parse(manifest.source.terrain);
+    }
+    if (!product || manifest.recipe.hash !== (await buildIdentity(product, manifest.coverage.hash, terrain)).recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
     signal.throwIfAborted();
     await commit(manifest, path, runId);
   }, store);

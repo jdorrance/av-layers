@@ -16,10 +16,32 @@ Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the opti
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`.
+
+## Terrain CLI
+
+Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.
+
+Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
+
+- `inventory`: `--store-dir <string>`, `--out <string>`.
+- `sync`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`, `--shard <string>`, `--shards <string>`, `--concurrency <string>`.
+- `finalize`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`.
+- `prepare`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--grid <string>`.
+- `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
+- `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
+
+Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:
+
+- `maxCachedPixels`: `8000000`.
+- `maxDecodedPixels`: `64000000`.
+- `maxOpenTiles`: `8`.
+- `maxOutputPixels`: `4000000`.
+- `maxRangeBytes`: `8388608`.
+- `maxReadBytes`: `268435456`.
 
 ## Configured models
 

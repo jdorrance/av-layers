@@ -111,6 +111,30 @@ Pages reads that API without a new app deployment for each forecast.
 [Operations](operations.md)
 covers publication, retention, and rollback.
 
+## Terrain preparation
+
+[Terrain inputs](../apps/batch/src/terrain/README.md) have a separate lifecycle
+from weather runs. A resumable importer verifies and losslessly repacks native
+GLO-90 COGs, then publishes an immutable global catalog. A bounded reader
+prepares elevations on a requested grid. Data identity, geometry and sampling
+method identify reusable results; storage layout is separate from numerical
+meaning. Missing source samples remain distinct from ocean absence and I/O failure.
+
+```mermaid
+flowchart LR
+  dem[Native DEM] --> ingest[One-time verified import]
+  ingest --> terrain[Immutable terrain namespace]
+  terrain --> prepare[Bounded grid preparation]
+  prepare --> inputs[Reusable arrays]
+  inputs --> plan[Optional pinned build-plan input]
+  plan --> workers[Local load once per shard]
+```
+
+Terrain is staged only when requested. The existing prepare job owns storage
+access; compute shards need no additional credentials. Current lift still uses
+model terrain. Terrain-aware physics, atmospheric remapping and profiles remain
+separate calculations. Terrain objects are outside forecast expiry and cleanup.
+
 ## Serving and clients
 
 The API checks that a requested build is published and unexpired before serving

@@ -16,6 +16,7 @@
     }
   },
   "scripts": {
+    "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",
     "test": "vitest run",

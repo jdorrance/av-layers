@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
-import { readProducerSourceState } from './identity.js';
+import { GFS_PRODUCT } from '@av/contracts';
+import { sha256 } from './terrain/contract.js';
+import { buildIdentity, readProducerSourceState } from './identity.js';
 
 it('records producer configuration edits while allowing unrelated client edits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-source-state-'));
@@ -26,4 +28,16 @@ it('records producer configuration edits while allowing unrelated client edits',
     await git('add', 'tsconfig.json');
     expect(await readProducerSourceState(root)).toEqual({ ...clean, dirty: true });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('keeps unstaged configuration identity stable and pins requested terrain without changing science', async () => {
+  const coverageHash = 'a'.repeat(64);
+  const baseline = await buildIdentity(GFS_PRODUCT, coverageHash);
+  expect(baseline.components.configuration).toBe(sha256(JSON.stringify({ product: GFS_PRODUCT, coverageHash })));
+  const terrain = { key: `terrain/prepared/${'b'.repeat(64)}/manifest.json`, bytes: 100, sha256: 'c'.repeat(64), arrayBytes: 20 };
+  const staged = await buildIdentity(GFS_PRODUCT, coverageHash, terrain);
+  const different = await buildIdentity(GFS_PRODUCT, coverageHash, { ...terrain, sha256: 'd'.repeat(64) });
+  expect(staged.recipe.hash).not.toBe(baseline.recipe.hash);
+  expect(different.recipe.hash).not.toBe(staged.recipe.hash);
+  expect(staged.scienceHash).toBe(baseline.scienceHash);
 });

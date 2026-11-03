@@ -13,6 +13,9 @@ import { getForecastProvider } from './providers.js';
 import { mergeSamplePacks } from './sample-pack.js';
 import { localPath, sha256 } from './validate.js';
 import { failureReason } from './failure.js';
+import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
+import { stagePreparedTerrain } from './terrain/staging.js';
+import type { ObjectStorage } from './storage.js';
 
 export const MAX_FORECAST_SHARDS = 4;
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
@@ -21,12 +24,12 @@ const planSchema = z.strictObject({
   version: z.literal(1), model: manifestSchema.shape.model,
   buildId: z.string().regex(/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/),
   createdAt: timestampSchema, cycle: timestampSchema, coverageHash: digestSchema,
-  providerId: z.string().min(1),
+  providerId: z.string().min(1), terrain: preparedTerrainRefSchema.optional(),
   recipe: manifestSchema.shape.recipe.strict().extend({ source: manifestSchema.shape.recipe.shape.source.strict() }),
   groups: z.array(z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES)).min(1).max(MAX_FORECAST_SHARDS)
 });
 export type BuildPlan = z.infer<typeof planSchema>;
-interface PlanOptions { out: string; cycle: string; shards?: number; signal?: AbortSignal }
+interface PlanOptions { out: string; cycle: string; shards?: number; signal?: AbortSignal; terrain?: { ref: PreparedTerrainRef; storage: Pick<ObjectStorage, 'get'> } }
 const nonnegativeNumber = z.number().nonnegative();
 const receiptSchema = z.strictObject({
   version: z.literal(1), planHash: digestSchema, shard: z.number().int().min(0).max(MAX_FORECAST_SHARDS - 1),
@@ -52,12 +55,14 @@ function partition(hours: readonly number[], count: number): number[][] {
 export async function createBuildPlan(options: PlanOptions & ForecastInputs): Promise<BuildPlan> {
   options.signal?.throwIfAborted();
   const { product, provider, mask } = options, root = resolve(options.out);
-  prepareBuild(mask, product, provider);
+  const terrain = options.terrain ? preparedTerrainRefSchema.parse(options.terrain.ref) : undefined;
+  prepareBuild(mask, product, { ...provider, terrainBytes: terrain?.arrayBytes });
   if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
   const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? MAX_FORECAST_SHARDS);
   const stamp = createBuildStamp(), coverageHash = await writeCoverage(root, mask, product);
-  const identity = await buildIdentity(product, coverageHash);
-  const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups });
+  if (terrain) await stagePreparedTerrain({ ref: terrain, storage: options.terrain!.storage, out: root, grid: product.grid, signal: options.signal });
+  const identity = await buildIdentity(product, coverageHash, terrain);
+  const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups, ...(terrain ? { terrain } : {}) });
   options.signal?.throwIfAborted();
   await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
   return plan;
@@ -77,9 +82,9 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs) {
   const age = Date.now() - Date.parse(plan.createdAt);
   if (age < -60_000 || age > MAX_BUILD_LIFETIME_MS) throw new Error('Forecast plan exceeds publisher lifetime');
   if (age > BUILD_BUDGETS.elapsedMs) throw new Error('Forecast plan exceeds elapsed-time budget; start a new build');
-  const prepared = prepareBuild(mask, product, provider);
+  const prepared = prepareBuild(mask, product, { ...provider, terrainBytes: plan.terrain?.arrayBytes });
   if (plan.coverageHash !== describeCoverage(mask, product).hash) throw new Error('Forecast plan coverage changed');
-  const identity = await buildIdentity(product, plan.coverageHash);
+  const identity = await buildIdentity(product, plan.coverageHash, plan.terrain);
   if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
   return { plan, prepared, identity };
 }
@@ -95,7 +100,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
   // A retry starts in a fresh worker directory; existing files never imply completion.
   await mkdir(localPath(root, prefix));
   try {
-    const result = await buildFrames({ ...options, prepared, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle, hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
+    const result = await buildFrames({ ...options, terrain: plan.terrain, prepared, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle, hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
     const receipt = receiptSchema.parse({ version: 1, planHash: planHash(plan), shard,
       sampleSha256: result.samples.sha256, tileSha256: result.artifacts.map(artifact => artifact.tilesSha256),
       provenance: result.receipts, metrics: result.metrics });
@@ -154,7 +159,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan 
     }
   };
   options.signal?.throwIfAborted();
-  return finishForecast({ ...options, prepared, buildId: plan.buildId, createdAt: plan.createdAt, coverageHash: plan.coverageHash, identity, result: merged, execution: {
+  return finishForecast({ ...options, terrain: plan.terrain, prepared, buildId: plan.buildId, createdAt: plan.createdAt, coverageHash: plan.coverageHash, identity, result: merged, execution: {
     mode: 'parallel', shardCount: plan.groups.length, totalWorkerElapsedMs,
     // Phase sums describe work; elapsedMs measures plan-to-validation latency including job handoffs.
     workers: results.map((result, shard) => ({ shard, hours: plan.groups[shard], elapsedMs: result.metrics.elapsedMs, peakRssBytes: result.metrics.peakRssBytes }))

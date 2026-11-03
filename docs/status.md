@@ -10,6 +10,19 @@ Open the [production map](https://windy-av-preview.pages.dev/),
 [Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
 or [API documentation](https://windy-av-api-production.jdorrance.workers.dev/docs).
 
+## Terrain inputs
+
+The global GLO-90 import, bounded native reader and reusable grid preparations
+are implemented. Source elevations and masks are preserved; optional prepared
+inputs travel through the existing forecast plan and shard artifacts. Current
+lift calculations still use model terrain.
+
+Real Armenia and polar tiles passed lossless repacking and independent rasterio
+sampling checks. The source snapshot contains 26,475 tiles. The global R2 import
+has not run yet; the **Global terrain** workflow must run from `main` to access
+the existing environment credentials. Follow the
+[terrain guide](../apps/batch/src/terrain/README.md) to import and prepare inputs.
+
 ## ICON-EU qualification
 
 The branch implements hourly candidates with regional daylight selection,

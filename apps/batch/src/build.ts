@@ -11,6 +11,7 @@ import { estimateCapacity, prepareBuild, type PreparedBuild } from './capacity.j
 import { failureReason } from './failure.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
+import type { PreparedTerrainRef } from './terrain/prepare.js';
 import { buildFrames, type FrameBuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
 export interface BuildOptions extends FrameBuildOptions { onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
 
@@ -27,9 +28,9 @@ export async function buildProduct(modelId: string, options: BuildOptions): Prom
 /** Local sequential execution and distributed workers share the same frame implementation. */
 export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
   const stamp = createBuildStamp();
-  const prepared = prepareBuild(options.mask, options.product, options.provider);
+  const prepared = prepareBuild(options.mask, options.product, { ...options.provider, terrainBytes: options.terrain?.arrayBytes });
   const coverageHash = await writeCoverage(resolve(options.out), options.mask, options.product);
-  const identity = await buildIdentity(options.product, coverageHash);
+  const identity = await buildIdentity(options.product, coverageHash, options.terrain);
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
   const result = await buildFrames({ ...options, ...stamp, prepared, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
   return finishForecast({ ...options, ...stamp, prepared, coverageHash, identity, result });
@@ -37,7 +38,7 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
 
 /** Assemble and validate a complete product once, before any publication callback. */
 export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal' | 'onValidated'> & ForecastInputs & BuildStamp & {
-  prepared: PreparedBuild; coverageHash: string; identity: Awaited<ReturnType<typeof buildIdentity>>; result: FrameBuildResult; execution?: Record<string, unknown>;
+  prepared: PreparedBuild; coverageHash: string; identity: Awaited<ReturnType<typeof buildIdentity>>; result: FrameBuildResult; execution?: Record<string, unknown>; terrain?: PreparedTerrainRef;
 }): Promise<string> {
   const { product, mask, provider, buildId, createdAt, coverageHash, identity, result } = options;
   const root = resolve(options.out), started = Date.parse(createdAt), prefix = `builds/${product.modelId}/${buildId}`;
@@ -77,7 +78,8 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
         temporalApproximation: 'interval flux with endpoint profile and PBL',
         frameCount: frames.length,
         provenanceKey,
-        provenanceSha256: sha256(provenanceBytes)
+        provenanceSha256: sha256(provenanceBytes),
+        ...(options.terrain ? { terrain: options.terrain } : {})
       },
       tool: { components: identity.components, node: process.version, pmtiles: pmtiles.version, tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: LIFT_RENDER_STYLE },
       palettes: descriptors.palettes.map(p => p.id)
