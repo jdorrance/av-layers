@@ -49,8 +49,10 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 model discovers its latest complete run independently. To select one shared
 initialization time, add `-f cycle=YYYY-MM-DDTHH:00:00Z`; both current models
 accept 00, 06, 12 or 18 UTC. Production runs all models automatically at
-**05:17 and 17:17 UTC**. A model skips a cycle already published, and successful
-publication is followed by cleanup.
+**05:17 and 17:17 UTC**. Both manual and scheduled runs skip a model whose cycle
+is already published. An `all` retry builds only the models with new cycles;
+skipped models need no batches or publication. Successful publication is followed
+by cleanup.
 
 Selected models run concurrently as GitHub runners and account limits allow.
 Each runs `forecast-plan`, up to four parallel `forecast-shard` jobs, then

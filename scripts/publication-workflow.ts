@@ -100,11 +100,8 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       const latestCycle = Math.max(...pointer.retained.map(item => Date.parse(item.cycle)));
       if (Date.parse(cycle) < latestCycle) throw new Error('Older cycle cannot be published');
       if (Date.parse(cycle) === latestCycle && process.env.ALLOW_SAME_CYCLE !== 'true') {
-        if (process.env.GITHUB_EVENT_NAME === 'schedule') {
-          console.log(`Skipped scheduled ${model} build: cycle ${cycle} was already published. No new build was produced.`);
-          return null;
-        }
-        throw new Error('This cycle was already published; set allow-same-cycle=true for an intentional replacement');
+        console.log(`Skipped ${model} build: cycle ${cycle} was already published. No new build was produced. Set allow-same-cycle=true to rebuild it.`);
+        return null;
       }
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
