@@ -12,7 +12,6 @@ const UNITS: Readonly<Record<string, string>> = Object.freeze({
   PRES: 'Pa',
   TMP: 'K',
   SPFH: 'kg/kg',
-  HPBL: 'm',
   SHTFL: 'W/m2',
   LHTFL: 'W/m2',
   APCP: 'kg/m2',

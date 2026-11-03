@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP } from '@av/contracts';
+import { STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP } from '@av/contracts';
 import { deriveColumn as deriveCountedColumn, dewPointMixingRatioKgKg, LENSCHOW_F_MAX, precipitationRateStatus, usableLiftDepthM, type ColumnInput } from './science.js';
 
-const base: ColumnInput = { terrainM: 0, surfaceTemperatureC: 20, surfacePressureHpa: 1000, humidity: { specificHumidityKgKg: 0.008 }, sensibleHeatFluxWm2: 250, latentHeatFluxWm2: 100, pblHeightM: 300, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 9 }, { heightM: 1500, temperatureC: 8 }] };
+const base: ColumnInput = { terrainM: 0, surfaceTemperatureC: 20, surfacePressureHpa: 1000, humidity: { specificHumidityKgKg: 0.008 }, sensibleHeatFluxWm2: 250, latentHeatFluxWm2: 100, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 9 }, { heightM: 1500, temperatureC: 8 }] };
 const deriveColumn = (input: ColumnInput) => deriveCountedColumn(input, input.levels.length);
 
 describe('dry column science', () => {
@@ -48,18 +48,27 @@ describe('dry column science', () => {
       expect(deriveColumn({ ...base, sensibleHeatFluxWm2, levels }).branch).toBe('unavailable');
     }
   });
-  it('resolves a crossing above PBL and does not require PBL', () => {
-    const a = deriveColumn({ ...base, pblHeightM: null });
+  it('resolves a parcel crossing', () => {
+    const a = deriveColumn(base);
     expect(a.branch).toBe('parcel-crossing'); expect(a.depthM).toBeGreaterThan(300); expect(a.depthM).toBeCloseTo(1153.8461538, 4);
     expect(a.msl.flags).toBe(STATUS_VALID | SUPPORT_PARCEL_CROSSING);
   });
-  it('preserves equality at the surface anchor and handles first-level equality via closure', () => {
-    const x = deriveColumn({ ...base, levels: [{ heightM: 500, temperatureC: 15.1 }], pblHeightM: 250 });
-    expect(x.branch).toBe('model-pbl-fallback'); expect(x.depthM).toBe(250); expect(x.msl.flags & SUPPORT_PBL_CLOSURE).toBeTruthy();
-    expect(deriveColumn({ ...base, pblHeightM: undefined, levels: [{ heightM: 500, temperatureC: 16 }] }).branch).toBe('unavailable');
+  it('continues neutral levels and caps an exactly neutral endpoint', () => {
+    const levels = [1000, 2000, 3000, 4000].map(heightM => ({ heightM, temperatureC: 20 - 0.0098 * heightM }));
+    const x = deriveColumn({ ...base, levels });
+    expect(x.branch).toBe('profile-top'); expect(x.depthM).toBe(4000);
   });
-  it('flags profile-top without extending or requiring PBL', () => {
-    const x = deriveColumn({ ...base, pblHeightM: null, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 8 }] });
+  it('uses bounded ground extrapolation for first-level crossings', () => {
+    const levels = [{ heightM: 200, temperatureC: 18.5 }, { heightM: 500, temperatureC: 17.3 }];
+    const x = deriveColumn({ ...base, levels });
+    expect(x.branch).toBe('parcel-crossing'); expect(x.depthM).toBeCloseTo(120.69, 2);
+    for (const stable of [[{ heightM: 200, temperatureC: 19.5 }, { heightM: 500, temperatureC: 18 }], [{ heightM: 200, temperatureC: 21 }, { heightM: 500, temperatureC: 22 }], [{ heightM: 200, temperatureC: 19 }]]) {
+      const result = deriveColumn({ ...base, levels: stable });
+      expect(result.branch).toBe('surface-stable'); expect(result.depthM).toBe(0); expect(result.agl.flags).toBe(STATUS_NO_LIFT);
+    }
+  });
+  it('flags profile-top without extending the profile', () => {
+    const x = deriveColumn({ ...base, levels: [{ heightM: 500, temperatureC: 13 }, { heightM: 1000, temperatureC: 8 }] });
     expect(x.depthM).toBe(1000); expect(x.branch).toBe('profile-top'); expect(x.msl.flags & SUPPORT_PROFILE_TOP).toBeTruthy();
   });
   it('requires explicit surface pressure, humidity, flux and profile coverage', () => {

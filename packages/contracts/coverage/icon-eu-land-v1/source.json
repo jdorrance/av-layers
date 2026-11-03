@@ -15,6 +15,7 @@
       "excludeField": "ADM0_A3",
       "excludeValues": [
         "RUS",
+        "CHN",
         "ATA",
         "GRL"
       ],
@@ -93,7 +94,7 @@
     "latMax": 70.5,
     "seaBufferMeters": 50000,
     "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core.",
-    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
+    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
     "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.03125deg, latitude center +/-0.03125deg, clipped to bounds [-23.5, 29.5, 62.5, 70.5].",
     "tileRule": "A z0-8 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
@@ -255,7 +256,7 @@
   "tests": {
     "cases": [
       {
-        "name": "armenia_yerevan",
+        "name": "caucasus_40n_44e",
         "lat": 40.179,
         "lon": 44.499,
         "expectedOutput": true,
@@ -384,23 +385,22 @@
   "regional": {},
   "regeneration": {
     "tooling": "scripts/masks/build_masks.py",
-    "toolingSha256": "1327179e3835aa5323357352522c35207f964c7a5421d010fdfcb6555a92d067",
-    "python": "3.12.14",
-    "pythonVersion": "3.12.14",
+    "toolingSha256": "d0799a74276ae80a6995abb601e45c88b3c5157393d832b06deb86a9a0da333b",
+    "python": "3.14.7",
+    "pythonVersion": "3.14.7",
     "pythonImplementation": "CPython",
-    "platform": "macOS-15.8-arm64-arm-64bit",
+    "platform": "macOS-15.8-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
     "nativeLibraries": {
-      "GEOS": "3.14.1",
-      "PROJ": "9.8.1"
+      "GEOS": "3.13.1",
+      "PROJ": "9.5.1"
     },
     "pythonPackages": {
       "shapely": "2.1.2",
-      "pyproj": "3.8.0",
-      "geopandas": "1.2.0",
-      "pyogrio": "0.13.0"
+      "pyproj": "3.7.2",
+      "pyshp": "2.3.1"
     },
-    "command": "python scripts/masks/build_masks.py --config packages/contracts/config/icon-eu.json --source ne_50m_admin_0_countries.zip --output packages/contracts/coverage/icon-eu-land-v1 --allow-local-libs",
+    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/icon-eu.json --output packages/contracts/coverage/icon-eu-land-v1",
     "scheduledBuildGIS": false
   }
 }

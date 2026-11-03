@@ -23,6 +23,7 @@ const {
   minimumProfileTemperatureC: MIN_PROFILE_TEMPERATURE,
   maximumProfileTemperatureC: MAX_PROFILE_TEMPERATURE,
   maximumProfileGapM: MAX_PROFILE_GAP,
+  crossingFloat32UnitRoundoff: CROSSING_FLOAT32_UNIT_ROUNDOFF,
   crossingEpsilonMultiplier: CROSSING_EPSILON_MULTIPLIER
 } = DEFAULT_SOARING_PARAMETERS;
 const DELTA = (1 - EPSILON) / EPSILON;
@@ -50,14 +51,13 @@ export interface ColumnInput {
   humidity: { specificHumidityKgKg: number } | { dewPointC: number };
   sensibleHeatFluxWm2: number;
   latentHeatFluxWm2: number;
-  pblHeightM?: number | null;
   levels: readonly { heightM: number; temperatureC: number }[];
 }
 
 export type DepthBranch =
   | 'parcel-crossing'
   | 'profile-top'
-  | 'model-pbl-fallback'
+  | 'surface-stable'
   | 'non-convective'
   | 'unavailable';
 
@@ -126,12 +126,12 @@ export function deriveLift(
     t < MIN_SURFACE_TEMPERATURE ||
     t > MAX_SURFACE_TEMPERATURE ||
     p < MIN_SURFACE_PRESSURE ||
-    p > MAX_SURFACE_PRESSURE ||
-    !input.humidity ||
-    !levelCount
+    p > MAX_SURFACE_PRESSURE
   ) {
     return unavailable();
   }
+  if (!levelCount) return unavailable();
+  if (!input.humidity) return unavailable();
   let previousHeight = terrainM;
   for (let i = 0; i < levelCount; i++) {
     const level = levels[i]!;
@@ -193,20 +193,28 @@ export function deriveLift(
       dryLapseRate
     );
     const excess = parcelTemperature - level.temperatureC;
-    if (
-      excess >
-      Number.EPSILON *
-        epsMultiplier *
-        Math.max(1, Math.abs(parcelTemperature), Math.abs(level.temperatureC))
-    ) {
+    // Propagate rounding from the normalized Float32 Kelvin temperatures and MSL heights.
+    const inputRounding = CROSSING_FLOAT32_UNIT_ROUNDOFF * (
+      Math.abs(tk) + Math.abs(level.temperatureC + KELVIN_OFFSET) +
+      Math.abs(dryLapseRate) * (Math.abs(terrainM) + Math.abs(level.heightM))
+    );
+    const eps = Math.max(inputRounding, Number.EPSILON * epsMultiplier *
+      Math.max(1, Math.abs(parcelTemperature), Math.abs(level.temperatureC)));
+    if (excess >= -eps) {
       continue;
     }
     if (i === 0) {
-      if (!Number.isFinite(input.pblHeightM) || (input.pblHeightM as number) <= 0) {
-        return unavailable();
+      const lapse = levelCount > 1
+        ? (level.temperatureC - levels[1]!.temperatureC) / (levels[1]!.heightM - level.heightM)
+        : dryLapseRate;
+      const surfaceExcess = parcelSurfaceTempC - (level.temperatureC + Math.max(0, Math.min(dryLapseRate, lapse)) * height);
+      if (surfaceExcess <= eps) {
+        depth = 0;
+        branch = 'surface-stable';
+      } else {
+        depth = height * surfaceExcess / (surfaceExcess - excess);
+        branch = 'parcel-crossing';
       }
-      depth = Math.min(height, input.pblHeightM as number);
-      branch = 'model-pbl-fallback';
     } else {
       const prev = levels[i - 1]!;
       const prevHeight = prev.heightM - terrainM;
@@ -215,7 +223,7 @@ export function deriveLift(
         prev.temperatureC;
       depth =
         prevHeight +
-        ((height - prevHeight) * prevExcess) / (prevExcess - Math.min(0, excess));
+        ((height - prevHeight) * Math.max(0, prevExcess)) / (Math.max(0, prevExcess) - excess);
       branch = 'parcel-crossing';
     }
     break;

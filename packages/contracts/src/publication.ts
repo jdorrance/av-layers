@@ -51,13 +51,17 @@ export function createProductDescriptors(product: ProductDefinition): z.infer<ty
 }
 
 export function createRefinementDescriptors(product: ProductDefinition, bounds: GeographicBounds): z.infer<typeof descriptorSchema> {
-  const base = createProductDescriptors(product), layer = base.layers['usable-lift-agl'];
-  if (!layer) throw new Error('Terrain clearance requires the AGL layer');
+  const base = createProductDescriptors(product);
+  const msl = base.layers['usable-lift-msl'], agl = base.layers['usable-lift-agl'];
+  if (!msl || !agl) throw new Error('Terrain clearance requires native MSL and AGL layers');
   return descriptorSchema.parse({ ...base, bounds: [...bounds],
     coverageDescription: 'Polygon-owned terrain clearance inside the model coverage, with interpolation halos excluded.',
-    layers: { [layer.id]: { ...layer, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: TERRAIN_CLEARANCE_METHOD.id } },
+    layers: {
+      [msl.id]: { ...msl, verticalReference: 'MSL', methodId: TERRAIN_CLEARANCE_METHOD.id },
+      [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: TERRAIN_CLEARANCE_METHOD.id }
+    },
     methods: { [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD },
-    palettes: base.palettes.filter(palette => palette.id === layer.palette)
+    palettes: base.palettes.filter(palette => palette.id === agl.palette)
   });
 }
 
@@ -237,4 +241,3 @@ export function validateArtifactRecords(manifest: Manifest): void {
     if (artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`) throw new Error(`unexpected tilesKey ${artifact.tilesKey}`);
   }
 }
-

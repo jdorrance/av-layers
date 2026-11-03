@@ -69,7 +69,7 @@ export function iconRunSentinelUrls(
   return [
     iconRegularFieldUrl('HSURF', cycle, { baseUrl: options.baseUrl }),
     ...[topHalfLevel, bottomHalfLevel].map(level => iconRegularFieldUrl('HHL', cycle, { level, baseUrl: options.baseUrl })),
-    ...['MH', 'PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S'].map(field => iconRegularFieldUrl(field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S'].map(field => iconRegularFieldUrl(field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
     ...['T', 'P'].flatMap(field => [lowestLevel, highestLevel].map(level => iconRegularFieldUrl(field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
   ];
 }

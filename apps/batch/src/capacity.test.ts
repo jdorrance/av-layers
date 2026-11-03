@@ -9,8 +9,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
-const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 267, 847, 2794];
-const Z7_TOTAL_TILES = 291096;
+const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 263, 818, 2655];
+const Z7_TOTAL_TILES = 278712;
 
 function receipt(): Manifest {
   return {
@@ -39,12 +39,12 @@ describe('build capacity admission and performance budgets', () => {
   });
   it('counts the real z0-z7 product before acquisition and leaves hourly retention headroom', async () => {
     const mask = await loadCoverage(GFS_PRODUCT), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    expect(indices.active.length).toBe(226187);
+    expect(indices.active.length).toBe(210453);
     expect(capacity).toMatchObject({
       tilesByZoom: Z7_TILES_BY_ZOOM,
       tiles: Z7_TOTAL_TILES,
       quarterSamples: Z7_TOTAL_TILES * 256 * 256 * 4,
-      samplePackBytes: 131506560,
+      samplePackBytes: 126824760,
       point: { reads: 1, worstCaseRangeBytes: 6840, values: 72 },
       violations: []
     });
@@ -59,7 +59,7 @@ describe('build capacity admission and performance budgets', () => {
     const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
     expect(doubled.tiles).toBe(Z7_TOTAL_TILES * 8);
-    expect(doubled.totalSamplePackBytes).toBe(131506560 * 8);
+    expect(doubled.totalSamplePackBytes).toBe(126824760 * 8);
     const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 8 });
     expect(deeper.violations).toContain('tile budget exceeded');
     expect(deeper.violations.join()).toContain('trusted product');

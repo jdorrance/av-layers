@@ -1,4 +1,4 @@
-import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type Grid, type LayerId, type LayerSpec } from '@av/contracts';
+import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type Grid, type GridGeometry, type LayerId, type LayerSpec } from '@av/contracts';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
 export interface Cell { value: number; flags: number }
@@ -85,8 +85,8 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   out.value = value; out.status = STATUS_VALID;
 }
 
-export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | null {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
+interface LocatedCell { column: number; row: number; fractionX: number; fractionY: number }
+function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: number): LocatedCell | null {
   let x: number, y: number;
   if (grid.kind === 'regular-latlon') {
     if (![grid.lon0, grid.lat0, grid.dx, grid.dy].every(Number.isFinite) || grid.dx === 0 || grid.dy === 0 || lat < -90 || lat > 90) return null;
@@ -94,13 +94,22 @@ export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | n
     y = snap((lat - grid.lat0) / grid.dy);
     if (grid.wrapLongitude) x = snap(((x % grid.width) + grid.width) % grid.width);
   } else {
-    const point = prepareGridGeometry(grid).geographicToGrid(lat, lon);
+    if (!geometry) return null;
+    const point = geometry.geographicToGrid(lat, lon);
     if (!point) return null;
     ({ x, y } = point);
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   if ((!grid.wrapLongitude && (x < 0 || x > grid.width - 1)) || y < 0 || y > grid.height - 1) return null;
-  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const column = Math.floor(x), row = Math.floor(y);
+  return { column, row, fractionX: x - column, fractionY: y - row };
+}
+
+export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
+  const located = locate(grid, grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null, lat, lon);
+  if (!located) return null;
+  const { column: x0, row: y0, fractionX: fx, fractionY: fy } = located;
   const contributors: Contributor[] = [];
   let first = Infinity, last = -Infinity;
   for (const [dx, dy] of QUAD_OFFSETS) {
@@ -240,6 +249,37 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
   };
 }
 
+/** Locate one geographic pair and record its covered cell, fractions and contributors. */
+function prepareLocatedSample(
+  grid: Grid,
+  geometry: GridGeometry | null,
+  mask: CoverageMask,
+  lat: number,
+  lon: number,
+  index: number,
+  lowerX: Float64Array,
+  lowerY: Float64Array,
+  fractionX: Float64Array,
+  fractionY: Float64Array,
+  covered: Uint8Array,
+  contributorSet: Set<number>
+): void {
+  if (!withinGeographicBounds(lat, lon, mask.bounds)) return;
+  const located = locate(grid, geometry, lat, lon);
+  if (!located) return;
+  const { column, row, fractionX: fx, fractionY: fy } = located;
+  const upperColumn = grid.wrapLongitude ? (column + 1) % grid.width : column + 1, upperRow = row + 1;
+  const nearestColumn = fx < 0.5 ? column : fx > 0.5 ? upperColumn : Math.min(column, upperColumn);
+  const nearestRow = fy <= 0.5 ? row : Math.min(grid.height - 1, upperRow);
+  if (!getBit(mask.output, nearestRow * grid.width + nearestColumn)) return;
+  covered[index >> 3] |= 1 << (index & 7);
+  lowerX[index] = column; lowerY[index] = row; fractionX[index] = fx; fractionY[index] = fy;
+  for (const [dx, dy] of QUAD_OFFSETS) {
+    if ((dx && fx === 0) || (dy && fy === 0)) continue;
+    contributorSet.add((dy === 0 ? row : upperRow) * grid.width + (dx === 0 ? column : upperColumn));
+  }
+}
+
 /** Projected coordinates are not separable. Retain only four numbers per requested coordinate. */
 function prepareProjectedSampling(mask: CoverageMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid, geometry = prepareGridGeometry(grid);
@@ -248,23 +288,32 @@ function prepareProjectedSampling(mask: CoverageMask, latitudes: Float64Array, l
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
   for (let index = 0; index < total; index++) {
-    const x = index % width, y = (index - x) / width, lat = latitudes[y], lon = longitudes[x];
-    if (!withinGeographicBounds(lat, lon, mask.bounds)) continue;
-    const point = geometry.geographicToGrid(lat, lon);
-    if (!point || point.x < 0 || point.x > grid.width - 1 || point.y < 0 || point.y > grid.height - 1) continue;
-    const column = Math.floor(point.x), row = Math.floor(point.y), fx = point.x - column, fy = point.y - row;
-    const nearestColumn = fx <= 0.5 ? column : column + 1, nearestRow = fy <= 0.5 ? row : row + 1;
-    if (!getBit(mask.output, nearestRow * grid.width + nearestColumn)) continue;
-    covered[index >> 3] |= 1 << (index & 7);
-    lowerX[index] = column; lowerY[index] = row; fractionX[index] = fx; fractionY[index] = fy;
-    for (const [dx, dy] of QUAD_OFFSETS) {
-      if ((dx && fx === 0) || (dy && fy === 0)) continue;
-      contributorSet.add((row + dy) * grid.width + column + dx);
-    }
+    const x = index % width, y = (index - x) / width;
+    prepareLocatedSample(grid, geometry, mask, latitudes[y], longitudes[x], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
   }
-  const contributors = Uint32Array.from(contributorSet);
+  return preparedFromCells(grid, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
+}
+
+/** One latitude/longitude pair per retained sample; coordinates outside the mask are skipped. */
+export function preparePointSampling(mask: CoverageMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
+  const grid = mask.grid, total = latitudes.length;
+  if (latitudes.length !== longitudes.length || total < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
+  if (!gridSchema.safeParse(grid).success) throw new RangeError('Invalid prepared grid');
+  if (mask.output.length !== Math.ceil(grid.width * grid.height / 8)) throw new RangeError('Coverage size differs from grid');
+  const geometry = grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null;
+  const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
+  const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
+  const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
+  for (let index = 0; index < total; index++) {
+    prepareLocatedSample(grid, geometry, mask, latitudes[index], longitudes[index], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
+  }
+  return preparedFromCells(grid, total, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
+}
+
+function preparedFromCells(grid: Grid, width: number, lowerX: Float64Array, lowerY: Float64Array, fractionX: Float64Array, fractionY: Float64Array, covered: Uint8Array, contributorSet: Set<number>, wrap: boolean): PreparedGridSampling {
+  const total = lowerX.length, contributors = Uint32Array.from(contributorSet);
   return {
-    width, height, contributors,
+    width, height: total / width, contributors,
     byteLength: total * 4 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
     bind(field, layer) {
       if (contributors.length && (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length)) throw new RangeError('field size differs from grid');
@@ -273,17 +322,19 @@ function prepareProjectedSampling(mask: CoverageMask, latitudes: Float64Array, l
         const index = y * width + x;
         if (!(covered[index >> 3] & (1 << (index & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = fractionX[index], fy = fractionY[index];
+        const column = lowerX[index], row = lowerY[index];
+        const nextColumn = wrap && column + 1 === grid.width ? 0 : column + 1, nextRow = row + 1;
         if (fx !== 0 && fy !== 0) {
-          const a = lowerY[index] * grid.width + lowerX[index], c = a + grid.width;
-          if (reduceKnownQuad(field, a, a + 1, c, c + 1, fx, fy, spec, out)) return;
+          const r0 = row * grid.width, r1 = nextRow * grid.width;
+          if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out)) return;
         }
         let count = 0;
         for (const [dx, dy] of QUAD_OFFSETS) {
           if ((dx && fx === 0) || (dy && fy === 0)) continue;
-          const row = lowerY[index] + dy, column = lowerX[index] + dx, source = row * grid.width + column;
+          const sourceRow = dy === 0 ? row : nextRow, sourceColumn = dx === 0 ? column : nextColumn, source = sourceRow * grid.width + sourceColumn;
           scratch.values[count] = field.values[source]; scratch.flags[count] = field.flags[source];
           scratch.weights[count] = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
-          scratch.rows[count] = row; scratch.columns[count] = column; count++;
+          scratch.rows[count] = sourceRow; scratch.columns[count] = sourceColumn; count++;
         }
         reduceCells(scratch, count, spec, out);
       };

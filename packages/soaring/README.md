@@ -41,6 +41,9 @@ elements of `levels`).
 - `no-lift`: `usableDepthM === 0`.
 - `unavailable`: missing or invalid inputs; numeric fields are `null`.
 
+`branch` distinguishes resolved parcel crossings, unresolved profile caps,
+surface-stable columns, and non-convective columns.
+
 ## Entry points
 
 - [`@av/soaring`](src/index.ts): `deriveLift` and column types.

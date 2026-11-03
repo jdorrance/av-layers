@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
 import { prepareTerrainClearance } from '@av/forecast/refinement';
 import type { ForecastProvider, ForecastSession } from './provider.js';
@@ -66,6 +66,8 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     clearance: prepareTerrainClearance(mask, patch.mask), pack: undefined as ReturnType<typeof createSamplePackBuilder> | undefined,
     samplesKey: `${options.refinementPrefix ?? `${prefix}/refinements`}/${patch.input.id}/samples.bin`
   }));
+  const cells = mask.grid.width * mask.grid.height;
+  const diagnostics = refinements.length ? { ceilingMslM: new Float32Array(cells), buoyancyM2S3: new Float32Array(cells), branch: new Uint8Array(cells) } : undefined;
   const renderer = createRenderer(mask, { signal: options.signal, rasterWorkers: capacity.rasterWorkers,
     patches: refinements.map(patch => ({ id: patch.input.id, geometry: patch.input.geometry, descriptors: { bounds: patch.input.bounds }, layers: TERRAIN_CLEARANCE_METHOD.outputs, mask: patch.mask })) });
   await mkdir(localPath(root, journalPrefix), { recursive: true });
@@ -105,16 +107,21 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
       receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
       const tDerive = Date.now();
       phase = 'derive';
-      const fields = deriveFrame(frame, mask, { ...deriveOptions, layers: product.layers });
+      const fields = deriveFrame(frame, mask, { ...deriveOptions, layers: product.layers, diagnostics });
       const fineFields = refinements.map(patch => {
         if (!fields['usable-lift-msl']) throw new Error('Terrain clearance requires the native MSL field');
-        return patch.clearance.derive(fields['usable-lift-msl'], patch.terrain, descriptor, deriveOptions.daylightOnly);
+        return patch.clearance.derive(diagnostics!, fields['usable-lift-msl'].flags, patch.terrain, descriptor, deriveOptions.daylightOnly);
       });
       summaries[id] = summarizeFields(fields, mask, indices.output, product.layers);
       deriveMs += Date.now() - tDerive;
       phase = 'pack';
       const tFinePack = Date.now();
-      for (let index = 0; index < refinements.length; index++) refinements[index].pack!.writeChannel(completedFrames, fineFields[index]);
+      for (let index = 0; index < refinements.length; index++) {
+        const fieldsForPatch = fineFields[index];
+        for (let layerIndex = 0; layerIndex < TERRAIN_CLEARANCE_METHOD.outputs.length; layerIndex++) {
+          refinements[index].pack!.writeChannel(completedFrames * TERRAIN_CLEARANCE_METHOD.outputs.length + layerIndex, fieldsForPatch[TERRAIN_CLEARANCE_METHOD.outputs[layerIndex]]);
+        }
+      }
       packMs += Date.now() - tFinePack;
       const targets = product.layers.map(layer => {
         const field = fields[layer];
@@ -123,7 +130,9 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
         const tPack = Date.now();
         pack!.writeChannel(channel++, field);
         packMs += Date.now() - tPack;
-        const patches = layer === 'usable-lift-agl' ? Object.fromEntries(refinements.map((patch, index) => [patch.input.id, fineFields[index]])) : undefined;
+        const patches = (TERRAIN_CLEARANCE_METHOD.outputs as readonly LayerId[]).includes(layer)
+          ? Object.fromEntries(refinements.map((patch, index) => [patch.input.id, fineFields[index][layer as typeof TERRAIN_CLEARANCE_METHOD.outputs[number]]]))
+          : undefined;
         return { path: localPath(root, tilesKey), field, layer, tilesKey, ...(patches ? { patches } : {}) };
       });
       const tRender = Date.now();

@@ -6,7 +6,7 @@
     "dev": "wrangler dev --local --var AV_LOCAL_DEVELOPMENT:true",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "wrangler deploy --dry-run --env staging --outdir dist"
+    "build": "node --input-type=module -e \"import { rm } from 'node:fs/promises'; await rm('dist', { recursive: true, force: true })\" && wrangler deploy --dry-run --env staging --outdir dist"
   },
   "dependencies": {
     "@av/contracts": "workspace:*",

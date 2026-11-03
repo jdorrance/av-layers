@@ -63,7 +63,6 @@ function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
     surfacePressurePa: empty(),
     temp2mK: empty(),
     specificHumidity2mKgKg: empty(),
-    pblHeightM: empty(),
     sensibleHeatFluxWm2: empty(),
     latentHeatFluxWm2: empty(),
     precipitationMmPerHour: empty(),
@@ -75,7 +74,6 @@ function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
       surfacePressure: new Uint8Array(1),
       temp2m: new Uint8Array(1),
       humidity2m: new Uint8Array(1),
-      pbl: new Uint8Array(1),
       sensibleHeatFlux: new Uint8Array(1),
       latentHeatFlux: new Uint8Array(1),
       precipitation: new Uint8Array(1),
@@ -176,7 +174,7 @@ describe('frame derivation', () => {
     setBit(mask.output, index); setBit(mask.halo, index + 1);
     const values = (v: number) => new Float32Array([v, v]);
     const missing = () => new Uint8Array(2);
-    const input = { ...frame(hour), activeIndices: new Uint32Array([index, index + 1]), terrainM: values(100), surfacePressurePa: values(100000), temp2mK: values(293.15), specificHumidity2mKgKg: values(0.008), pblHeightM: values(300), sensibleHeatFluxWm2: values(250), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [990, 950, 900], hgtM: [new Float32Array([100, 90]), values(600), values(1100)], tempK: [values(290), values(286.15), values(281.15)], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), pbl: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing(), missing(), missing()], temp: [missing(), missing(), missing()] } };
+    const input = { ...frame(hour), activeIndices: new Uint32Array([index, index + 1]), terrainM: values(100), surfacePressurePa: values(100000), temp2mK: values(293.15), specificHumidity2mKgKg: values(0.008), sensibleHeatFluxWm2: values(250), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [990, 950, 900], hgtM: [new Float32Array([100, 90]), values(600), values(1100)], tempK: [values(290), values(286.15), values(281.15)], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing(), missing(), missing()], temp: [missing(), missing(), missing()] } };
     return { input, mask, index };
   }
 
@@ -262,7 +260,6 @@ describe('bounded end-to-end build pipeline integration', () => {
         surfacePressurePa: values(100000),
         temp2mK: values(293.15),
         specificHumidity2mKgKg: values(0.008),
-        pblHeightM: values(300),
         sensibleHeatFluxWm2: values(250),
         latentHeatFluxWm2: values(100),
         precipitationMmPerHour: new Float32Array([2, 4]),
@@ -274,7 +271,6 @@ describe('bounded end-to-end build pipeline integration', () => {
           surfacePressure: missing(),
           temp2m: missing(),
           humidity2m: missing(),
-          pbl: missing(),
           sensibleHeatFlux: missing(),
           latentHeatFlux: missing(),
           precipitation: missing(),

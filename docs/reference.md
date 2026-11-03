@@ -58,12 +58,12 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Attribution: NOAA GFS · Aviation Forecast Layers.
 - Grid: `regular-latlon`; 1440 columns × 721 rows; spherical Earth radius 6371229 m; periodic longitude: true.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
-- Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.
+- Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland and Antarctica excluded.
 - Native tile zoom: 0–7.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
 - Vertical coordinate: `isobaric`; maximum levels: 21.
-- Calculation methods: `dry-lenschow-pbl-1p2-v1`, `trailing-precipitation-rate-v1`.
-- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `precipitationMmPerHour`.
+- Calculation methods: `dry-lenschow-1p2-v2`, `trailing-precipitation-rate-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `precipitationMmPerHour`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
@@ -73,12 +73,12 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Attribution: DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers.
 - Grid: `regular-latlon`; 1377 columns × 657 rows; spherical Earth radius 6371229 m; periodic longitude: false.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
-- Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, Greenland and Antarctica excluded.
+- Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland and Antarctica excluded.
 - Native tile zoom: 0–8.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
-- Calculation methods: `dry-lenschow-pbl-1p2-model-levels-v1`.
-- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
+- Calculation methods: `dry-lenschow-1p2-model-levels-v2`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
@@ -98,7 +98,7 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). Each product s
 
 - Kind: `scalar`; quantity: `usable-lift-top`; units: `m AGL`.
 - Vertical reference: `model-AGL`; time support: `interval-flux-endpoint-profile`.
-- Method: `dry-lenschow-pbl-1p2-v1`; palette: `lift`.
+- Method: `dry-lenschow-1p2-v2`; palette: `lift`.
 - Supports no-lift status: true; public no-lift value: `0`; supports lift flags: true.
 - Zero on no-lift interpolation: true; hide nonpositive rendered values: true.
 
@@ -106,7 +106,7 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). Each product s
 
 - Kind: `scalar`; quantity: `usable-lift-top`; units: `m MSL`.
 - Vertical reference: `MSL`; time support: `interval-flux-endpoint-profile`.
-- Method: `dry-lenschow-pbl-1p2-v1`; palette: `lift`.
+- Method: `dry-lenschow-1p2-v2`; palette: `lift`.
 - Supports no-lift status: true; public no-lift value: `null`; supports lift flags: true.
 - Zero on no-lift interpolation: false; hide nonpositive rendered values: false.
 
@@ -130,15 +130,16 @@ Packed status and support bitmasks from [layer definitions](../packages/contract
 
 Source: [method definitions](../packages/contracts/src/methods.ts). See [science](science.md) and [extensions](extensions.md).
 
-### dry-lenschow-pbl-1p2-model-levels-v1
+### dry-lenschow-1p2-model-levels-v2
 
 - Outputs: `usable-lift-msl`, `usable-lift-agl`.
-- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
+- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
 - Spatial support: `column`.
 
 Parameters:
 
 - `crossingEpsilonMultiplier`: `8`.
+- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
 - `dryLapseRateKperM`: `0.0098`.
@@ -170,20 +171,21 @@ Caveats:
 
 - Dry parcel calculation; no moist parcel or cloud treatment.
 - Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
-- Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
-- PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.
+- Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
+- A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.
 - A profile without a resolved crossing is capped at its highest usable level and flagged.
 - MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.
 
-### dry-lenschow-pbl-1p2-v1
+### dry-lenschow-1p2-v2
 
 - Outputs: `usable-lift-msl`, `usable-lift-agl`.
-- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`.
+- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`.
 - Spatial support: `column`.
 
 Parameters:
 
 - `crossingEpsilonMultiplier`: `8`.
+- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
 - `dryLapseRateKperM`: `0.0098`.
@@ -215,27 +217,44 @@ Caveats:
 
 - Dry parcel calculation; no moist parcel or cloud treatment.
 - Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
-- Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
-- PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.
+- Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
+- A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.
 - A profile without a resolved crossing is capped at its highest usable level and flagged.
 - MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.
 
-### native-lift-terrain-clearance-v1
+### native-lift-terrain-clearance-v2
 
-- Outputs: `usable-lift-agl`.
-- Required inputs: `sourceLiftMslM`, `terrainElevationM`.
+- Outputs: `usable-lift-msl`, `usable-lift-agl`.
+- Required inputs: `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
 - Spatial support: `bilinear-neighborhood`.
 
 Parameters:
 
+- `crossingEpsilonMultiplier`: `8`.
+- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
+- `lenschowPeakZeta`: `0.3125`.
+- `lenschowScale`: `4`.
+- `lenschowShape`: `0.8`.
+- `maximumBisectionIterations`: `60`.
+- `maximumProfileGapM`: `1000`.
+- `maximumProfileTemperatureC`: `60`.
+- `maximumSurfacePressureHpa`: `1100`.
+- `maximumSurfaceTemperatureC`: `60`.
+- `minimumProfileTemperatureC`: `-120`.
 - `minimumSolarElevationDeg`: `-0.833`.
+- `minimumSurfacePressureHpa`: `100`.
+- `minimumSurfaceTemperatureC`: `-100`.
+- `minimumThermalVelocityMps`: `0`.
+- `saturationRelativeTolerance`: `0.000001`.
+- `sinkRateMps`: `1.2`.
 
 Caveats:
 
-- Bilinearly reconstructs the native lift ceiling and subtracts prepared DEM elevation, clipping depth at zero; it does not change the native MSL forecast.
-- Every positive-weight native contributor is required. Mixed lift/no-lift neighborhoods and missing contributors are unavailable; all-no-lift neighborhoods remain zero.
+- Interpolates native convective-depth top and buoyancy, then solves usable lift depth over the DEM for both MSL and AGL outputs.
+- All positive-weight contributors must be convective to interpolate, including positive-depth no-lift columns; all non-convective or surface-stable contributors yield no lift, and mixed branches are unavailable. Support flags are combined.
 - Uses the parent frame daylight interval. Nighttime with valid terrain and native geometric support emits no lift; missing terrain remains unavailable.
-- DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion or new atmospheric column calculation is applied.
+- Valley extrapolation is assumed and can produce usable valley lift from native no-lift columns; it is not empirically validated.
+- DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion is applied.
 
 ### trailing-precipitation-rate-v1
 
@@ -258,7 +277,6 @@ Caveats:
 
 - `hgtM`: `geopotential-height`; units `m`; dimensions `level-cell`; vertical reference `MSL at profile levels (isobaric or model levels)`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `latentHeatFluxWm2`: `upward-latent-heat-flux`; units `W/m2`; dimensions `cell`; vertical reference `surface`; time support `interval-mean`; missingness `explicit-cell-mask`.
-- `pblHeightM`: `boundary-layer-depth`; units `m`; dimensions `cell`; vertical reference `model AGL`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `precipitationMmPerHour`: `liquid-water-equivalent-precipitation-rate`; units `mm/h`; dimensions `cell`; vertical reference `surface`; time support `interval-mean`; missingness `explicit-cell-mask`.
 - `pressureLevelsHpa`: `air-pressure-coordinate`; units `hPa`; dimensions `level`; vertical reference `strictly decreasing isobaric levels`; time support `static`; missingness `all-levels-required`.
 - `pressurePa`: `air-pressure`; units `Pa`; dimensions `level-cell`; vertical reference `terrain-following model levels`; time support `valid-time`; missingness `explicit-cell-mask`.

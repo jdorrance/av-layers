@@ -5,7 +5,7 @@ and point queries evaluate the same grids and interpolation rules.
 
 ## Layers and missing values
 
-- `usable-lift-msl`: estimated usable thermal top in metres above model mean sea
+- `usable-lift-msl`: estimated usable thermal top in metres above mean sea
   level.
 - `usable-lift-agl`: usable depth in metres above ground. The descriptor names
   `model-AGL` for model terrain or `terrain-AGL` for prepared DEM terrain.
@@ -35,7 +35,7 @@ leave `precip-rate` valid and vice versa. Sample responses also report
 ## Coverage and resolution
 
 - `soaring-land-v1` (GFS): land and a 50 km coastal buffer between 55°S and
-  65°N on the 0.25° global grid (native tile zoom 7), excluding Russia,
+  65°N on the 0.25° global grid (native tile zoom 7), excluding Russia, China,
   Antarctica, and Greenland.
 - `icon-eu-land-v1` (ICON-EU): land and a 50 km coastal buffer across the
   0.0625° European domain (23.5°W–62.5°E, 29.5°N–70.5°N, native tile zoom 8),
@@ -49,8 +49,10 @@ Version-3 manifests pin the grid, bounds, coverage descriptor, and bitset
 digests so retained builds remain self-contained.
 
 Version-4 builds add internal patches with their own grids and methods under the
-same model and frame times. Polygon and output-mask membership select a patch
-per layer before values are read. Selected no-lift and unavailable values remain
+same model and frame times. Patches derive both `usable-lift-msl` and
+`usable-lift-agl` on 1 km grids with `native-lift-terrain-clearance-v2`.
+Polygon and output-mask membership select a patch per layer before values are
+read. Selected no-lift and unavailable values remain
 in effect; sampling never falls back to the coarse grid. Halo cells support
 interpolation at the mask edges. Missing advertised patch assets fail the request.
 

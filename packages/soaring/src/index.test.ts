@@ -38,7 +38,6 @@ describe('@av/soaring configurable m/s thresholds and presets', () => {
       surfacePressureHpa: 950,
       surfaceTemperatureC: 25,
       humidity: { specificHumidityKgKg: 0.007 },
-      pblHeightM: 1800,
       sensibleHeatFluxWm2: 20,
       latentHeatFluxWm2: 5,
       levels: [
@@ -76,4 +75,12 @@ describe('@av/soaring configurable m/s thresholds and presets', () => {
     expect(highMinWStarOut.status).toBe('no-lift');
     expect(highMinWStarOut.usableDepthM).toBe(0);
   });
+});
+
+it('preserves production solver bytes across valid and unavailable branches', () => {
+  const input = { terrainM: 500, surfaceTemperatureC: 25, surfacePressureHpa: 950, humidity: { specificHumidityKgKg: 0.007 }, sensibleHeatFluxWm2: 20, latentHeatFluxWm2: 5, levels: [{ heightM: 700, temperatureC: 22.85 }, { heightM: 1300, temperatureC: 16.95 }, { heightM: 1900, temperatureC: 11.25 }, { heightM: 2500, temperatureC: 7.65 }, { heightM: 3100, temperatureC: 5.35 }] };
+  expect(JSON.stringify(deriveLift(input, 5))).toBe('{"status":"valid","usableDepthM":1166.3583159326154,"branch":"parcel-crossing","depthM":1407.8947368421057,"thermalVelocityMps":0.9471513891236684}');
+  expect(JSON.stringify(deriveLift(input, 3))).toBe('{"status":"valid","usableDepthM":1158.4838004851847,"branch":"profile-top","depthM":1400,"thermalVelocityMps":0.945377693233115}');
+  expect(JSON.stringify(deriveLift({ ...input, sensibleHeatFluxWm2: -100, latentHeatFluxWm2: 0 }, 5))).toBe('{"status":"no-lift","usableDepthM":0,"branch":"non-convective","depthM":0,"thermalVelocityMps":0}');
+  expect(JSON.stringify(deriveLift({ ...input, humidity: { specificHumidityKgKg: 0.9 } }, 5))).toBe('{"status":"unavailable","usableDepthM":null,"branch":"unavailable","depthM":null,"thermalVelocityMps":null}');
 });

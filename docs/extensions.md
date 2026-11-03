@@ -62,7 +62,7 @@ Return a [`NormalizedFrame`](../packages/forecast/src/inputs.ts) ordered by
 `activeIndices`:
 
 - Units: surface pressure in `Pa`, temperatures in `K`, specific humidity in
-  `kg/kg`, terrain and profile heights in `m` MSL, PBL depth in `m` AGL, upward
+  `kg/kg`, terrain and profile heights in `m` MSL, upward
   heat fluxes in `W/m²`, and optional precipitation rate in `mm/h`.
 - Vertical coordinate: descending shared `pressureLevelsHpa` for `IsobaricFrame`,
   or per-column `pressurePa` + `missing.pressure` for `ModelLevelFrame`, ordered

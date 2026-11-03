@@ -20,8 +20,34 @@ import {
 } from './science.js';
 import type { GridField } from './sampler.js';
 import type { NormalizedFrame } from './inputs.js';
+import type { DepthBranch } from '@av/soaring';
 
 const { kelvinOffset: KELVIN_OFFSET, pascalsPerHectopascal: PA_PER_HPA } = LIFT_METHOD_PARAMETERS;
+
+export interface FrameDiagnostics {
+  readonly ceilingMslM: Float32Array;
+  readonly buoyancyM2S3: Float32Array;
+  readonly branch: Uint8Array;
+}
+
+export const FRAME_BRANCH = Object.freeze({
+  unavailable: 0,
+  nonConvective: 1,
+  parcelCrossing: 2,
+  profileTop: 3,
+  surfaceStable: 4,
+  skippedDark: 5
+} as const);
+
+type FrameBranchCode = typeof FRAME_BRANCH[keyof typeof FRAME_BRANCH];
+
+const branchCodes: Record<DepthBranch, FrameBranchCode> = {
+  unavailable: FRAME_BRANCH.unavailable,
+  'non-convective': FRAME_BRANCH.nonConvective,
+  'parcel-crossing': FRAME_BRANCH.parcelCrossing,
+  'profile-top': FRAME_BRANCH.profileTop,
+  'surface-stable': FRAME_BRANCH.surfaceStable
+};
 
 export interface DeriveFrameOptions extends ColumnDerivationOptions {
   /**
@@ -42,11 +68,88 @@ export interface DeriveFrameOptions extends ColumnDerivationOptions {
    * Minimum valid liquid-water-equivalent precipitation rate in mm/h (default: 0).
    */
   readonly minimumRateMmPerHour?: number;
+  readonly diagnostics?: FrameDiagnostics;
 }
 
 function field(mask: CoverageMask): GridField {
   const size = mask.grid.width * mask.grid.height;
   return { values: new Float32Array(size), flags: new Uint8Array(size).fill(STATUS_OUTSIDE) };
+}
+
+const frameViews = (frame: NormalizedFrame): ArrayBufferView[] => [
+  frame.activeIndices,
+  frame.terrainM,
+  frame.surfacePressurePa,
+  frame.temp2mK,
+  frame.specificHumidity2mKgKg,
+  frame.sensibleHeatFluxWm2,
+  frame.latentHeatFluxWm2,
+  ...(frame.precipitationMmPerHour ? [frame.precipitationMmPerHour] : []),
+  ...frame.hgtM,
+  ...frame.tempK,
+  ...(frame.pressurePa ?? []),
+  frame.missing.terrain,
+  frame.missing.surfacePressure,
+  frame.missing.temp2m,
+  frame.missing.humidity2m,
+  frame.missing.sensibleHeatFlux,
+  frame.missing.latentHeatFlux,
+  ...(frame.missing.precipitation ? [frame.missing.precipitation] : []),
+  ...frame.missing.hgt,
+  ...frame.missing.temp,
+  ...(frame.missing.pressure ?? [])
+];
+
+function validateDiagnostics(
+  diagnostics: FrameDiagnostics,
+  frame: NormalizedFrame,
+  mask: CoverageMask
+): void {
+  const cells = mask.grid.width * mask.grid.height;
+  const arrays = [diagnostics.ceilingMslM, diagnostics.buoyancyM2S3, diagnostics.branch];
+  const types = [Float32Array, Float32Array, Uint8Array] as const;
+  if (arrays.some((array, i) => !(array instanceof types[i]) || array.length !== cells)) {
+    throw new Error('Diagnostics arrays must match the native grid and declared types');
+  }
+  const inputBuffers = new Set([...frameViews(frame), mask.output, mask.halo, mask.tiles].map(view => view.buffer));
+  if (arrays.some(array => inputBuffers.has(array.buffer))) {
+    throw new Error('Diagnostics arrays must not alias frame inputs');
+  }
+  if (arrays[0]!.buffer === arrays[1]!.buffer || arrays[0]!.buffer === arrays[2]!.buffer || arrays[1]!.buffer === arrays[2]!.buffer) {
+    throw new Error('Diagnostics arrays must not alias each other');
+  }
+}
+
+function resetDiagnostics(diagnostics: FrameDiagnostics): void {
+  diagnostics.ceilingMslM.fill(NaN);
+  diagnostics.buoyancyM2S3.fill(NaN);
+  diagnostics.branch.fill(FRAME_BRANCH.unavailable);
+}
+
+function writeColumnDiagnostics(
+  diagnostics: FrameDiagnostics,
+  index: number,
+  terrain: number,
+  branch: DepthBranch,
+  depthM: number | null,
+  thermalVelocityMps: number | null
+): void {
+  const code = branchCodes[branch];
+  if (branch === 'unavailable' || !Number.isFinite(terrain)) {
+    return;
+  }
+  if (branch === 'non-convective' || branch === 'surface-stable') {
+    diagnostics.ceilingMslM[index] = terrain;
+    diagnostics.buoyancyM2S3[index] = 0;
+    diagnostics.branch[index] = code;
+    return;
+  }
+  if (depthM === null || thermalVelocityMps === null || !Number.isFinite(depthM) || depthM <= 0 || !Number.isFinite(thermalVelocityMps)) {
+    return;
+  }
+  diagnostics.ceilingMslM[index] = terrain + depthM;
+  diagnostics.buoyancyM2S3[index] = (thermalVelocityMps ** 3) / depthM;
+  diagnostics.branch[index] = code;
 }
 
 const buildDaylightTimestampsMs = (frame: NormalizedFrame): readonly number[] => {
@@ -77,6 +180,14 @@ export function deriveFrame(
     layer => layer === 'usable-lift-msl' || layer === 'usable-lift-agl'
   );
   const requiresPrecip = activeLayers.includes('precip-rate');
+  const diagnostics = options?.diagnostics;
+  if (diagnostics) {
+    if (!requiresLift) {
+      throw new Error('Diagnostics require a usable-lift layer; precipitation-only diagnostics are unsupported');
+    }
+    validateDiagnostics(diagnostics, frame, mask);
+    resetDiagnostics(diagnostics);
+  }
   if (
     requiresPrecip &&
     (!(frame.precipitationMmPerHour instanceof Float32Array) ||
@@ -133,6 +244,7 @@ export function deriveFrame(
           liftAgl.values[index] = finiteTerrain ? 0 : NaN;
           liftAgl.flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
         }
+        if (diagnostics) diagnostics.branch[index] = FRAME_BRANCH.skippedDark;
       }
       if (precipitation) {
         precipitation.values[index] = NaN;
@@ -177,12 +289,14 @@ export function deriveFrame(
             i
           ),
           latentHeatFluxWm2: read(frame.latentHeatFluxWm2, frame.missing.latentHeatFlux, i),
-          pblHeightM: read(frame.pblHeightM, frame.missing.pbl, i),
           levels
         },
         levelCount,
         options
       );
+      if (diagnostics) {
+        writeColumnDiagnostics(diagnostics, index, terrain, lift.branch, lift.depthM, lift.thermalVelocityMps);
+      }
       if (liftMsl) {
         liftMsl.values[index] = lift.msl.value ?? NaN;
         liftMsl.flags[index] = lift.msl.flags;

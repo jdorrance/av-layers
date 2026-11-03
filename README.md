@@ -6,9 +6,10 @@ serves them to a standalone map and a Windy plugin.
 
 The builder supports NOAA GFS and regional DWD ICON-EU. The forecast workflow
 runs either model or both in parallel; scheduled runs build both. Configure
-[polygons](packages/contracts/config/refinement.json) to refine ground clearance
-on 1 km DEM grids. Atmospheric lift ceilings retain their source-model
-resolution. See [deployments](docs/status.md) for live applications and runs.
+[polygons](packages/contracts/config/refinement.json) to refine MSL and ground
+clearance on 1 km DEM grids with `native-lift-terrain-clearance-v2`. Coverage
+excludes Russia, China, Antarctica, and Greenland. See
+[deployments](docs/status.md) for live applications and runs.
 
 ## Quick start
 

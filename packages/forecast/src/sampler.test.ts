@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, LAYERS, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type Grid } from '@av/contracts';
-import { cellsFromRange, packCells, planSample, prepareGridSampling, sampleCells, sampleGrid, unpackCells } from './sampler.js';
+import { GFS_GRID, LAYERS, prepareGridGeometry, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
+import { cellsFromRange, MAX_PREPARED_SAMPLES, packCells, planSample, prepareGridSampling, preparePointSampling, sampleCells, sampleGrid, unpackCells } from './sampler.js';
 const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
 describe('scalar sampling', () => {
   it('interpolates physical no-lift with terrain as MSL reference', () => {
@@ -86,5 +86,75 @@ describe('scalar sampling', () => {
     expect(planSample(GFS_GRID, 10.125, 179.875)?.byteRange.length).toBe(14400);
     expect(planSample(GFS_GRID, 10.125, -180)?.contributors).toHaveLength(2);
     expect(planSample(GFS_GRID, 90, -180)?.byteRange.length).toBe(5);
+  });
+});
+
+describe('point sampling', () => {
+  const coverage = (target: Grid): CoverageMask => {
+    const bytes = Math.ceil(target.width * target.height / 8);
+    return { grid: target, output: new Uint8Array(bytes).fill(255), halo: new Uint8Array(bytes), tiles: Uint8Array.of(1), maxZoom: 0 };
+  };
+  const result = () => ({ value: null as number | null, status: 3, support: 0, interpolated: false });
+  it('samples paired coordinates at nodes, boundaries and outside cells like scalar sampling', () => {
+    const mask = coverage(grid), layer = 'precip-rate';
+    const field = { values: Float32Array.of(10, 20, 30, 40), flags: new Uint8Array(4) };
+    const latitudes = Float64Array.of(1, 0, 1, 0.25, 1.5, -0.1);
+    const longitudes = Float64Array.of(0, 1, 1, 0.5, 0, 0.5);
+    const prepared = preparePointSampling(mask, latitudes, longitudes);
+    expect(prepared.width).toBe(latitudes.length);
+    expect(prepared.height).toBe(1);
+    for (let i = 0; i < latitudes.length; i++) {
+      const out = result();
+      prepared.bind(field, layer)(i, 0, out);
+      expect(out).toEqual(sampleGrid(grid, field, latitudes[i], longitudes[i], layer, mask));
+    }
+    expect(sampleGrid(grid, field, 1.5, 0, layer, mask).status).toBe(STATUS_OUTSIDE);
+  });
+  it('validates paired lengths, the sample budget, grid and coverage bytes', () => {
+    const mask = coverage(grid), lats = Float64Array.of(1), lons = Float64Array.of(0.5);
+    expect(() => preparePointSampling(mask, lats, Float64Array.of(0.5, 0.6))).toThrow('budget');
+    expect(() => preparePointSampling(mask, new Float64Array(0), new Float64Array(0))).toThrow('budget');
+    expect(() => preparePointSampling(mask, new Float64Array(MAX_PREPARED_SAMPLES + 1), new Float64Array(MAX_PREPARED_SAMPLES + 1))).toThrow('budget');
+    expect(() => preparePointSampling({ ...mask, grid: { ...grid, dx: 0 } }, lats, lons)).toThrow('Invalid prepared grid');
+    expect(() => preparePointSampling({ ...mask, output: new Uint8Array(0) }, lats, lons)).toThrow('Coverage size');
+  });
+  it('matches scalar sampling through Lambert geometry', () => {
+    const lambert: Grid = { kind: 'lambert-conformal', earthRadiusM: 6371229, width: 8, height: 8, centralMeridianDeg: 10, latitudeOfOriginDeg: 40, standardParallel1Deg: 38, standardParallel2Deg: 42, x0M: 0, y0M: 0, dxM: 1000, dyM: -1000, wrapLongitude: false };
+    const geometry = prepareGridGeometry(lambert), mask = coverage(lambert);
+    const latitudes: number[] = [], longitudes: number[] = [];
+    for (const [x, y] of [[2.25, 2.25], [5.5, 4.5], [7, 7], [3, 6.75]]) {
+      const point = geometry.gridToGeographic(x, y)!;
+      latitudes.push(point.lat); longitudes.push(point.lon);
+    }
+    const field = { values: Float32Array.from({ length: 64 }, (_, i) => i * 10), flags: new Uint8Array(64) };
+    const prepared = preparePointSampling(mask, Float64Array.from(latitudes), Float64Array.from(longitudes));
+    for (let i = 0; i < latitudes.length; i++) {
+      const out = result();
+      prepared.bind(field, 'precip-rate')(i, 0, out);
+      expect(out).toEqual(sampleGrid(lambert, field, latitudes[i], longitudes[i], 'precip-rate', mask));
+    }
+  });
+  it('matches projected and point sampling at exact half-cell coordinates and the wrapped seam tie', () => {
+    const lambert: Grid = { kind: 'lambert-conformal', earthRadiusM: 6371229, width: 8, height: 8, centralMeridianDeg: 10, latitudeOfOriginDeg: 40, standardParallel1Deg: 38, standardParallel2Deg: 42, x0M: 0, y0M: 0, dxM: 1000, dyM: -1000, wrapLongitude: false };
+    const geometry = prepareGridGeometry(lambert), mask = coverage(lambert);
+    const field = { values: Float32Array.from({ length: 64 }, (_, i) => i * 10), flags: new Uint8Array(64) };
+    for (const [column, row] of [[0, 0], [2, 3], [6, 6], [7, 7]]) {
+      const point = geometry.gridToGeographic(column + 0.5, row + 0.5)!;
+      const projected = result(), paired = result();
+      prepareGridSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate')(0, 0, projected);
+      preparePointSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate')(0, 0, paired);
+      expect(projected).toEqual(paired);
+      expect(paired).toEqual(sampleGrid(lambert, field, point.lat, point.lon, 'precip-rate', mask));
+    }
+    const wrap: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 4, height: 4, lon0: 0, lat0: 3, dx: 1, dy: -1, wrapLongitude: true };
+    const wrapMask = coverage(wrap), wrapField = { values: Float32Array.from({ length: 16 }, (_, i) => i + 1), flags: new Uint8Array(16) };
+    wrapMask.output.fill(0); for (const index of [0, 4]) setBit(wrapMask.output, index);
+    for (const [lat, lon] of [[2.5, 0.5], [1.5, 3.5]]) {
+      const prepared = result(), paired = result();
+      prepareGridSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate')(0, 0, prepared);
+      preparePointSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate')(0, 0, paired);
+      expect(prepared).toEqual(paired);
+      expect(prepared.status).not.toBe(STATUS_OUTSIDE);
+    }
   });
 });

@@ -12,6 +12,8 @@ import {
   type CoverageMask
 } from '@av/contracts';
 import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './daylight.js';
+import { usableLiftDepthM } from '@av/soaring/velocity';
+import { FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
 import { planSample, type GridField } from './sampler.js';
 
 const CONTRIBUTORS_PER_CELL = 4;
@@ -25,15 +27,21 @@ export function terrainClearanceMappingBytes(activeCells: number): number {
     + CONTRIBUTORS_PER_CELL * (Uint32Array.BYTES_PER_ELEMENT + Float64Array.BYTES_PER_ELEMENT));
 }
 
+export interface TerrainClearanceFields {
+  readonly 'usable-lift-msl': GridField;
+  readonly 'usable-lift-agl': GridField;
+}
+
 export interface PreparedTerrainClearance {
   /** Retained mapping arrays only; each derived field owns another five bytes per target cell. */
   readonly byteLength: number;
   derive(
-    sourceMsl: GridField,
+    diagnostics: FrameDiagnostics,
+    sourceFlags: Uint8Array,
     terrain: { elevationM: Float32Array; valid: Uint8Array },
     time: { intervalStart: string; validTime: string },
     daylightOnly?: boolean
-  ): GridField;
+  ): TerrainClearanceFields;
 }
 
 function admitMask(mask: CoverageMask) {
@@ -81,9 +89,11 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
 
   return {
     byteLength: terrainClearanceMappingBytes(activeCount),
-    derive(sourceMsl, terrain, time, daylightOnly = true) {
-      if (!(sourceMsl.values instanceof Float32Array) || !(sourceMsl.flags instanceof Uint8Array)
-          || sourceMsl.values.length !== source.cells || sourceMsl.flags.length !== source.cells
+    derive(diagnostics, sourceFlags, terrain, time, daylightOnly = true) {
+      if (!(diagnostics.ceilingMslM instanceof Float32Array) || !(diagnostics.buoyancyM2S3 instanceof Float32Array)
+          || !(diagnostics.branch instanceof Uint8Array) || !(sourceFlags instanceof Uint8Array)
+          || diagnostics.ceilingMslM.length !== source.cells || diagnostics.buoyancyM2S3.length !== source.cells
+          || diagnostics.branch.length !== source.cells || sourceFlags.length !== source.cells
           || !(terrain.elevationM instanceof Float32Array) || !(terrain.valid instanceof Uint8Array)
           || terrain.elevationM.length !== target.cells || terrain.valid.length !== target.cells) {
         throw new RangeError('Terrain clearance input size or type differs from grid');
@@ -97,39 +107,57 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
         timestamps = buildIntervalDaylightTimestampsMs(startMs, endMs);
       }
       const isDaylight = createMaskDaylightTester(target.grid, timestamps);
-      const values = new Float32Array(target.cells), flags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
+      const mslValues = new Float32Array(target.cells), mslFlags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
+      const aglValues = new Float32Array(target.cells), aglFlags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
       for (let slot = 0; slot < targets.length; slot++) {
         const index = targets[slot], elevation = terrain.elevationM[index], count = counts[slot];
-        values[index] = NaN;
-        flags[index] = STATUS_UNAVAILABLE;
+        mslValues[index] = NaN; aglValues[index] = NaN;
+        mslFlags[index] = STATUS_UNAVAILABLE; aglFlags[index] = STATUS_UNAVAILABLE;
         if (!count || terrain.valid[index] !== 1 || !Number.isFinite(elevation)) continue;
         if (!isDaylight(index)) {
-          values[index] = 0;
-          flags[index] = STATUS_NO_LIFT;
+          mslValues[index] = elevation; aglValues[index] = 0;
+          mslFlags[index] = STATUS_NO_LIFT; aglFlags[index] = STATUS_NO_LIFT;
           continue;
         }
-        let status = -1, support = 0, ceiling = 0, complete = true;
+        let support = 0, ceiling = 0, buoyancy = 0, complete = true, branches = 0;
         for (let contributor = 0; contributor < count; contributor++) {
           const offset = slot * CONTRIBUTORS_PER_CELL + contributor, sourceIndex = indices[offset];
-          const flag = sourceMsl.flags[sourceIndex], nextStatus = flag & STATUS_MASK;
-          const value = sourceMsl.values[sourceIndex];
+          const flag = sourceFlags[sourceIndex], nextStatus = flag & STATUS_MASK;
+          const value = diagnostics.ceilingMslM[sourceIndex], b = diagnostics.buoyancyM2S3[sourceIndex];
+          const branch = diagnostics.branch[sourceIndex];
+          const zeroDepth = branch === FRAME_BRANCH.nonConvective || branch === FRAME_BRANCH.surfaceStable;
+          const convective = branch === FRAME_BRANCH.parcelCrossing || branch === FRAME_BRANCH.profileTop;
           if (nextStatus >= STATUS_UNAVAILABLE || (flag & ~(STATUS_MASK | SUPPORT_MASK)) !== 0
-              || !Number.isFinite(value) || (status !== -1 && status !== nextStatus)) {
+              || (!zeroDepth && !convective) || (zeroDepth && (nextStatus !== STATUS_NO_LIFT || b !== 0))
+              || !Number.isFinite(value) || !Number.isFinite(b) || b < 0) {
             complete = false;
             break;
           }
-          status = nextStatus;
+          branches |= zeroDepth ? 1 : 2;
           support |= flag & SUPPORT_MASK;
           ceiling += value * weights[offset];
+          buoyancy += b * weights[offset];
         }
-        if (!complete) continue;
-        const clearance = Math.fround(status === STATUS_NO_LIFT ? 0 : Math.max(0, ceiling - elevation));
-        // Float32 output must remain finite even for finite but physically invalid input magnitudes.
-        if (!Number.isFinite(clearance)) continue;
-        values[index] = clearance;
-        flags[index] = (clearance > 0 ? STATUS_VALID : STATUS_NO_LIFT) | support;
+        if (!complete || branches === 3) continue;
+        if (branches === 1) {
+          mslValues[index] = elevation; aglValues[index] = 0;
+          mslFlags[index] = STATUS_NO_LIFT | support; aglFlags[index] = STATUS_NO_LIFT | support;
+          continue;
+        }
+        const depth = Math.max(0, ceiling - elevation);
+        const velocity = Math.cbrt(buoyancy * depth);
+        if (!Number.isFinite(depth) || !Number.isFinite(velocity)) continue;
+        const clearance = Math.fround(usableLiftDepthM(depth, velocity) ?? 0);
+        const msl = Math.fround(elevation + clearance);
+        if (!Number.isFinite(clearance) || !Number.isFinite(msl)) continue;
+        const flags = (clearance > 0 ? STATUS_VALID : STATUS_NO_LIFT) | support;
+        aglValues[index] = clearance; aglFlags[index] = flags;
+        mslValues[index] = msl; mslFlags[index] = flags;
       }
-      return { values, flags };
+      return {
+        'usable-lift-msl': { values: mslValues, flags: mslFlags },
+        'usable-lift-agl': { values: aglValues, flags: aglFlags }
+      };
     }
   };
 }

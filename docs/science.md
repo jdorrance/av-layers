@@ -11,11 +11,11 @@ point queries. See [data](data.md) for output units and status meanings.
 
 - **GFS** ([fields.ts](../apps/batch/src/gfs/fields.ts), [gfs.json](../packages/contracts/config/gfs.json)):
   model terrain, surface pressure, 2 m temperature and specific humidity,
-  sensible and latent heat flux, PBL height, precipitation rate, and
+  sensible and latent heat flux, precipitation rate, and
   isobaric-level geopotential height and temperature (`pressureLevelsHpa`).
 - **ICON-EU** ([icon/README.md](../apps/batch/src/icon/README.md), [icon-eu.json](../packages/contracts/config/icon-eu.json)):
   DWD's 0.0625° regular latitude/longitude grid, surface fields (`HSURF`, `PS`,
-  `T_2M`, `QV_2M`, `MH`, `ASHFL_S`, `ALHFL_S`), static half-level heights `HHL`
+  `T_2M`, `QV_2M`, `ASHFL_S`, `ALHFL_S`), static half-level heights `HHL`
   (`45..75`, midpoint-averaged into full-level heights and verified against
   `HSURF` at half-level `75`), and per-column pressure `P` and temperature `T`
   on model levels `45..74`.
@@ -50,19 +50,28 @@ windows in GRIB2 metadata and pass them to
 - Small negative precipitation differences within combined GRIB packing error
   clamp to `0`; larger negative rates become `unavailable`.
 - Lift pairs the trailing-interval surface heat fluxes with the valid-time
-  temperature profile and PBL depth.
+  temperature profile.
 
 ## Lift depth and usable top
 
-`dry-lenschow-pbl-1p2-v1` (isobaric) and `dry-lenschow-pbl-1p2-model-levels-v1`
+`dry-lenschow-1p2-v2` (isobaric) and `dry-lenschow-1p2-model-levels-v2`
 (model levels) lift a dry parcel from the surface at `dryLapseRateKperM = 0.0098 K/m`
 ([`@av/thermodynamics/constants`](../packages/thermodynamics/src/constants.ts)).
 Profiles require ascending heights above ground with gaps $\le 1,000\text{ m}$.
-Where parcel temperature excess crosses from positive to nonpositive, linear
-interpolation gives the thermal top; if the profile remains buoyant at the top
-resolved level, depth caps at that level (`SUPPORT_CAPPED`). When surface
-buoyancy flux is positive and the first profile level is neutral or stable,
-depth closes to $\min(z_1, \text{PBL})$ (`SUPPORT_PBL`).
+Neutral levels within the propagated Float32 temperature and height rounding
+bound continue the search. The first strictly negative parcel excess
+after a resolved level gives a linearly interpolated crossing
+(`SUPPORT_PARCEL_CROSSING`); without a crossing, depth caps at the highest
+profile level (`SUPPORT_PROFILE_TOP`), leaving the atmospheric top unresolved.
+If the first level is negative, extrapolate its environmental temperature to
+ground using the first two levels' lapse rate clamped to zero through the dry
+lapse rate, or the dry lapse rate for one level. Nonpositive surface excess
+gives zero depth; otherwise interpolate the crossing from ground.
+
+Screening levels at model ground can introduce jumps. For surface temperature
+20 °C and levels (500 m, 21 °C), (1000 m, 14 °C), (1500 m, 11 °C), terrain
+499 m gives zero depth while terrain 500 m screens the first level and gives
+789.47 m depth.
 
 Deardorff convective velocity $w_*$ (`m/s`) scales the Lenschow updraft profile
 in [`@av/soaring/velocity`](../packages/soaring/src/velocity.ts). Usable lift
@@ -72,21 +81,25 @@ crossing with `sinkRateMps` sets the usable thermal depth ([column.ts](../packag
 
 ## Terrain clearance
 
-Method `native-lift-terrain-clearance-v1` derives fine AGL in the configured
-polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
+Method `native-lift-terrain-clearance-v2` derives fine MSL and AGL in the
+configured polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
 compiles native neighbors and weights once per target grid. Each target cell
-requires every positive-weight native neighbor to have known, matching lift status.
-Valid lift gives `max(0, interpolated MSL ceiling − DEM elevation)`; all-no-lift
-neighbors give zero. Mixed lift/no-lift neighborhoods, missing DEM and missing
-native support remain unavailable.
+requires complete native diagnostics. Every positive-weight neighbor must have
+positive convective depth for interpolation. The method interpolates convective-depth
+top MSL and buoyancy $B=w_*^3/\mathrm{depth}$, sets local depth to
+`max(0, top - DEM)`, and applies `usableLiftDepthM(depth, cbrt(B * depth))`.
+Native no-lift columns with positive depth participate. All non-convective or
+surface-stable contributors yield no lift; a mixture with convective contributors
+is unavailable. Missing DEM or native support remains unavailable. Contributor
+support flags are ORed.
 
 Daylight follows the same interval as the parent frame. A dark cell with valid
 terrain and complete native geometric support emits no lift without evaluating
 the atmospheric values. Missing terrain or geometric support stays unavailable.
-MSL and atmospheric column calculations remain native. Clearance can include
-space below model ground; it does not establish thermals originating at the
-local DEM surface. Each patch records the DEM datum and surface type. The
-calculation applies no vertical-datum transformation.
+The patch publishes MSL as DEM elevation plus usable clearance and AGL as that
+clearance. Valleys inherit the parent model's convective top and buoyancy
+forcing over a deeper local layer. Each patch records the DEM datum and surface
+type. The calculation applies no vertical-datum transformation.
 
 ## Reconstruction and storage
 

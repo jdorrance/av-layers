@@ -136,6 +136,31 @@ describe('configured refinement geometry', () => {
     }
   });
 
+  it('assigns omitted feature IDs by index and rejects explicit collisions', () => {
+    const unnamed = (coordinates = [rectangle(10, 39, 12, 41)]) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates } });
+    const parsed = parseRefinementConfig({ type: 'FeatureCollection', features: [unnamed(), unnamed([rectangle(15, 39, 17, 41)])] });
+    expect(parsed.features.map(item => item.id)).toEqual(['zone-001', 'zone-002']);
+    expect(planRefinements(parsed, options).map(plan => plan.id)).toEqual(['zone-001', 'zone-002']);
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features: [unnamed(), feature('zone-001', [rectangle(15, 39, 17, 41)])] })).toThrow('unique');
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features: [feature('zone-002', [rectangle(10, 39, 12, 41)]), unnamed([rectangle(15, 39, 17, 41)])] })).toThrow('unique');
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features: [feature('zone-001'), feature('zone-001', [rectangle(15, 39, 17, 41)])] })).toThrow('unique');
+  });
+
+  it('enforces one coordinate budget across named and unnamed features', () => {
+    const circle = (points: number, centerLon: number) => {
+      const ring = Array.from({ length: points - 1 }, (_, i) => {
+        const angle = i / (points - 1) * 2 * Math.PI;
+        return [centerLon + Math.cos(angle), 40 + Math.sin(angle)];
+      });
+      ring.push(ring[0]);
+      return { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring] } };
+    };
+    const features = (points: number[]) => points.map((count, index) => circle(count, 10 + index * 3));
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features: features([205, 205, 205, 205, 205]) })).toThrow('coordinate budget');
+    const parsed = parseRefinementConfig({ type: 'FeatureCollection', features: features([205, 205, 205, 205, 204]) });
+    expect(parsed.features.map(item => item.id)).toEqual(['zone-001', 'zone-002', 'zone-003', 'zone-004', 'zone-005']);
+  });
+
   it('produces stable plans independent of feature ordering and accounts all target cells', () => {
     const a = feature('zone-001'), b = feature('zone-002', [rectangle(15, 39, 17, 41)]);
     const plans = planRefinements(config(a, b), options);

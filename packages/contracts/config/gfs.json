@@ -22,11 +22,11 @@
   "freshness": { "maxCycleAgeHours": 18, "minHorizonHours": 6 },
   "coverage": {
     "id": "soaring-land-v1",
-    "description": "Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.",
+    "description": "Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland and Antarctica excluded.",
     "west": -180, "south": -55, "east": 180, "north": 65,
     "maxNativeZoom": 7,
     "seaBufferMeters": 50000,
-    "excludedA3": ["RUS", "ATA", "GRL"],
+    "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
     "interpolationHaloCells": 1
   },
   "upstream": {

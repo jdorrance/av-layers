@@ -3,7 +3,6 @@
   "features": [
     {
       "type": "Feature",
-      "id": "zone-001",
       "properties": {},
       "geometry": {
         "type": "Polygon",

@@ -29,7 +29,6 @@ interface FrameFields {
   surfacePressurePa: Float32Array;
   temp2mK: Float32Array;
   specificHumidity2mKgKg: Float32Array;
-  pblHeightM: Float32Array;
   sensibleHeatFluxWm2: Float32Array;
   latentHeatFluxWm2: Float32Array;
   precipitationMmPerHour?: Float32Array;
@@ -40,7 +39,6 @@ interface FrameFields {
     surfacePressure: Uint8Array;
     temp2m: Uint8Array;
     humidity2m: Uint8Array;
-    pbl: Uint8Array;
     sensibleHeatFlux: Uint8Array;
     latentHeatFlux: Uint8Array;
     precipitation?: Uint8Array;
@@ -138,11 +136,11 @@ export function validateNormalizedFrame(
 
   const fields = [
     frame.terrainM, frame.surfacePressurePa, frame.temp2mK, frame.specificHumidity2mKgKg,
-    frame.pblHeightM, frame.sensibleHeatFluxWm2, frame.latentHeatFluxWm2
+    frame.sensibleHeatFluxWm2, frame.latentHeatFluxWm2
   ];
   const missing = [
     frame.missing.terrain, frame.missing.surfacePressure, frame.missing.temp2m, frame.missing.humidity2m,
-    frame.missing.pbl, frame.missing.sensibleHeatFlux, frame.missing.latentHeatFlux
+    frame.missing.sensibleHeatFlux, frame.missing.latentHeatFlux
   ];
 
   if (requiresPrecipitation || frame.precipitationMmPerHour !== undefined || frame.missing.precipitation !== undefined) {

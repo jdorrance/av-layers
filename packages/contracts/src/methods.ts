@@ -5,15 +5,13 @@ import { DEFAULT_HORIZON_DEG } from '@av/solar/parameters';
 
 /** Current adapter outputs only. Isobaric pressure levels are a shared coordinate;
  * terrain-following model levels supply per-column pressures with an explicit mask.
- * Missing cell values have an explicit mask; a masked PBL value is permitted until
- * the first-level closure needs it. No vector field/basis is admitted yet.
+ * Missing cell values have an explicit mask. No vector field/basis is admitted yet.
  */
 export const NORMALIZED_INPUTS = {
   terrainM: { id: 'terrainM', quantity: 'geopotential-height', units: 'm', dimensions: 'cell', verticalReference: 'MSL', timeSupport: 'static', missingness: 'explicit-cell-mask' },
   surfacePressurePa: { id: 'surfacePressurePa', quantity: 'air-pressure', units: 'Pa', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
   temp2mK: { id: 'temp2mK', quantity: 'air-temperature', units: 'K', dimensions: 'cell', verticalReference: '2 m model AGL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
   specificHumidity2mKgKg: { id: 'specificHumidity2mKgKg', quantity: 'specific-humidity', units: 'kg/kg', dimensions: 'cell', verticalReference: '2 m model AGL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
-  pblHeightM: { id: 'pblHeightM', quantity: 'boundary-layer-depth', units: 'm', dimensions: 'cell', verticalReference: 'model AGL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
   sensibleHeatFluxWm2: { id: 'sensibleHeatFluxWm2', quantity: 'upward-sensible-heat-flux', units: 'W/m2', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' },
   latentHeatFluxWm2: { id: 'latentHeatFluxWm2', quantity: 'upward-latent-heat-flux', units: 'W/m2', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' },
   precipitationMmPerHour: { id: 'precipitationMmPerHour', quantity: 'liquid-water-equivalent-precipitation-rate', units: 'mm/h', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' },
@@ -41,14 +39,14 @@ const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readon
 const liftCaveats = Object.freeze([
   'Dry parcel calculation; no moist parcel or cloud treatment.',
   'Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.',
-  'Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
-  'PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.',
+  'Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
+  'A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.',
   'A profile without a resolved crossing is capped at its highest usable level and flagged.',
   'MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.'
 ] as const);
 
 function defineLiftMethod<const Id extends string>(id: Id, pressureInput: 'pressureLevelsHpa' | 'pressurePa') {
-  const inputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', pressureInput, 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
+  const inputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', pressureInput, 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
   return Object.freeze({
     id,
     requiredInputs: Object.freeze(inputs),
@@ -59,8 +57,8 @@ function defineLiftMethod<const Id extends string>(id: Id, pressureInput: 'press
     caveats: liftCaveats
   } as const);
 }
-export const LIFT_METHOD = defineLiftMethod('dry-lenschow-pbl-1p2-v1', 'pressureLevelsHpa');
-export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('dry-lenschow-pbl-1p2-model-levels-v1', 'pressurePa');
+export const LIFT_METHOD = defineLiftMethod('dry-lenschow-1p2-v2', 'pressureLevelsHpa');
+export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('dry-lenschow-1p2-model-levels-v2', 'pressurePa');
 
 export const PRECIPITATION_METHOD = Object.freeze({
   id: 'trailing-precipitation-rate-v1',
@@ -76,20 +74,23 @@ export const PRECIPITATION_METHOD = Object.freeze({
   ])
 } as const);
 export const TERRAIN_CLEARANCE_METHOD = Object.freeze({
-  id: 'native-lift-terrain-clearance-v1',
-  requiredInputs: Object.freeze(['sourceLiftMslM', 'terrainElevationM'] as const),
+  id: 'native-lift-terrain-clearance-v2',
+  requiredInputs: Object.freeze(['convectiveDepthTopMslM', 'buoyancyM2S3', 'branch', 'terrainElevationM'] as const),
   inputs: Object.freeze({
-    sourceLiftMslM: Object.freeze({ id: 'sourceLiftMslM', quantity: 'usable-lift-ceiling', units: 'm', dimensions: 'cell', verticalReference: 'model MSL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }),
+    convectiveDepthTopMslM: Object.freeze({ id: 'convectiveDepthTopMslM', quantity: 'convective-depth-top', units: 'm', dimensions: 'cell', verticalReference: 'model MSL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }),
+    buoyancyM2S3: Object.freeze({ id: 'buoyancyM2S3', quantity: 'buoyancy-velocity-cubed-per-depth', units: 'm2/s3', dimensions: 'cell', verticalReference: 'model column', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }),
+    branch: Object.freeze({ id: 'branch', quantity: 'convective-physical-support-branch', units: 'code', dimensions: 'cell', verticalReference: 'model column', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }),
     terrainElevationM: Object.freeze({ id: 'terrainElevationM', quantity: 'surface-elevation', units: 'm', dimensions: 'cell', verticalReference: 'prepared DEM datum recorded in the patch', timeSupport: 'static', missingness: 'explicit-cell-mask' })
   }),
-  outputs: Object.freeze(['usable-lift-agl'] as const),
+  outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
   spatialSupport: 'bilinear-neighborhood',
-  parameters: Object.freeze({ minimumSolarElevationDeg: DEFAULT_HORIZON_DEG }),
+  parameters: Object.freeze({ ...DEFAULT_SOARING_PARAMETERS, minimumSolarElevationDeg: DEFAULT_HORIZON_DEG }),
   caveats: Object.freeze([
-    'Bilinearly reconstructs the native lift ceiling and subtracts prepared DEM elevation, clipping depth at zero; it does not change the native MSL forecast.',
-    'Every positive-weight native contributor is required. Mixed lift/no-lift neighborhoods and missing contributors are unavailable; all-no-lift neighborhoods remain zero.',
+    'Interpolates native convective-depth top and buoyancy, then solves usable lift depth over the DEM for both MSL and AGL outputs.',
+    'All positive-weight contributors must be convective to interpolate, including positive-depth no-lift columns; all non-convective or surface-stable contributors yield no lift, and mixed branches are unavailable. Support flags are combined.',
     'Uses the parent frame daylight interval. Nighttime with valid terrain and native geometric support emits no lift; missing terrain remains unavailable.',
-    'DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion or new atmospheric column calculation is applied.'
+    'Valley extrapolation is assumed and can produce usable valley lift from native no-lift columns; it is not empirically validated.',
+    'DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion is applied.'
   ])
 } as const);
 export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD, [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });

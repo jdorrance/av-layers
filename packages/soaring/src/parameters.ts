@@ -13,6 +13,7 @@ export const DEFAULT_SOARING_PARAMETERS = Object.freeze({
   minimumProfileTemperatureC: -120,
   maximumProfileTemperatureC: 60,
   maximumProfileGapM: 1000,
+  crossingFloat32UnitRoundoff: 2 ** -24,
   crossingEpsilonMultiplier: 8,
   maximumBisectionIterations: 60
 } as const);

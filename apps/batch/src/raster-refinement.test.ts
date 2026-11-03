@@ -5,7 +5,7 @@ import { afterEach, expect, it } from 'vitest';
 import { PMTiles } from 'pmtiles';
 import { isCovered, paletteColor, setBit, STATUS_NO_LIFT, STATUS_UNAVAILABLE, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { parseRefinementConfig, planRefinements, refinementCandidate } from '@av/contracts/refinement';
-import { QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
+import { MAX_PREPARED_SAMPLES, QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
 import { createRenderer, mercatorPoint, renderTileRgba } from './render.js';
 import type { RasterPatch } from './raster.js';
 import { createRasterPool } from './raster-pool.js';
@@ -45,6 +45,21 @@ function referencePixel(base: GridField, fine: GridField, mask: CoverageMask, pa
   return alpha ? [Math.round(r / alpha), Math.round(g / alpha), Math.round(b / alpha), Math.round(alpha * 255 / 4)] : [0, 0, 0, 0];
 }
 const pixel = (bytes: Uint8Array, x: number, y: number) => [...bytes.subarray((y * 256 + x) * 4, (y * 256 + x) * 4 + 4)];
+function referenceZonesPixel(base: GridField, mask: CoverageMask, zones: { patch: RasterPatch; field: GridField }[], x: number, y: number) {
+  let r = 0, g = 0, b = 0, alpha = 0;
+  for (const [dx, dy] of QUAD_OFFSETS) {
+    const point = mercatorPoint(tile.z, tile.x, tile.y, x + 0.25 + dx * 0.5, y + 0.25 + dy * 0.5);
+    if (!isCovered(mask, point.lat, point.lon)) continue;
+    const selected = refinementCandidate(zones.map(zone => zone.patch), undefined, point.lat, point.lon);
+    const zone = selected ? zones.find(candidate => candidate.patch === selected) : undefined;
+    const owned = zone && isCovered(zone.patch.mask, point.lat, point.lon) ? zone : undefined;
+    const gridMask = owned ? owned.patch.mask : mask, field = owned ? owned.field : base;
+    const sample = sampleGrid(gridMask.grid, field, point.lat, point.lon, layer, gridMask), color = paletteColor(layer, sample.value, sample.status);
+    if (!color) continue;
+    r += parseInt(color.slice(1, 3), 16); g += parseInt(color.slice(3, 5), 16); b += parseInt(color.slice(5, 7), 16); alpha++;
+  }
+  return alpha ? [Math.round(r / alpha), Math.round(g / alpha), Math.round(b / alpha), Math.round(alpha * 255 / 4)] : [0, 0, 0, 0];
+}
 
 it('composes exact polygon/holes/mask ownership before coloring and never falls back on missing or no-lift values', () => {
   const { mask, patch, base, fine } = fixture(), renderer = createRenderer(mask, { patches: [patch], rasterWorkers: 0 });
@@ -94,6 +109,49 @@ it('prepares only actual ownership when nested polygon bounds cover the same til
   const coarse = createRenderer(mask, { rasterWorkers: 0 });
   expect(Buffer.from(outsideFine).equals(coarse.renderTileRgba(base, layer, tile.z, tile.x, tile.y))).toBe(true);
   expect(outer.metrics().geometryBytes).toBe(coarse.metrics().geometryBytes);
+});
+
+it('prepares sparse owned samples when nested zone bounding rectangles exceed the tile budget', () => {
+  const { mask, base } = fixture();
+  const rectangle = (w: number, s: number, e: number, n: number) => [[w, s], [e, s], [e, n], [w, n], [w, s]];
+  const plans = planRefinements({ type: 'FeatureCollection', features: [
+    { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [rectangle(9, 34, 19, 43), rectangle(12.5, 37.5, 15.5, 39.5)] } },
+    { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [rectangle(13, 38, 15, 39)] } }
+  ] }, { sourceGrid: mask.grid, bounds: [5, 26, 24, 45], haloCells: 1 });
+  expect(plans.map(plan => plan.id)).toEqual(['zone-001', 'zone-002']);
+  const patches: RasterPatch[] = plans.map(plan => ({ id: plan.id, geometry: plan.geometry, descriptors: { bounds: plan.bounds }, layers: [layer], mask: { ...maskFor(plan.grid), bounds: plan.bounds } }));
+  const field = (target: Grid, value: number): GridField => ({ values: new Float32Array(target.width * target.height).fill(value), flags: new Uint8Array(target.width * target.height) });
+  const fields = { [patches[0].id]: field(patches[0].mask.grid, 4000), [patches[1].id]: field(patches[1].mask.grid, 3000) };
+  const zones = patches.map(patch => ({ patch, field: fields[patch.id] }));
+  // The old preparation sampled each zone's full bounding rectangle in this tile.
+  const lats = new Float64Array(512), lons = new Float64Array(512);
+  for (let i = 0; i < 256; i++) {
+    lats[i * 2] = mercatorPoint(tile.z, tile.x, tile.y, 0, i + 0.25).lat;
+    lats[i * 2 + 1] = mercatorPoint(tile.z, tile.x, tile.y, 0, i + 0.75).lat;
+    lons[i * 2] = mercatorPoint(tile.z, tile.x, tile.y, i + 0.25, 0).lon;
+    lons[i * 2 + 1] = mercatorPoint(tile.z, tile.x, tile.y, i + 0.75, 0).lon;
+  }
+  const span = (axis: Float64Array, low: number, high: number) => {
+    let count = 0;
+    for (const coordinate of axis) if (coordinate >= low && coordinate <= high) count++;
+    return count;
+  };
+  const boundingSamples = plans.reduce((sum, plan) => sum + span(lons, plan.bounds[0], plan.bounds[2]) * span(lats, plan.bounds[1], plan.bounds[3]), 0);
+  expect(boundingSamples).toBeGreaterThan(MAX_PREPARED_SAMPLES);
+  const renderer = createRenderer(mask, { patches, rasterWorkers: 0 });
+  const actual = renderer.renderTileRgba(base, layer, tile.z, tile.x, tile.y, fields);
+  let outer = 0, inner = 0, gap = 0;
+  for (let y = 8; y < 248; y += 4) for (let x = 8; x < 248; x += 4) {
+    const point = mercatorPoint(tile.z, tile.x, tile.y, x + 0.5, y + 0.5);
+    const selected = refinementCandidate(patches, undefined, point.lat, point.lon);
+    if (selected === patches[0]) outer++; else if (selected === patches[1]) inner++; else gap++;
+    expect(pixel(actual, x, y)).toEqual(referenceZonesPixel(base, mask, zones, x, y));
+  }
+  expect(outer).toBeGreaterThan(0);
+  expect(inner).toBeGreaterThan(0);
+  expect(gap).toBeGreaterThan(0);
+  expect(renderer.metrics().geometryBytes).toBeGreaterThan(0);
+  expect(renderer.metrics().geometryBytes).toBeLessThanOrEqual(24 * 1024 * 1024);
 });
 
 it('shares fine arrays with workers within the existing byte budget and preserves inline pixels', async () => {

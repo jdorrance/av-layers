@@ -71,7 +71,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
         verticalDatum: terrain.descriptor.source.verticalDatum, surface: terrain.descriptor.source.surface }
     }));
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
-    const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle, provider: provider.provider, temporalApproximation: 'interval flux with endpoint profile and PBL', frames: receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
+    const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle, provider: provider.provider, temporalApproximation: 'interval flux with endpoint profile', frames: receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
     await mkdir(dirname(provenancePath), { recursive: true });
     await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });
     const baseManifest = {
@@ -93,7 +93,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
       source: {
         provider: provider.provider,
         model: product.modelId,
-        temporalApproximation: 'interval flux with endpoint profile and PBL',
+        temporalApproximation: 'interval flux with endpoint profile',
         frameCount: frames.length,
         provenanceKey,
         provenanceSha256: sha256(provenanceBytes),

@@ -21,5 +21,5 @@ and arrays with the build plan. Workers verify and read those files locally.
 [Build budgets](../capacity.ts) include the base and fine grids.
 
 [`@av/forecast/refinement`](../../../../packages/forecast/src/refinement.ts)
-calculates terrain-referenced AGL beneath the native lift ceiling. See
+calculates MSL and terrain-AGL lift from native convective-depth top and buoyancy. See
 [science](../../../../docs/science.md#terrain-clearance) for the method.
