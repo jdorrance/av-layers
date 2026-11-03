@@ -37,6 +37,7 @@ Run batch tests with `pnpm test apps/batch`.
 - [src/icon](src/icon/README.md): DWD ICON-EU adapter.
 - [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
 - [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
+- [src/refinement](src/refinement/README.md): polygon configuration and 1 km grid planning.
 - [pmtiles.json](pmtiles.json): pinned `pmtiles` binary version and SHA-256 digests.
 
 ## Parallel builds

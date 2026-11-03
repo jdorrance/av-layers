@@ -28,9 +28,9 @@ repacks each source tile into a 512×512-tiled Cloud-Optimized GeoTIFF via `uv`
 pnpm terrain inspect --catalog-ref output/terrain-catalog-ref.json \
   --bounds 43.99,40.49,44.01,40.51 --out output/terrain-read.json
 pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json \
-  --grid scripts/fixtures/terrain-armenia-grid.json --out output/terrain-prepared-ref.json
+  --grid scripts/fixtures/terrain-grid.json --out output/terrain-prepared-ref.json
 pnpm terrain stage --prepared-ref output/terrain-prepared-ref.json \
-  --grid scripts/fixtures/terrain-armenia-grid.json --out output
+  --grid scripts/fixtures/terrain-grid.json --out output
 ```
 
 `--bounds` takes `west,south,east,north` (with `west > east` crossing the

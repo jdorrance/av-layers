@@ -41,6 +41,13 @@ Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
 - `maxRangeBytes`: `8388608`.
 - `maxReadBytes`: `268435456`.
 
+## Refinement grids
+
+Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).
+
+- `--model <string>`.
+- `--zones <string>`.
+
 ## Configured models
 
 Source: [product registry](../packages/contracts/src/products.ts). See [status](status.md) for deployment state.

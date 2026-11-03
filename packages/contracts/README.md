@@ -21,6 +21,7 @@ export function parseManifest(json: string): Manifest {
   builders, and sample formatting.
 - [`@av/contracts/client/dom`](src/client-dom.ts): DOM renderers for legends,
   diagnostics, and point sample tables.
+- [`@av/contracts/refinement`](src/refinement.ts): polygon validation and 1 km Lambert grids.
 - [`@av/contracts/fixture-product`](src/fixture-product.ts): synthetic product
   definition used by `pnpm dev`.
 
@@ -32,6 +33,10 @@ and coverage mask; [products.ts](src/products.ts) loads them with
 `defineProduct`. [layers.ts](src/layers.ts) defines layer units and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.
 See [extensions](../../docs/extensions.md) to add a model or layer.
+
+[refinement.json](config/refinement.json) selects refinement areas.
+[planRefinements](src/refinement.ts) builds grids within the source bounds, with
+halo cells. Inspect the result with `pnpm refinement --model icon-eu`.
 
 ```sh
 pnpm test packages/contracts
