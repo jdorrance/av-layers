@@ -1,38 +1,30 @@
 # `@av/solar`
 
-Solar position, sunrise/sunset times, relative solar flux, and daylight checks
-for points and grids using NOAA-style calculations.
+NOAA-style solar position, sunrise/sunset times, top-of-atmosphere flux factor,
+and grid daylight testers.
 
 ## Usage
 
 ```ts
 import { solarPosition } from '@av/solar';
 
-const timestampMs = Date.parse('2026-06-21T16:00:00Z');
-const position = solarPosition(40.7128, -74.006, timestampMs);
-
+const position = solarPosition(40.7128, -74.006, Date.parse('2026-06-21T16:00:00Z'));
 console.log(position.elevationDeg, position.azimuthDeg, position.isDaylight);
 ```
 
-Coordinates and angles are degrees; timestamps are UTC milliseconds. Longitude
-is positive east. `solarPosition` returns elevation, azimuth, and daylight status
-along with ephemeris terms. Non-finite inputs produce `NaN` numeric fields and
-`isDaylight: false`.
+Latitudes and longitudes (positive east) are in degrees; timestamps are UTC
+milliseconds.
 
-The [point functions](src/position.ts) also include `sunriseSunset`, which returns
-UTC timestamps and day length in hours. Sunrise and sunset are `null` during
-polar day or night; check `kind` for the regime. `solarFluxFactor` returns a
-dimensionless top-of-atmosphere horizontal flux factor.
+## Entry points
 
-- [`@av/solar/grid`](src/grid.ts): `createGridDaylightTester` returns a function
-  that checks a cell index for daylight at any supplied timestamp. It accepts
-  regular latitude/longitude grids or projected grids with a coordinate converter.
-- [`@av/solar/parameters`](src/parameters.ts): the default apparent sunrise/sunset
-  horizon, used when a calculation's optional horizon argument is omitted.
+- [`@av/solar`](src/index.ts): `solarPosition`, `sunriseSunset` (returns UTC
+  sunrise/sunset timestamps, day length, and polar day/night `kind`), and
+  `solarFluxFactor`.
+- [`@av/solar/grid`](src/grid.ts): `createGridDaylightTester` for regular
+  lat/lon and projected grids.
+- [`@av/solar/parameters`](src/parameters.ts): `DEFAULT_HORIZON_DEG` (`-0.833°`).
 
-See the [science guide](../../docs/science.md) for forecast daylight sampling.
-
-Run tests from the repository root:
+See [science](../../docs/science.md).
 
 ```sh
 pnpm test packages/solar

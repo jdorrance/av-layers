@@ -1,7 +1,8 @@
 # `@av/soaring`
 
-Calculate thermal lift depth and convective velocity from a temperature profile
-and surface heat fluxes.
+Calculates dry convective boundary-layer depth, Deardorff thermal velocity
+($w_*$), and usable lift depth from a vertical temperature profile and surface
+heat fluxes.
 
 ## Usage
 
@@ -24,44 +25,30 @@ const column: ColumnInput = {
 
 const lift = deriveLift(column, column.levels.length, { sinkRateMps: 1.2 });
 if (lift.status === 'valid') {
-  console.log(lift.usableDepthM); // metres above the column's terrain
+  console.log(lift.usableDepthM); // metres AGL
 }
 ```
 
-Use °C for temperatures, hPa for surface pressure, and upward-positive W/m² for
-heat fluxes. Profile heights are metres above sea level, ordered from lowest to
-highest. Humidity accepts either `specificHumidityKgKg` or `dewPointC`.
+Inputs use `°C` for temperature, `hPa` for surface pressure, upward-positive
+`W/m²` for fluxes, and ascending `m` MSL for `levels` (reading the first `count`
+elements of `levels`).
 
-The second argument selects how many profile levels to read. Pass `levels.length`
-for a complete profile, or a smaller count when reusing an array. An invalid
-count throws `RangeError`.
+## Return value
 
-## Results
+`deriveLift` returns `{ status, depthM, thermalVelocityMps, usableDepthM, branch }`:
 
-- `valid`: `usableDepthM` is the estimated usable depth above terrain for the
-  chosen sink rate.
-- `no-lift`: `usableDepthM` is zero.
-- `unavailable`: required weather data is missing or invalid; numeric results are
-  `null`.
+- `valid`: `usableDepthM > 0` for the configured `sinkRateMps`.
+- `no-lift`: `usableDepthM === 0`.
+- `unavailable`: missing or invalid inputs; numeric fields are `null`.
 
-`depthM` is the convective layer depth, `thermalVelocityMps` is its velocity scale,
-and `branch` describes how the depth was calculated. Supply `pblHeightM` when the
-first profile level is neutral or stable; the solver uses it to limit that case.
+## Entry points
 
-## Other exports
+- [`@av/soaring`](src/index.ts): `deriveLift` and column types.
+- [`@av/soaring/velocity`](src/velocity.ts): Lenschow updraft profile,
+  `usableLiftDepthM`, and `SINK_RATE_PRESETS_MPS`.
+- [`@av/soaring/parameters`](src/parameters.ts): default solver parameters.
 
-- [`@av/soaring/velocity`](src/velocity.ts): Lenschow updraft curves,
-  `usableLiftDepthM`, and sink-rate presets. Use this when depth and velocity are
-  already known.
-- [`@av/soaring/parameters`](src/parameters.ts): default calculation settings.
-- [`ColumnDerivationOptions`](src/column.ts): per-call options, including sink
-  rate, lapse rate, and maximum profile gap.
-
-See [science](../../docs/science.md#lift-depth-and-usable-top) for the equations
-and profile assumptions. For gridded MSL/AGL output, use
-[`@av/forecast`](../forecast/README.md).
-
-Run tests from the repository root:
+See [science](../../docs/science.md#lift-depth-and-usable-top).
 
 ```sh
 pnpm test packages/soaring
