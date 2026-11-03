@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { MODEL_IDS } from '@av/contracts';
 import { selectWorkflowModels } from './workflow-models.js';
+import { terrainCatalogInput } from './terrain-inputs.js';
 
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected object');
@@ -51,13 +52,18 @@ describe('workflow model selection', () => {
 });
 
 describe('multi-model workflow isolation', () => {
-  it('resolves one catalog override or environment default only in the preparation job', () => {
+  it('resolves catalog overrides before the production pin only in the preparation job', () => {
     const forecast = workflow('forecast'), model = workflow('forecast-model'), modelJobs = jobs('forecast-model');
     const input = record(record(record(record(forecast.on).workflow_dispatch).inputs)['terrain-catalog-ref']);
     expect(input).toMatchObject({ type: 'string', default: '' });
     expect(record(record(jobs('forecast').forecast).with)['terrain-catalog-ref']).toBe("${{ inputs['terrain-catalog-ref'] || '' }}");
     expect(record(record(record(model.on).workflow_call).inputs)['terrain-catalog-ref']).toEqual({ type: 'string', default: '' });
-    expect(record(record(modelJobs.prepare).env).TERRAIN_CATALOG_REF).toBe("${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF || '' }}");
+    const catalogExpression = String(record(record(modelJobs.prepare).env).TERRAIN_CATALOG_REF);
+    const catalogJson = catalogExpression.match(/inputs.environment == 'production' && '([^']+)'/)?.[1];
+    expect(catalogJson).toBeDefined();
+    const catalog = terrainCatalogInput(catalogJson!);
+    expect(catalog.key).toBe(`terrain/catalogs/${catalog.sha256}.json`);
+    expect(catalogExpression).toBe(`\${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF || (inputs.environment == 'production' && '${catalogJson}') || '' }}`);
     for (const env of [record(model.env), record(record(modelJobs.shard).env), record(record(modelJobs['build-publish']).env)]) {
       expect(env.TERRAIN_CATALOG_REF).toBeUndefined();
       expect(env.TERRAIN_INPUTS).toBeUndefined();
