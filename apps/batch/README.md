@@ -3,11 +3,10 @@
 Downloads GFS or ICON-EU weather data and builds map tiles, point sample packs,
 and a build manifest.
 
-Run from the repository root after [R2 setup](../../docs/development.md#build-a-real-forecast):
+Run from the repository root:
 
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
-  --terrain-catalog-ref output/terrain-catalog-ref.json
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs
 ```
 
 Writes the completed build under `output/builds/gfs/` and prints the manifest
@@ -15,8 +14,12 @@ path. Pass `--model icon-eu` for regional ICON-EU lift and `--cycle` to select a
 specific UTC run. See [development](../../docs/development.md#build-a-real-forecast)
 to preview the build locally.
 
-Estimate build resources or verify a single upstream frame before running a full
-build:
+Add `--terrain-catalog-ref PATH` to enable configured refinement zones. Use
+`--terrain-store-dir PATH` for a local terrain store; otherwise the catalog and
+terrain come from R2. See [terrain setup](../../docs/development.md#terrain-refinement).
+
+Estimate build resources including configured refinement grids, or verify a
+single upstream frame:
 
 ```sh
 pnpm capacity --model icon-eu

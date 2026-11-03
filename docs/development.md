@@ -1,7 +1,7 @@
 # Development
 
-Run commands from the repository root. See [status](status.md) for release
-evidence and [architecture](architecture.md#workspace-map) for package layout.
+Run commands from the repository root. See [deployments](status.md) for live
+applications and [architecture](architecture.md#workspace-map) for package layout.
 
 ## Setup
 
@@ -32,14 +32,10 @@ or `pnpm dev --seed-only` to seed `.wrangler/fixture-state` and exit.
 
 ## Build a real forecast
 
-Save the completed terrain import's reference as `output/terrain-catalog-ref.json`
-and configure [R2 access](../apps/batch/src/terrain/README.md#import-a-dataset).
-The catalog supplies configured refinement zones; models with no intersecting
-zones can omit the catalog option.
+Build the native model forecast:
 
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
-  --terrain-catalog-ref output/terrain-catalog-ref.json
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs
 ```
 
 For ICON-EU:
@@ -47,11 +43,11 @@ For ICON-EU:
 ```sh
 pnpm capacity --model icon-eu
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
-pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu \
-  --terrain-catalog-ref output/terrain-catalog-ref.json
+pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu
 ```
 
-`capacity` prints offline memory, tile, and sample-pack estimates. `input:proof`
+`capacity` includes configured refinement grids in its offline memory, tile and
+sample-pack estimates. `input:proof`
 downloads and validates one frame. Both models accept `--cycle YYYY-MM-DDTHH:00:00Z`
 (`00`, `06`, `12`, or `18` UTC) or discover the latest complete upstream run
 automatically. See the [CLI reference](reference.md#batch-cli) for all flags.
@@ -64,6 +60,21 @@ pnpm sample-preview --manifest output/builds/MODEL/BUILD_ID/manifest.json
 
 This validates the build, seeds local Wrangler storage, and starts the API and
 preview server.
+
+### Terrain refinement
+
+Save the terrain import's catalog reference as `output/terrain-catalog-ref.json`.
+For a [local terrain store](../apps/batch/src/terrain/README.md#import-a-dataset):
+
+```sh
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
+  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
+```
+
+The directory must contain the referenced catalog and DEM objects. Omit
+`--terrain-store-dir` to use R2 with the [terrain credentials](../apps/batch/src/terrain/README.md#import-a-dataset).
+The catalog option enables the configured polygons for either model. A supplied
+catalog must pass validation before weather acquisition starts.
 
 ## Tests and builds
 

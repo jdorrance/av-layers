@@ -23,6 +23,8 @@ pnpm dev
 This starts the local API and map with generated test data. Open the URL printed
 by the development server. To build a real forecast, follow
 [the forecast setup guide](docs/development.md#build-a-real-forecast).
+The [terrain example](docs/development.md#terrain-refinement) uses
+`--terrain-catalog-ref` and `--terrain-store-dir` for a local DEM store.
 
 ## Development checks
 

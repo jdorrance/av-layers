@@ -92,10 +92,14 @@ it.each(MODEL_IDS)('passes the same global catalog pin for configured %s zones',
   await planForecast();
   expect(fake.plan).toHaveBeenCalledWith(model, expect.objectContaining({ refinement: { catalogRef, storage: {} } }));
 });
-it('rejects configured zones without a catalog pin before preparing a build', async () => {
-  vi.stubEnv('TERRAIN_CATALOG_REF', '');
-  await expect(planForecast()).rejects.toThrow('Configured refinement zones require TERRAIN_CATALOG_REF');
-  expect(fake.plan).not.toHaveBeenCalled();
+it.each(MODEL_IDS)('keeps scheduled and manual %s forecasts native until a catalog is configured', async model => {
+  vi.stubEnv('MODEL', model);
+  for (const event of ['schedule', 'workflow_dispatch']) {
+    vi.stubEnv('GITHUB_EVENT_NAME', event);
+    vi.stubEnv('TERRAIN_CATALOG_REF', '');
+    await planForecast();
+    expect(fake.plan).toHaveBeenLastCalledWith(model, { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal) });
+  }
 });
 it('ignores an unused catalog input when no configured zone intersects the product', async () => {
   vi.spyOn(refinementConfiguration, 'configuredRefinements').mockReturnValue([]);

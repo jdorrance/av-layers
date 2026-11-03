@@ -109,8 +109,7 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
     let terrain, refinement;
     const product = getProduct(model);
     if (!product) throw new Error(`No forecast product for ${model}`);
-    if (configuredRefinements(product).length) {
-      if (!process.env.TERRAIN_CATALOG_REF) throw new Error('Configured refinement zones require TERRAIN_CATALOG_REF; set the environment default or terrain-catalog-ref workflow input');
+    if (process.env.TERRAIN_CATALOG_REF && configuredRefinements(product).length) {
       const { terrainCatalogInput } = await import('./terrain-inputs.js');
       refinement = { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store };
     }

@@ -4,7 +4,7 @@ import z from 'zod';
 import { resolveProductFrameHours } from '@av/forecast';
 import { CELL_BYTES, encodeBoundedJson, getProduct, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, TERRAIN_CLEARANCE_METHOD } from '@av/contracts';
 import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
-import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
+import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild, type PreparedBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
 import { describeCoverage, loadCoverage, writeCoverage } from './coverage.js';
 import { buildFrames, forecastFrame, matchesFrameIntervals, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
@@ -17,7 +17,6 @@ import { failureReason } from './failure.js';
 import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
 import { stagePreparedTerrain } from './terrain/staging.js';
 import { loadRefinements, prepareRefinements, refinementInputSchema } from './refinement/prepare.js';
-import { configuredRefinements } from './refinement/config.js';
 import type { ObjectStorage } from './storage.js';
 
 export const MAX_FORECAST_SHARDS = 4;
@@ -133,7 +132,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
   }
 }
 
-function readResult(raw: unknown, plan: BuildPlan, shard: number, options: ForecastInputs, prepared: ReturnType<typeof prepareBuild>): FrameBuildResult {
+function readResult(raw: unknown, plan: BuildPlan, shard: number, options: ForecastInputs, prepared: PreparedBuild): FrameBuildResult {
   const receipt = receiptSchema.parse(raw), hours = plan.groups[shard], layers = options.product.layers;
   if (receipt.planHash !== planHash(plan) || receipt.shard !== shard) throw new Error('Forecast shard receipt identity mismatch');
   const frames = hours.map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours)), channelCount = hours.length * layers.length;
@@ -209,7 +208,6 @@ export async function readBuildPlan(path: string): Promise<BuildPlan> {
 }
 export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<BuildPlan> {
   const inputs = await inputsFor(modelId);
-  if (!options.refinement && configuredRefinements(inputs.product).length) throw new Error('Configured refinement zones require a pinned terrain catalog reference');
   return createBuildPlan({ ...options, ...inputs });
 }
 export async function buildForecastShard(planPath: string, shard: number, options: Pick<BuildOptions, 'out' | 'cacheDir' | 'signal'>): Promise<string> {

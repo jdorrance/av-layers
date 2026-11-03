@@ -13,7 +13,7 @@ verification, deployments, forecasts and terrain imports. Forecast manifests
 record elapsed time, peak memory and capacity accounting. Follow
 [operations](operations.md) for retry, resume, rollback and publication checks.
 
-The environment's `TERRAIN_CATALOG_REF` pins the DEM catalog for configured
-refinement polygons. Retained builds preserve their original terrain and
+The environment's `TERRAIN_CATALOG_REF` enables configured refinement polygons
+using a pinned DEM catalog. Retained builds preserve their original terrain and
 method references. The [terrain guide](../apps/batch/src/terrain/README.md)
 covers import and preparation; [science](science.md) describes the calculations.

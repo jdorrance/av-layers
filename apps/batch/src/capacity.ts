@@ -1,7 +1,7 @@
 import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { terrainClearanceMappingBytes } from '@av/forecast/refinement';
-import { MAX_PREPARED_TERRAIN_BYTES, type PreparedTerrain } from './terrain/prepare.js';
+import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import type { LoadedRefinement } from './refinement/prepare.js';
 
@@ -15,7 +15,7 @@ export const BUILD_BUDGETS = {
 } as const;
 
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
-export type PreparedBuild = ReturnType<typeof prepareBuild> & { terrain?: PreparedTerrain };
+export type PreparedBuild = ReturnType<typeof prepareBuild<LoadedRefinement>> & { terrain?: PreparedTerrain };
 
 export interface CapacityScenario {
   frames?: number;
@@ -64,7 +64,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 }
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number; retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly LoadedRefinement[] }) {
+export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number; retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
   if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
@@ -79,10 +79,11 @@ export function prepareBuild(mask: CoverageMask, product: ProductDefinition, res
   const refinements = (resources.refinements ?? []).map(item => {
     const active = coverageIndices(item.mask), layout = prepareSamplePackLayout(item.mask.grid, item.mask.output, item.mask.halo);
     if (!active.output.length) throw new Error('Refinement coverage is empty');
-    refinementSize.gridCells += item.mask.grid.width * item.mask.grid.height;
+    const cells = item.mask.grid.width * item.mask.grid.height;
+    refinementSize.gridCells += cells;
     refinementSize.storedCells += layout.storedCells;
     refinementMappingBytes += terrainClearanceMappingBytes(active.active.length);
-    refinementTerrainBytes += item.input.terrain.arrayBytes;
+    refinementTerrainBytes += cells * PREPARED_TERRAIN_CELL_BYTES;
     refinementMaskBytes += item.mask.output.byteLength + item.mask.halo.byteLength + item.mask.tiles.byteLength;
     return { ...item, layout };
   });

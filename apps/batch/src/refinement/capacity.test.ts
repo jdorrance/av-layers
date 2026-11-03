@@ -6,23 +6,25 @@ import { GFS_PRODUCT, setBit, STATUS_VALID, type CoverageMask, type ProductDefin
 import type { GridField } from '@av/forecast';
 import { prepareTerrainClearance } from '@av/forecast/refinement';
 import { buildForecast } from '../build.js';
-import { BUILD_BUDGETS, prepareBuild } from '../capacity.js';
+import { BUILD_BUDGETS, estimateCapacity, prepareBuild } from '../capacity.js';
 import type { ForecastProvider } from '../provider.js';
 import { createSamplePackBuilder } from '../sample-pack.js';
 import { seedTerrainCatalog, TerrainTestStorage } from '../terrain/test-fixtures.js';
 import * as config from './config.js';
+import { planRefinementCoverage } from './coverage.js';
 import { loadRefinements, prepareRefinements } from './prepare.js';
 
 vi.mock('../raster-pool.js', async importOriginal => ({
   ...await importOriginal<typeof import('../raster-pool.js')>(),
   rasterWorkerCount: () => 2
 }));
+const terrainReads = vi.hoisted(() => ({ opens: 0 }));
 vi.mock('../terrain/reader.js', () => ({
-  createTerrainReader: async () => ({
+  createTerrainReader: async () => { terrainReads.opens++; return {
     async sample() { return { elevationM: 100, source: 'dem' as const }; },
     close() {},
     stats: () => ({ requests: 1, bytesRead: 16, decodedPixels: 4, outputPixels: 4, cacheHits: 0 })
-  })
+  }; }
 }));
 
 const roots: string[] = [];
@@ -48,10 +50,15 @@ async function fixture() {
   };
   const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, output: new Uint8Array(8), halo: new Uint8Array(8), tiles: Uint8Array.of(1), maxZoom: 0 };
   for (let i = 0; i < 63; i++) setBit(mask.output, i);
-  const inputs = await prepareRefinements({ product, mask, out, storage, catalogRef, zones });
-  const refinements = await loadRefinements({ inputs, out, baseMask: mask });
+  return { product, mask, out, storage, catalogRef };
+}
+
+async function preparedFixture() {
+  const options = await fixture();
+  const inputs = await prepareRefinements({ ...options, zones });
+  const refinements = await loadRefinements({ inputs, out: options.out, baseMask: options.mask });
   expect(refinements).toHaveLength(2);
-  return { product, mask, out, storage, catalogRef, refinements };
+  return { ...options, refinements };
 }
 
 const bytes = (...arrays: ArrayBufferView[]) => arrays.reduce((sum, value) => sum + value.byteLength, 0);
@@ -59,8 +66,44 @@ const fieldBytes = (field: GridField) => bytes(field.values, field.flags);
 const maskBytes = (mask: CoverageMask) => bytes(mask.output, mask.halo, mask.tiles);
 
 describe('refinement build admission', () => {
+  it('inspects the exact producer masks and resources before any terrain acquisition', async () => {
+    const options = await fixture(), reads = terrainReads.opens;
+    setBit(options.mask.output, 3 * 9 + 3, false);
+    const planned = planRefinementCoverage({ ...options, zones });
+    const inspected = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: planned });
+    expect(planned).toHaveLength(2);
+    expect(terrainReads.opens).toBe(reads);
+    expect(options.storage.gets).toHaveLength(0);
+    expect(inspected.capacity.workingSet.preparedTerrain).toBeGreaterThan(0);
+    expect(inspected.capacity.workingSet.refinementMapping).toBeGreaterThan(0);
+
+    const inputs = await prepareRefinements({ ...options, zones });
+    const loaded = await loadRefinements({ inputs, out: options.out, baseMask: options.mask });
+    const actual = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: loaded });
+    const contents = ({ mask }: { mask: CoverageMask }) => ({ ...mask, output: [...mask.output], halo: [...mask.halo], tiles: [...mask.tiles] });
+    expect(planned.map(contents)).toEqual(loaded.map(contents));
+    expect(inspected.capacity).toEqual(actual.capacity);
+    expect(terrainReads.opens).toBeGreaterThan(reads);
+    const scenario = estimateCapacity(options.mask, options.product, inspected.layout.storedCells,
+      { frames: options.product.frameHours.length * 2 }, inspected.capacity.refinement);
+    expect(scenario.samplePackBytes).toBe(actual.capacity.samplePackBytes * 2);
+    expect(scenario.refinement).toEqual(actual.capacity.refinement);
+  });
+
+  it('charges no refinement resources when the polygons miss base output cells', async () => {
+    const options = await fixture(), reads = terrainReads.opens;
+    options.mask.output.fill(0); setBit(options.mask.output, 0);
+    const planned = planRefinementCoverage({ ...options, zones });
+    expect(planned).toHaveLength(0);
+    const inspected = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: planned });
+    const baseline = prepareBuild(options.mask, options.product, { maxLevels: 2 });
+    expect(inspected.capacity).toEqual(baseline.capacity);
+    expect(terrainReads.opens).toBe(reads);
+    expect(options.storage.gets).toHaveLength(0);
+  });
+
   it('reserves all retained patch inputs and packs while composing the existing archive set', async () => {
-    const { product, mask, out, refinements } = await fixture();
+    const { product, mask, out, refinements } = await preparedFixture();
     const baseline = prepareBuild(mask, product, { maxLevels: 2 });
     const prepared = prepareBuild(mask, product, { maxLevels: 2, refinements });
     const fields = product.layers.map((): GridField => ({ values: new Float32Array(63).fill(1000), flags: new Uint8Array(63).fill(STATUS_VALID) }));
@@ -92,7 +135,7 @@ describe('refinement build admission', () => {
   });
 
   it('rejects aggregate packs before opening weather or publishing, even when every pack fits alone', async () => {
-    const options = await fixture();
+    const options = await preparedFixture();
     const baseline = prepareBuild(options.mask, options.product, { maxLevels: 2 });
     const prepared = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: options.refinements });
     const limit = prepared.capacity.samplePackBytes - 1;

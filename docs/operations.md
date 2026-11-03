@@ -13,8 +13,8 @@ Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
 - Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit),
   `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` scoped to that environment's
   bucket.
-- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and the pinned
-  `TERRAIN_CATALOG_REF` from [terrain import](#terrain-data). Bucket names come
+- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
+  `TERRAIN_CATALOG_REF` to enable [terrain refinement](#terrain-data). Bucket names come
   from [wrangler.json](../apps/api/wrangler.json).
 
 Create the R2 bucket (with `r2.dev` disabled) and Cloudflare Pages project once
@@ -26,8 +26,8 @@ pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
 pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
-For a new environment, import terrain and set its catalog pin, run the Forecast
-workflow (which commits to R2 before the serving check), deploy the API and
+For a new environment, run the Forecast workflow (which commits to R2 before
+the serving check), deploy the API and
 Pages, then [resume that build](#resume-or-promote-a-build) to complete serving
 verification.
 
@@ -118,15 +118,16 @@ to import and verify the Copernicus GLO-90 catalog in R2. See the
 [terrain guide](../apps/batch/src/terrain/README.md) for CLI commands and grid
 preparations.
 
-Set the environment's `TERRAIN_CATALOG_REF` variable to the complete JSON
+Deploy compatible API and clients, then set the environment's `TERRAIN_CATALOG_REF`
+variable to the complete JSON
 reference in the import's `terrain-catalog-ref.json` artifact. The catalog and
 tiles must exist in that environment's bucket. Both weather models use this pin
 and the shared [polygon configuration](../packages/contracts/config/refinement.json).
 
 The Forecast workflow's `terrain-catalog-ref` input overrides the default for
-one run and reaches only the preparation job. Configured zones require a pin;
-missing or corrupt catalogs fail preparation. Empty or out-of-domain zone
-configurations keep native output without catalog access.
+one run and reaches only the preparation job. Without a catalog setting,
+forecasts use their native grids. A supplied missing or corrupt catalog fails
+preparation. Empty or out-of-domain zone configurations keep native output.
 
 The existing `terrain-inputs` model map remains available for staging prepared
 native-grid arrays alongside configured refinements.

@@ -12,7 +12,6 @@ import { failureReason } from './failure.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
 import type { PreparedTerrainRef } from './terrain/prepare.js';
-import { configuredRefinements } from './refinement/config.js';
 import { prepareRefinements, loadRefinements } from './refinement/prepare.js';
 import type { TerrainAsset, TerrainStorage } from './terrain/contract.js';
 import { buildFrames, type FrameBuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
@@ -28,7 +27,6 @@ export function createBuildStamp(): BuildStamp {
 export async function buildProduct(modelId: string, options: BuildOptions): Promise<string> {
   const product = getProduct(modelId), provider = getForecastProvider(modelId);
   if (!product) throw new Error(`No forecast product for ${modelId}`);
-  if (!options.refinement && configuredRefinements(product).length) throw new Error('Configured refinement zones require a pinned terrain catalog reference');
   return buildForecast({ ...options, product, mask: await loadCoverage(product), provider });
 }
 
