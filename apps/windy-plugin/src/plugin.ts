@@ -125,6 +125,7 @@ function ensurePanel(): PluginPanel {
 }
 
 async function startController(model: ModelId): Promise<void> {
+  const initialLayer = controller?.state().layerId ?? undefined;
   controller?.dispose();
   seriesAbort?.abort();
   seriesAbort = null;
@@ -135,6 +136,7 @@ async function startController(model: ModelId): Promise<void> {
   ui.setStatus('Loading latest immutable build…');
   const activeController: PluginController = new PluginController({
     model,
+    initialLayer,
     host,
     hostRange: () => (activeController.currentBuild ? datasetRange(activeController.currentBuild.manifest.frames) : null),
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),

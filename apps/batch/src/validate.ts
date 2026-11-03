@@ -153,11 +153,7 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   if (manifest.coverage.maskKey !== `coverage/${manifest.coverage.hash}/manifest.json` || !sameGrid(mask.grid, manifest.grid) || JSON.stringify(manifest.descriptors.bounds) !== JSON.stringify(mask.bounds ?? product.bounds)) throw new Error('Coverage descriptor binding mismatch');
   const cycle = Date.parse(manifest.cycle), created = Date.parse(manifest.createdAt), expiry = Date.parse(manifest.expiresAt);
   if (!(created < expiry) || expiry > created + RETENTION_DAYS * 86400000 || !Number.isFinite(cycle)) throw new Error('Invalid build timestamps');
-  const daylightHours = resolveProductFrameHours(product, mask, manifest.cycle);
-  const expectedHours =
-    manifest.frames.length === product.frameHours.length
-      ? product.frameHours
-      : daylightHours;
+  const expectedHours = resolveProductFrameHours(product, mask, manifest.cycle);
   const frames = expectedHours.map(hour => `f${String(hour).padStart(3, '0')}`);
   if (manifest.frames.length !== frames.length || manifest.layers.length !== product.layers.length || product.layers.some((layer, i) => manifest.layers[i] !== layer)) {
     throw new Error('Incomplete frame or layer set');
