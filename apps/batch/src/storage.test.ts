@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { DeleteObjectsCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
 import { r2ClientOptions, r2Storage } from './storage';
@@ -42,8 +43,99 @@ describe('R2 S3 client configuration', () => {
 
   it('rejects a truncated object stream even when no Range was requested', async () => {
     const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 4, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never);
-    try { await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('manifest')).rejects.toThrow('response length'); }
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('manifest')).rejects.toThrow('response length');
+      expect(send).toHaveBeenCalledTimes(1);
+    }
     finally { send.mockRestore(); }
+  });
+
+  it.each(['ECONNRESET', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE'])('restarts a GET after %s without retaining partial bytes', async code => {
+    const failed = Readable.from((async function* () { yield Uint8Array.of(99); throw Object.assign(new Error('aborted'), { code }); })());
+    const send = vi.spyOn(S3Client.prototype, 'send')
+      .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: failed } as never)
+      .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never);
+    try {
+      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2);
+      expect([...result!.bytes]).toEqual([1, 2]);
+      expect(failed.destroyed).toBe(true);
+      expect(send).toHaveBeenCalledTimes(2);
+      for (const [command] of send.mock.calls) expect(command.input).toMatchObject({ Key: 'terrain/tile.tif', Range: 'bytes=7-8' });
+    } finally { send.mockRestore(); }
+  });
+
+  it('bounds failed body attempts and preserves the final cause with the object range', async () => {
+    const failure = Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+    const bodies: Readable[] = [];
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async () => {
+      const body = Readable.from((async function* () { yield Uint8Array.of(99); throw failure; })());
+      bodies.push(body);
+      return { ContentLength: 2, ETag: 'etag', Body: body } as never;
+    });
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2))
+        .rejects.toMatchObject({ message: 'R2 GET terrain/tile.tif (bytes 7–8): aborted [ECONNRESET]', cause: failure });
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(bodies.every(body => body.destroyed)).toBe(true);
+    } finally { send.mockRestore(); }
+  });
+
+  it('bounds a stalled response body even after the SDK returned its headers', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const stalled = new Readable({ read() {} });
+    const send = vi.spyOn(S3Client.prototype, 'send')
+      .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: stalled } as never)
+      .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never);
+    try {
+      const pending = r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif');
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect([...(await pending)!.bytes]).toEqual([1, 2]);
+      expect(stalled.destroyed).toBe(true);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { send.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it.each(['body', 'backoff'])('preserves caller cancellation during %s without another GET', async phase => {
+    const controller = new AbortController(), reason = new Error('cancel import');
+    const body = phase === 'body' ? new Readable({ read() {} })
+      : Readable.from((async function* () { yield Uint8Array.of(99); throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); })());
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 2, ETag: 'etag', Body: body } as never);
+    try {
+      const pending = r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, controller.signal);
+      await nextTurn();
+      if (phase === 'backoff') expect(body.destroyed).toBe(true);
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(body.destroyed).toBe(true);
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally { send.mockRestore(); }
+  });
+
+  it.each(['missing-etag', 'declared-size', 'stream-size', 'unexpected-error'])('does not retry %s and destroys the abandoned body', async failure => {
+    const body = failure === 'unexpected-error'
+      ? Readable.from((async function* () { yield new Uint8Array(); throw new Error('invalid stream'); })())
+      : Readable.from([Uint8Array.of(1, 2, 3)]);
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: failure === 'declared-size' ? 3 : 2,
+      ETag: failure === 'missing-etag' ? undefined : 'etag', Body: body } as never);
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2)).rejects.toThrow('R2 GET tile');
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(body.destroyed).toBe(true);
+    } finally { send.mockRestore(); }
+  });
+
+  it('leaves request failures to SDK retries and retains missing-object behavior', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce(Object.assign(new Error('request timeout'), { name: 'TimeoutError' }))
+      .mockRejectedValueOnce({ $metadata: { httpStatusCode: 404 } });
+    try {
+      const store = r2Storage({ ...env, R2_BUCKET: 'test' });
+      await expect(store.get('tile')).rejects.toThrow('request timeout');
+      expect(send).toHaveBeenCalledTimes(1);
+      await expect(store.get('missing')).resolves.toBeNull();
+      expect(send).toHaveBeenCalledTimes(2);
+    } finally { send.mockRestore(); }
   });
 
   it('uses the R2 endpoint and required-only SDK checksums', () => {

@@ -174,6 +174,18 @@ it('resumes matching artifacts through the same admission/journal without rebuil
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"validationReused": false'));
 });
+it('reports incomplete retained shard output without rebuilding or publishing it', async () => {
+  fake.readLocal.mockRejectedValueOnce(Object.assign(new Error('missing manifest'), { code: 'ENOENT' }));
+  await expect(resumePublication(revision)).rejects.toThrow('Resume artifact is incomplete: missing manifest.json');
+  for (const call of [fake.identity, fake.plan, fake.shard, fake.finalize, fake.publish, fake.cleanup]) expect(call).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('start a fresh forecast without resume-run-id'));
+});
+it('preserves unrelated retained manifest read failures', async () => {
+  const error = Object.assign(new Error('manifest read denied'), { code: 'EACCES' });
+  fake.readLocal.mockRejectedValueOnce(error);
+  await expect(resumePublication(revision)).rejects.toBe(error);
+  expect(fake.publish).not.toHaveBeenCalled();
+});
 it('refuses resume after recipe changes and preserves a failure receipt', async () => {
   fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
   await expect(resumePublication(revision)).rejects.toThrow('recipe differs');
