@@ -210,6 +210,11 @@ export function decodeIconGribField(
   if (scanningMode !== ICON_EU_NATIVE_SCANNING_MODE && scanningMode !== 0) {
     throw new Error(`Unsupported ICON scanning mode ${scanningMode}`);
   }
+  const southToNorth = scanningMode === ICON_EU_NATIVE_SCANNING_MODE;
+  if (southToNorth ? grid.latitudeOfFirstGridPoint >= grid.latitudeOfLastGridPoint
+    : grid.latitudeOfFirstGridPoint <= grid.latitudeOfLastGridPoint) {
+    throw new Error('ICON scanning mode disagrees with latitude endpoints');
+  }
 
   const id = field.identification;
   const referenceTimeIso = new Date(
@@ -260,20 +265,22 @@ export function decodeIconGribField(
   }
   if (codedValueCount !== presentCount) throw new Error('GRIB2 coded value count differs from grid/bitmap coverage');
 
+  if (drt === 42 && s5.byteLength < 25) throw new Error(`Truncated GRIB2 Section 5.42 (${s5.byteLength} bytes)`);
   let fullValues: Float64Array | Float32Array;
-  if (drt === 42) {
-    if (s5.byteLength < 25) {
-      throw new Error(`Truncated GRIB2 Section 5.42 (${s5.byteLength} bytes)`);
+  if ((drt === 0 || drt === 42) && bitsPerValue === 0) {
+    // ecCodes treats zero-bit 5.0/5.42 fields as the unscaled reference value.
+    fullValues = new Float32Array(pointCount).fill(referenceValue);
+    if (hasBitmap) for (let i = 0; i < pointCount; i++) {
+      if (!(bitmapBytes![i >> 3]! & (0x80 >> (i & 7)))) fullValues[i] = NaN;
     }
+  } else if (drt === 42) {
     const flags = s5View.getUint8(21);
     const blockSize = s5View.getUint8(22);
     const rsi = s5View.getUint16(23, false);
     const payload = field.section7.subarray(5);
 
     const decodedCoded = new Float32Array(codedValueCount);
-    if (bitsPerValue === 0 || codedValueCount === 0) {
-      decodedCoded.fill(referenceValue * decimalScale);
-    } else {
+    if (codedValueCount > 0) {
       const rawSamples = decodeCcsdsSamples(payload, {
         bitsPerSample: bitsPerValue,
         blockSize,
@@ -316,7 +323,6 @@ export function decodeIconGribField(
 
   const outValues = new Float32Array(activeIndices.length);
   const outMissing = new Uint8Array(activeIndices.length);
-  const southToNorth = scanningMode === ICON_EU_NATIVE_SCANNING_MODE;
 
   for (let i = 0; i < activeIndices.length; i += 1) {
     const targetIdx = activeIndices[i]!;

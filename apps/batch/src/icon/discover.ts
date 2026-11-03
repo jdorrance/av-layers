@@ -10,6 +10,8 @@ import {
 } from './constants.js';
 import { iconRegularFieldUrl, validateIconCycle } from './fields.js';
 
+const PROBE_CONCURRENCY = 4;
+
 export interface IconDiscoveryResult {
   readonly schemaVersion: 1;
   readonly model: 'icon-eu';
@@ -48,8 +50,8 @@ export function candidateIconCycles(
 
 /**
  * Sentinel URLs that must be present on DWD Open Data before a 00/06/12/18 UTC
- * ICON-EU main run is admitted for acquisition. Includes `MH` at the last forecast
- * hour because DWD publishes mixing height after model-level and flux fields.
+ * ICON-EU main run is admitted. Probes cover field families and profile endpoints;
+ * acquisition still checks every required object.
  */
 export function iconRunSentinelUrls(
   cycleIso: string,
@@ -60,17 +62,15 @@ export function iconRunSentinelUrls(
 ): string[] {
   const cycle = validateIconCycle(cycleIso);
   const lastHour = options.lastForecastHour ?? ICON_EU_FORECAST_HOURS.at(-1)!;
+  const topHalfLevel = ICON_EU_HALF_LEVELS[0]!;
   const bottomHalfLevel = ICON_EU_HALF_LEVELS.at(-1)!;
   const lowestLevel = ICON_EU_MODEL_LEVELS[0]!;
   const highestLevel = ICON_EU_MODEL_LEVELS.at(-1)!;
   return [
     iconRegularFieldUrl('HSURF', cycle, { baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('HHL', cycle, { level: bottomHalfLevel, baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('T', cycle, { hour: lastHour, level: lowestLevel, baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('P', cycle, { hour: lastHour, level: highestLevel, baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('ASHFL_S', cycle, { hour: lastHour, baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('ALHFL_S', cycle, { hour: lastHour, baseUrl: options.baseUrl }),
-    iconRegularFieldUrl('MH', cycle, { hour: lastHour, baseUrl: options.baseUrl })
+    ...[topHalfLevel, bottomHalfLevel].map(level => iconRegularFieldUrl('HHL', cycle, { level, baseUrl: options.baseUrl })),
+    ...['MH', 'PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S'].map(field => iconRegularFieldUrl(field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...['T', 'P'].flatMap(field => [lowestLevel, highestLevel].map(level => iconRegularFieldUrl(field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
   ];
 }
 
@@ -91,15 +91,18 @@ export async function discoverIconEuRun(
   for (const cycle of candidates) {
     options.signal?.throwIfAborted();
     const sentinelUrls = iconRunSentinelUrls(cycle, { baseUrl });
-    const probes = await Promise.allSettled(
-      sentinelUrls.map(url => {
+    let complete = true;
+    for (let offset = 0; offset < sentinelUrls.length; offset += PROBE_CONCURRENCY) {
+      options.signal?.throwIfAborted();
+      const probes = await Promise.allSettled(sentinelUrls.slice(offset, offset + PROBE_CONCURRENCY).map(url => {
         const timeout = AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS);
         const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
         return fetchFn(url, { method: 'HEAD', signal });
-      })
-    );
-    options.signal?.throwIfAborted();
-    if (probes.every(p => p.status === 'fulfilled' && p.value.ok)) {
+      }));
+      options.signal?.throwIfAborted();
+      if (!probes.every(probe => probe.status === 'fulfilled' && probe.value.ok)) { complete = false; break; }
+    }
+    if (complete) {
       return {
         schemaVersion: 1,
         model: 'icon-eu',

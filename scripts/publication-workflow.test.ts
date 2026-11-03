@@ -22,7 +22,7 @@ const revision = 'a'.repeat(40);
 let manifest: Manifest;
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', API_BASE_URL: 'https://api.example', CYCLE: '', RESUME_RUN_ID: '100', ALLOW_SAME_CYCLE: 'false' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', API_BASE_URL: 'https://api.example', CYCLE: '', RESUME_RUN_ID: '100', ALLOW_SAME_CYCLE: 'false', TERRAIN_INPUTS: '' })) vi.stubEnv(key, value);
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
@@ -179,6 +179,21 @@ it('refuses resume after recipe changes and preserves a failure receipt', async 
   await expect(resumePublication(revision)).rejects.toThrow('recipe differs');
   expect(fake.publish).not.toHaveBeenCalled();
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('recipe differs'));
+});
+it('resumes with the retained terrain identity instead of new workflow input', async () => {
+  const terrain = { key: `terrain/prepared/${'a'.repeat(64)}/manifest.json`, bytes: 100, sha256: 'b'.repeat(64), arrayBytes: 20 };
+  manifest.source.terrain = terrain;
+  vi.stubEnv('TERRAIN_INPUTS', JSON.stringify({ gfs: { ...terrain, sha256: 'c'.repeat(64) } }));
+  fake.identity.mockImplementation(async (_product, _coverage, actual) => ({ recipe: { hash: actual?.sha256 === terrain.sha256 ? manifest.recipe.hash : 'd'.repeat(64) } }));
+  await resumePublication(revision);
+  expect(fake.identity).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gfs' }), manifest.coverage.hash, terrain);
+  expect(fake.publish).toHaveBeenCalledTimes(1);
+});
+it('refuses malformed retained terrain before resuming publication', async () => {
+  manifest.source.terrain = { key: 'other/path' };
+  await expect(resumePublication(revision)).rejects.toThrow();
+  expect(fake.identity).not.toHaveBeenCalled();
+  expect(fake.publish).not.toHaveBeenCalled();
 });
 it('refuses ambiguous downloaded build sets before any publication', async () => {
   fake.directories.mockResolvedValueOnce([{ name: manifest.buildId, isDirectory: () => true }, { name: 'another', isDirectory: () => true }]);

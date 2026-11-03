@@ -20,6 +20,9 @@ on:
       retain-full-artifacts:
         type: boolean
         default: false
+      terrain-inputs:
+        type: string
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -43,6 +46,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       artifact: ${{ steps.plan.outputs.artifact }}
     env:
+      TERRAIN_INPUTS: ${{ inputs['terrain-inputs'] || '' }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -64,6 +68,7 @@ jobs:
           path: |
             output/plan.json
             output/coverage/
+            output/terrain/
           if-no-files-found: error
           retention-days: 1
       - name: Upload planning failure

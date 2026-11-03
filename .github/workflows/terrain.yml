@@ -1,0 +1,126 @@
+name: Global terrain
+run-name: Terrain ${{ inputs.environment || 'production' }} — Copernicus GLO-90
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Terrain storage environment
+        type: choice
+        options: [staging, production]
+        default: production
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: terrain-${{ inputs.environment || 'production' }}
+  cancel-in-progress: false
+env:
+  TARGET_ENV: ${{ inputs.environment || 'production' }}
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  inventory:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.environment || 'production' }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm terrain inventory --out output/terrain-inventory.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: terrain-inventory-${{ github.run_id }}
+          overwrite: true
+          path: output/terrain-inventory.json
+          if-no-files-found: error
+          retention-days: 7
+  sync:
+    needs: inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    environment: ${{ inputs.environment || 'production' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ strategy.job-total }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: terrain-inventory-${{ github.run_id }}
+          path: output
+      - name: Import and verify native terrain
+        run: pnpm terrain sync --inventory output/terrain-inventory.json --shard "$SHARD" --shards "$SHARDS" --concurrency 2 --out output/terrain-sync.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terrain-sync-${{ github.run_id }}-${{ matrix.shard }}
+          overwrite: true
+          path: output/terrain-sync.json
+          if-no-files-found: warn
+          retention-days: 7
+  publish:
+    needs: [inventory, sync]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: ${{ inputs.environment || 'production' }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: terrain-inventory-${{ github.run_id }}
+          path: output
+      - name: Verify complete global inventory and publish catalog
+        run: pnpm terrain finalize --inventory output/terrain-inventory.json --out output/terrain-catalog-ref.json
+      - name: Read native terrain across a tile boundary
+        run: pnpm terrain inspect --catalog-ref output/terrain-catalog-ref.json --bounds 43.99,40.49,44.01,40.51 --out output/terrain-read.json
+      - name: Prepare a bounded metric grid
+        run: pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json --grid scripts/fixtures/terrain-armenia-grid.json --out output/terrain-prepared-ref.json
+      - name: Reuse the exact prepared input
+        run: pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json --grid scripts/fixtures/terrain-armenia-grid.json --out output/terrain-reused-ref.json
+      - name: Verify reuse and stage the local input
+        run: |
+          cmp output/terrain-prepared-ref.json output/terrain-reused-ref.json
+          pnpm terrain stage --prepared-ref output/terrain-prepared-ref.json --grid scripts/fixtures/terrain-armenia-grid.json --out output/staged
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terrain-release-${{ github.run_id }}
+          overwrite: true
+          path: |
+            output/terrain-catalog-ref.json
+            output/terrain-read.json
+            output/terrain-prepared-ref.json
+            output/terrain-reused-ref.json
+          if-no-files-found: warn
+          retention-days: 90

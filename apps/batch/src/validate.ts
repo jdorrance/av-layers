@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, RASTER_TILE_SIZE, MAX_TILE_BYTES, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, manifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, RASTER_TILE_SIZE, MAX_TILE_BYTES, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, manifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
@@ -143,7 +143,7 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   const manifest = manifestSchema.parse(raw);
   encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
   const product = trustedProduct ?? getProduct(manifest.model);
-  if (!product || manifest.model !== product.modelId || manifest.recipe.id !== product.id || manifest.method.id !== createProductMethodId(product) || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key]) || !sameGrid(manifest.grid, product.grid) || manifest.coverage.maxZoom !== product.maxNativeZoom) {
+  if (!product || manifest.model !== product.modelId || manifest.recipe.id !== product.id || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key]) || !sameGrid(manifest.grid, product.grid) || manifest.coverage.maxZoom !== product.maxNativeZoom) {
     throw new Error('Unsupported model, grid or zoom');
   }
   const admittedHash = expectedCoverageHash ?? describeCoverage(await loadCoverage(product), product).hash;

@@ -59,6 +59,35 @@ describe('real contract-shaped fixtures', () => {
 });
 
 describe('declarative workflows', () => {
+  it('verifies code before global terrain writes and requires every fixed shard before publication', () => {
+    const terrain = workflow('terrain.yml'), jobs = record(terrain.jobs);
+    expect(Object.keys(record(terrain.on))).toEqual(['workflow_dispatch']);
+    expect(record(terrain.concurrency)['cancel-in-progress']).toBe(false);
+    expect(record(jobs.verify).uses).toBe('./.github/workflows/ci.yml');
+    expect(record(jobs.inventory).needs).toBe('verify');
+    const sync = record(jobs.sync), strategy = record(sync.strategy);
+    expect(sync.needs).toBe('inventory');
+    expect(strategy['fail-fast']).toBe(false);
+    const shards = list(record(strategy.matrix).shard);
+    expect(shards).toEqual(Array.from({ length: shards.length }, (_, index) => index));
+    expect(shards.length).toBeGreaterThan(1);
+    expect(shards.length).toBeLessThanOrEqual(64);
+    expect(record(sync.env).SHARDS).toBe('${{ strategy.job-total }}');
+    expect(record(jobs.publish).needs).toEqual(['inventory', 'sync']);
+    expect(record(jobs.publish).if).toBeUndefined();
+    for (const name of ['inventory', 'sync', 'publish']) {
+      const job = record(jobs[name]);
+      expect(job['runs-on']).toBe('ubuntu-24.04');
+      for (const step of list(job.steps).map(record)) {
+        if (step.uses === 'actions/upload-artifact@v4') expect(record(step.with).overwrite).toBe(true);
+        if (typeof step.run === 'string') expect(step.run).not.toMatch(/operations forecast|operations deploy|pnpm forecast/);
+      }
+    }
+    const verification = list(record(record(workflow('ci.yml').jobs).verify).steps).map(record);
+    expect(verification.some(step => step.run === 'pnpm verify')).toBe(true);
+    expect(verification.some(step => typeof step.run === 'string' && step.run.includes('--with rasterio==1.4.3 --with numpy==2.2.6'))).toBe(true);
+  });
+
   it('scopes planning, publication and maintenance credentials to the selected environment', () => {
     expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}");
     expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}");

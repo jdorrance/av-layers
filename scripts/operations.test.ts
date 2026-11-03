@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { MODEL_IDS } from '@av/contracts';
+import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
 
 const account = '0123456789abcdef0123456789abcdef', pages = 'windy-av-preview-staging';
@@ -9,7 +11,25 @@ const config: WranglerConfig = {
   staging: { name: 'windy-av-api-staging', bucket: 'windy-av-layer-staging' },
   production: { name: 'windy-av-api-production', bucket: 'windy-av-layer' }
 };
-const base = { TARGET_ENV: 'staging', CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: 'token', PAGES_PROJECT_NAME: pages, API_BASE_URL: 'https://api-staging.example.com' };
+const base = { TARGET_ENV: 'staging', MODEL: 'gfs', CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: 'token', PAGES_PROJECT_NAME: pages, API_BASE_URL: 'https://api-staging.example.com' };
+
+it('requires an explicit registered model for forecast writes and maintenance', () => {
+  const context = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging' };
+  for (const MODEL of MODEL_IDS) {
+    for (const command of ['forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
+      expect(() => validateOperationInputs(command, { ...base, MODEL, SHARD_ID: '0', ACTION: 'cleanup' })).not.toThrow();
+    }
+    expect(workflowAuthority({ ...context, MODEL })).toMatchObject({ model: MODEL, group: `forecast-staging-${MODEL}` });
+  }
+  for (const MODEL of [undefined, '', 'all', 'unknown', 'constructor']) {
+    for (const command of ['forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
+      expect(() => validateOperationInputs(command, { ...base, MODEL, SHARD_ID: '0', ACTION: 'cleanup' })).toThrow(/MODEL|model/);
+    }
+    expect(() => workflowAuthority({ ...context, MODEL })).toThrow('serialized');
+  }
+  expect(() => validateOperationInputs('deploy', { ...base, MODEL: undefined })).not.toThrow();
+  expect(() => validateOperationInputs('deploy', { ...base, MODEL: 'unknown' })).toThrow('Unknown forecast model');
+});
 
 it('accepts explicit operations without ceremonial confirmation and rejects ambiguous write targets', () => {
   expect(() => validateOperationInputs('deploy', base)).not.toThrow();

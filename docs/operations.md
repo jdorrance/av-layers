@@ -6,6 +6,11 @@ Forecast and maintenance jobs for the same environment and model wait for each
 other. Different models can build and publish independently. Keep write
 credentials in GitHub.
 
+Forecast and maintenance through `pnpm operations` require an explicit registered `MODEL`; their
+workflows set it from the selection. Health defaults to all registered models in
+Actions. Local preview reads the model from its manifest, while `pnpm dev` creates
+the separate synthetic fixture without downloading any model.
+
 ## Set up an environment
 
 Store the shared `CLOUDFLARE_ACCOUNT_ID` as a repository secret. Create protected
@@ -37,6 +42,9 @@ then [resume that saved build](#resume-or-promote-a-build) to complete serving
 verification. The forecast does not need to be rebuilt.
 
 ## Publish a forecast
+
+For an existing environment, deploy API changes before publishing forecasts with
+new method IDs. Retained builds continue to use their embedded method descriptors.
 
 Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow's model dropdown,
 or run:
@@ -168,6 +176,15 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
 Cleanup protects current and retained builds and applies a 24-hour grace period
 to unreferenced files. Let this workflow manage deletion; separate bucket expiry
 rules can remove files still in use.
+
+## Terrain data
+
+Global DEM ingestion uses the separate [Global terrain workflow](../.github/workflows/terrain.yml).
+Select its environment and run from `main`, as required by the existing storage
+environment branch policies. It verifies the complete inventory before publishing
+a catalog and retains verified receipts for retries. Dataset versions are
+outside forecast cleanup. The [terrain guide](../apps/batch/src/terrain/README.md)
+covers references, bounded reads, preparations and optional forecast inputs.
 
 ## Check a failure
 

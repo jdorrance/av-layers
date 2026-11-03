@@ -21,3 +21,8 @@ jobs:
       - run: pnpm tools:pmtiles
       - name: Verify foundation
         run: pnpm verify
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.17'
+      - name: Verify lossless terrain packing
+        run: uv run --python 3.12 --with rasterio==1.4.3 --with numpy==2.2.6 python apps/batch/src/terrain/test_repack.py

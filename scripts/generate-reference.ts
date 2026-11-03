@@ -5,6 +5,8 @@ import { parseArgs } from 'node:util';
 import * as contracts from '@av/contracts';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { CLI_COMMANDS, CLI_OPTIONS } from '../apps/batch/src/commands.js';
+import { TERRAIN_COMMANDS } from '../apps/batch/src/terrain/cli.js';
+import { TERRAIN_READ_LIMITS } from '../apps/batch/src/terrain/reader.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_NATIVE_RESERVE_MB, RASTER_WORKER_RESERVE_BYTES, RASTER_WORKER_RESOURCE_LIMITS } from '../apps/batch/src/raster-pool.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
@@ -47,10 +49,15 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [command, options] of entries(CLI_COMMANDS)) {
     lines.push(`- ${code(command)}: ${options.map((option: keyof typeof CLI_OPTIONS) => code(`--${option}${CLI_OPTIONS[option].type === 'string' ? ' <string>' : ''}`)).join(', ')}.`);
   }
+  lines.push('', '## Terrain CLI', '', 'Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.', '', 'Source: [terrain commands](../apps/batch/src/terrain/cli.ts).', '');
+  for (const [command, options] of Object.entries(TERRAIN_COMMANDS)) lines.push(`- ${code(command)}: ${options.map(option => code(`--${option} <string>`)).join(', ')}.`);
+  lines.push('', 'Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:', '');
+  for (const [name, value] of entries(TERRAIN_READ_LIMITS)) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
+    const methods = Object.values(contracts.createProductDescriptors(product).methods);
     lines.push(`### ${product.label} (${product.id})`, '',
       `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,
@@ -60,11 +67,12 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
       `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
       `- Vertical coordinate: ${code(product.capabilities.verticalCoordinate)}; maximum levels: ${product.capabilities.maxVerticalLevels}.`,
-      `- Required calculation inputs: ${[...new Set(Object.values(contracts.createProductDescriptors(product).methods).flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
+      `- Calculation methods: ${methods.map(method => code(method.id)).join(', ')}.`,
+      `- Required calculation inputs: ${[...new Set(methods.flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
       `- Layers: ${product.layers.map(code).join(', ')}.`,
       `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
   }
-  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).', '');
+  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). The method below is the isobaric default; each configured product selects the method for its vertical coordinate. Published layers link to their selected descriptors. Interpret values and absence using [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {
     lines.push(`### ${layer.label} (${id})`, '',
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,

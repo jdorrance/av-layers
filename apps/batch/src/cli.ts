@@ -10,7 +10,12 @@ async function main(): Promise<void> {
   if (!command || !allowed || Object.keys(values).some(key => !allowed.includes(key))) throw new Error(`Usage: ${Object.keys(CLI_COMMANDS).join(', ')} with command-specific options`);
   if (command === 'build') {
     const { buildProduct } = await import('./build.js');
-    console.log(await buildProduct(values.model ?? 'gfs', { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'] }));
+    let terrain;
+    if (values['terrain-ref']) {
+      const [{ readLocalFile }, { parseJson }, { preparedTerrainRefSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js'), import('./terrain/prepare.js')]);
+      terrain = parseJson(await readLocalFile(values['terrain-ref'], 16 * 1024), preparedTerrainRefSchema, 16 * 1024);
+    }
+    console.log(await buildProduct(values.model ?? 'gfs', { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], ...(terrain ? { terrain } : {}) }));
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
     if (!product) throw new Error('No admitted product for this model');

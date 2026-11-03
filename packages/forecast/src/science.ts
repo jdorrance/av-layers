@@ -3,7 +3,6 @@ export * from '@av/thermodynamics';
 export * from '@av/soaring';
 
 import {
-  LIFT_METHOD,
   PRECIPITATION_METHOD_PARAMETERS,
   STATUS_NO_LIFT,
   STATUS_UNAVAILABLE,
@@ -18,8 +17,6 @@ import {
   type ColumnInput,
   type DepthBranch
 } from '@av/soaring';
-
-export const METHOD_ID = LIFT_METHOD.id;
 
 export interface ColumnResult {
   msl: { value: number | null; flags: number };

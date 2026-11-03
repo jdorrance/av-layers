@@ -318,8 +318,8 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t/icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2'
     );
     const sentinels = iconRunSentinelUrls(cycle);
-    expect(sentinels).toHaveLength(7);
-    expect(sentinels.some(u => u.endsWith('_024_MH.grib2.bz2'))).toBe(true);
+    expect(sentinels).toHaveLength(13);
+    expect(sentinels).toContain(iconRegularFieldUrl('MH', cycle, { hour: ICON_EU_PRODUCT.frameHours.at(-1)! }));
   });
 
   it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', () => {
@@ -557,6 +557,70 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     for (const concurrency of [0, 1.5, 9, NaN]) {
       await expect(createIconEuAcquisitionSession({ ...options, concurrency })).rejects.toThrow('concurrency');
     }
+  });
+
+  it('rejects unconfigured output hours before fetching or caching any objects', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-hours-'));
+    tempDirs.push(cacheDir);
+    const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error('Unexpected download'); });
+    const session = await createIconEuAcquisitionSession({ cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+    try {
+      for (const hour of [0, -1, 1.5, NaN, Infinity, ICON_EU_PRODUCT.frameHours.at(-1)! + 1]) {
+        await expect(session.acquire(hour)).rejects.toThrow('Unsupported ICON-EU forecast hour');
+      }
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(await readdir(cacheDir)).toEqual([]);
+    } finally { await session.close(); }
+  });
+
+  it('rejects invalid active indices before run discovery', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-indices-'));
+    tempDirs.push(cacheDir);
+    const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error('Unexpected discovery'); });
+    for (const activeIndices of [new Uint32Array(), Uint32Array.of(ICON_EU_GRID.width * ICON_EU_GRID.height), Uint32Array.of(0, 0), [0] as unknown as Uint32Array]) {
+      await expect(createIconEuAcquisitionSession({ activeIndices, cacheDir, fetchImpl })).rejects.toThrow('ICON active index');
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('pins requested cells and isolates returned frame geometry from caller mutations', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-frame-ownership-'));
+    tempDirs.push(cacheDir);
+    const cycle = '2026-10-08T00:00:00Z', requested: string[] = [];
+    const baseFetch = syntheticFetch(cycle, requested);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const match = String(input).match(/_(\d{3})_T_2M\.grib2\.bz2$/);
+      if (!match) return baseFetch(input, init);
+      return new Response(Buffer.from(buildSyntheticIconGrib2({
+        referenceTimeIso: cycle, templateNumber: 0, parameterCategory: 0, parameterNumber: 0,
+        firstFixedSurfaceType: 103, firstFixedSurfaceValue: 2, hour: Number(match[1]), constantValue: 280,
+        overridePoint: { sourceRow: ICON_EU_GRID.height - 1, col: 0, value: 300 }
+      })));
+    };
+    const activeIndices = Uint32Array.of(0);
+    const session = await createIconEuAcquisitionSession({ cycle, activeIndices, cacheDir, fetchImpl });
+    try {
+      const first = await session.acquire(4);
+      expect(first.temp2mK[0]).toBe(300);
+      activeIndices[0] = 1;
+      first.activeIndices[0] = 2;
+      first.terrainM[0] = -999;
+      first.hgtM[0][0] = -888;
+      first.hgtM[1] = Float32Array.of(-777);
+      first.missing.terrain[0] = 1;
+      first.missing.hgt[0][0] = 1;
+      first.missing.hgt[1] = Uint8Array.of(1);
+      const second = await session.acquire(5);
+      expect([...second.activeIndices]).toEqual([0]);
+      expect(second.temp2mK[0]).toBe(300);
+      expect(second.terrainM[0]).toBe(1000);
+      expect(second.hgtM[0][0]).toBe(1100);
+      expect(second.hgtM[1][0]).toBe(1300);
+      expect(second.missing.terrain[0]).toBe(0);
+      expect(second.missing.hgt.slice(0, 2).map(level => level[0])).toEqual([0, 0]);
+      expect(requested.filter(url => url.endsWith('_HSURF.grib2.bz2'))).toHaveLength(1);
+      expect(requested.filter(url => url.endsWith('_HHL.grib2.bz2'))).toHaveLength(ICON_EU_HALF_LEVELS.length);
+    } finally { await session.close(); }
   });
 
   it('keeps closed sessions closed without starting new downloads', async () => {

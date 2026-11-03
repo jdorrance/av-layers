@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, createProductDescriptors, getBit, GFS_GRID, GFS_PRODUCT, isCovered, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, GFS_GRID, GFS_PRODUCT, ICON_EU_PRODUCT, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { packCells, prepareSamplePackLayout, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
 import { describeCoverage, writeCoverage } from './coverage.js';
@@ -20,18 +20,27 @@ async function writeTestSamplePack(output: string, inputs: string[], layout: Ret
 }
 
 describe('build provenance validation', () => {
-  async function fixture() {
+  async function fixture(product: ProductDefinition = GFS_PRODUCT) {
     const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
-    const mask = await loadCoverage(GFS_PRODUCT);
-    manifest.coverage.hash = describeCoverage(mask, GFS_PRODUCT).hash;
+    manifest.model = product.modelId;
+    manifest.grid = product.grid;
+    manifest.layers = [...product.layers];
+    manifest.descriptors = createProductDescriptors(product);
+    manifest.recipe = createRecipeIdentity(product, manifest.recipe.hash);
+    manifest.method.id = createProductMethodId(product);
+    manifest.samples.key = `builds/${manifest.model}/${manifest.buildId}/samples.bin`;
+    const mask = await loadCoverage(product);
+    manifest.coverage.id = product.coverageId;
+    manifest.coverage.maxZoom = product.maxNativeZoom;
+    manifest.coverage.hash = describeCoverage(mask, product).hash;
     manifest.coverage.maskKey = `coverage/${manifest.coverage.hash}/manifest.json`;
     manifest.createdAt = manifest.cycle;
     manifest.expiresAt = new Date(Date.parse(manifest.createdAt) + 7 * 86400000).toISOString();
     const cycleMs = Date.parse(manifest.cycle);
-    manifest.frames = GFS_PRODUCT.frameHours.map(hour => ({
+    manifest.frames = product.frameHours.map(hour => ({
       id: `f${String(hour).padStart(3, '0')}`,
       validTime: new Date(cycleMs + hour * 3600000).toISOString(),
-      intervalStart: new Date(cycleMs + (hour - GFS_PRODUCT.intervalHours) * 3600000).toISOString(),
+      intervalStart: new Date(cycleMs + (hour - product.intervalHours) * 3600000).toISOString(),
       intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
     }));
     manifest.artifacts = manifest.frames.flatMap(frame =>
@@ -43,13 +52,14 @@ describe('build provenance validation', () => {
       }))
     );
     manifest.samples.channelCount = manifest.artifacts.length;
+    manifest.samples.storedCells = prepareSamplePackLayout(mask.grid, mask.output, mask.halo, manifest.samples.blockSize).storedCells;
     manifest.samples.bytes = manifest.samples.storedCells * manifest.artifacts.length * CELL_BYTES;
     const root = await mkdtemp(join(tmpdir(), 'av-validate-'));
-    await writeCoverage(root, mask, GFS_PRODUCT);
+    await writeCoverage(root, mask, product);
     const key = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;
     const receipt = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [] };
     const bytes = Buffer.from(JSON.stringify(receipt));
-    manifest.source = { provider: 'noaa', provenanceKey: key, provenanceSha256: sha256(bytes) };
+    manifest.source = { provider: 'fixture', provenanceKey: key, provenanceSha256: sha256(bytes) };
     await mkdir(dirname(join(root, key)), { recursive: true });
     await writeFile(join(root, key), bytes);
     return { root, manifest, mask, key, receipt };
@@ -110,6 +120,24 @@ describe('build provenance validation', () => {
     const { root, manifest, mask } = await fixture();
     try {
       await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.samples.key) });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('validates retained $modelId methods against their snapshots instead of current product constants', async product => {
+    const { root, manifest, mask } = await fixture(product);
+    try {
+      const layer = manifest.descriptors.layers['usable-lift-msl'];
+      const previousId = layer.methodId, previous = manifest.descriptors.methods[previousId];
+      delete manifest.descriptors.methods[previousId];
+      previous.id = product.modelId === 'icon-eu' ? LIFT_METHOD.id : 'retained-dry-column-v0';
+      manifest.descriptors.methods[previous.id] = previous;
+      for (const descriptor of Object.values(manifest.descriptors.layers)) {
+        if (descriptor.methodId === previousId) descriptor.methodId = previous.id;
+      }
+      manifest.method.id = [...new Set(manifest.layers.map(id => manifest.descriptors.layers[id].methodId))].join('+');
+      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.samples.key) });
+      manifest.method.id = 'unrelated-method-v1';
+      await expect(validateBuild(root, manifest, mask)).rejects.toThrow('published descriptor snapshots');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

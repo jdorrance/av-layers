@@ -117,7 +117,7 @@ const OPERATION_USAGE = `Usage: pnpm operations ${OPERATIONS.join('|')}`;
 export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
   if (!(OPERATIONS as readonly string[]).includes(command)) throw new Error(OPERATION_USAGE);
   if (!['staging', 'production'].includes(env.TARGET_ENV ?? '')) throw new Error('TARGET_ENV must be staging or production');
-  if (command !== 'deploy' && !getProduct(env.MODEL ?? 'gfs')) throw new Error('Unknown forecast model');
+  if ((command !== 'deploy' || env.MODEL !== undefined) && !getProduct(required(env, 'MODEL'))) throw new Error('Unknown forecast model');
   if (command.startsWith('forecast') && env.RESUME_RUN_ID) {
     if (command !== 'forecast') throw new Error('Only forecast accepts resume-run-id');
     if (!/^[1-9]\d{0,19}$/.test(env.RESUME_RUN_ID)) throw new Error('resume-run-id must be numeric');
@@ -159,15 +159,16 @@ export async function runOperation(command: string): Promise<void> {
     return;
   }
   if (command !== 'deploy') {
+    const model = required(process.env, 'MODEL');
     const config = validatePublicationEnvironment(process.env);
     const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
     if (command === 'forecast-plan') {
       validateApiBaseUrl(process.env.API_BASE_URL);
       const plan = await planForecast(store);
-      const { shards, summary } = forecastPlanReport(plan, required(process.env, 'MODEL'));
+      const { shards, summary } = forecastPlanReport(plan, model);
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
       if (process.env.GITHUB_OUTPUT) {
-        const artifact = `forecast-plan-${process.env.MODEL ?? 'gfs'}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
+        const artifact = `forecast-plan-${model}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
         appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\n`);
       }
     } else if (command === 'forecast') {
@@ -175,7 +176,7 @@ export async function runOperation(command: string): Promise<void> {
       else await finalizeAndPublish(store);
     } else {
       const { maintenanceWorkflow } = await import('../apps/batch/src/maintenance.js');
-      console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model: process.env.MODEL ?? 'gfs', buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store })));
+      console.log(JSON.stringify(await maintenanceWorkflow({ action: process.env.ACTION as 'rollback' | 'cleanup', model, buildId: process.env.BUILD_ID || undefined, authority: workflowAuthority(), store })));
     }
     return;
   }

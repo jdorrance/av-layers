@@ -140,3 +140,11 @@ Natural Earth 1:50m admin-0 data is public domain. The pinned release,
 checksum and attribute mapping are recorded by packages/contracts/coverage.
 GFS source data remain subject to the provider's terms;
 this repository does not relicense source data.
+
+Copernicus DEM GLO-90 (2021 AWS distribution)
+Data attribution: DLR e.V. (2010–2014), Airbus Defence and Space GmbH
+(2014–2018); supplied under Copernicus by the European Union and ESA.
+Dataset: https://registry.opendata.aws/copernicus-dem/
+License and attribution: https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
+Native data are retained; Cloud Optimized GeoTIFFs are losslessly repacked.
+Prepared elevation arrays are derived from these data.

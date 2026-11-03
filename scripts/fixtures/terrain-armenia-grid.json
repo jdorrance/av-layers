@@ -1,0 +1,15 @@
+{
+  "kind": "lambert-conformal",
+  "width": 128,
+  "height": 128,
+  "earthRadiusM": 6371229,
+  "centralMeridianDeg": 45,
+  "latitudeOfOriginDeg": 40,
+  "standardParallel1Deg": 38,
+  "standardParallel2Deg": 42,
+  "x0M": -64000,
+  "y0M": 64000,
+  "dxM": 1000,
+  "dyM": -1000,
+  "wrapLongitude": false
+}

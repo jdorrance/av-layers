@@ -584,6 +584,7 @@ describe('read-only worker', () => {
     const pub = publication('ordered');
     pub.manifest.frames.reverse();
     pub.manifest.layers = [...layers].reverse();
+    pub.manifest.method.id = createProductMethodId({ ...GFS_PRODUCT, layers: pub.manifest.layers });
     bucket.install(pub);
     const first = await call('/v1/models/gfs/runs/ordered/sample?lat=0&lon=0&frame=f006,f003&layers=usable-lift-agl,precip-rate');
     expect(first.status).toBe(200);

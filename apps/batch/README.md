@@ -46,6 +46,8 @@ use `pnpm forecast` to generate forecast data.
 - [src/icon](src/icon/README.md): ICON-EU provider, downloads, geometry, decoding,
   and tests.
 - [src/render.ts](src/render.ts): map tile generation.
+- [src/terrain](src/terrain/README.md): global native DEM ingestion, bounded reads
+  and reusable prepared inputs.
 - [pmtiles.json](pmtiles.json): PMTiles tool version and download checksums.
 
 The adapters return [normalized arrays](../../packages/forecast/src/inputs.ts)

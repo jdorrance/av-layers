@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ObjectStorage } from './storage.js';
 
 /** Retries prove every byte of an existing object; they never overwrite immutable keys. */
-export async function putImmutable(store: ObjectStorage, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<void> {
+export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
   const md5 = createHash('md5').update(bytes).digest(), sha = createHash('sha256').update(bytes).digest('hex');
   const proveExisting = async (): Promise<boolean> => {

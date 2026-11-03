@@ -24,8 +24,10 @@ pnpm test apps/batch/src/icon
 The default suite runs without network access. Synthetic GRIB messages exercise
 packing, row order, missingness, statistical metadata and acquisition.
 The CCSDS test includes a nonconstant libaec 1.1.3 reference payload and its
-encoding options. The bzip2 fixture is generated independently by Python's
-standard library; neither reference library is required to run tests.
+encoding options. Zero-bit 5.0/5.42 fixtures were cross-checked with ecCodes 2.50.0
+for both row orders, bitmaps, and nonzero decimal scale factors. The bzip2 fixture
+is generated independently by Python's standard library. These reference tools
+are not required to run the suite.
 
 If you have the retained 2026-10-08 00Z Skyjuice ICON probe, run this additional
 check. It reads six fields, verifies their bytes against `manifest.json`, and
@@ -46,7 +48,9 @@ and attribution; the weather files are not committed here.
 - [acquire.ts](acquire.ts): acquisition options, sessions, cached geometry, and
   hourly normalization. Acquire frames sequentially and close the session in
   `finally` to cancel pending downloads and release its caches. Closing waits for
-  active acquisition to finish; a closed session cannot acquire another frame.
+  active acquisition to finish; a closed session cannot acquire another frame. Static
+  geometry is decoded once per session; each returned frame receives its own
+  buffers so caller edits cannot change later forecasts.
 - [fields.ts](fields.ts): field selection, URLs, and metadata checks.
 - [ICON-EU settings](../../../../packages/contracts/config/icon-eu.json): grid,
   levels, and forecast schedule.

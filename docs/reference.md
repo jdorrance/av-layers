@@ -16,10 +16,32 @@ Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the opti
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`.
+
+## Terrain CLI
+
+Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.
+
+Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
+
+- `inventory`: `--store-dir <string>`, `--out <string>`.
+- `sync`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`, `--shard <string>`, `--shards <string>`, `--concurrency <string>`.
+- `finalize`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`.
+- `prepare`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--grid <string>`.
+- `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
+- `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
+
+Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:
+
+- `maxCachedPixels`: `8000000`.
+- `maxDecodedPixels`: `64000000`.
+- `maxOpenTiles`: `8`.
+- `maxOutputPixels`: `4000000`.
+- `maxRangeBytes`: `8388608`.
+- `maxReadBytes`: `268435456`.
 
 ## Configured models
 
@@ -35,6 +57,7 @@ Source: [product registry](../packages/contracts/src/products.ts). Test fixtures
 - Native tile zoom: 0–7.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
 - Vertical coordinate: `isobaric`; maximum levels: 21.
+- Calculation methods: `dry-lenschow-pbl-1p2-v1`, `trailing-precipitation-rate-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `precipitationMmPerHour`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
@@ -49,13 +72,14 @@ Source: [product registry](../packages/contracts/src/products.ts). Test fixtures
 - Native tile zoom: 0–8.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
+- Calculation methods: `dry-lenschow-pbl-1p2-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
 ## Scalar quantities and units
 
-Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).
+Source: [layer definitions](../packages/contracts/src/layers.ts). The method below is the isobaric default; each configured product selects the method for its vertical coordinate. Published layers link to their selected descriptors. Interpret values and absence using [the data guide](data.md).
 
 ### Precipitation rate (precip-rate)
 
@@ -100,6 +124,51 @@ The packed status and support constants below come from the same [layer definiti
 ## Methods and normalized inputs
 
 Source: [method definitions](../packages/contracts/src/methods.ts). The descriptors record the defaults used by the science packages. Adapters supply the units listed below; frame calculations convert temperature to Celsius and pressure to hPa for the column solver. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.
+
+### dry-lenschow-pbl-1p2-model-levels-v1
+
+- Outputs: `usable-lift-msl`, `usable-lift-agl`.
+- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
+- Spatial support: `column`.
+
+Parameters:
+
+- `crossingEpsilonMultiplier`: `8`.
+- `dryAirGasConstantJkgK`: `287.05`.
+- `dryAirHeatCapacityJkgK`: `1004`.
+- `dryLapseRateKperM`: `0.0098`.
+- `gravityMps2`: `9.80665`.
+- `kelvinOffset`: `273.15`.
+- `latentHeatVaporizationJkg`: `2501000`.
+- `lenschowPeakZeta`: `0.3125`.
+- `lenschowScale`: `4`.
+- `lenschowShape`: `0.8`.
+- `maximumBisectionIterations`: `60`.
+- `maximumProfileGapM`: `1000`.
+- `maximumProfileTemperatureC`: `60`.
+- `maximumSurfacePressureHpa`: `1100`.
+- `maximumSurfaceTemperatureC`: `60`.
+- `minimumProfileTemperatureC`: `-120`.
+- `minimumSolarElevationDeg`: `-0.833`.
+- `minimumSurfacePressureHpa`: `100`.
+- `minimumSurfaceTemperatureC`: `-100`.
+- `minimumThermalVelocityMps`: `0`.
+- `pascalsPerHectopascal`: `100`.
+- `saturationExponent`: `17.67`.
+- `saturationRelativeTolerance`: `0.000001`.
+- `saturationTemperatureOffsetC`: `243.5`.
+- `saturationVaporPressureScaleHpa`: `6.112`.
+- `sinkRateMps`: `1.2`.
+- `waterDryAirMolarMassRatio`: `0.622`.
+
+Caveats:
+
+- Dry parcel calculation; no moist parcel or cloud treatment.
+- Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
+- Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
+- PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.
+- A profile without a resolved crossing is capped at its highest usable level and flagged.
+- MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.
 
 ### dry-lenschow-pbl-1p2-v1
 

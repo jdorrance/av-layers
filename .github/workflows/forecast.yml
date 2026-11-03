@@ -33,6 +33,10 @@ on:
         description: Retain complete forecast files even after successful R2 publication
         type: boolean
         default: false
+      terrain-inputs:
+        description: Optional JSON object mapping model IDs to prepared terrain references
+        type: string
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -72,4 +76,5 @@ jobs:
       allow-same-cycle: ${{ inputs['allow-same-cycle'] || false }}
       resume-run-id: ${{ inputs['resume-run-id'] || '' }}
       retain-full-artifacts: ${{ inputs['retain-full-artifacts'] || false }}
+      terrain-inputs: ${{ inputs['terrain-inputs'] || '' }}
     secrets: inherit

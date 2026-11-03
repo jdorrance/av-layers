@@ -13,6 +13,7 @@ export function fixtureManifest(overrides: Partial<Manifest> = {}): Manifest {
     samples: { ...value.samples, channelCount, bytes: value.samples.storedCells * channelCount * CELL_BYTES, key: `${prefix}/samples.bin` },
     source: { ...value.source, provenanceKey: `${prefix}/provenance.json` }
   });
+  if (!overrides.method) manifest.method.id = [...new Set(manifest.layers.map(layer => manifest.descriptors.layers[layer].methodId))].join('+');
   validateArtifactRecords(manifest);
   getProvenanceReference(manifest);
   return manifest;

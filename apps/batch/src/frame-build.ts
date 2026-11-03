@@ -9,8 +9,10 @@ import { MAX_BUILD_LIFETIME_MS, type PreparedBuild } from './capacity.js';
 import { createSamplePackBuilder } from './sample-pack.js';
 import { failureReason } from './failure.js';
 import { fileSha256, localPath } from './validate.js';
+import type { PreparedTerrainRef } from './terrain/prepare.js';
+import { loadPreparedTerrain } from './terrain/staging.js';
 
-export interface FrameBuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: Pick<DeriveFrameOptions, 'daylightOnly'> }
+export interface FrameBuildOptions { signal?: AbortSignal; out: string; cycle?: string; cacheDir?: string; deriveOptions?: Pick<DeriveFrameOptions, 'daylightOnly'>; terrain?: PreparedTerrainRef }
 export interface ForecastInputs { product: ProductDefinition; mask: CoverageMask; provider: ForecastProvider }
 export interface BuildStamp { buildId: string; createdAt: string }
 export interface FrameBuildResult {
@@ -66,6 +68,11 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
   let completedFrames = 0, frameHour: number | null = null, phase = 'open-provider';
   try {
     options.signal?.throwIfAborted();
+    if (options.terrain) {
+      phase = 'load-terrain';
+      options.prepared.terrain = await loadPreparedTerrain({ ref: options.terrain, out: root, grid: product.grid, signal: options.signal });
+    }
+    phase = 'open-provider';
     acquisition = await provider.open({ cycle: options.cycle, activeIndices: active, cacheDir, signal: options.signal });
     const cycle = new Date(acquisition.cycle).toISOString();
     if (options.cycle && Date.parse(cycle) !== Date.parse(options.cycle)) throw new Error('Provider cycle differs from requested cycle');
@@ -125,6 +132,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     throw error;
   } finally {
     pack?.close();
+    delete options.prepared.terrain;
     await acquisition?.close();
   }
 }
