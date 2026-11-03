@@ -18,13 +18,11 @@ For the separate app command, the API must already have forecast data. Open the
 URL Vite prints, choose a layer and time, then click the map and select
 **Sample clicked point**.
 
-The map checks for newly published forecasts when it becomes visible or focused,
-and once a minute while visible. **Refresh latest forecast** checks on demand. A new
-build updates the layer and hour lists together, keeps the selected layer and
-nearest valid time, and clears point results from the previous build. It does not
-move the map. Each forecast is read from the API; publishing data does not require
-a Pages deployment. The API's [latest-pointer cache](../../docs/serving-budgets.md)
-can delay discovery by up to 15 seconds.
+The map loads the latest forecast when opened or when a model is selected.
+Reload the browser page to see a new publication. Forecast data comes from the
+API, so publishing it does not require a Pages deployment. The API's
+[latest-pointer cache](../../docs/serving-budgets.md) can delay discovery by up to
+15 seconds.
 
 `AV_API_BASE` defaults to `http://localhost:8787` and is also used when building.
 Set `VITE_OFFLINE_FIXTURE=true` when using generated test data; this shows a test

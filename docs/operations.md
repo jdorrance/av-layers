@@ -128,14 +128,15 @@ Deployment runs CI, builds the clients, deploys the Worker, checks the live API,
 and then deploys Pages. It checks that both services serve the requested version,
 and that the Windy bundle is readable from Windy and points to the selected API.
 
-A forecast publication does not rebuild Pages. The map reads the selected model's
-latest published manifest through the API, including its layers and forecast
-hours. The publisher checks that the live API serves the exact new build and its
-frame/layer lists, with a one-minute deadline that allows the API pointer cache
-to refresh. `serving.json` records the result. This confirms data visibility
-through the API; it is separate from deploying the Pages app or checking its
-rendered UI. An open map refreshes on focus and once a minute while visible;
-see the [preview lifecycle](../apps/preview/README.md).
+A forecast publication does not rebuild Pages. The map loads the selected model's
+latest manifest, layers, and hours when opened or when a model is selected.
+Reload an open browser page to see a new publication; the API's
+[pointer cache](serving-budgets.md) can delay discovery by up to 15 seconds.
+
+The publisher checks that the live API serves the exact new build and its
+frame/layer lists, with a one-minute deadline for cache refresh. `serving.json`
+records the result. This verifies API data visibility; Pages deployment and
+rendered UI checks are separate.
 
 Pushes to `main` normally deploy production automatically. For an incompatible
 alpha release, pause that workflow before merging, publish matching data, then

@@ -128,7 +128,7 @@ export class ApiClient {
     if (!(this.requestTimeoutMs > 0) || !Number.isFinite(this.requestTimeoutMs) || this.retryDelayMs < 0 || !Number.isFinite(this.retryDelayMs)) throw new RangeError('Invalid request timing budget');
   }
 
-  private async getJson(path: string, signal?: AbortSignal, cache?: RequestCache): Promise<unknown> {
+  private async getJson(path: string, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw signal.reason;
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
@@ -139,7 +139,7 @@ export class ApiClient {
       for (let attempt = 0; ; attempt++) {
         controller.signal.throwIfAborted();
         try {
-          const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal, cache });
+          const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal });
           if (!response.ok) throw await readError(response, controller.signal);
           return await readJsonBounded(response, 1024 * 1024, controller.signal);
         } catch (error) {
@@ -155,7 +155,7 @@ export class ApiClient {
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const parsed = latestSchema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal, 'no-store'));
+    const parsed = latestSchema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
     if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
     const raw = parsed.data;
     const pointer = raw.pointer;
