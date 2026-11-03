@@ -7,12 +7,12 @@ import { putImmutable } from '../immutable-upload.js';
 import { readLocalFile } from '../local-file.js';
 import { r2Storage } from '../storage.js';
 import { loadWranglerConfig } from '../../../../scripts/operations.js';
-import { CATALOG_MAX_BYTES, encodeJson, parseJson, sha256, terrainAssetSchema, terrainCatalogSchema, terrainInventorySchema, type TerrainAsset, type TerrainStorage } from './contract.js';
+import { CATALOG_MAX_BYTES, encodeJson, parseJson, terrainAssetSchema, terrainInventorySchema, type TerrainStorage } from './contract.js';
 import { fetchSourceInventory } from './source.js';
 import { finalizeTerrainCatalog, syncTerrainShard } from './ingest.js';
 import { localTerrainStorage } from './local-store.js';
 import { prepareTerrain, preparedTerrainRefSchema } from './prepare.js';
-import { stagePreparedTerrain } from './staging.js';
+import { loadTerrainCatalog, stagePreparedTerrain } from './staging.js';
 import { createTerrainReader } from './reader.js';
 
 const COMMON = ['store-dir', 'out'] as const;
@@ -50,11 +50,6 @@ async function writeJson(path: string, value: unknown) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, encodeJson(value));
 }
-async function readAsset(store: TerrainStorage, ref: TerrainAsset, signal: AbortSignal) {
-  const result = await store.get(ref.key, undefined, ref.bytes, signal);
-  if (!result || result.bytes.length !== ref.bytes || sha256(result.bytes) !== ref.sha256) throw new Error(`Terrain artifact missing or corrupt: ${ref.key}`);
-  return result.bytes;
-}
 async function readGrid(path: string): Promise<Grid> {
   return parseJson(await readLocalFile(path, 16 * 1024), gridSchema, 16 * 1024);
 }
@@ -88,7 +83,7 @@ export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
       return;
     }
     const catalogRef = parseJson(await readLocalFile(values['catalog-ref'], 16 * 1024), terrainAssetSchema, 16 * 1024);
-    const catalog = parseJson(await readAsset(store, catalogRef, signal), terrainCatalogSchema);
+    const catalog = await loadTerrainCatalog(catalogRef, store, signal);
     if (command === 'prepare') {
       const ref = await prepareTerrain({ catalog, storage: store, grid: await readGrid(values.grid), signal, onReport: report => console.error(JSON.stringify(report)) });
       await writeJson(values.out, ref);

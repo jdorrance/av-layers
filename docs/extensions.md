@@ -69,11 +69,13 @@ pnpm test packages/forecast/src/inputs.test.ts apps/batch/src/providers.test.ts
 pnpm test apps/batch/src/native-build.integration.test.ts apps/batch/src/parallel.test.ts
 pnpm capacity --model MODEL
 pnpm input:proof --model MODEL --cache-dir .cache/MODEL
-pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL
+pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL \
+  --terrain-catalog-ref output/terrain-catalog-ref.json
 ```
 
 The first three commands are offline. The proof and forecast download weather
-data. [capacity.ts](../apps/batch/src/capacity.ts) defines build limits; use
+data; [development](development.md#build-a-real-forecast) covers the terrain
+catalog used for configured zones. [capacity.ts](../apps/batch/src/capacity.ts) defines build limits; use
 measurements before raising them. Record source licensing and attribution in
 [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt). The scheduled workflow's
 `all` selection expands from the product registry. Update the static GitHub

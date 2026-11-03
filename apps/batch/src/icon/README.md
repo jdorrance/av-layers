@@ -9,10 +9,10 @@ Run from the repository root after [setup](../../../../docs/development.md#setup
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
 ```
 
-This downloads and checks one frame, then prints its input report. Use
-`pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu` to build
-the lift tiles and point data. Both commands reuse downloaded files; see
-[development](../../../../docs/development.md#build-a-real-forecast) for cycle
+This downloads and checks one frame, then prints its input report. The
+[forecast command](../../../../docs/development.md#build-a-real-forecast) builds
+lift tiles and point data with the configured terrain refinements. Both commands
+reuse downloaded files; the development guide covers catalog access, cycle
 selection and local preview.
 
 ## Offline checks

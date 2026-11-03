@@ -2,7 +2,7 @@
 
 Run commands from the repository root. The alpha builder supports GFS and
 ICON-EU. Scheduled forecasts select both models; manual runs can select either
-model or both. See [status](status.md) for release evidence and
+model or both. See [deployments](status.md) for the live applications and
 [the project layout](architecture.md#workspace-map) for code ownership.
 
 ## Setup
@@ -40,8 +40,16 @@ API data under `.wrangler/fixture-state`. Nothing is uploaded. Use
 
 ## Build a real forecast
 
+Configured refinement zones need a pinned global terrain catalog. Save the
+completed import's reference as `output/terrain-catalog-ref.json` and supply
+`CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET`
+for its store. See [terrain operations](operations.md#terrain-data) for the
+reference's origin. Preparation reuses terrain cached in R2; the forecast output
+is written locally.
+
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
+  --terrain-catalog-ref output/terrain-catalog-ref.json
 ```
 
 This downloads the fields for the configured GFS horizon and can take a while.
@@ -51,10 +59,13 @@ resource estimate, optionally prove one input frame, then build:
 ```sh
 pnpm capacity --model icon-eu
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
-pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu
+pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu \
+  --terrain-catalog-ref output/terrain-catalog-ref.json
 ```
 
 Capacity is offline; the proof and forecast commands download weather data.
+When no configured zone intersects a model, omit the catalog option; its build
+uses native output without terrain access.
 The ICON-EU proof checks one frame's acquisition and normalized inputs; it does
 not build all forecast hours or prove forecast skill. Both models accept `--cycle`
 with an available 00, 06, 12, or 18 UTC initialization. Without it, the adapter

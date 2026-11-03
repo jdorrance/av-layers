@@ -13,7 +13,7 @@ import {
   type Grid,
   type RegularLatLonGrid
 } from '@av/contracts';
-import { prepareTerrainClearance } from './refinement.js';
+import { prepareTerrainClearance, terrainClearanceMappingBytes } from './refinement.js';
 import type { GridField } from './sampler.js';
 
 const sourceGrid: RegularLatLonGrid = {
@@ -134,6 +134,7 @@ describe('coverage and geometry', () => {
     expect([...result.values]).toEqual([1800, 0, 2200]);
     expect([...result.flags]).toEqual([STATUS_VALID, STATUS_OUTSIDE, STATUS_VALID]);
     expect(prepared.byteLength).toBe(106);
+    expect(terrainClearanceMappingBytes(2)).toBe(prepared.byteLength);
   });
 
   it('uses only the actual grid node when all other contributors have zero weight', () => {
@@ -182,6 +183,21 @@ describe('coverage and geometry', () => {
 });
 
 describe('daylight and ownership', () => {
+  it.each([
+    { ...day, intervalStart: 'invalid' },
+    { ...day, validTime: 'invalid' },
+    { intervalStart: day.validTime, validTime: day.intervalStart }
+  ])('rejects an invalid daylight interval $intervalStart to $validTime', time => {
+    const prepared = prepareTerrainClearance(mask(), mask(targetGrid));
+    expect(() => prepared.derive(field(), terrain(), time)).toThrow(/valid daylight interval/);
+    expect(prepared.derive(field(), terrain(), time, false).values[0]).toBe(1450);
+  });
+
+  it('allows a single valid daylight instant', () => {
+    const prepared = prepareTerrainClearance(mask(), mask(targetGrid));
+    expect(prepared.derive(field(), terrain(), { intervalStart: day.validTime, validTime: day.validTime }).values[0]).toBe(1450);
+  });
+
   it('uses the same interval start/midpoint/end admission as forecast frames', () => {
     const prepared = prepareTerrainClearance(mask(), mask(targetGrid));
     const interval = { intervalStart: day.validTime, validTime: '2026-03-21T00:00:00Z' };
@@ -226,6 +242,7 @@ describe('daylight and ownership', () => {
   it('allocates no mapping for an empty target mask', () => {
     const prepared = prepareTerrainClearance(mask(), mask(targetGrid, []));
     expect(prepared.byteLength).toBe(0);
+    expect(terrainClearanceMappingBytes(0)).toBe(prepared.byteLength);
     expect(prepared.derive(field(), terrain(), day).flags[0]).toBe(STATUS_OUTSIDE);
   });
 
@@ -235,6 +252,10 @@ describe('daylight and ownership', () => {
     expect(() => prepareTerrainClearance(source, { ...target, grid: { ...targetGrid, dx: 0 } })).toThrow();
     expect(() => prepareTerrainClearance({ ...source, halo: new Uint8Array(0) }, target)).toThrow(/coverage size/);
     expect(() => prepareTerrainClearance(source, { ...target, output: new Uint8Array(0) })).toThrow(/coverage size/);
+  });
+
+  it.each([-1, 0.5, NaN, Infinity, MAX_GRID_CELLS + 1])('rejects inadmissible mapping allocation counts %s', count => {
+    expect(() => terrainClearanceMappingBytes(count)).toThrow(/active cell budget/);
   });
 
   it('rejects mismatched source and terrain array dimensions', () => {

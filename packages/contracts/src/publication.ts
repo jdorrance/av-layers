@@ -1,8 +1,8 @@
 import z from 'zod';
-import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, methodDescriptorSchema, methodIdSchema } from './methods.js';
+import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, TERRAIN_CLEARANCE_METHOD, methodDescriptorSchema, methodIdSchema } from './methods.js';
 import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
 import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
-import { gridSchema, sameGrid } from './geometry.js';
+import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
 import type { CoverageDescriptor } from './coverage.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
 import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
@@ -47,6 +47,17 @@ export function createProductDescriptors(product: ProductDefinition): z.infer<ty
     methods: Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId]])),
     palettes: [...new Set(product.layers.map(id => LAYERS[id].palette))].map(id => PALETTES[id]),
     attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
+  });
+}
+
+export function createRefinementDescriptors(product: ProductDefinition, bounds: GeographicBounds): z.infer<typeof descriptorSchema> {
+  const base = createProductDescriptors(product), layer = base.layers['usable-lift-agl'];
+  if (!layer) throw new Error('Terrain clearance requires the AGL layer');
+  return descriptorSchema.parse({ ...base, bounds: [...bounds],
+    coverageDescription: 'Polygon-owned terrain clearance inside the model coverage, with interpolation halos excluded.',
+    layers: { [layer.id]: { ...layer, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: TERRAIN_CLEARANCE_METHOD.id } },
+    methods: { [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD },
+    palettes: base.palettes.filter(palette => palette.id === layer.palette)
   });
 }
 
@@ -114,7 +125,7 @@ export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'lay
 export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [manifest, ...(manifest.patches ?? [])]; }
 
 /** A coverage hash binds its geometry and public extent to one numeric surface. */
-export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: ForecastGrid): void {
+export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: Pick<ForecastGrid, 'grid' | 'coverage'> & { descriptors: Pick<ForecastGrid['descriptors'], 'bounds'> }): void {
   if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom
     || !sameGrid(descriptor.grid, surface.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(surface.descriptors.bounds)
     || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Coverage descriptor binding mismatch');

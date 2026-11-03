@@ -2,7 +2,7 @@
 
 The builder supports GFS and ICON-EU. Keep the shared pipeline and math packages
 small; another model should use their existing contracts before introducing a
-new abstraction. [Status](status.md) records what has actually been deployed.
+new abstraction. [Deployments](status.md) links to the running applications and build history.
 
 Next work, in order:
 

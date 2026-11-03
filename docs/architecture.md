@@ -15,9 +15,8 @@ flowchart LR
 ```
 
 GFS and ICON-EU use the same build and serving code. The scheduled workflow
-selects all registered models; a manual run can select one model. ICON-EU still
-needs recorded full-run and deployment checks. See [project status](status.md)
-for completed validation.
+selects all registered models; a manual run can select one model. Internal
+refinement patches share that model's cycle, timeline, publication and URLs.
 
 ## Workspace map
 
@@ -91,10 +90,12 @@ to calculate its time intervals. Sessions close after success or failure. The
 size, and tile count before downloads begin. Publication also checks measured
 runtime and peak memory against the build limits.
 
-Each layer and frame gets a PMTiles archive. A single numeric file stores point
-data for all frames and layers in spatial blocks. Each block includes neighboring
-cells so a point can be sampled with one storage range. Tiles and point results
-use the same interpolation; colors and display zoom do not change the numbers.
+Each layer and frame gets one composited PMTiles archive. Each numeric grid has
+a pack containing its supported layers across the common frame axis. Spatial
+blocks include neighboring cells so a grid can be sampled with one storage
+range. A point combining base MSL with fine AGL reads two ranges. Polygon and
+output-mask membership select the same grid for tiles and point results;
+colors and display zoom do not change the numbers.
 
 The build's manifest lists its files, hashes, frames, layers, methods, source
 records, and expiry. Separate coverage files distinguish public output from the
@@ -125,15 +126,26 @@ flowchart LR
   dem[Native DEM] --> ingest[One-time verified import]
   ingest --> terrain[Immutable terrain namespace]
   terrain --> prepare[Bounded grid preparation]
-  prepare --> inputs[Reusable arrays]
-  inputs --> plan[Optional pinned build-plan input]
+  zones[JSON polygons] --> prepare
+  prepare --> inputs[Reusable arrays and coverage]
+  inputs --> plan[Frozen build-plan inputs]
   plan --> workers[Local load once per shard]
+  native[Native lift ceiling] --> clearance[Terrain clearance]
+  workers --> clearance
+  clearance --> agl[Fine AGL pack and composited tiles]
 ```
 
-Terrain is staged only when requested. The existing prepare job owns storage
-access; compute shards need no additional credentials. Current lift still uses
-model terrain. Terrain-aware physics, atmospheric remapping and profiles remain
-separate calculations. Terrain objects are outside forecast expiry and cleanup.
+The [zone configuration](../packages/contracts/config/refinement.json) selects
+bounded 1 km grids inside each source domain. The prepare job owns storage
+access and freezes coverage and DEM references before fan-out. Compute shards
+load verified local inputs; they do not resolve a mutable catalog or need
+storage credentials. Empty owned zones perform no terrain reads.
+
+[`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) reconstructs
+the native MSL ceiling with strict contributor support, then subtracts the DEM
+to derive terrain AGL. Native column physics and MSL output stay in the source
+pipeline. The aggregate build budget includes every pack, terrain array,
+mapping and raster input. Terrain objects are outside forecast expiry and cleanup.
 
 ## Serving and clients
 

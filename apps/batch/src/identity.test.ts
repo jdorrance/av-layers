@@ -7,6 +7,8 @@ import { expect, it } from 'vitest';
 import { GFS_PRODUCT } from '@av/contracts';
 import { sha256 } from './terrain/contract.js';
 import { buildIdentity, readProducerSourceState } from './identity.js';
+import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
+import type { RefinementInput } from './refinement/prepare.js';
 
 it('records producer configuration edits while allowing unrelated client edits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-source-state-'));
@@ -40,4 +42,24 @@ it('keeps unstaged configuration identity stable and pins requested terrain with
   expect(staged.recipe.hash).not.toBe(baseline.recipe.hash);
   expect(different.recipe.hash).not.toBe(staged.recipe.hash);
   expect(staged.scienceHash).toBe(baseline.scienceHash);
+});
+
+it('pins resolved polygon, grid and DEM references while keeping the scientific method independent of the chosen region', async () => {
+  const patch = fixturePatch(fixtureManifest()), coverageHash = 'a'.repeat(64);
+  const input: RefinementInput = { id: patch.id, geometry: patch.geometry, bounds: patch.descriptors.bounds,
+    grid: patch.grid, coverage: patch.coverage, terrain: { key: patch.terrain.key, sha256: patch.terrain.sha256, bytes: 100, arrayBytes: 45 } };
+  const baseline = await buildIdentity(GFS_PRODUCT, coverageHash);
+  const refined = await buildIdentity(GFS_PRODUCT, coverageHash, undefined, [input]);
+  const changed = structuredClone(input); changed.terrain.sha256 = 'd'.repeat(64);
+  const otherTerrain = await buildIdentity(GFS_PRODUCT, coverageHash, undefined, [changed]);
+  if (changed.geometry.type !== 'Polygon') throw new Error('Expected polygon fixture');
+  changed.geometry.coordinates[0][0][0] -= 0.001;
+  changed.geometry.coordinates[0][changed.geometry.coordinates[0].length - 1][0] -= 0.001;
+  const otherGeometry = await buildIdentity(GFS_PRODUCT, coverageHash, undefined, [changed]);
+  expect(refined.recipe.hash).not.toBe(baseline.recipe.hash);
+  expect(otherTerrain.recipe.hash).not.toBe(refined.recipe.hash);
+  expect(otherGeometry.recipe.hash).not.toBe(otherTerrain.recipe.hash);
+  expect(otherTerrain.scienceHash).toBe(refined.scienceHash);
+  expect(otherGeometry.scienceHash).toBe(refined.scienceHash);
+  expect(refined.scienceHash).not.toBe(baseline.scienceHash);
 });

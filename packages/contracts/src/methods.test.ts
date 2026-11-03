@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, createProductDescriptors, createProductMethodId, descriptorSchema } from './index.js';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, createProductDescriptors, createProductMethodId, createRefinementDescriptors, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain clearance separately from its native atmospheric method', product => {
+    const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
+    expect(Object.keys(patch.layers)).toEqual(['usable-lift-agl']);
+    expect(patch.layers['usable-lift-agl']).toMatchObject({ methodId: TERRAIN_CLEARANCE_METHOD.id, verticalReference: 'terrain-AGL' });
+    expect(patch.methods).toEqual({ [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });
+    expect(patch.methods[TERRAIN_CLEARANCE_METHOD.id].spatialSupport).toBe('bilinear-neighborhood');
+    expect(patch.bounds).toEqual([1, 2, 3, 4]);
+    expect(base.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
+    expect(base.layers['usable-lift-msl'].methodId).not.toBe(TERRAIN_CLEARANCE_METHOD.id);
+  });
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
     const descriptors = createProductDescriptors(GFS_PRODUCT);
     expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-v1', 'trailing-precipitation-rate-v1']);

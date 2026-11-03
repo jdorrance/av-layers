@@ -70,16 +70,19 @@ global catalog permits allocating an unrestricted native raster.
 
 ## Use in forecasts
 
-Terrain is optional; ordinary builds acquire none. A local build can load a
-staged reference with `pnpm forecast --terrain-ref PATH --out output`. Its grid
-must match the forecast product. The hosted Forecast workflow's `terrain-inputs`
-accepts a JSON object mapping model IDs to prepared references. Its prepare job
-stages the selected inputs in the existing shared artifact. Shards validate and
-load them locally once before weather acquisition, with memory reserved.
+The [refinement producer](../refinement/README.md) prepares the configured zones
+from one pinned global catalog before weather acquisition. It reuses immutable
+terrain arrays and stages them with their masks in the shared build artifact.
+Shards validate and load those local inputs once, with memory reserved. A model
+with no intersecting zones acquires no terrain. [Operations](../../../../docs/operations.md#terrain-data)
+owns the hosted catalog default and override; [development](../../../../docs/development.md#build-a-real-forecast)
+covers the local `--terrain-catalog-ref` option.
 
-The plan, recipe and source provenance pin the reference. It does not replace
-model terrain or imply terrain-adjusted lift. The regional example demonstrates
-input preparation; it is not a newly published weather model.
+The separate `--terrain-ref PATH` option loads an already staged native-grid
+reference. The hosted `terrain-inputs` JSON model map stages the equivalent
+references. Their grids must match their forecast products; these optional
+inputs retain their existing plan, recipe and source provenance identity.
+They do not replace model terrain or the catalog for configured refinements.
 
 ```mermaid
 flowchart LR

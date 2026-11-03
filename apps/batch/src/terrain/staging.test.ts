@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
 import { type Grid } from '@av/contracts';
 import { prepareTerrain } from './prepare.js';
-import { loadPreparedTerrain, stagePreparedTerrain } from './staging.js';
-import { TerrainTestStorage, terrainCatalogFixture } from './test-fixtures.js';
+import { loadPreparedTerrain, loadTerrainCatalog, stagePreparedTerrain } from './staging.js';
+import { seedTerrainCatalog, TerrainTestStorage, terrainCatalogFixture } from './test-fixtures.js';
+import { CATALOG_MAX_BYTES } from './contract.js';
 
 vi.mock('./reader.js', () => ({ createTerrainReader: async () => ({ sample: async () => ({ elevationM: 12.5, source: 'dem' }), close: async () => {}, stats: () => ({ requests: 0, bytesRead: 0, decodedPixels: 0, outputPixels: 4, cacheHits: 0 }) }) }));
 const grid: Grid = { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
@@ -39,4 +40,25 @@ it('rejects local corruption and wrong pinned descriptors before exposing arrays
   await expect(loadPreparedTerrain({ ...options, ref: { ...options.ref, sha256: 'f'.repeat(64) } })).rejects.toThrow('integrity mismatch');
   await writeFile(join(options.out, options.ref.key.replace('manifest.json', 'valid.u8')), Uint8Array.of(1, 1, 1, 0));
   await expect(loadPreparedTerrain(options)).rejects.toThrow('integrity mismatch');
+});
+
+it('loads only the checksum-pinned catalog and validates its data identity', async () => {
+  const storage = new TerrainTestStorage(), catalog = terrainCatalogFixture(), ref = seedTerrainCatalog(storage, catalog);
+  expect(await loadTerrainCatalog(ref, storage)).toEqual(catalog);
+  const corrupted = new Uint8Array(storage.objects.get(ref.key)!); corrupted[corrupted.length - 1] ^= 1;
+  storage.objects.set(ref.key, corrupted);
+  await expect(loadTerrainCatalog(ref, storage)).rejects.toThrow('missing or corrupt');
+  storage.objects.delete(ref.key);
+  await expect(loadTerrainCatalog(ref, storage)).rejects.toThrow('missing or corrupt');
+  const invalid = seedTerrainCatalog(storage, { ...catalog, dataId: 'f'.repeat(64) });
+  await expect(loadTerrainCatalog(invalid, storage)).rejects.toThrow('data identity');
+});
+
+it('rejects oversized or cancelled catalog reads before touching storage', async () => {
+  const storage = new TerrainTestStorage(), ref = seedTerrainCatalog(storage);
+  await expect(loadTerrainCatalog({ ...ref, bytes: CATALOG_MAX_BYTES + 1 }, storage)).rejects.toThrow('catalog reference');
+  await expect(loadTerrainCatalog({ ...ref, key: 'terrain/catalogs/other.json' }, storage)).rejects.toThrow('catalog reference');
+  const controller = new AbortController(); controller.abort(new Error('stopped'));
+  await expect(loadTerrainCatalog(ref, storage, controller.signal)).rejects.toThrow('stopped');
+  expect(storage.gets).toEqual([]);
 });

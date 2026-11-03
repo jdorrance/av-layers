@@ -3,14 +3,18 @@
 Downloads GFS or ICON-EU weather data and writes map tiles, point forecasts,
 and a manifest describing the build.
 
-After the [root setup](../../README.md), run from the repository root:
+After [setup and terrain-store access](../../docs/development.md#build-a-real-forecast),
+run from the repository root:
 
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
+  --terrain-catalog-ref output/terrain-catalog-ref.json
 ```
 
 This downloads a recent forecast, reuses cached files, and prints the completed
-manifest path under `output/builds/gfs/`. Use `--model icon-eu` for regional
+manifest path under `output/builds/gfs/`. The catalog supplies the configured
+refinement zones; an empty or out-of-domain zone configuration needs no catalog.
+Use `--model icon-eu` for regional
 ICON-EU lift, and `--cycle` with a UTC initialization time to select a particular
 run. See [development](../../docs/development.md#build-a-real-forecast) to open
 the result locally.

@@ -1,13 +1,15 @@
 # Aviation Forecast Layers
 
-Maps and point forecasts for usable lift above sea level, usable lift above model
-terrain, and precipitation rate. A batch job builds the forecast files; an API
+Maps and point forecasts for usable lift above sea level, usable lift above
+ground, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
 This project is in alpha. The builder supports NOAA GFS and regional DWD ICON-EU.
 The forecast workflow supports either model or both in parallel; scheduled runs
-select both. See [status](docs/status.md) for completed deployment validation.
-Forecasts use model resolution; zooming in does not add local weather or terrain detail.
+select both. Configure [polygons](packages/contracts/config/refinement.json) to
+refine ground clearance on 1 km DEM grids inside either model. Atmospheric lift
+ceilings retain their source-model resolution. See [deployments](docs/status.md)
+for the map, API and run history.
 
 ## Quick start
 
@@ -50,7 +52,7 @@ server options.
 - [Science](docs/science.md): how lift and precipitation are calculated.
 - [Development](docs/development.md): working on the code.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
-- [Project status](docs/status.md): release checks and remaining work.
+- [Deployments](docs/status.md): live applications and build history.
 
 Source data and third-party license notices are listed in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

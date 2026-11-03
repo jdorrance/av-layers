@@ -20,8 +20,9 @@ ICON-EU uses DWD's regular grid, surface fields and the lowest 30 model levels.
 Pressure comes from each column's `P` fields in Pa, with temperature from `T`.
 Adjacent static `HHL` interfaces supply full-level midpoint heights; the bottom
 interface must agree with `HSURF` terrain. The [ICON adapter](../apps/batch/src/icon/README.md) reads the fields listed in
-[ICON settings](../packages/contracts/config/icon-eu.json). This supports lift only and performs no 1 km terrain
-downscaling or reconstruction of hybrid-coordinate pressure.
+[ICON settings](../packages/contracts/config/icon-eu.json). The adapter retains
+native model inputs and performs no reconstruction of hybrid-coordinate pressure.
+Terrain clearance is calculated separately from the resulting native lift ceiling.
 
 Both adapters check decoded parameter, level, grid, initialization, packing and
 statistical-window metadata. GFS also checks inventory labels. Duplicate inventory
@@ -117,6 +118,26 @@ retains that top; otherwise the descending threshold crossing sets the usable de
 [The solver](../packages/soaring/src/column.ts) uses those defaults, and
 [its tests](../packages/forecast/src/science.test.ts) cover branch boundaries.
 
+## Terrain clearance
+
+Method `native-lift-terrain-clearance-v1` derives fine AGL in the configured
+polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
+compiles native neighbors and weights once for each target grid. For every
+frame, all positive-weight neighbors must be present and agree on valid lift
+versus no lift. Valid lift gives `max(0, interpolated MSL ceiling − DEM elevation)`;
+all-no-lift neighbors give zero. Mixed lift/no-lift neighborhoods, missing DEM
+and missing native support remain unavailable. Zero-weight neighbors do not
+affect the result, and there is no nearest-valid or renormalized fallback in
+this calculation.
+
+Daylight follows the same interval as the parent frame. A dark cell with valid
+terrain and complete native geometric support emits no lift without evaluating
+the atmospheric values. Missing terrain or geometric support stays unavailable.
+The method keeps the native MSL forecast and does not rerun a parcel from the
+DEM surface. A detailed ground-clearance map therefore is not a higher-resolution
+atmospheric prediction. Each patch records the DEM datum and surface type;
+the calculation applies no vertical-datum transformation.
+
 ## Reconstruction and storage
 
 The [shared sampler](../packages/forecast/src/sampler.ts) first applies output
@@ -139,7 +160,8 @@ Each numeric record contains a little-endian `Float32` value followed by a
 status/support byte. The low two
 bits encode status; three further bits identify parcel crossing, profile top
 and PBL closure. [layers.ts](../packages/contracts/src/layers.ts) defines these constants. Grid geometry, Earth radius, bounds and wrap behavior come from the
-immutable version-3 manifest and its content-addressed coverage descriptor.
+immutable manifest and its content-addressed coverage descriptor. Version 4
+adds a separate numeric pack and descriptor for each internal refinement grid.
 Native Lambert-conformal grids are sampled through their declared projection;
 the current GFS and ICON-EU providers both supply regular latitude/longitude
 grids. The sampler finds the contributing cells; the [numeric block layout](architecture.md#build-and-storage)

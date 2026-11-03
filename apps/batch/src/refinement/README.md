@@ -19,3 +19,15 @@ The source model's coverage and native interpolation support limit each plan.
 The pure [polygon planner](../../../../packages/contracts/src/refinement.ts)
 owns geometry, admission and deterministic grid placement. Neither reads a DEM
 or acquires weather.
+
+[prepare.ts](prepare.ts) prepares the forecast inputs. Each output cell lies
+inside its polygon and the base forecast coverage. A one-cell halo supplies
+interpolation support. The base and fine grids share the existing aggregate
+cell budget; empty owned areas need no terrain reads.
+
+Preparation reads one pinned catalog, reuses or creates elevations on each grid,
+and stages the verified arrays beside the coverage files. The build plan stores
+their complete immutable references. Workers load those local files and verify
+their geometry, coverage and checksums without resolving a catalog or downloading
+source DEMs. Changing polygon ownership while retaining the same grid reuses
+the elevation preparation.

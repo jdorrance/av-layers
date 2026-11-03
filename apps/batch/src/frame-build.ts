@@ -1,7 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
+import { prepareTerrainClearance } from '@av/forecast/refinement';
 import type { ForecastProvider, ForecastSession } from './provider.js';
 import { createRenderer } from './render.js';
 import { summarizeFields } from './summary.js';
@@ -21,6 +22,7 @@ export interface FrameBuildResult {
   artifacts: Manifest['artifacts'];
   receipts: { hour: number; intervals: unknown; receipt: unknown }[];
   samples: { key: string; sha256: string; bytes: number; channelCount: number };
+  refinements?: { id: string; samples: FrameBuildResult['samples'] }[];
   metrics: {
     /** Summary observations are metadata, never inputs to the forecast calculation. */
     frames: Record<string, Record<string, unknown>>;
@@ -50,7 +52,8 @@ export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frame
 }
 
 /** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
-export async function buildFrames(options: FrameBuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours?: readonly number[]; samplesKey: string; journalPrefix: string }): Promise<FrameBuildResult> {
+export async function buildFrames(options: FrameBuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours?: readonly number[]; samplesKey: string; journalPrefix: string; refinementPrefix?: string }): Promise<FrameBuildResult> {
+  options.signal?.throwIfAborted();
   const { product, mask, provider, buildId, samplesKey, journalPrefix } = options;
   // Numerical overrides would disagree with the method parameters recorded in the build.
   const deriveOptions = { daylightOnly: options.deriveOptions?.daylightOnly };
@@ -59,7 +62,12 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
   const { indices, layout, capacity } = options.prepared, active = indices.active;
   let channel = 0;
   const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: FrameBuildResult['receipts'] = [], summaries: FrameBuildResult['metrics']['frames'] = {};
-  const renderer = createRenderer(mask, { signal: options.signal, rasterWorkers: capacity.rasterWorkers });
+  const refinements = options.prepared.refinements.map(patch => ({ ...patch,
+    clearance: prepareTerrainClearance(mask, patch.mask), pack: undefined as ReturnType<typeof createSamplePackBuilder> | undefined,
+    samplesKey: `${options.refinementPrefix ?? `${prefix}/refinements`}/${patch.input.id}/samples.bin`
+  }));
+  const renderer = createRenderer(mask, { signal: options.signal, rasterWorkers: capacity.rasterWorkers,
+    patches: refinements.map(patch => ({ id: patch.input.id, geometry: patch.input.geometry, descriptors: { bounds: patch.input.bounds }, layers: TERRAIN_CLEARANCE_METHOD.outputs, mask: patch.mask })) });
   await mkdir(localPath(root, journalPrefix), { recursive: true });
   const journal = (name: string, data: unknown) => writeFile(localPath(root, `${journalPrefix}/${name}.json`), JSON.stringify(data));
   await journal('progress', { state: 'acquiring', buildId, startedAt: new Date(started).toISOString() });
@@ -79,6 +87,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     const hours = options.hours ?? resolveProductFrameHours(product, mask, cycle, { ...deriveOptions, outputIndices: indices.output });
     const channelCount = hours.length * product.layers.length;
     pack = createSamplePackBuilder(layout, channelCount);
+    for (const patch of refinements) patch.pack = createSamplePackBuilder(patch.layout, hours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
     let acquireMs = 0, deriveMs = 0, packMs = 0, renderMs = 0;
     for (const hour of hours) {
       frameHour = hour; phase = 'acquire';
@@ -97,9 +106,16 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
       const tDerive = Date.now();
       phase = 'derive';
       const fields = deriveFrame(frame, mask, { ...deriveOptions, layers: product.layers });
+      const fineFields = refinements.map(patch => {
+        if (!fields['usable-lift-msl']) throw new Error('Terrain clearance requires the native MSL field');
+        return patch.clearance.derive(fields['usable-lift-msl'], patch.terrain, descriptor, deriveOptions.daylightOnly);
+      });
       summaries[id] = summarizeFields(fields, mask, indices.output, product.layers);
       deriveMs += Date.now() - tDerive;
       phase = 'pack';
+      const tFinePack = Date.now();
+      for (let index = 0; index < refinements.length; index++) refinements[index].pack!.writeChannel(completedFrames, fineFields[index]);
+      packMs += Date.now() - tFinePack;
       const targets = product.layers.map(layer => {
         const field = fields[layer];
         if (!field) throw new Error(`Missing derived field for layer ${layer}`);
@@ -107,7 +123,8 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
         const tPack = Date.now();
         pack!.writeChannel(channel++, field);
         packMs += Date.now() - tPack;
-        return { path: localPath(root, tilesKey), field, layer, tilesKey };
+        const patches = layer === 'usable-lift-agl' ? Object.fromEntries(refinements.map((patch, index) => [patch.input.id, fineFields[index]])) : undefined;
+        return { path: localPath(root, tilesKey), field, layer, tilesKey, ...(patches ? { patches } : {}) };
       });
       const tRender = Date.now();
       phase = 'render';
@@ -122,8 +139,14 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     frameHour = null; phase = 'finalize-pack';
     const tPack = Date.now();
     const packed = await pack.finish(localPath(root, samplesKey));
+    const refined: NonNullable<FrameBuildResult['refinements']> = [];
+    for (const patch of refinements) {
+      options.signal?.throwIfAborted();
+      refined.push({ id: patch.input.id, samples: { ...await patch.pack!.finish(localPath(root, patch.samplesKey)),
+        key: patch.samplesKey, channelCount: hours.length * TERRAIN_CLEARANCE_METHOD.outputs.length } });
+    }
     packMs += Date.now() - tPack;
-    return { cycle, frames, artifacts, receipts, samples: { ...packed, key: samplesKey, channelCount }, metrics: {
+    return { cycle, frames, artifacts, receipts, samples: { ...packed, key: samplesKey, channelCount }, ...(refined.length ? { refinements: refined } : {}), metrics: {
       frames: summaries, phasesMs: { acquireMs, deriveMs, packMs, renderMs }, renderer: renderer.metrics(), acquisition: acquisition.stats,
       elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024
     } };
@@ -132,6 +155,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     throw error;
   } finally {
     pack?.close();
+    for (const patch of refinements) patch.pack?.close();
     delete options.prepared.terrain;
     await acquisition?.close();
   }

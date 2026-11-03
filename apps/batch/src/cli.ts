@@ -1,21 +1,27 @@
 import { validateLocalBuild } from './local-build.js';
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
 import { getProduct, modelIdSchema } from '@av/contracts';
 import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
 
-async function main(): Promise<void> {
-  const command = process.argv[2];
-  const { values } = parseArgs({ args: process.argv.slice(3), strict: true, options: CLI_OPTIONS });
+export async function runBatch(args = process.argv.slice(2)): Promise<void> {
+  const command = args[0];
+  const { values } = parseArgs({ args: args.slice(1), strict: true, options: CLI_OPTIONS });
   const allowed: readonly string[] | undefined = CLI_COMMANDS[command];
   if (!command || !allowed || Object.keys(values).some(key => !allowed.includes(key))) throw new Error(`Usage: ${Object.keys(CLI_COMMANDS).join(', ')} with command-specific options`);
   if (command === 'build') {
     const { buildProduct } = await import('./build.js');
-    let terrain;
+    let terrain, refinement;
     if (values['terrain-ref']) {
       const [{ readLocalFile }, { parseJson }, { preparedTerrainRefSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js'), import('./terrain/prepare.js')]);
       terrain = parseJson(await readLocalFile(values['terrain-ref'], 16 * 1024), preparedTerrainRefSchema, 16 * 1024);
     }
-    console.log(await buildProduct(values.model ?? 'gfs', { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], ...(terrain ? { terrain } : {}) }));
+    if (values['terrain-catalog-ref']) {
+      const [{ readLocalFile }, { parseJson, terrainAssetSchema }, { r2Storage }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js'), import('./storage.js')]);
+      const catalogRef = parseJson(await readLocalFile(values['terrain-catalog-ref'], 16 * 1024), terrainAssetSchema, 16 * 1024);
+      refinement = { catalogRef, storage: r2Storage() };
+    }
+    console.log(await buildProduct(values.model ?? 'gfs', { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], ...(terrain ? { terrain } : {}), ...(refinement ? { refinement } : {}) }));
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
     if (!product) throw new Error('No admitted product for this model');
@@ -37,4 +43,6 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  runBatch().catch(error => { console.error(error); process.exitCode = 1; });
+}

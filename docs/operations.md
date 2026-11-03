@@ -19,7 +19,8 @@ Store the shared `CLOUDFLARE_ACCOUNT_ID` as a repository secret. Create protecte
 - Secrets: `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`,
   `R2_SECRET_ACCESS_KEY`. Scope R2 credentials to that
   environment's bucket. Deployment needs Workers Scripts Edit and Pages Edit.
-- Variables: `API_BASE_URL` and `PAGES_PROJECT_NAME` for that environment.
+- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and the finalized
+  `TERRAIN_CATALOG_REF` described under [terrain data](#terrain-data).
   The bucket comes from its `BUCKET` binding in [Wrangler configuration](../apps/api/wrangler.json).
 
 Create resources once with an authenticated Wrangler session. For staging:
@@ -65,7 +66,10 @@ by cleanup.
 Selected models run concurrently as GitHub runners and account limits allow.
 Each runs `forecast-plan`, up to four parallel `forecast-shard` jobs, then
 `forecast` to assemble and publish. Planning fixes that model's cycle and frame
-list, including its daylight filtering. Job names list the actual `fXXX` hours in
+list, including its daylight filtering, and prepares the configured refinement
+grids from the pinned global terrain catalog. Masks and terrain arrays travel
+with the immutable plan; workers load them locally without catalog access.
+Job names list the actual `fXXX` hours in
 each batch; the planning summary also shows their UTC valid times. GFS and ICON-EU
 can have different cycles, hour lists, and batch sizes.
 
@@ -184,7 +188,25 @@ Select its environment and run from `main`, as required by the existing storage
 environment branch policies. It verifies the complete inventory before publishing
 a catalog and retains verified receipts for retries. Dataset versions are
 outside forecast cleanup. The [terrain guide](../apps/batch/src/terrain/README.md)
-covers references, bounded reads, preparations and optional forecast inputs.
+covers references, bounded reads and reusable preparations.
+
+After the import succeeds, set the environment variable `TERRAIN_CATALOG_REF`
+to the complete JSON reference from its `terrain-catalog-ref.json` artifact:
+`key`, `sha256`, and `bytes`. The referenced catalog and its tiles must exist in
+that environment's bucket. Both weather models use this one pin and the shared
+[polygon configuration](../packages/contracts/config/refinement.json).
+
+The Forecast workflow accepts `terrain-catalog-ref` to override that default for
+one run. Only its preparation job receives the input. Configured zones require
+a pin; a missing or corrupt catalog fails preparation before weather acquisition.
+An empty configuration, or one outside a model's domain, needs no catalog and
+keeps the native output. A completed refined build retains `plan.json` with its
+full artifacts so resume can verify the original inputs without consulting new
+catalog defaults or preparing terrain again.
+
+The older `terrain-inputs` model map remains available for staging already
+prepared native-grid arrays. It does not replace the catalog used by configured
+refinements.
 
 ## Check a failure
 

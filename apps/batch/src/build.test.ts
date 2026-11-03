@@ -25,6 +25,8 @@ vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<type
   loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
   writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
+// These native pipeline fixtures have no refinement zones; the refined path has its own integration tests.
+vi.mock('./refinement/config.js', () => ({ configuredRefinements: vi.fn(() => []) }));
 vi.mock('./gfs/discover.js', () => ({ discoverGfsRun: vi.fn() }));
 vi.mock('./gfs/acquire.js', async () => {
   const { discoverGfsRun } = await import('./gfs/discover.js');
@@ -42,6 +44,7 @@ import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
 import * as validateModule from './validate.js';
 import * as coverageModule from './coverage.js';
+import { configuredRefinements } from './refinement/config.js';
 
 const ms = (hour: number): string => new Date(Date.parse(CYCLE) + hour * 3600000).toISOString();
 const noMs = (hour: number): string => ms(hour).replace('.000Z', 'Z');
@@ -108,6 +111,14 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
 }
 
 describe('build sample acquisition intervals', () => {
+  it('requires a terrain pin for configured zones before opening the weather provider', async () => {
+    const actual = await vi.importActual<typeof import('./refinement/config.js')>('./refinement/config.js');
+    vi.mocked(configuredRefinements).mockReturnValueOnce(actual.configuredRefinements(GFS_PRODUCT));
+    const before = vi.mocked(createGfsAcquisitionSession).mock.calls.length;
+    const out = await mkdtemp(join(tmpdir(), 'av-build-pin-')); temp.push(out);
+    await expect(buildProduct('gfs', { out, cycle: CYCLE })).rejects.toThrow('pinned terrain catalog reference');
+    expect(vi.mocked(createGfsAcquisitionSession).mock.calls).toHaveLength(before);
+  });
   it.each(['acquire', 'render'])('records a structured %s failure and only completely rendered frames', async phase => {
     const failure = Object.assign(new Error('Injected field failure'), { code: 'fixture-failure', details: { reason: 'fixture', hour: 2 } });
     if (phase === 'render') {

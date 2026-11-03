@@ -177,7 +177,7 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   await validateSamplePack(localPath(root, manifest.samples.key), manifest, mask);
   for (const patch of manifest.patches ?? []) {
     const patchMask = await readGridCoverage(root, patch);
-    validateRefinementCoverage(mask, patchMask, patch);
+    validateRefinementCoverage(mask, patchMask, { geometry: patch.geometry, bounds: patch.descriptors.bounds });
     await validateSamplePack(localPath(root, patch.samples.key), { ...patch, frames: manifest.frames }, patchMask);
   }
   for (const artifact of manifest.artifacts) {

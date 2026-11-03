@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { readLocalFile } from './local-file.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ProductDefinition } from '@av/contracts';
+import { assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition } from '@av/contracts';
 
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const names = ['output', 'halo', 'tiles'] as const;
@@ -64,7 +64,7 @@ export async function readCoverage(root: string, coverageHash: string): Promise<
   return (await readCoverageDirectory(join(root, coveragePrefix(coverageHash)), coverageHash)).mask;
 }
 
-export async function readGridCoverage(root: string, grid: ForecastGrid): Promise<CoverageMask> {
+export async function readGridCoverage(root: string, grid: Parameters<typeof assertCoverageBinding>[1]): Promise<CoverageMask> {
   const result = await readCoverageDirectory(join(root, coveragePrefix(grid.coverage.hash)), grid.coverage.hash);
   assertCoverageBinding(result.descriptor, grid);
   return result.mask;

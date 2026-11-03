@@ -13,6 +13,7 @@ import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.
 import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import type { ValidatedBuild } from '../apps/batch/src/validate.js';
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
+import { configuredRefinements } from '../apps/batch/src/refinement/config.js';
 
 /** Check at entry and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
@@ -105,13 +106,20 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       }
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
-    let terrain;
+    let terrain, refinement;
+    const product = getProduct(model);
+    if (!product) throw new Error(`No forecast product for ${model}`);
+    if (configuredRefinements(product).length) {
+      if (!process.env.TERRAIN_CATALOG_REF) throw new Error('Configured refinement zones require TERRAIN_CATALOG_REF; set the environment default or terrain-catalog-ref workflow input');
+      const { terrainCatalogInput } = await import('./terrain-inputs.js');
+      refinement = { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store };
+    }
     if (process.env.TERRAIN_INPUTS) {
       const { terrainInputForModel } = await import('./terrain-inputs.js');
       const ref = terrainInputForModel(process.env.TERRAIN_INPUTS, model);
       if (ref) terrain = { ref, storage: store };
     }
-    return createForecastPlan(model, { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain } : {}) });
+    return createForecastPlan(model, { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain } : {}), ...(refinement ? { refinement } : {}) });
   }, store);
 }
 
@@ -167,7 +175,29 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       const { preparedTerrainRefSchema } = await import('../apps/batch/src/terrain/prepare.js');
       terrain = preparedTerrainRefSchema.parse(manifest.source.terrain);
     }
-    if (!product || manifest.recipe.hash !== (await buildIdentity(product, manifest.coverage.hash, terrain)).recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
+    let refinements;
+    if (manifest.version === 4) {
+      const { readBuildPlan } = await import('../apps/batch/src/parallel.js');
+      const plan = await readBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new Error('Resume artifact is incomplete: missing plan.json for refined build; start a fresh forecast without resume-run-id', { cause: error });
+        }
+        throw error;
+      });
+      const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+      if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
+          || plan.createdAt !== manifest.createdAt || plan.coverageHash !== manifest.coverage.hash
+          || !same(plan.recipe, manifest.recipe) || !same(plan.terrain, terrain)
+          || !same(plan.refinements?.map(input => ({ id: input.id, grid: input.grid, coverage: input.coverage,
+            geometry: input.geometry, bounds: input.bounds, terrain: { key: input.terrain.key, sha256: input.terrain.sha256 } })),
+          manifest.patches!.map(patch => ({ id: patch.id, grid: patch.grid, coverage: patch.coverage,
+            geometry: patch.geometry, bounds: patch.descriptors.bounds, terrain: { key: patch.terrain.key, sha256: patch.terrain.sha256 } })))) {
+        throw new Error('Resume plan differs from the retained refined manifest');
+      }
+      refinements = plan.refinements;
+    }
+    const identity = product && (refinements ? await buildIdentity(product, manifest.coverage.hash, terrain, refinements) : await buildIdentity(product, manifest.coverage.hash, terrain));
+    if (!identity || manifest.recipe.hash !== identity.recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
     signal.throwIfAborted();
     await commit(manifest, path, runId);
   }, store);

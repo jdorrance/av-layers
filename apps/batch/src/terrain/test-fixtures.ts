@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { dataIdentity, TERRAIN_PACKING, TERRAIN_SOURCE, type TerrainCatalog } from './contract.js';
+import { dataIdentity, encodeJson, sha256, TERRAIN_PACKING, TERRAIN_SOURCE, type TerrainAsset, type TerrainCatalog } from './contract.js';
 import type { ObjectStorage } from '../storage.js';
 
 export function terrainCatalogFixture(): TerrainCatalog {
@@ -13,6 +13,12 @@ export function terrainCatalogFixture(): TerrainCatalog {
   };
   catalog.dataId = dataIdentity(catalog);
   return catalog;
+}
+
+export function seedTerrainCatalog(storage: TerrainTestStorage, catalog = terrainCatalogFixture()): TerrainAsset {
+  const bytes = encodeJson(catalog), hash = sha256(bytes), key = `terrain/catalogs/${hash}.json`;
+  storage.objects.set(key, bytes);
+  return { key, sha256: hash, bytes: bytes.byteLength };
 }
 
 /** Immutable single-PUT storage used by preparation and staging fixtures. */

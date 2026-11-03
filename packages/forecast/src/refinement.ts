@@ -14,6 +14,17 @@ import {
 import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './daylight.js';
 import { planSample, type GridField } from './sampler.js';
 
+const CONTRIBUTORS_PER_CELL = 4;
+
+/** Retained native contributor mapping; excludes terrain and derived output arrays. */
+export function terrainClearanceMappingBytes(activeCells: number): number {
+  if (!Number.isSafeInteger(activeCells) || activeCells < 0 || activeCells > MAX_GRID_CELLS) {
+    throw new RangeError('Terrain clearance active cell budget exceeded');
+  }
+  return activeCells * (Uint32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT
+    + CONTRIBUTORS_PER_CELL * (Uint32Array.BYTES_PER_ELEMENT + Float64Array.BYTES_PER_ELEMENT));
+}
+
 export interface PreparedTerrainClearance {
   /** Retained mapping arrays only; each derived field owns another five bytes per target cell. */
   readonly byteLength: number;
@@ -44,7 +55,7 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
     if (getBit(targetMask.output, index) || getBit(targetMask.halo, index)) activeCount++;
   }
   const targets = new Uint32Array(activeCount), counts = new Uint8Array(activeCount);
-  const indices = new Uint32Array(activeCount * 4), weights = new Float64Array(activeCount * 4);
+  const indices = new Uint32Array(activeCount * CONTRIBUTORS_PER_CELL), weights = new Float64Array(activeCount * CONTRIBUTORS_PER_CELL);
   const geometry = prepareGridGeometry(target.grid);
   let active = 0;
   for (let index = 0; index < target.cells; index++) {
@@ -61,7 +72,7 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
         complete = false;
         break;
       }
-      const offset = slot * 4 + count++;
+      const offset = slot * CONTRIBUTORS_PER_CELL + count++;
       indices[offset] = contributor.index;
       weights[offset] = contributor.weight;
     }
@@ -69,7 +80,7 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
   }
 
   return {
-    byteLength: targets.byteLength + counts.byteLength + indices.byteLength + weights.byteLength,
+    byteLength: terrainClearanceMappingBytes(activeCount),
     derive(sourceMsl, terrain, time, daylightOnly = true) {
       if (!(sourceMsl.values instanceof Float32Array) || !(sourceMsl.flags instanceof Uint8Array)
           || sourceMsl.values.length !== source.cells || sourceMsl.flags.length !== source.cells
@@ -77,9 +88,14 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
           || terrain.elevationM.length !== target.cells || terrain.valid.length !== target.cells) {
         throw new RangeError('Terrain clearance input size or type differs from grid');
       }
-      const timestamps = daylightOnly
-        ? buildIntervalDaylightTimestampsMs(Date.parse(time.intervalStart), Date.parse(time.validTime))
-        : [];
+      let timestamps: readonly number[] = [];
+      if (daylightOnly) {
+        const startMs = Date.parse(time.intervalStart), endMs = Date.parse(time.validTime);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+          throw new RangeError('Terrain clearance requires a valid daylight interval');
+        }
+        timestamps = buildIntervalDaylightTimestampsMs(startMs, endMs);
+      }
       const isDaylight = createMaskDaylightTester(target.grid, timestamps);
       const values = new Float32Array(target.cells), flags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
       for (let slot = 0; slot < targets.length; slot++) {
@@ -94,7 +110,7 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
         }
         let status = -1, support = 0, ceiling = 0, complete = true;
         for (let contributor = 0; contributor < count; contributor++) {
-          const offset = slot * 4 + contributor, sourceIndex = indices[offset];
+          const offset = slot * CONTRIBUTORS_PER_CELL + contributor, sourceIndex = indices[offset];
           const flag = sourceMsl.flags[sourceIndex], nextStatus = flag & STATUS_MASK;
           const value = sourceMsl.values[sourceIndex];
           if (nextStatus >= STATUS_UNAVAILABLE || (flag & ~(STATUS_MASK | SUPPORT_MASK)) !== 0
