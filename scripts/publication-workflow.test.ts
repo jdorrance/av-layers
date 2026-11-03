@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Manifest, ModelPointer } from '@av/contracts';
+import { MODEL_IDS, type Manifest, type ModelPointer } from '@av/contracts';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn() }));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
@@ -42,25 +42,27 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 
-const retainedPointer = (cycles: string[]): ModelPointer => ({
-  version: 1, model: 'gfs', latestBuildId: 'build-0',
-  retained: cycles.map((cycle, i) => ({ buildId: `build-${i}`, manifestKey: `builds/gfs/build-${i}/manifest.json`, cycle, expiresAt: '2020-01-01T00:00:00Z' }))
+const retainedPointer = (cycles: string[], model = 'gfs'): ModelPointer => ({
+  version: 1, model, latestBuildId: 'build-0',
+  retained: cycles.map((cycle, i) => ({ buildId: `build-${i}`, manifestKey: `builds/${model}/build-${i}/manifest.json`, cycle, expiresAt: '2020-01-01T00:00:00Z' }))
 });
 
-it('skips an already-published scheduled cycle before building or writing anything', async () => {
-  vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
+it.each(MODEL_IDS.flatMap(model => ['schedule', 'workflow_dispatch'].map(event => ({ model, event }))))(
+  'skips an already-published $model cycle for $event before building or writing anything', async ({ model, event }) => {
+    vi.stubEnv('MODEL', model); vi.stubEnv('GITHUB_EVENT_NAME', event);
+    fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle], model) });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(planForecast()).resolves.toBeNull();
+    expect(fake.pointer).toHaveBeenCalledWith({}, model, expect.any(AbortSignal));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('No new build was produced'));
+    for (const call of [fake.plan, fake.publish, fake.cleanup, fake.verifyServing, fake.write]) expect(call).not.toHaveBeenCalled();
+  }
+);
+it('skips an explicitly selected published cycle without discovering or rebuilding it', async () => {
+  vi.stubEnv('CYCLE', manifest.cycle);
   fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
-  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
   await expect(planForecast()).resolves.toBeNull();
-  expect(log).toHaveBeenCalledWith(expect.stringContaining('No new build was produced'));
-  for (const call of [fake.plan, fake.publish, fake.cleanup, fake.write]) expect(call).not.toHaveBeenCalled();
-});
-it('rejects manual equality early with explicit replacement guidance', async () => {
-  fake.pointer.mockResolvedValue({ pointer: retainedPointer([manifest.cycle]) });
-  await expect(planForecast()).rejects.toThrow('allow-same-cycle=true');
-  expect(fake.plan).not.toHaveBeenCalled();
-  expect(fake.publish).not.toHaveBeenCalled();
-  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
+  for (const call of [fake.discover, fake.plan, fake.publish, fake.cleanup, fake.write]) expect(call).not.toHaveBeenCalled();
 });
 it.each(['schedule', 'workflow_dispatch'])('permits an intentional same-cycle replacement for %s', async event => {
   vi.stubEnv('GITHUB_EVENT_NAME', event); vi.stubEnv('ALLOW_SAME_CYCLE', 'true'); vi.stubEnv('CYCLE', manifest.cycle);
