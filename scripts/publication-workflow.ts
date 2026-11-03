@@ -152,7 +152,13 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     const builds = await readdir(join(root, 'builds', model), { withFileTypes: true });
     if (builds.length !== 1 || !builds[0].isDirectory() || !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(builds[0].name)) throw new Error('Resume artifact must contain exactly one build');
     const path = join(root, 'builds', model, builds[0].name, 'manifest.json');
-    const manifest = manifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
+    const bytes = await readLocalFile(path, MAX_MANIFEST_BYTES).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new Error(`Resume artifact is incomplete: missing manifest.json for ${model}/${builds[0].name}; start a fresh forecast without resume-run-id`, { cause: error });
+      }
+      throw error;
+    });
+    const manifest = manifestSchema.parse(parseBoundedJson(bytes));
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
     const product = getProduct(manifest.model);

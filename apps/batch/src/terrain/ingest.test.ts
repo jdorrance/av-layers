@@ -112,6 +112,41 @@ describe('global terrain ingestion', () => {
     await expect(finalizeTerrainCatalog({ store, inventory: input.inventory })).rejects.toThrow('does not match');
   });
 
+  it.each(['sync', 'finalize'] as const)('identifies a failed tile receipt read during %s without retrying it', async command => {
+    const { store, objects } = memoryStorage(), input = fixture(1), cause = new Error('aborted');
+    objects.set(`terrain/inventories/${input.inventory.sha256}.txt`, input.raw);
+    const read = store.get;
+    store.get = vi.fn(async (...args: Parameters<ObjectStorage['get']>) => {
+      if (args[0].includes('/imports/')) throw cause;
+      return read(...args);
+    });
+    const promise = command === 'sync' ? syncTerrainShard({ store, ...input }) : finalizeTerrainCatalog({ store, inventory: input.inventory });
+    await expect(promise).rejects.toMatchObject({
+      message: `Terrain ${input.inventory.tiles[0].id}: read ${command === 'sync' ? 'import' : 'catalog'} receipt failed: aborted`, cause
+    });
+    expect(store.get).toHaveBeenCalledTimes(command === 'sync' ? 1 : 2);
+    expect(input.fetch).not.toHaveBeenCalled();
+    expect(input.repack).not.toHaveBeenCalled();
+    expect(objects.size).toBe(1);
+  });
+
+  it.each(['sync', 'finalize'] as const)('preserves caller cancellation during %s', async command => {
+    const { store, objects } = memoryStorage(), input = fixture(1), controller = new AbortController(), reason = new Error('caller stopped import');
+    objects.set(`terrain/inventories/${input.inventory.sha256}.txt`, input.raw);
+    const read = store.get;
+    store.get = async (...args: Parameters<ObjectStorage['get']>) => {
+      if (args[0].includes('/imports/')) { controller.abort(reason); throw new Error('read interrupted'); }
+      return read(...args);
+    };
+    const promise = command === 'sync'
+      ? syncTerrainShard({ store, ...input, signal: controller.signal })
+      : finalizeTerrainCatalog({ store, inventory: input.inventory, signal: controller.signal });
+    await expect(promise).rejects.toBe(reason);
+    expect(input.fetch).not.toHaveBeenCalled();
+    expect(input.repack).not.toHaveBeenCalled();
+    expect(objects.size).toBe(1);
+  });
+
   it('requires the pinned raw inventory and rejects a catalog with truncated coverage', async () => {
     const { store, objects } = memoryStorage(), input = fixture(2);
     await syncTerrainShard({ store, ...input });
@@ -143,27 +178,32 @@ describe('global terrain ingestion', () => {
 
   it('cancels an active sibling repack on the first failure and preserves that failure', async () => {
     const { store, objects } = memoryStorage(), input = fixture(4);
+    const cause = new Error('first packing failure');
     let secondStarted = () => {};
     const started = new Promise<void>(resolve => { secondStarted = resolve; });
     let siblingAborted = false;
     const repack = vi.fn(async (bytes: Uint8Array, signal?: AbortSignal) => {
-      if (bytes[0] === 1) { await started; throw new Error('first packing failure'); }
+      if (bytes[0] === 1) { await started; throw cause; }
       secondStarted();
       await new Promise<void>((_resolve, reject) => signal!.addEventListener('abort', () => {
         siblingAborted = true; reject(signal!.reason);
       }, { once: true }));
       return input.repack(bytes);
     });
-    await expect(syncTerrainShard({ store, ...input, repack, concurrency: 2 })).rejects.toThrow('first packing failure');
+    await expect(syncTerrainShard({ store, ...input, repack, concurrency: 2 })).rejects.toMatchObject({
+      message: `Terrain ${input.inventory.tiles[0].id}: repack source failed: first packing failure`, cause
+    });
     expect(siblingAborted).toBe(true);
     expect(repack).toHaveBeenCalledTimes(2);
     expect(objects.size).toBe(0);
   });
 
   it('does not publish a receipt when an upload fails', async () => {
-    const { store, objects } = memoryStorage(), input = fixture(1);
-    store.put = async () => { throw new Error('upload failed'); };
-    await expect(syncTerrainShard({ store, ...input })).rejects.toThrow('upload failed');
+    const { store, objects } = memoryStorage(), input = fixture(1), cause = new Error('upload failed');
+    store.put = async () => { throw cause; };
+    await expect(syncTerrainShard({ store, ...input })).rejects.toMatchObject({
+      message: `Terrain ${input.inventory.tiles[0].id}: write terrain asset failed: upload failed`, cause
+    });
     expect(objects.size).toBe(0);
   });
 

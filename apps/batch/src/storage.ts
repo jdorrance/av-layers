@@ -1,5 +1,33 @@
-import { Readable } from 'node:stream';
+import { addAbortSignal, Readable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+
+const R2_BODY_TIMEOUT_MS = 30_000;
+
+/** SDK retries stop at response headers; a fresh GET must replace an interrupted body. */
+function retryableBodyError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'TimeoutError'
+    || ['ECONNRESET', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE'].includes((error as NodeJS.ErrnoException).code ?? ''));
+}
+
+async function readBody(body: Readable, maximum: number, key: string, signal?: AbortSignal): Promise<Uint8Array> {
+  if (signal) addAbortSignal(signal, body);
+  const timer = setTimeout(() => body.destroy(Object.assign(new Error('R2 response body timed out'), { name: 'TimeoutError' })), R2_BODY_TIMEOUT_MS);
+  const chunks: Uint8Array[] = []; let length = 0;
+  try {
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      signal?.throwIfAborted();
+      length += chunk.byteLength;
+      if (length > maximum) throw new Error(`Object exceeds read byte budget: ${key}`);
+      chunks.push(chunk);
+    }
+    signal?.throwIfAborted();
+    return Buffer.concat(chunks, length);
+  } catch (error) {
+    body.destroy();
+    throw error;
+  } finally { clearTimeout(timer); }
+}
 
 export interface ObjectStorage {
   get(key: string, range?: { offset: number; length: number }, maxBytes?: number, signal?: AbortSignal): Promise<{ bytes: Uint8Array; etag: string } | null>;
@@ -32,32 +60,35 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
       signal?.throwIfAborted();
       if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid read budget');
       try {
-        const result = await client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, Range: range ? `bytes=${range.offset}-${range.offset + range.length - 1}` : undefined }), { abortSignal: signal });
-        if (!result.Body || !result.ETag) throw new Error(`Incomplete response for ${key}`);
-        const maximum = Math.min(range?.length ?? maxBytes, maxBytes);
-        if (result.ContentLength === undefined || result.ContentLength > maximum) {
-          if (result.Body instanceof Readable) result.Body.destroy();
-          throw new Error(`Object exceeds read byte budget: ${key}`);
-        }
-        const chunks: Uint8Array[] = []; let length = 0;
-        try {
-          for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
-            signal?.throwIfAborted();
-            length += chunk.byteLength;
-            if (length > maximum) throw new Error(`Object exceeds read byte budget: ${key}`);
-            chunks.push(chunk);
+        for (let attempt = 0; ; attempt++) {
+          signal?.throwIfAborted();
+          const result = await client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, Range: range ? `bytes=${range.offset}-${range.offset + range.length - 1}` : undefined }), { abortSignal: signal });
+          if (!(result.Body instanceof Readable) || !result.ETag) {
+            if (result.Body instanceof Readable) result.Body.destroy();
+            throw new Error(`Incomplete response for ${key}`);
           }
-        } catch (error) {
-          if (result.Body instanceof Readable) result.Body.destroy();
-          throw error;
+          const maximum = Math.min(range?.length ?? maxBytes, maxBytes);
+          if (result.ContentLength === undefined || result.ContentLength > maximum) {
+            result.Body.destroy();
+            throw new Error(`Object exceeds read byte budget: ${key}`);
+          }
+          let bytes: Uint8Array;
+          try { bytes = await readBody(result.Body, maximum, key, signal); }
+          catch (error) {
+            signal?.throwIfAborted();
+            if (attempt >= 2 || !retryableBodyError(error)) throw error;
+            await delay(250 * (attempt + 1), undefined, { signal });
+            continue;
+          }
+          if (bytes.length !== result.ContentLength) throw new Error(`Incorrect object response length for ${key}`);
+          if (range && bytes.length !== range.length) throw new Error(`Incorrect range length for ${key}`);
+          return { bytes, etag: result.ETag };
         }
-        const bytes = Buffer.concat(chunks, length);
-        if (bytes.length !== result.ContentLength) throw new Error(`Incorrect object response length for ${key}`);
-        if (range && bytes.length !== range.length) throw new Error(`Incorrect range length for ${key}`);
-        return { bytes, etag: result.ETag };
       } catch (error) {
-        if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
-        throw error;
+        signal?.throwIfAborted();
+        if ((error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode === 404) return null;
+        const code = (error as NodeJS.ErrnoException)?.code;
+        throw new Error(`R2 GET ${key}${range ? ` (bytes ${range.offset}–${range.offset + range.length - 1})` : ''}: ${error instanceof Error ? error.message : String(error)}${code ? ` [${code}]` : ''}`, { cause: error });
       }
     },
     async head(key, signal) {

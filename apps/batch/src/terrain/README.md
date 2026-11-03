@@ -15,6 +15,12 @@ Verified receipts let interrupted imports resume without repeating completed
 downloads and packing. The `terrain-release-RUN_ID` artifact contains the
 catalog reference and a bounded preparation proof.
 
+Tile failures name the tile and the operation that failed. Rerun failed jobs to
+reuse verified receipts; cancellation stops remaining work without publishing an
+incomplete catalog. Interrupted R2 response bodies get at most three read attempts,
+each with a 30-second body deadline. Partial bytes are discarded; byte-budget and
+integrity failures stop the operation.
+
 Equivalent commands:
 
 ```sh

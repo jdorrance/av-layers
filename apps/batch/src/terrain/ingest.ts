@@ -52,22 +52,33 @@ export async function syncTerrainShard(options: ImportOptions): Promise<{ import
   const importId = terrainImportId(inventory), tiles = inventory.tiles.filter((_, index) => index % shardCount === shardIndex);
   let completed = 0, reused = 0;
   await bounded(tiles, concurrency, signal, async (tile, _index, signal) => {
-    signal?.throwIfAborted();
-    const key = receiptKey(importId, tile), existing = await readReceipt(store, key, inventory, tile, signal);
-    if (existing && await proveAsset(store, existing, signal)) { reused++; options.onProgress?.({ completed, reused, total: tiles.length }); return; }
-    const source = await fetchSourceTile(tile, { fetch: options.fetch, signal }), sourceSha256 = sha256(source);
-    if (existing && sourceSha256 !== existing.tile.sourceSha256) throw new Error(`Terrain source changed during resumed import: ${tile.id}`);
-    const packed = await repack(source, signal);
-    signal?.throwIfAborted();
-    if (!packed.bytes.byteLength || packed.bytes.byteLength > ASSET_MAX_BYTES) throw new Error('Packed terrain exceeds asset byte budget');
-    const hash = sha256(packed.bytes), asset = { key: `terrain/assets/${hash}.tif`, sha256: hash, bytes: packed.bytes.byteLength };
-    const result = terrainTileSchema.parse({ ...tile, asset, sourceSha256, ...packingResultSchema.parse({ geometry: packed.geometry, nodata: packed.nodata }) });
-    const receipt = receiptSchema.parse({ version: 1, inventorySha256: inventory.sha256, recipeSha256: RECIPE_SHA256,
-      tile: result, assetEtag: `"${createHash('md5').update(packed.bytes).digest('hex')}"` });
-    if (existing && !Buffer.from(encodeJson(existing)).equals(encodeJson(receipt))) throw new Error(`Terrain repacking differs from the retained receipt: ${tile.id}`);
-    await putImmutable(store, asset.key, packed.bytes, 'image/tiff', signal);
-    await putImmutable(store, key, encodeJson(receipt, RECEIPT_MAX_BYTES), 'application/json', signal);
-    completed++;
+    let operation = 'read import receipt';
+    try {
+      signal.throwIfAborted();
+      const key = receiptKey(importId, tile), existing = await readReceipt(store, key, inventory, tile, signal);
+      operation = 'verify retained asset';
+      if (existing && await proveAsset(store, existing, signal)) {
+        reused++;
+      } else {
+        operation = 'download source';
+        const source = await fetchSourceTile(tile, { fetch: options.fetch, signal }), sourceSha256 = sha256(source);
+        if (existing && sourceSha256 !== existing.tile.sourceSha256) throw new Error(`Terrain source changed during resumed import: ${tile.id}`);
+        operation = 'repack source';
+        const packed = await repack(source, signal);
+        signal.throwIfAborted();
+        if (!packed.bytes.byteLength || packed.bytes.byteLength > ASSET_MAX_BYTES) throw new Error('Packed terrain exceeds asset byte budget');
+        const hash = sha256(packed.bytes), asset = { key: `terrain/assets/${hash}.tif`, sha256: hash, bytes: packed.bytes.byteLength };
+        const result = terrainTileSchema.parse({ ...tile, asset, sourceSha256, ...packingResultSchema.parse({ geometry: packed.geometry, nodata: packed.nodata }) });
+        const receipt = receiptSchema.parse({ version: 1, inventorySha256: inventory.sha256, recipeSha256: RECIPE_SHA256,
+          tile: result, assetEtag: `"${createHash('md5').update(packed.bytes).digest('hex')}"` });
+        if (existing && !Buffer.from(encodeJson(existing)).equals(encodeJson(receipt))) throw new Error(`Terrain repacking differs from the retained receipt: ${tile.id}`);
+        operation = 'write terrain asset';
+        await putImmutable(store, asset.key, packed.bytes, 'image/tiff', signal);
+        operation = 'write import receipt';
+        await putImmutable(store, key, encodeJson(receipt, RECEIPT_MAX_BYTES), 'application/json', signal);
+        completed++;
+      }
+    } catch (error) { throwTileFailure(tile, operation, error, signal); }
     options.onProgress?.({ completed, reused, total: tiles.length });
   });
   return { importId, completed, reused, total: tiles.length };
@@ -84,10 +95,15 @@ export async function finalizeTerrainCatalog({ store, inventory: input, concurre
   if (!Buffer.from(encodeJson(original)).equals(encodeJson(inventory))) throw new Error('Terrain catalog must include the complete source inventory');
   const tiles = new Array<TerrainTile>(inventory.tiles.length);
   await bounded(inventory.tiles, concurrency, signal, async (source, index, signal) => {
-    signal?.throwIfAborted();
-    const receipt = await readReceipt(store, receiptKey(importId, source), inventory, source, signal);
-    if (!receipt || !await proveAsset(store, receipt, signal)) throw new Error(`Terrain import is incomplete: ${source.id}`);
-    tiles[index] = receipt.tile;
+    let operation = 'read catalog receipt';
+    try {
+      signal.throwIfAborted();
+      const receipt = await readReceipt(store, receiptKey(importId, source), inventory, source, signal);
+      if (!receipt) throw new Error(`Terrain import is incomplete: ${source.id}`);
+      operation = 'verify catalog asset';
+      if (!await proveAsset(store, receipt, signal)) throw new Error(`Terrain import is incomplete: ${source.id}`);
+      tiles[index] = receipt.tile;
+    } catch (error) { throwTileFailure(source, operation, error, signal); }
   });
   const identity = { source: TERRAIN_SOURCE, inventorySha256: inventory.sha256, tiles };
   const catalog = terrainCatalogSchema.parse({ version: 1, ...identity, dataId: dataIdentity(identity), packing: TERRAIN_PACKING });
@@ -98,6 +114,11 @@ export async function finalizeTerrainCatalog({ store, inventory: input, concurre
 
 function receiptKey(importId: string, tile: TerrainTileSource): string {
   return `terrain/imports/${importId}/${tile.id}.json`;
+}
+
+function throwTileFailure(tile: TerrainTileSource, operation: string, error: unknown, signal: AbortSignal): never {
+  signal.throwIfAborted();
+  throw new Error(`Terrain ${tile.id}: ${operation} failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 }
 
 async function readReceipt(store: TerrainStorage, key: string, inventory: TerrainInventory, source: TerrainTileSource, signal?: AbortSignal): Promise<Receipt | null> {
