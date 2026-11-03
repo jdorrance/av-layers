@@ -1,12 +1,15 @@
 # Map preview
 
-A standalone MapLibre map for viewing forecast layers and sampling a point over
-time. It uses the same API as the Windy plugin.
+Standalone MapLibre GL viewer for forecast tiles and point time series.
 
-Use `pnpm dev` from the repository root to start the API and map with generated
-test data. See [setup](../../README.md) for the first install.
+Start both the local API and preview map with generated test data from the
+repository root:
 
-To run this app against an existing API, or test and build it separately:
+```sh
+pnpm dev
+```
+
+To run, test, or build `@av/preview` against an existing API:
 
 ```sh
 AV_API_BASE=http://127.0.0.1:8787 pnpm --filter @av/preview dev
@@ -14,26 +17,16 @@ pnpm test apps/preview
 pnpm --filter @av/preview build
 ```
 
-For the separate app command, the API must already have forecast data. Open the
-URL Vite prints, choose a layer and time, then click the map and select
-**Sample clicked point**.
+`AV_API_BASE` defaults to `http://localhost:8787`. Set
+`VITE_OFFLINE_FIXTURE=true` when serving the synthetic fixture (`pnpm dev`).
+Reload the page to pick up a newly published build (subject to the API's
+15-second [pointer cache](../../docs/serving-budgets.md)).
 
-The map loads the latest forecast when opened or when a model is selected.
-Reload the browser page to see a new publication. Forecast data comes from the
-API, so publishing it does not require a Pages deployment. The API's
-[latest-pointer cache](../../docs/serving-budgets.md) can delay discovery by up to
-15 seconds.
+## Source layout
 
-`AV_API_BASE` defaults to `http://localhost:8787` and is also used when building.
-Set `VITE_OFFLINE_FIXTURE=true` when using generated test data; this shows a test
-label and removes external basemap requests. See [local development](../../docs/development.md).
+- [src/main.ts](src/main.ts): MapLibre initialization, model/layer/frame controls, and point sampling.
+- [index.html](index.html): application shell.
+- [package.json](package.json): Vite scripts.
 
-Useful files:
-
-- [src/main.ts](src/main.ts): map and panel behavior.
-- [index.html](index.html): page layout.
-- [package.json](package.json): Vite commands.
-
-Shared API requests and display helpers live in
-[contracts](../../packages/contracts/README.md). See [the data guide](../../docs/data.md)
-for units, coverage, and forecast times.
+Shared client helpers live in [`@av/contracts/client`](../../packages/contracts/README.md).
+See [the data guide](../../docs/data.md) for units and coverage.

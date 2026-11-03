@@ -1,70 +1,53 @@
 # Forecast builder
 
-Downloads GFS or ICON-EU weather data and writes map tiles, point forecasts,
-and a manifest describing the build.
+Downloads GFS or ICON-EU weather data and builds map tiles, point sample packs,
+and a build manifest.
 
-After the [root setup](../../README.md), run from the repository root:
+Run from the repository root after [setup](../../README.md):
 
 ```sh
 pnpm forecast --model gfs --out output --cache-dir .cache/gfs
 ```
 
-This downloads a recent forecast, reuses cached files, and prints the completed
-manifest path under `output/builds/gfs/`. Use `--model icon-eu` for regional
-ICON-EU lift, and `--cycle` with a UTC initialization time to select a particular
-run. See [development](../../docs/development.md#build-a-real-forecast) to open
-the result locally.
+Writes the completed build under `output/builds/gfs/` and prints the manifest
+path. Pass `--model icon-eu` for regional ICON-EU lift and `--cycle` to select a
+specific UTC run. See [development](../../docs/development.md#build-a-real-forecast)
+to preview the build locally.
 
-To estimate resource use or check source downloads before a full build:
+Estimate build resources or verify a single upstream frame before running a full
+build:
 
 ```sh
 pnpm capacity --model icon-eu
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
 ```
 
-`capacity` prints resource estimates without downloading weather data.
-`input:proof` downloads and checks one input frame, then prints a JSON report.
-The [CLI reference](../../docs/reference.md#batch-cli) lists all options and the
-local validation command. [Operations](../../docs/operations.md) covers
-publication, rollback, and cleanup.
-
-Run `pnpm test apps/batch` for the batch tests. `pnpm build` bundles the apps;
-use `pnpm forecast` to generate forecast data.
+See the [CLI reference](../../docs/reference.md#batch-cli) for all options and
+[operations](../../docs/operations.md) for publication, rollback, and cleanup.
+Run batch tests with `pnpm test apps/batch`.
 
 ## Source layout
 
-- [src/cli.ts](src/cli.ts): command entry point.
-- [src/commands.ts](src/commands.ts): command names and options.
-- [src/build.ts](src/build.ts): the forecast build steps.
-- [src/frame-build.ts](src/frame-build.ts): the shared acquisition, calculation,
-  packing and rendering path for a group of hours.
-- [src/parallel.ts](src/parallel.ts): frozen plans, independent workers and complete
-  build assembly; the hosted workflow runs the workers on separate runners.
-- [src/provider.ts](src/provider.ts): shared provider and acquisition-session types.
-- [src/providers.ts](src/providers.ts): model-to-provider registration.
-- [src/gfs](src/gfs/README.md): GFS provider, downloads, decoding, and tests.
-- [src/icon](src/icon/README.md): ICON-EU provider, downloads, geometry, decoding,
-  and tests.
-- [src/render.ts](src/render.ts): map tile generation.
-- [src/terrain](src/terrain/README.md): global native DEM ingestion, bounded reads
-  and reusable prepared inputs.
-- [src/refinement](src/refinement/README.md): polygon configuration and bounded
-  calculation-grid planning.
-- [pmtiles.json](pmtiles.json): PMTiles tool version and download checksums.
-
-The adapters return [normalized arrays](../../packages/forecast/src/inputs.ts)
-for the [forecast calculations](../../packages/forecast/README.md).
-[Science](../../docs/science.md) explains the calculations and source handling;
-[extensions](../../docs/extensions.md#add-a-weather-model) covers adding a source.
+- [src/cli.ts](src/cli.ts) & [src/commands.ts](src/commands.ts): CLI entry point and flag definitions.
+- [src/build.ts](src/build.ts): sequential build orchestration and manifest assembly.
+- [src/frame-build.ts](src/frame-build.ts): frame acquisition, derivation, packing, and tile rendering.
+- [src/parallel.ts](src/parallel.ts): build-plan creation, shard execution, and shard assembly.
+- [src/provider.ts](src/provider.ts) & [src/providers.ts](src/providers.ts): provider interface and model registry lookup.
+- [src/gfs](src/gfs/README.md): NOAA GFS adapter.
+- [src/icon](src/icon/README.md): DWD ICON-EU adapter.
+- [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
+- [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
+- [src/refinement](src/refinement/README.md): polygon configuration and 1 km grid planning.
+- [pmtiles.json](pmtiles.json): pinned `pmtiles` binary version and SHA-256 digests.
 
 ## Parallel builds
 
-The hosted [forecast workflow](../../.github/workflows/forecast.yml) accepts
-`all`, `gfs`, or `icon-eu`. It selects models from the product registry and runs
-them concurrently as GitHub runners and account limits allow. Each uses the same
-[model workflow](../../.github/workflows/forecast-model.yml), with its own cycle,
-daylight-filtered hours, and up to four parallel hour batches. Job names list
-the included hours; the planning summary includes their UTC valid times.
+The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
+`gfs`, or `icon-eu` and calls the reusable
+[model workflow](../../.github/workflows/forecast-model.yml) per model. Each
+model resolves its cycle and daylight-filtered hours, runs up to four parallel
+`forecast-shard` workers, and merges and validates the shards before publishing
+to R2.
 
 ```mermaid
 flowchart TB
@@ -80,14 +63,7 @@ flowchart TB
   api --> pages["Pages reads each published manifest and hour list"]
 ```
 
-Hours run sequentially within a batch. Each worker opens and closes its own
-provider session, including any earlier source fields needed for interval
-calculations. Finalization rejects missing, extra, or mismatched batches. One
-model's failure does not cancel the other model's work.
-
-A model holds its environment/model lock through planning, computation,
-publication, and cleanup. A manual single-model run, an `all` run, and maintenance
-cannot publish that same model simultaneously. Artifacts are named by model and
-plan, so batches from different models or attempts cannot be mixed. The
-[capacity checks](src/capacity.ts) and [parallel planner](src/parallel.ts) bound
-the work; [operations](../../docs/operations.md) covers publication and recovery.
+Concurrency locks are scoped per environment and model (`forecast-<env>-<model>`),
+and artifacts are namespaced by model, run ID, and run attempt. See
+[capacity.ts](src/capacity.ts) and [parallel.ts](src/parallel.ts) for resource
+limits.

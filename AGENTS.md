@@ -30,3 +30,24 @@ tests, commands, comments, config, and UI.
   leaves them unreached. A comment records an obligation the code cannot state.
 - Preserve public contracts and forecast behavior during structural edits.
   Validate with the [root checks](README.md#development-checks).
+
+## Documentation
+
+Write terse, plain prose for an experienced engineer. Every sentence must earn
+its space.
+
+- **Be terse.** Open with one sentence on what the module does and a short
+  command or code example. Cut throat-clearing, restatements, and filler.
+- **State what code does positively; ban "X, not Y" contrasts.** Write "Grid
+  geometry comes from `planRefinement`"—never "from the shared planner, not
+  from model-specific configuration." State a negative only when callers would
+  reasonably expect a side effect.
+- **Cut defensive disclaimers.** Do not append "Planning does not allocate
+  fields," "Support is not coverage," or "Estimates are not evidence." Name
+  functions and types clearly instead of disclaiming what they do not do.
+- **Leave schemas and standard specs in code.** Do not explain how GeoJSON,
+  HTTP, or GRIB work, and do not recite validator bounds (`max(16)`, `max(256)`,
+  regexes) in prose. Link to the schema or config file.
+- **Use concrete names over invented jargon.** Use the actual symbol, file, or
+  unit (`1 km Lambert grid`, `halo cells`, `land mask`) instead of abstract
+  labels (`admitted coverage identity`, `computational support`, `ownership`).

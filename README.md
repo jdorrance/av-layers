@@ -4,10 +4,9 @@ Maps and point forecasts for usable lift above sea level, usable lift above mode
 terrain, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
-This project is in alpha. The builder supports NOAA GFS and regional DWD ICON-EU.
-The forecast workflow supports either model or both in parallel; scheduled runs
-select both. See [status](docs/status.md) for completed deployment validation.
-Forecasts use model resolution; zooming in does not add local weather or terrain detail.
+The builder supports NOAA GFS and regional DWD ICON-EU. The forecast workflow
+runs either model or both in parallel; scheduled runs build both. See
+[status](docs/status.md) for deployment validation.
 
 ## Quick start
 
@@ -19,23 +18,22 @@ pnpm tools:pmtiles
 pnpm dev
 ```
 
-This starts both the API and map with generated test data. Open the URL printed
-by the development server. The test map needs no NOAA downloads or Cloudflare
-account. For a real forecast, follow [the forecast setup guide](docs/development.md#build-a-real-forecast).
+This starts the local API and map with generated test data. Open the URL printed
+by the development server. To build a real forecast, follow
+[the forecast setup guide](docs/development.md#build-a-real-forecast).
 
 ## Development checks
 
-Use `pnpm test` while working, and `pnpm verify` before submitting a change.
-`pnpm build` bundles the apps without deploying them.
+Run `pnpm test` while working and `pnpm verify` before submitting a change.
+`pnpm build` bundles the apps locally.
 
-The project uses the Node version declared in `package.json`; pnpm installs it
-locally. [Local development](docs/development.md) covers the test data and
-server options.
+pnpm installs the Node version declared in `package.json`.
+[Local development](docs/development.md) covers test data and server options.
 
 ## Project layout
 
 - [apps/batch](apps/batch/README.md): adapts weather sources and builds forecast files.
-- [apps/api](apps/api/README.md): serves forecast details, tiles, and point results.
+- [apps/api](apps/api/README.md): serves forecast manifests, tiles, and point samples.
 - [apps/preview](apps/preview/README.md): standalone map.
 - [apps/windy-plugin](apps/windy-plugin/README.md): Windy integration.
 - [packages/contracts](packages/contracts/README.md): shared types and API helpers.
@@ -52,5 +50,5 @@ server options.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
 - [Project status](docs/status.md): release checks and remaining work.
 
-Source data and third-party license notices are listed in
+Source data and third-party license notices are in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

@@ -1,20 +1,20 @@
 # API
 
-A Cloudflare Worker that serves forecast details, map tiles, and point forecasts
-from completed builds in R2 storage.
+Cloudflare Worker serving forecast catalogs, manifests, WebP map tiles, and
+point samples from R2.
 
-After [root setup](../../README.md#quick-start), start the API and map with
-generated test data:
+Start the local API and preview map with synthetic data after
+[root setup](../../README.md#quick-start):
 
 ```sh
 pnpm dev
 ```
 
-The API normally runs at `http://127.0.0.1:8787`. Open `/docs` to try requests or
-read `/openapi.json` for the generated schema. To serve a real forecast locally,
-follow [development](../../docs/development.md#build-a-real-forecast).
+The API listens on `http://127.0.0.1:8787` (`/docs` for Swagger UI,
+`/openapi.json` for the OpenAPI 3.1 spec). To serve a real forecast locally, see
+[development](../../docs/development.md#build-a-real-forecast).
 
-For work on the Worker alone, run these commands from the repository root:
+Worker-only commands:
 
 ```sh
 pnpm --filter @av/api dev
@@ -22,36 +22,31 @@ pnpm test apps/api
 pnpm --filter @av/api build
 ```
 
-The standalone development server starts with empty local storage. `test` uses
-local fixtures, and `build` bundles the Worker without deploying it.
+## Request flow
 
-## Request a forecast
+1. `GET /v1/catalog`: list registered models and their availability.
+2. `GET /v1/models/:model/latest?expand=manifest`: fetch the current `buildId`,
+   manifest, and tile URL templates.
+3. Pin `buildId` for subsequent `GET /tiles/:model/:buildId/:layer/:frame/:z/:x/:y.webp`
+   and `GET /v1/models/:model/runs/:buildId/sample` requests.
 
-Start with `/v1/catalog` to find available models, then request
-`/v1/models/MODEL/latest?expand=manifest`. The response includes the build's
-layers, times, and tile URL templates. Use its build ID for subsequent tile and
-sample requests so a map displays one forecast run consistently. The
-[API reference](../../docs/reference/openapi.json) describes the endpoints and
-query options; [the data guide](../../docs/data.md) explains values and missing data.
+See the [OpenAPI spec](../../docs/reference/openapi.json) for parameters and
+[the data guide](../../docs/data.md) for units and status flags.
 
-For version-4 builds, point sampling chooses a numeric grid independently for
-each requested layer. A matching patch must contain the point in both its
-polygon and output mask. Requests outside a patch use the base grid; requests
-inside it retain the patch's no-lift or unavailable result. Missing advertised
-patch assets return a publication error. The response's optional `patchId`
-identifies the applicable descriptors. Both grids share the build's frame axis.
-
-Map tiles are already composited by the producer, so tile URLs and model
-selection do not change when a build contains patches.
+Version-4 point requests select a grid per layer using patch polygons and output
+masks. Selected no-lift or unavailable results remain in effect. `patchId` names
+the applicable descriptors; missing patch assets return a publication error.
+Composited map tiles use the existing URLs and model selector.
 
 ## Source layout
 
-- [src/index.ts](src/index.ts): routes and Worker entry point.
-- [src/publication.ts](src/publication.ts): checks forecast files before serving them.
-- [src/pmtiles.ts](src/pmtiles.ts): reads map tiles from archives.
-- [src/sample.ts](src/sample.ts): reads and interpolates point forecasts.
-- [src/resources.ts](src/resources.ts): request, memory, and storage-read limits.
-- [wrangler.json](wrangler.json): local and deployed Worker settings.
+- [src/index.ts](src/index.ts): Hono OpenAPI routes and Worker entry point.
+- [src/publication.ts](src/publication.ts): pointer, manifest, and provenance verification.
+- [src/coverage.ts](src/coverage.ts): coverage descriptor and bitset cache.
+- [src/pmtiles.ts](src/pmtiles.ts): PMTiles directory cache and R2 range reader.
+- [src/sample.ts](src/sample.ts): block-packed point sample reader and bilinear sampler.
+- [src/resources.ts](src/resources.ts): concurrency, memory pool, and cache limits.
+- [wrangler.json](wrangler.json): Worker bindings and environment settings.
 
-See [operations](../../docs/operations.md) for deployment and
-[serving budgets](../../docs/serving-budgets.md) for API limits.
+See [operations](../../docs/operations.md) and
+[serving budgets](../../docs/serving-budgets.md).
