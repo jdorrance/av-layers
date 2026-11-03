@@ -1,15 +1,16 @@
 # Reading the forecast
 
 Each build describes a model run, forecast times and coverage. Samples and tiles
-share the same fields and sampling rules. Zooming does not add observations or
-resolve local terrain.
+share the same fields and sampling rules. Zooming does not add observations;
+local detail comes from the grid and method recorded in the build.
 
 ## Layers and missing values
 
 - `usable-lift-msl` estimates the usable thermal top in metres above model mean
   sea level.
-- `usable-lift-agl` expresses that same top in metres above model ground. It
-  subtracts the terrain used by the solver, without a high-resolution DEM correction.
+- `usable-lift-agl` expresses usable depth above ground. Its descriptor names
+  the reference: `model-AGL` uses model terrain; `terrain-AGL` uses prepared DEM
+  terrain in a refinement patch.
 - `precip-rate` is the mean precipitation rate over the frame's advertised
   interval, in millimetres per hour.
 
@@ -51,12 +52,31 @@ in the [coverage source notes](../packages/contracts/coverage/source.json).
 
 The build manifest records grid spacing and display limits. GFS uses its native
 quarter-degree sampling and native tile zoom 7. ICON-EU uses DWD's published
-0.0625° regular grid and native tile zoom 8. This is a remapped model product;
-neither model receives 1 km terrain processing here. Higher display zoom does
-not imply finer forecasts. Version-3 manifests bind the exact grid, Earth radius, bounds,
+0.0625° regular grid and native tile zoom 8. This is a remapped model product.
+Higher display zoom does not imply finer forecasts. Version-3 manifests bind the exact grid, Earth radius, bounds,
 coverage policy and three coverage bitsets through a content hash. Retained builds
 keep their own descriptors rather than depending on the current registry.
-Current model availability and release work are listed in [status](status.md).
+
+Version-4 manifests add internal refinement patches to the same model. Each
+patch has its own grid, output mask, supported layers and method descriptors;
+it inherits the build's times. Polygon and output-mask membership select a
+patch before reading values. A no-lift or unavailable fine value does not reveal
+the coarse value underneath. Halos supply interpolation support without
+enlarging ownership. Missing advertised patch assets are publication errors.
+
+```mermaid
+flowchart LR
+  B[Model build and timeline] --> N[Base grid]
+  B --> P[Polygon patches]
+  N --> S[Choose grid by layer and coverage]
+  P --> S
+  S --> M[Composited map tiles]
+  S --> Q[Point values with patchId]
+```
+
+An optional `patchId` on a point value identifies its grid, method and ground
+reference. A request can combine base MSL or precipitation with refined AGL.
+Terrain detail does not by itself establish finer atmospheric prediction.
 
 ## Time and retention
 

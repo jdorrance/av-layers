@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { coverageDescriptorSchema, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastObjects, getProduct, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, getProduct, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import type { ObjectStorage } from './storage.js';
 import { assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
@@ -84,15 +84,18 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
     return { ...file, size };
   }));
-  const coverageBytes = await readLocalFile(localPath(root, manifest.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
-  if (sha256(coverageBytes) !== manifest.coverage.hash || manifest.coverage.maskKey !== `${coveragePrefix(manifest.coverage.hash)}/manifest.json`) throw new Error('Coverage descriptor hash mismatch');
-  const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
-  for (const name of ['output', 'halo', 'tiles'] as const) {
-    const objectKey = `${coveragePrefix(manifest.coverage.hash)}/${name}.bin`, bytes = await readLocalFile(localPath(root, objectKey), MAX_COVERAGE_BITSET_BYTES, descriptor.files[name].bytes);
-    if (bytes.byteLength !== descriptor.files[name].bytes || sha256(bytes) !== descriptor.files[name].sha256) throw new Error(`Coverage ${name} hash mismatch`);
-    check(); await putImmutable(store, objectKey, bytes, 'application/octet-stream', options.signal);
+  for (const grid of forecastGrids(manifest)) {
+    const coverageBytes = await readLocalFile(localPath(root, grid.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
+    if (sha256(coverageBytes) !== grid.coverage.hash) throw new Error('Coverage descriptor hash mismatch');
+    const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
+    assertCoverageBinding(descriptor, grid);
+    for (const name of ['output', 'halo', 'tiles'] as const) {
+      const objectKey = `${coveragePrefix(grid.coverage.hash)}/${name}.bin`, bytes = await readLocalFile(localPath(root, objectKey), MAX_COVERAGE_BITSET_BYTES, descriptor.files[name].bytes);
+      if (bytes.byteLength !== descriptor.files[name].bytes || sha256(bytes) !== descriptor.files[name].sha256) throw new Error(`Coverage ${name} hash mismatch`);
+      check(); await putImmutable(store, objectKey, bytes, 'application/octet-stream', options.signal);
+    }
+    check(); await putImmutable(store, grid.coverage.maskKey, coverageBytes, 'application/json', options.signal);
   }
-  check(); await putImmutable(store, manifest.coverage.maskKey, coverageBytes, 'application/json', options.signal);
   await uploadBounded(sized, MAX_UPLOAD_RESERVED_BYTES, async file => {
     check();
     const bytes = await readLocalFile(localPath(root, file.key), MAX_UPLOAD_ARTIFACT_BYTES, file.size);
@@ -143,19 +146,20 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   if (!receipt || sha256(receipt.bytes) !== provenance.sha256) throw new Error(`Rollback provenance missing or corrupt: ${provenance.key}`);
   parseProvenance(decode(receipt.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
   validateArtifactRecords(manifest);
-  const coverageKey = `${coveragePrefix(manifest.coverage.hash)}/manifest.json`;
-  if (manifest.coverage.maskKey !== coverageKey) throw new Error('Rollback coverage descriptor key mismatch');
-  const coverage = await store.get(coverageKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, options.signal);
-  check();
-  if (!coverage || sha256(coverage.bytes) !== manifest.coverage.hash) throw new Error('Rollback coverage descriptor missing or corrupt');
-  const descriptor = coverageDescriptorSchema.parse(decode(coverage.bytes));
-  if (descriptor.id !== manifest.coverage.id || descriptor.maxZoom !== manifest.coverage.maxZoom || JSON.stringify(descriptor.grid) !== JSON.stringify(manifest.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(manifest.descriptors.bounds)) throw new Error('Rollback coverage descriptor binding mismatch');
-  for (const name of ['output', 'halo', 'tiles'] as const) {
-    const file = descriptor.files[name], key = `${coveragePrefix(manifest.coverage.hash)}/${name}.bin`;
-    await verifyRemoteHash(store, key, file.sha256, file.bytes, file.bytes, options.signal);
+  const grids = forecastGrids(manifest);
+  for (const grid of grids) {
+    const coverage = await store.get(grid.coverage.maskKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, options.signal);
+    check();
+    if (!coverage || sha256(coverage.bytes) !== grid.coverage.hash) throw new Error('Rollback coverage descriptor missing or corrupt');
+    const descriptor = coverageDescriptorSchema.parse(decode(coverage.bytes));
+    assertCoverageBinding(descriptor, grid);
+    for (const name of ['output', 'halo', 'tiles'] as const) {
+      const file = descriptor.files[name], key = `${coveragePrefix(grid.coverage.hash)}/${name}.bin`;
+      await verifyRemoteHash(store, key, file.sha256, file.bytes, file.bytes, options.signal);
+    }
   }
   for (const { key, sha256: hash } of forecastObjects(manifest)) {
-    await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, key === manifest.samples.key ? manifest.samples.bytes : undefined, options.signal);
+    await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, grids.find(grid => key === grid.samples.key)?.samples.bytes, options.signal);
   }
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   check();

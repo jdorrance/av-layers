@@ -1,4 +1,4 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, LAYERS, MAX_GRID_CELLS, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { MAX_PREPARED_TERRAIN_BYTES, type PreparedTerrain } from './terrain/prepare.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
@@ -113,7 +113,10 @@ export function checkPerformance(manifest: Manifest) {
   const validCounts = Array.isArray(counts) && counts.length === manifest.coverage.maxZoom + 1 && counts.every(n => Number.isSafeInteger(n) && n >= 0);
   if (!validCounts) failures.push('missing or invalid tile counts');
   const tiles = validCounts ? counts.reduce((sum: number, count: number) => sum + count, 0) * manifest.artifacts.length : NaN;
-  const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes: manifest.samples.bytes, gridCells: manifest.grid.width * manifest.grid.height };
+  const grids = forecastGrids(manifest);
+  const observed = { elapsedMs, peakRssBytes, tiles,
+    samplePackBytes: grids.reduce((sum, grid) => sum + grid.samples.bytes, 0),
+    gridCells: grids.reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) };
   for (const key of Object.keys(BUILD_BUDGETS) as (keyof typeof BUILD_BUDGETS)[]) {
     if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);
   }

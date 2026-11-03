@@ -34,6 +34,16 @@ sample requests so a map displays one forecast run consistently. The
 [API reference](../../docs/reference/openapi.json) describes the endpoints and
 query options; [the data guide](../../docs/data.md) explains values and missing data.
 
+For version-4 builds, point sampling chooses a numeric grid independently for
+each requested layer. A matching patch must contain the point in both its
+polygon and output mask. Requests outside a patch use the base grid; requests
+inside it retain the patch's no-lift or unavailable result. Missing advertised
+patch assets return a publication error. The response's optional `patchId`
+identifies the applicable descriptors. Both grids share the build's frame axis.
+
+Map tiles are already composited by the producer, so tile URLs and model
+selection do not change when a build contains patches.
+
 ## Source layout
 
 - [src/index.ts](src/index.ts): routes and Worker entry point.

@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import type { CoverageMask, LayerId } from '@av/contracts';
 import type { GridField } from '@av/forecast';
-import type { RasterMetrics, RasterPixels } from './raster.js';
+import { validateRasterPatchFields, type RasterMetrics, type RasterPixels, type RasterPatch, type RasterPatchFields } from './raster.js';
 export type { RasterMetrics, RasterPixels } from './raster.js';
 
 export const MAX_RASTER_WORKERS = 3;
@@ -27,7 +27,7 @@ export function rasterWorkerCount(cpus = availableParallelism()): number {
   if (!Number.isSafeInteger(cpus) || cpus < 1) throw new RangeError('Invalid available CPU count');
   return cpus === 1 ? 0 : Math.min(MAX_RASTER_WORKERS, cpus);
 }
-export interface RasterWorkerData { mask: CoverageMask; fields: GridField[]; layers: LayerId[]; geometryCacheBytes: number }
+export interface RasterWorkerData { mask: CoverageMask; fields: GridField[]; layers: LayerId[]; geometryCacheBytes: number; patches: RasterPatch[]; patchFields: RasterPatchFields[] }
 export interface RasterJob { id: number; field: number; z: number; x: number; y: number }
 export interface RasterResult extends RasterPixels { id: number; metrics: RasterMetrics }
 
@@ -36,9 +36,10 @@ function sharedBytes(bytes: Uint8Array): Uint8Array<SharedArrayBuffer> {
 }
 
 /** One frame, immutable shared inputs, bounded admission and tile-to-worker affinity. */
-export async function createRasterPool(mask: CoverageMask, targets: readonly { field: GridField; layer: LayerId }[], options: {
+export async function createRasterPool(mask: CoverageMask, targets: readonly { field: GridField; layer: LayerId; patches?: RasterPatchFields }[], options: {
   workers: number; geometryCacheBytes: number; maxPending: number; signal?: AbortSignal;
   onMetrics?: (worker: number, metrics: RasterMetrics) => void;
+  patches?: readonly RasterPatch[];
 }) {
   const { workers: count, maxPending, geometryCacheBytes, signal } = options;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_RASTER_WORKERS || !Number.isSafeInteger(maxPending) || maxPending < 1 || maxPending > 32
@@ -46,10 +47,17 @@ export async function createRasterPool(mask: CoverageMask, targets: readonly { f
   signal?.throwIfAborted();
   const cells = mask.grid.width * mask.grid.height;
   for (const { field } of targets) if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array) || field.values.length !== cells || field.flags.length !== cells) throw new RangeError('Raster field does not match its grid');
-  const sharedInputBytes = targets.reduce((sum, { field }) => sum + field.values.byteLength + field.flags.byteLength, 0) + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength;
+  const patches = options.patches ?? [];
+  for (const target of targets) validateRasterPatchFields(patches, target.layer, target.patches);
+  const maskBytes = (mask: CoverageMask) => mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength;
+  const fieldBytes = (field: GridField) => field.values.byteLength + field.flags.byteLength;
+  const sharedInputBytes = targets.reduce((sum, target) => sum + fieldBytes(target.field) + Object.values(target.patches ?? {}).reduce((bytes, field) => bytes + fieldBytes(field), 0), 0) + maskBytes(mask) + patches.reduce((sum, patch) => sum + maskBytes(patch.mask), 0);
   if (!Number.isSafeInteger(sharedInputBytes) || sharedInputBytes > MAX_RASTER_SHARED_INPUT_BYTES) throw new RangeError('Raster shared input byte budget exceeded');
-  const fields = targets.map(({ field }) => ({ values: new Float32Array(sharedBytes(new Uint8Array(field.values.buffer, field.values.byteOffset, field.values.byteLength)).buffer), flags: sharedBytes(field.flags) }));
-  const sharedMask = { ...mask, output: sharedBytes(mask.output), halo: sharedBytes(mask.halo), tiles: sharedBytes(mask.tiles) };
+  const shareField = (field: GridField) => ({ values: new Float32Array(sharedBytes(new Uint8Array(field.values.buffer, field.values.byteOffset, field.values.byteLength)).buffer), flags: sharedBytes(field.flags) });
+  const shareMask = (mask: CoverageMask) => ({ ...mask, output: sharedBytes(mask.output), halo: sharedBytes(mask.halo), tiles: sharedBytes(mask.tiles) });
+  const fields = targets.map(({ field }) => shareField(field)), sharedMask = shareMask(mask);
+  const sharedPatches = patches.map(patch => ({ ...patch, mask: shareMask(patch.mask) }));
+  const patchFields = targets.map(target => Object.fromEntries(Object.entries(target.patches ?? {}).map(([id, field]) => [id, shareField(field)])));
   const workers: Worker[] = [], waiting = new Map<number, { resolve: (value: RasterPixels) => void; reject: (error: Error) => void }>();
   const initialization: ((error: Error) => void)[] = [];
   let nextId = 0, failed: Error | undefined, closing: Promise<void> | undefined;
@@ -71,7 +79,7 @@ export async function createRasterPool(mask: CoverageMask, targets: readonly { f
   try {
     await Promise.all(Array.from({ length: count }, (_, index) => new Promise<void>((resolve, reject) => {
       initialization.push(reject);
-      const data: RasterWorkerData = { mask: sharedMask, fields, layers: targets.map(target => target.layer), geometryCacheBytes: Math.floor(geometryCacheBytes / count) };
+      const data: RasterWorkerData = { mask: sharedMask, fields, layers: targets.map(target => target.layer), geometryCacheBytes: Math.floor(geometryCacheBytes / count), patches: sharedPatches, patchFields };
       const worker = new Worker('import("node:worker_threads").then(async ({workerData}) => { const {tsImport} = await import(workerData.loader); await tsImport(workerData.entry, workerData.entry); })', {
         eval: true, resourceLimits: { ...RASTER_WORKER_RESOURCE_LIMITS },
         workerData: { ...data, loader: pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href, entry: new URL('./raster-worker.ts', import.meta.url).href }

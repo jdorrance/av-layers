@@ -7,7 +7,9 @@ import { CELL_BYTES, RASTER_TILE_SIZE, MAX_TILE_BYTES, encodeBoundedJson, MAX_MA
 import { prepareSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
-import { describeCoverage, loadCoverage } from './coverage.js';
+import { describeCoverage, loadCoverage, readGridCoverage } from './coverage.js';
+import { forecastGrids, type ForecastGrid } from '@av/contracts';
+import { validateRefinementCoverage } from './refinement/coverage.js';
 import { readLocalFile } from './local-file.js';
 
 export const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
@@ -103,7 +105,7 @@ export async function validateArchive(path: string, mask: CoverageMask): Promise
 }
 
 /** Validate all packed blocks, including byte-exact equality of duplicated halo/wrap cells. */
-export async function validateSamplePack(path: string, manifest: Manifest, mask: CoverageMask): Promise<void> {
+export async function validateSamplePack(path: string, manifest: Pick<Manifest, 'frames'> & ForecastGrid, mask: CoverageMask): Promise<void> {
   const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo, manifest.samples.blockSize);
   const { samples } = manifest, channels = manifest.frames.length * manifest.layers.length, stride = channels * CELL_BYTES;
   if (samples.channelCount !== channels || samples.storedCells !== layout.storedCells || samples.bytes !== layout.storedCells * stride || samples.bytes > BUILD_BUDGETS.samplePackBytes) {
@@ -170,7 +172,14 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   const provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
   if (sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Invalid provenance hash ${provenance.key}`);
   parseProvenance(parseBoundedJson(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.samples.bytes, 0) > BUILD_BUDGETS.samplePackBytes) throw new Error('Aggregate sample packs exceed the build byte budget');
+  if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) > BUILD_BUDGETS.gridCells) throw new Error('Aggregate forecast grids exceed the cell budget');
   await validateSamplePack(localPath(root, manifest.samples.key), manifest, mask);
+  for (const patch of manifest.patches ?? []) {
+    const patchMask = await readGridCoverage(root, patch);
+    validateRefinementCoverage(mask, patchMask, patch);
+    await validateSamplePack(localPath(root, patch.samples.key), { ...patch, frames: manifest.frames }, patchMask);
+  }
   for (const artifact of manifest.artifacts) {
     if (await fileSha256(localPath(root, artifact.tilesKey)) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
     await validateArchive(localPath(root, artifact.tilesKey), mask);

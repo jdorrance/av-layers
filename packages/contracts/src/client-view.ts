@@ -86,7 +86,8 @@ export function formatSeriesSummary(
 ): string {
   const method = payload.method as { id?: unknown } | null;
   const coverage = payload.coverage as { id?: unknown } | null;
-  return `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)} · ${payload.frames.length} frames × ${layers.length} layers · method ${String(method?.id ?? 'unknown')} · coverage ${String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
+  const patches = [...new Set(payload.frames.flatMap(frame => layers.flatMap(layer => frame.layers[layer]?.patchId ? [frame.layers[layer].patchId!] : [])))];
+  return `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)} · ${payload.frames.length} frames × ${layers.length} layers · ${patches.length ? 'base method' : 'method'} ${String(method?.id ?? 'unknown')}${patches.length ? ` · refinement ${patches.join(', ')}` : ''} · coverage ${String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
 }
 
 /** Pure presentation models shared by the two independent host controllers. */
@@ -96,13 +97,18 @@ export function paletteLegend(palette: PaletteSummary): { title: string; rows: {
   return { title: `${palette.id} · ${palette.units}`, rows, note: paletteNoteText(palette) };
 }
 
-export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}): { headings: string[]; rows: string[][] } {
-  const label = (layer: string) => descriptors[layer] ? `${descriptors[layer].label} (${descriptors[layer].units})` : layer;
+export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}, patches: Manifest['patches'] = []): { headings: string[]; rows: string[][] } {
+  const descriptor = (layer: string, patchId?: string) => patchId ? patches.find(patch => patch.id === patchId)?.descriptors.layers[layer] : descriptors[layer];
+  const label = (layer: string) => {
+    const spec = descriptor(layer, payload.frames[0]?.layers[layer]?.patchId);
+    return spec ? `${spec.label} (${spec.units})` : layer;
+  };
   return {
     headings: ['Frame', 'Valid', ...layers.map(label), ...layers.map(layer => `${label(layer)} status/support`)],
     rows: payload.frames.map(frame => [frame.id, frame.validTime, ...layers.map(layer => formatSampleStatus(frame.layers[layer])), ...layers.map(layer => {
       const value = frame.layers[layer];
-      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}`;
+      const spec = descriptor(layer, value.patchId);
+      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}${value.patchId && spec ? ` / ${value.patchId} · ${spec.verticalReference} · ${spec.methodId}` : ''}`;
     })])
   };
 }

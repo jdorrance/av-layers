@@ -21,6 +21,7 @@ vi.mock('./validate.js', async importOriginal => {
 
 import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
 import { localPath, sha256 } from './validate.js';
+import { fixturePatch } from '../../../tests/forecast-fixture.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date }>();
@@ -77,7 +78,46 @@ async function fixture(): Promise<{ root: string; manifest: Manifest }> {
   return { root, manifest };
 }
 
+async function addPatch(root: string, manifest: Manifest) {
+  const patch = fixturePatch(manifest);
+  const hash = await writeCoverage(root, { grid: patch.grid, bounds: patch.descriptors.bounds,
+    output: Uint8Array.of(16, 0), halo: Uint8Array.of(239, 1), tiles: new Uint8Array(2731), maxZoom: 7 },
+  { coverageId: patch.coverage.id, coverageDescription: 'Synthetic refinement', bounds: patch.descriptors.bounds, supportHaloCells: 1 });
+  patch.coverage = { ...patch.coverage, hash, maskKey: `coverage/${hash}/manifest.json` };
+  const bytes = Buffer.alloc(patch.samples.bytes);
+  for (let offset = 4; offset < bytes.length; offset += 5) bytes[offset] = 1;
+  patch.samples.sha256 = sha256(bytes);
+  await mkdir(dirname(localPath(root, patch.samples.key)), { recursive: true });
+  await writeFile(localPath(root, patch.samples.key), bytes);
+  manifest.version = 4; manifest.patches = [patch];
+  return patch;
+}
+
 describe('immutable publication', () => {
+  it('publishes every patch before committing the one model pointer and verifies it during rollback', async () => {
+    const { root, manifest } = await fixture(), patch = await addPatch(root, manifest), store = new MemoryStore();
+    store.beforePut = key => {
+      if (key === 'catalog/gfs/latest.json') {
+        expect(store.objects.has(patch.samples.key)).toBe(true);
+        expect(store.objects.has(patch.coverage.maskKey)).toBe(true);
+      }
+    };
+    await publish(store, root, manifest, { authority, now: () => now });
+    await expect(rollback(store, 'gfs', id, authority, now)).resolves.toBeUndefined();
+    const pointer = store.objects.get('catalog/gfs/latest.json')!.bytes.slice();
+    store.objects.get(patch.samples.key)!.bytes[0] ^= 1;
+    await expect(rollback(store, 'gfs', id, authority, now)).rejects.toThrow('Rollback object corrupt');
+    expect(store.objects.get('catalog/gfs/latest.json')!.bytes).toEqual(pointer);
+  });
+
+  it.each(['samples', 'coverage'] as const)('keeps the pointer uncommitted after a patch %s upload failure', async kind => {
+    const { root, manifest } = await fixture(), patch = await addPatch(root, manifest), store = new MemoryStore();
+    store.failKey = kind === 'samples' ? patch.samples.key : patch.coverage.maskKey;
+    await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow('injected failure');
+    expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
+    expect(store.objects.has(`builds/gfs/${id}/manifest.json`)).toBe(false);
+  });
+
   it('stops existing-object verification between bounded ranges when cancelled', async () => {
     const store = new MemoryStore(), bytes = new Uint8Array(8 * 1024 * 1024), signal = new AbortController();
     await store.put('existing', bytes, { ifNoneMatch: '*' });

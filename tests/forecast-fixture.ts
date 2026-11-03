@@ -1,5 +1,5 @@
 import raw from '../scripts/fixtures/manifest.contract.json' with { type: 'json' };
-import { CELL_BYTES, computeFreshness, getProvenanceReference, latestSchema, manifestSchema, validateArtifactRecords, type Manifest } from '@av/contracts';
+import { CELL_BYTES, computeFreshness, getProvenanceReference, latestSchema, manifestSchema, refinementPatchSchema, validateArtifactRecords, type Manifest, type RefinementPatch } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 
 /** Start valid; tests corrupt individual fields only after constructing a fixture. */
@@ -32,4 +32,25 @@ export function fixtureLatest(overrides: Partial<Manifest> = {}, baseUrl = 'http
 export function fixtureBuild(overrides: Partial<Manifest> = {}, baseUrl = 'https://api.test'): PinnedBuild {
   const { manifest, templates } = fixtureLatest(overrides, baseUrl);
   return { manifest: manifest!, templates: templates! as PinnedBuild['templates'], expiresAtMs: Date.parse(manifest!.expiresAt) };
+}
+
+/** A synthetic terrain-AGL surface; callers supply stored coverage and sample bytes when needed. */
+export function fixturePatch(manifest: Manifest, overrides: Partial<RefinementPatch> = {}): RefinementPatch {
+  const baseLayer = manifest.descriptors.layers['usable-lift-agl'];
+  if (!baseLayer) throw new Error('Refinement fixture requires the AGL layer');
+  const method = { ...structuredClone(manifest.descriptors.methods[baseLayer.methodId]), id: 'fixture-terrain-clearance', outputs: ['usable-lift-agl'] };
+  const id = overrides.id ?? 'zone-001', hash = 'b'.repeat(64), bounds = [-0.008, -0.008, 0.008, 0.008];
+  return refinementPatchSchema.parse({
+    id,
+    grid: { kind: 'lambert-conformal', width: 3, height: 3, earthRadiusM: 6371229, centralMeridianDeg: 0, latitudeOfOriginDeg: 0, standardParallel1Deg: 1, standardParallel2Deg: 1, x0M: -1000, y0M: 1000, dxM: 1000, dyM: -1000, wrapLongitude: false },
+    coverage: { id: 'fixture-refinement', hash, maskKey: `coverage/${hash}/manifest.json`, maxZoom: manifest.coverage.maxZoom },
+    geometry: { type: 'Polygon', coordinates: [[[-0.008, -0.008], [0.008, -0.008], [0.008, 0.008], [-0.008, 0.008], [-0.008, -0.008]]] },
+    descriptors: { ...structuredClone(manifest.descriptors), bounds,
+      layers: { 'usable-lift-agl': { ...baseLayer, methodId: method.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' } },
+      methods: { [method.id]: method }, palettes: manifest.descriptors.palettes.filter(palette => palette.id === baseLayer.palette) },
+    layers: ['usable-lift-agl'], method: { id: method.id, hash },
+    samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 9, channelCount: manifest.frames.length, bytes: 9 * manifest.frames.length * CELL_BYTES, key: `builds/${manifest.model}/${manifest.buildId}/refinements/${id}/samples.bin`, sha256: hash },
+    terrain: { dataId: 'c'.repeat(64), key: `terrain/prepared/${hash}/manifest.json`, sha256: hash, verticalDatum: 'EGM2008', surface: 'DSM' },
+    ...overrides
+  });
 }

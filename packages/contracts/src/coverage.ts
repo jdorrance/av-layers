@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { geographicToGrid, gridSchema, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid } from './geometry.js';
+import { geographicToGrid, gridSchema, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid } from './geometry.js';
 import { MAX_NATIVE_ZOOM, SAMPLE_BLOCK_SIZE } from './format.js';
 
 export const MAX_COVERAGE_DESCRIPTOR_BYTES = 128 * 1024;
@@ -55,6 +55,17 @@ export function coverageIndices(mask: CoverageMask): { output: Uint32Array; acti
   }
   return { output: Uint32Array.from(out), active: Uint32Array.from(act) };
 }
+function coveredCoordinate(mask: CoverageMask, x: number, y: number): boolean {
+  const { grid } = mask;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || (!grid.wrapLongitude && (x < -0.5 || x > grid.width - 0.5)) || y < -0.5 || y > grid.height - 0.5) return false;
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const c0 = grid.wrapLongitude ? ((x0 % grid.width) + grid.width) % grid.width : x0;
+  const c1 = grid.wrapLongitude ? (((x0 + 1) % grid.width) + grid.width) % grid.width : x0 + 1;
+  const col = fx === 0 ? c0 : fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
+  const row = fy <= 0.5 ? Math.max(0, y0) : Math.min(grid.height - 1, y0 + 1);
+  if (col < 0 || col >= grid.width || row < 0 || row >= grid.height) return false;
+  return getBit(mask.output, row * grid.width + col);
+}
 export function isCovered(mask: CoverageMask, lat: number, lon: number): boolean {
   if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
   const { grid } = mask;
@@ -69,14 +80,17 @@ export function isCovered(mask: CoverageMask, lat: number, lon: number): boolean
     if (!point) return false;
     ({ x, y } = point);
   }
-  if (!Number.isFinite(x) || !Number.isFinite(y) || (!grid.wrapLongitude && (x < -0.5 || x > grid.width - 0.5)) || y < -0.5 || y > grid.height - 0.5) return false;
-  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-  const c0 = grid.wrapLongitude ? ((x0 % grid.width) + grid.width) % grid.width : x0;
-  const c1 = grid.wrapLongitude ? (((x0 + 1) % grid.width) + grid.width) % grid.width : x0 + 1;
-  const col = fx === 0 ? c0 : fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
-  const row = fy <= 0.5 ? Math.max(0, y0) : Math.min(grid.height - 1, y0 + 1);
-  if (col < 0 || col >= grid.width || row < 0 || row >= grid.height) return false;
-  return getBit(mask.output, row * grid.width + col);
+  return coveredCoordinate(mask, x, y);
+}
+/** Compile projected coordinates once while preserving the same nearest-cell ownership as isCovered. */
+export function prepareCoverageTester(mask: CoverageMask): (lat: number, lon: number) => boolean {
+  if (mask.grid.kind === 'regular-latlon') return (lat, lon) => isCovered(mask, lat, lon);
+  const geometry = prepareGridGeometry(mask.grid);
+  return (lat, lon) => {
+    if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
+    const point = geometry.geographicToGrid(lat, lon);
+    return !!point && coveredCoordinate(mask, point.x, point.y);
+  };
 }
 export function isTileCovered(mask: CoverageMask, z: number, x: number, y: number): boolean {
   if (!Number.isInteger(z) || z < 0 || z > mask.maxZoom || z > 24 || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) return false;

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
+import type { SamplePayload } from '@av/contracts/client';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
 import { resolveCoverage } from '../src/coverage';
+import { fixturePatch } from '../../../tests/forecast-fixture';
 
 const now = Date.parse('2026-11-01T00:00:00Z');
 const hash = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
@@ -11,21 +13,22 @@ const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
 const regular: Grid = gridSchema.parse({ kind: 'regular-latlon', width: 3, height: 3, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false, earthRadiusM: 6371229 });
 const lambert: Grid = gridSchema.parse({ kind: 'lambert-conformal', width: 3, height: 3, centralMeridianDeg: 0, latitudeOfOriginDeg: 40, standardParallel1Deg: 30, standardParallel2Deg: 60, x0M: -10000, y0M: -10000, dxM: 10000, dyM: 10000, earthRadiusM: 6371229, wrapLongitude: false });
 
-function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string; policy?: string; value?: number; layer?: LayerId; verticalCoordinate?: VerticalCoordinateKind } = {}) {
+function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string; policy?: string; value?: number; layer?: LayerId; layers?: LayerId[]; verticalCoordinate?: VerticalCoordinateKind } = {}) {
   const model = options.model ?? 'synthetic', buildId = 'fixture-1', prefix = `builds/${model}/${buildId}`;
   const layer = options.layer ?? 'precip-rate';
+  const layers = options.layers ?? [layer];
   const bounds: [number, number, number, number] = grid.kind === 'regular-latlon' ? [-2, -2, 2, 2] : [-2, 38, 2, 42];
-  const product: ProductDefinition = { id: 'synthetic-test', modelId: model, configPath: `packages/contracts/config/${model}.json`, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers: [layer], capabilities: { verticalCoordinate: options.verticalCoordinate ?? 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
+  const product: ProductDefinition = { id: 'synthetic-test', modelId: model, configPath: `packages/contracts/config/${model}.json`, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers, capabilities: { verticalCoordinate: options.verticalCoordinate ?? 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
   const output = Uint8Array.of(255, 1), halo = Uint8Array.of(0, 0), tiles = Uint8Array.of(0);
   const descriptor = { version: 1, id: product.coverageId, grid, bounds, policy: product.coverageDescription, maxZoom: 0, supportHaloCells: 0, sampleLayout: { format: 'cell-major-blocks-v1', blockSize: 16 }, files: Object.fromEntries(Object.entries({ output, halo, tiles }).map(([name, data]) => [name, { bytes: data.length, sha256: hash(data) }])) };
   const descriptorBytes = json(descriptor), coverageHash = hash(descriptorBytes), coveragePrefix = `coverage/${coverageHash}`;
   const layout = prepareSamplePackLayout(grid, output, halo);
   const cycle = new Date(now).toISOString(), expiresAt = new Date(now + 86400_000).toISOString();
   const frames = product.frameHours.map(hour => ({ id: `h${hour}`, validTime: new Date(now + hour * 3600_000).toISOString(), intervalStart: new Date(now + (hour - 1) * 3600_000).toISOString(), intervalEnd: new Date(now + hour * 3600_000).toISOString() }));
-  const samples = new Uint8Array(layout.storedCells * frames.length * 5), view = new DataView(samples.buffer);
+  const samples = new Uint8Array(layout.storedCells * frames.length * layers.length * 5), view = new DataView(samples.buffer);
   for (let offset = 0; offset < samples.length; offset += 5) view.setFloat32(offset, options.value ?? 7, true);
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
-  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: createProductMethodId(product), hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers: [layer], artifacts: frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: [layer === 'precip-rate' ? 'rain' : 'lift'], tool: {}, metrics: {} };
+  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: createProductMethodId(product), hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers, artifacts: frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length * layers.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: [layer === 'precip-rate' ? 'rain' : 'lift'], tool: {}, metrics: {} };
   const objects = new Map<string, Uint8Array>([
     [`${coveragePrefix}/manifest.json`, descriptorBytes], [`${coveragePrefix}/output.bin`, output], [`${coveragePrefix}/halo.bin`, halo], [`${coveragePrefix}/tiles.bin`, tiles],
     [`${prefix}/manifest.json`, json(manifest)], [`${prefix}/samples.bin`, samples], [`${prefix}/provenance.json`, provenance],
@@ -145,4 +148,91 @@ it('evicts and reloads coverage through the production 16-entry cache limit', as
   expect((await resolveCoverage(owner.bucket, variants[0].manifest)).layout.storedCells).toBe(9);
   expect(owner.get).toHaveBeenCalledTimes(before + 4);
   expect(owner.get.mock.calls.filter(([key]) => key.startsWith(variants[0].coveragePrefix))).toHaveLength(8);
+});
+
+function refinedFixture(flag = 0) {
+  const data = fixture(regular, 3, { layers: ['precip-rate', 'usable-lift-agl'] });
+  const { manifest, product, objects } = data;
+  const patch = fixturePatch(manifest), grid = patch.grid, bounds = patch.descriptors.bounds;
+  const output = Uint8Array.of(16, 0), halo = Uint8Array.of(239, 1), tiles = Uint8Array.of(0);
+  const layout = prepareSamplePackLayout(grid, output, halo);
+  const coverage = { version: 1, id: 'refined-mask', grid, bounds, policy: 'Synthetic refinement', maxZoom: 0, supportHaloCells: 1, sampleLayout: { format: 'cell-major-blocks-v1', blockSize: 16 }, files: Object.fromEntries(Object.entries({ output, halo, tiles }).map(([name, bytes]) => [name, { bytes: bytes.length, sha256: hash(bytes) }])) };
+  const coverageBytes = json(coverage), coverageHash = hash(coverageBytes), prefix = `coverage/${coverageHash}`;
+  for (const [name, bytes] of Object.entries({ 'manifest.json': coverageBytes, 'output.bin': output, 'halo.bin': halo, 'tiles.bin': tiles })) objects.set(`${prefix}/${name}`, bytes);
+  const samples = new Uint8Array(layout.storedCells * manifest.frames.length * 5), view = new DataView(samples.buffer);
+  for (let i = 0; i < samples.length / 5; i++) { view.setFloat32(i * 5, flag === 1 ? 0 : 900 + i % manifest.frames.length, true); view.setUint8(i * 5 + 4, flag); }
+  patch.coverage = { id: coverage.id, hash: coverageHash, maskKey: `${prefix}/manifest.json`, maxZoom: 0 };
+  patch.samples = { ...patch.samples, storedCells: layout.storedCells, bytes: samples.length, sha256: hash(samples) };
+  manifest.version = 4; manifest.patches = [patch];
+  objects.set(patch.samples.key, samples);
+  objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, json(manifest));
+  const app = createApp({ products: { synthetic: product } });
+  const sample = (lat = 0, lon = 0, layers = manifest.layers.join(',')) => app.fetch(new Request(`https://api.test/v1/models/synthetic/runs/fixture-1/sample?lat=${lat}&lon=${lon}&frame=all&layers=${layers}`, { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: data.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+  return { ...data, patch, sample };
+}
+
+it('samples base precipitation and refined AGL using each pack’s inherited frame channels', async () => {
+  const { sample, get, patch } = refinedFixture();
+  const response = await sample();
+  expect(response.status, await response.clone().text()).toBe(200);
+  const result = await response.json() as SamplePayload;
+  expect(result.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 7, 7]);
+  expect(result.frames.map(frame => frame.layers['usable-lift-agl'].value)).toEqual([900, 901, 902]);
+  expect(result.frames.every(frame => frame.layers['usable-lift-agl'].patchId === patch.id && frame.layers['precip-rate'].patchId === undefined)).toBe(true);
+  const ranges = get.mock.calls.filter(([, options]) => options?.range);
+  expect(ranges).toHaveLength(2);
+  expect(ranges.some(([key]) => key === patch.samples.key)).toBe(true);
+});
+
+it.each([1, 2])('preserves refined status %i instead of falling back to base lift', async flag => {
+  const { sample } = refinedFixture(flag);
+  const response = await sample(0, 0, 'usable-lift-agl');
+  expect(response.status).toBe(200);
+  const value = (await response.json() as SamplePayload).frames[0].layers['usable-lift-agl'];
+  expect(value).toMatchObject({ value: flag === 1 ? 0 : null, status: flag === 1 ? 'no-usable-lift' : 'unavailable', patchId: 'zone-001' });
+});
+
+it('returns base values outside patch output and skips patch I/O outside its polygon or for base-only layers', async () => {
+  for (const [lat, lon, layer, loadsCoverage] of [[0, 0.006, 'usable-lift-agl', true], [0, 0.1, 'usable-lift-agl', false], [0, 0, 'precip-rate', false]] as const) {
+    const { sample, get, patch } = refinedFixture();
+    const response = await sample(lat, lon, layer);
+    expect(response.status).toBe(200);
+    expect((await response.json() as SamplePayload).frames[0].layers[layer]).toMatchObject({ value: 7, status: 'valid' });
+    expect(get.mock.calls.some(([key]) => key === patch.samples.key)).toBe(false);
+    expect(get.mock.calls.some(([key]) => key === patch.coverage.maskKey)).toBe(loadsCoverage);
+  }
+});
+
+it('keeps base coverage as the outer boundary without reading refinement data', async () => {
+  const { sample, get, patch } = refinedFixture();
+  const response = await sample(20, 20);
+  expect(response.status).toBe(200);
+  const result = await response.json() as SamplePayload;
+  expect(result.frames.every(frame => Object.values(frame.layers).every(value => value.status === 'outside-domain' && value.patchId === undefined))).toBe(true);
+  expect(get.mock.calls.some(([key, options]) => key === patch.coverage.maskKey || options?.range)).toBe(false);
+});
+
+it.each(['samples', 'coverage'] as const)('fails missing refined %s without serving coarse replacement', async missing => {
+  const { sample, objects, patch, get } = refinedFixture();
+  objects.delete(missing === 'samples' ? patch.samples.key : patch.coverage.maskKey);
+  const response = await sample(0, 0, 'usable-lift-agl');
+  expect(response.status).toBe(503);
+  expect(get.mock.calls.some(([key, options]) => options?.range && key !== patch.samples.key)).toBe(false);
+});
+
+it('keeps refinement channels aligned when manifest frame order differs from valid-time order', async () => {
+  const { manifest, objects, sample } = refinedFixture();
+  manifest.frames.reverse();
+  objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, json(manifest));
+  const response = await sample(0, 0, 'usable-lift-agl');
+  expect(response.status).toBe(200);
+  expect((await response.json() as SamplePayload).frames.map(frame => frame.layers['usable-lift-agl'].value)).toEqual([902, 901, 900]);
+});
+
+it('rejects a forged refinement pack reference before reading numeric data', async () => {
+  const { manifest, patch, objects, sample, get } = refinedFixture();
+  patch.samples.key = manifest.samples.key;
+  objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, json(manifest));
+  expect((await sample()).status).toBe(503);
+  expect(get.mock.calls.some(([, options]) => options?.range)).toBe(false);
 });

@@ -17,6 +17,17 @@ export function parseManifest(json: string): Manifest {
 A manifest lists the build's layers, frame times, grid, files and display
 settings. Use its `layers` and `frames` to populate a forecast viewer.
 
+Version 3 describes one numeric grid. Version 4 adds `patches`: bounded grids
+inside the same model, build and frame axis. Each patch declares its polygon,
+coverage, supported layers, numeric pack, method descriptors and prepared-terrain
+reference. `forecastGrids` visits the base and patches; `forecastObjects` lists
+all numeric packs and the single composited tile archive for each frame/layer.
+
+`validateArtifactRecords` checks those cross-references after schema parsing.
+`assertCoverageBinding` checks a loaded coverage descriptor against its numeric
+grid. Point values with `patchId` use that patch's layer and method descriptors;
+values without it use the base descriptors.
+
 ## Imports
 
 - `@av/contracts`: types and schemas, model lookup with `getProduct`, grid
@@ -26,6 +37,8 @@ settings. Use its `layers` and `frames` to populate a forecast viewer.
 - [`@av/contracts/client/dom`](src/client-dom.ts): shared map controls.
 - [`@av/contracts/fixture-product`](src/fixture-product.ts): the synthetic product
   used by `pnpm dev`.
+- [`@av/contracts/refinement`](src/refinement.ts): polygon validation, bounded
+  grid planning and per-layer refinement lookup.
 
 ## Model and display settings
 

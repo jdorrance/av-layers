@@ -7,6 +7,7 @@ import { GFS_PRESSURE_LEVELS_HPA } from './gfs/constants.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
 const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 267, 847, 2794];
 const Z7_TOTAL_TILES = 291096;
@@ -119,6 +120,15 @@ describe('build capacity admission and performance budgets', () => {
     expect(checkPerformance(manifest).passed).toBe(false);
     manifest.metrics.tiles = [...Z7_TILES_BY_ZOOM];
     manifest.samples.bytes = BUILD_BUDGETS.samplePackBytes + 1;
+    expect(checkPerformance(manifest).passed).toBe(false);
+  });
+  it('applies one aggregate grid and numeric byte budget to base plus refinements', () => {
+    const manifest = receipt(), patch = fixturePatch(fixtureManifest());
+    manifest.patches = [patch];
+    const result = checkPerformance(manifest);
+    expect(result.observed.gridCells).toBe(1440 * 721 + 9);
+    expect(result.observed.samplePackBytes).toBe(manifest.samples.bytes + patch.samples.bytes);
+    patch.samples.bytes = BUILD_BUDGETS.samplePackBytes - manifest.samples.bytes + 1;
     expect(checkPerformance(manifest).passed).toBe(false);
   });
 });
