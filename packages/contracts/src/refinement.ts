@@ -42,9 +42,27 @@ function inRing(ring: Position[], point: Position): boolean {
   }
   return inside;
 }
-const inPolygon = (polygon: Polygon, point: Position) => inRing(polygon[0], point) && !polygon.slice(1).some(hole => inRing(hole, point));
+function inPolygon(polygon: Polygon, point: Position): boolean {
+  if (!inRing(polygon[0], point)) return false;
+  for (let i = 1; i < polygon.length; i++) if (inRing(polygon[i], point)) return false;
+  return true;
+}
 function overlaps(a: Polygon, b: Polygon): boolean {
   return a.some(ringA => b.some(ringB => ringsIntersect(ringA, ringB))) || inPolygon(a, b[0][0]) || inPolygon(b, a[0][0]);
+}
+function geometriesOverlap(a: RefinementGeometry, b: RefinementGeometry): boolean {
+  const other = polygons(b);
+  return polygons(a).some(part => other.some(candidate => overlaps(part, candidate)));
+}
+function coordinateCount(geometry: RefinementGeometry): number {
+  let count = 0;
+  for (const part of polygons(geometry)) for (const ring of part) count += ring.length;
+  return count;
+}
+function ringArea(points: Position[]): number {
+  let area = 0;
+  for (let i = 1; i + 1 < points.length; i++) area += cross(points[0], points[i], points[i + 1]);
+  return Math.abs(area) / 2;
 }
 function geometryBounds(geometry: RefinementGeometry): GeographicBounds {
   let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
@@ -53,32 +71,32 @@ function geometryBounds(geometry: RefinementGeometry): GeographicBounds {
   }
   return [west, south, east, north];
 }
+function validateRing(ring: Position[]): void {
+  if (!equal(ring[0], ring[ring.length - 1])) throw new Error('Refinement rings must be closed');
+  for (let i = 1; i < ring.length; i++) {
+    if (equal(ring[i - 1], ring[i])) throw new Error('Refinement rings have repeated adjacent vertices');
+    if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) throw new Error('Dateline-crossing refinement edges are unsupported; split the polygon');
+    for (let j = i + 2; j < ring.length; j++) {
+      if (i === 1 && j === ring.length - 1) continue;
+      if (intersects(ring[i - 1], ring[i], ring[j - 1], ring[j])) throw new Error('Refinement rings must not self-intersect or touch');
+    }
+  }
+  if (ringArea(ring) <= EPSILON / 2) throw new Error('Refinement rings must enclose a nonzero area');
+}
+function validatePolygon(part: Polygon): void {
+  for (const ring of part) validateRing(ring);
+  for (let i = 1; i < part.length; i++) {
+    if (!inRing(part[0], part[i][0]) || ringsIntersect(part[0], part[i])) throw new Error('Refinement holes must lie strictly inside their outer ring');
+    for (let j = 1; j < i; j++) {
+      if (ringsIntersect(part[i], part[j]) || inRing(part[i], part[j][0]) || inRing(part[j], part[i][0])) throw new Error('Refinement holes must not overlap or touch');
+    }
+  }
+}
 function validateGeometry(geometry: RefinementGeometry): void {
   const bounds = geometryBounds(geometry);
   if (bounds[2] - bounds[0] > 20 || bounds[3] - bounds[1] > 20) throw new Error('Refinement zones must span at most 20 degrees per axis; split larger or dateline-crossing areas');
   const parts = polygons(geometry);
-  for (const part of parts) {
-    for (const ring of part) {
-      if (!equal(ring[0], ring[ring.length - 1])) throw new Error('Refinement rings must be closed');
-      let area = 0;
-      for (let i = 1; i < ring.length; i++) {
-        if (equal(ring[i - 1], ring[i])) throw new Error('Refinement rings have repeated adjacent vertices');
-        if (Math.abs(ring[i][0] - ring[i - 1][0]) > 180) throw new Error('Dateline-crossing refinement edges are unsupported; split the polygon');
-        area += cross(ring[0], ring[i - 1], ring[i]);
-        for (let j = i + 2; j < ring.length; j++) {
-          if (i === 1 && j === ring.length - 1) continue;
-          if (intersects(ring[i - 1], ring[i], ring[j - 1], ring[j])) throw new Error('Refinement rings must not self-intersect or touch');
-        }
-      }
-      if (Math.abs(area) <= EPSILON) throw new Error('Refinement rings must enclose a nonzero area');
-    }
-    for (let i = 1; i < part.length; i++) {
-      if (!inRing(part[0], part[i][0]) || ringsIntersect(part[0], part[i])) throw new Error('Refinement holes must lie strictly inside their outer ring');
-      for (let j = 1; j < i; j++) {
-        if (ringsIntersect(part[i], part[j]) || inRing(part[i], part[j][0]) || inRing(part[j], part[i][0])) throw new Error('Refinement holes must not overlap or touch');
-      }
-    }
-  }
+  for (const part of parts) validatePolygon(part);
   for (let i = 0; i < parts.length; i++) for (let j = 0; j < i; j++) {
     if (overlaps(parts[i], parts[j])) throw new Error('Refinement polygon components must not overlap or touch');
   }
@@ -92,7 +110,7 @@ export const refinementConfigSchema = z.strictObject({
   })).max(16)
 }).superRefine((config, context) => {
   try {
-    const coordinates = config.features.reduce((sum, feature) => sum + polygons(feature.geometry).reduce((count, part) => count + part.reduce((n, ring) => n + ring.length, 0), 0), 0);
+    const coordinates = config.features.reduce((sum, feature) => sum + coordinateCount(feature.geometry), 0);
     if (coordinates > MAX_COORDINATES) throw new Error('Refinement coordinate budget exceeded');
     const ids = new Set<string>();
     for (const feature of config.features) {
@@ -100,7 +118,7 @@ export const refinementConfigSchema = z.strictObject({
       ids.add(feature.id); validateGeometry(feature.geometry);
     }
     for (let i = 0; i < config.features.length; i++) for (let j = 0; j < i; j++) {
-      if (polygons(config.features[i].geometry).some(a => polygons(config.features[j].geometry).some(b => overlaps(a, b)))) throw new Error('Refinement zones must not overlap or touch');
+      if (geometriesOverlap(config.features[i].geometry, config.features[j].geometry)) throw new Error('Refinement zones must not overlap or touch');
     }
   } catch (error) { context.addIssue({ code: 'custom', message: (error as Error).message }); }
 });
@@ -125,13 +143,12 @@ const intersection = (a: GeographicBounds, b: GeographicBounds): GeographicBound
   const result: GeographicBounds = [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];
   return result[0] < result[2] && result[1] < result[3] ? result : null;
 };
-/** Clip a ring to a convex rectangle to measure area; mere boundary contact owns no area. */
-function clippedArea(ring: Position[], bounds: GeographicBounds): number {
+function clipRing(ring: Position[], bounds: GeographicBounds): Position[] {
   let points = ring.slice(0, -1);
   const edges = [[0, bounds[0], 1], [0, bounds[2], -1], [1, bounds[1], 1], [1, bounds[3], -1]] as const;
   for (const [axis, limit, sign] of edges) {
     const input = points; points = [];
-    if (!input.length) return 0;
+    if (!input.length) return [];
     let previous = input[input.length - 1], previousInside = (previous[axis] - limit) * sign >= 0;
     for (const point of input) {
       const inside = (point[axis] - limit) * sign >= 0;
@@ -145,12 +162,22 @@ function clippedArea(ring: Position[], bounds: GeographicBounds): number {
       previous = point; previousInside = inside;
     }
   }
-  let area = 0;
-  for (let i = 1; i + 1 < points.length; i++) area += cross(points[0], points[i], points[i + 1]);
-  return Math.abs(area) / 2;
+  return points;
 }
-function intersectsBounds(geometry: RefinementGeometry, bounds: GeographicBounds): boolean {
-  return polygons(geometry).some(part => clippedArea(part[0], bounds) - part.slice(1).reduce((sum, hole) => sum + clippedArea(hole, bounds), 0) > EPSILON);
+/** Bound clipped outer rings with positive area; holes keep a conservative envelope. */
+function clippedBounds(geometry: RefinementGeometry, bounds: GeographicBounds): GeographicBounds | null {
+  let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+  for (const part of polygons(geometry)) {
+    const outer = clipRing(part[0], bounds);
+    const holeArea = part.slice(1).reduce((sum, hole) => sum + ringArea(clipRing(hole, bounds)), 0);
+    if (ringArea(outer) - holeArea <= EPSILON) continue;
+    for (const point of outer) {
+      if (!inRing(part[0], point)) continue;
+      west = Math.min(west, point[0]); east = Math.max(east, point[0]);
+      south = Math.min(south, point[1]); north = Math.max(north, point[1]);
+    }
+  }
+  return west < east && south < north ? [west, south, east, north] : null;
 }
 function targetGrid(bounds: GeographicBounds, earthRadiusM: number, haloCells: number): LambertConformalGrid {
   const [west, south, east, north] = bounds, centerLat = (south + north) / 2, centerLon = (west + east) / 2;
@@ -189,8 +216,8 @@ export function planRefinements(raw: unknown, options: { sourceGrid: Grid; bound
   let totalCells = 0;
   const plans: RefinementPlan[] = [];
   for (const feature of [...config.features].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
-    const bounds = intersection(geometryBounds(feature.geometry), admitted);
-    if (!bounds || !intersectsBounds(feature.geometry, bounds)) continue;
+    const bounds = clippedBounds(feature.geometry, admitted);
+    if (!bounds) continue;
     const grid = targetGrid(bounds, source.earthRadiusM, haloCells), cells = grid.width * grid.height;
     totalCells += cells;
     if (totalCells > maxCells) throw new Error(`Refinement cell budget exceeded: ${totalCells} > ${maxCells}`);

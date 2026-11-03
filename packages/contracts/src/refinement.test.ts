@@ -67,6 +67,45 @@ describe('configured refinement geometry', () => {
     expect(planRefinements(config(), options)).toEqual([]);
   });
 
+  it.each([
+    { name: 'concave arm', geometry: { type: 'Polygon', coordinates: [[[10, 39], [10.4, 39], [10.4, 40.5], [14, 40.5], [14, 41], [10, 41], [10, 39]]] },
+      admitted: [10.2, 39, 14, 40], expected: [10.2, 39, 10.4, 40], maxCells: 3000 },
+    { name: 'one multipart component', geometry: { type: 'MultiPolygon', coordinates: [[rectangle(10, 39, 10.2, 39.2)], [rectangle(14, 42, 14.2, 42.2)]] },
+      admitted: [9, 38, 15, 40], expected: [10, 39, 10.2, 39.2], maxCells: 600 },
+    { name: 'diagonal corner', geometry: { type: 'Polygon', coordinates: [[[10, 39], [14, 43], [10, 43], [10, 39]]] },
+      admitted: [12, 39, 14, 41.5], expected: [12, 41, 12.5, 41.5], maxCells: 3000 }
+  ] as const)('sizes the grid from the clipped $name within its cell budget', ({ geometry, admitted, expected, maxCells }) => {
+    const input = parseRefinementConfig({ type: 'FeatureCollection', features: [{ ...feature('zone-001'), geometry }] });
+    const [plan] = planRefinements(input, { ...options, bounds: admitted, maxCells });
+    expect(plan.bounds).toEqual(expected);
+    expect(plan.grid.width * plan.grid.height).toBeLessThanOrEqual(maxCells);
+    expect(plan.geometry).toEqual(input.features[0].geometry);
+    const projected = prepareGridGeometry(plan.grid);
+    for (const lat of [expected[1], expected[3]]) for (const lon of [expected[0], expected[2]]) {
+      const point = projected.geographicToGrid(lat, lon)!;
+      expect(point.x).toBeGreaterThanOrEqual(1 - 1e-8);
+      expect(point.y).toBeGreaterThanOrEqual(1 - 1e-8);
+      expect(point.x).toBeLessThanOrEqual(plan.grid.width - 2 + 1e-8);
+      expect(point.y).toBeLessThanOrEqual(plan.grid.height - 2 + 1e-8);
+    }
+  });
+
+  it('preserves the positive-area intersection when hole edges coincide with source boundaries', () => {
+    const input = config(feature('zone-001', [rectangle(-1, -1, 11, 11), rectangle(0, 0, 7, 10)]));
+    const [plan] = planRefinements(input, { ...options, bounds: [0, 0, 10, 10] });
+    const geometry = prepareGridGeometry(plan.grid);
+    for (const lat of [0, 5, 10]) {
+      expect(containsRefinement(plan, lat, 0)).toBe(false);
+      expect(containsRefinement(plan, lat, 7)).toBe(false);
+      expect(containsRefinement(plan, lat, 7.1)).toBe(true);
+      const point = geometry.geographicToGrid(lat, 7.1)!;
+      expect(point.x).toBeGreaterThanOrEqual(1);
+      expect(point.x).toBeLessThanOrEqual(plan.grid.width - 2);
+      expect(point.y).toBeGreaterThanOrEqual(1);
+      expect(point.y).toBeLessThanOrEqual(plan.grid.height - 2);
+    }
+  });
+
   it.each([[10, 39, 12, 41], [130, -42, 133, -39], [20, -1, 22, 1]])('bounds the full curved rectangle and adds halo: %j', (w, s, e, n) => {
     const [plan] = planRefinements(config(feature('zone-001', [rectangle(w, s, e, n)])), { ...options, haloCells: 2 });
     const geometry = prepareGridGeometry(plan.grid);
@@ -104,6 +143,34 @@ describe('configured refinement geometry', () => {
     expect(() => config(feature('zone-001'), feature('zone-002', [rectangle(11, 40, 13, 42)]))).toThrow('overlap or touch');
     expect(() => config(feature('zone-001'), feature('zone-002', [rectangle(12, 39, 13, 40)]))).toThrow('overlap or touch');
     expect(() => config(feature('zone-001'), feature('zone-002', [rectangle(10.1, 39.1, 11.9, 40.9)]))).toThrow('overlap or touch');
+  });
+
+  it.each(['features', 'components'])('admits disjoint nested annuli and an island inside their holes as %s', representation => {
+    const parts = [
+      [rectangle(10, 38, 18, 46), rectangle(11, 39, 17, 45)],
+      [rectangle(12, 40, 16, 44), rectangle(13, 41, 15, 43)],
+      [rectangle(13.5, 41.5, 14.5, 42.5)]
+    ];
+    const features = representation === 'features' ? parts.map((part, index) => feature(`zone-${index}`, part))
+      : [{ ...feature('zone-001'), geometry: { type: 'MultiPolygon', coordinates: parts } }];
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features })).not.toThrow();
+  });
+
+  it.each(['features', 'components'])('rejects overlapping concentric annuli as %s without boundary crossings', representation => {
+    const parts = [
+      [rectangle(10, 38, 16, 44), rectangle(12, 40, 14, 42)],
+      [rectangle(11, 39, 15, 43), rectangle(12.5, 40.5, 13.5, 41.5)]
+    ];
+    const features = representation === 'features' ? parts.map((part, index) => feature(`zone-${index}`, part))
+      : [{ ...feature('zone-001'), geometry: { type: 'MultiPolygon', coordinates: parts } }];
+    expect(() => parseRefinementConfig({ type: 'FeatureCollection', features })).toThrow('overlap or touch');
+  });
+
+  it('rejects an outer ring that starts inside another hole then crosses or touches its boundary', () => {
+    const annulus = feature('zone-001', [rectangle(10, 38, 16, 44), rectangle(12, 40, 14, 42)]);
+    for (const outer of [[[13, 41], [15, 41], [15, 43], [13, 41]], rectangle(12, 40, 13, 41)]) {
+      expect(() => config(annulus, feature('zone-002', [outer]))).toThrow('overlap or touch');
+    }
   });
 
   it('rejects unsupported geometry and resource growth before target allocation', () => {
