@@ -11,7 +11,7 @@ describe('ICON-EU run admission', () => {
   it('probes every required surface field and both profile and half-level endpoints', () => {
     const urls = iconRunSentinelUrls(cycles[0]);
     expect(new Set(urls).size).toBe(urls.length);
-    for (const field of ['PS', 'T_2M', 'QV_2M', 'MH', 'ASHFL_S', 'ALHFL_S']) {
+    for (const field of ['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S']) {
       expect(urls).toContain(iconRegularFieldUrl(field, cycles[0], { hour: lastHour }));
     }
     for (const field of ['T', 'P']) for (const level of [ICON_EU_MODEL_LEVELS[0], ICON_EU_MODEL_LEVELS.at(-1)]) {

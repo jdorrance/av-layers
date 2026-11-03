@@ -269,7 +269,7 @@ function syntheticFetch(cycle: string, requestedUrls: string[]): typeof fetch {
         }))
       );
     }
-    const singleMatch = file.match(/_(\d{3})_(PS|T_2M|QV_2M|MH|ASHFL_S|ALHFL_S)\.grib2\.bz2$/);
+    const singleMatch = file.match(/_(\d{3})_(PS|T_2M|QV_2M|ASHFL_S|ALHFL_S)\.grib2\.bz2$/);
     if (singleMatch) {
       const hour = Number(singleMatch[1]);
       const field = singleMatch[2]!;
@@ -280,7 +280,6 @@ function syntheticFetch(cycle: string, requestedUrls: string[]): typeof fetch {
         PS: { t: 0, cat: 3, num: 0, s1: 1, v1: null, val: 90000 },
         T_2M: { t: 0, cat: 0, num: 0, s1: 103, v1: 2, val: 295 + hour * 0.2 },
         QV_2M: { t: 0, cat: 1, num: 0, s1: 103, v1: 2, val: 0.008 },
-        MH: { t: 0, cat: 19, num: 3, s1: 1, v1: null, val: 1200 },
         ASHFL_S: { t: 8, cat: 0, num: 11, s1: 1, v1: null, val: -150 - hour * 10 },
         ALHFL_S: { t: 8, cat: 0, num: 10, s1: 1, v1: null, val: -60 - hour * 5 }
       };
@@ -318,8 +317,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t/icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2'
     );
     const sentinels = iconRunSentinelUrls(cycle);
-    expect(sentinels).toHaveLength(13);
-    expect(sentinels).toContain(iconRegularFieldUrl('MH', cycle, { hour: ICON_EU_PRODUCT.frameHours.at(-1)! }));
+    expect(sentinels).toHaveLength(12);
   });
 
   it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', () => {
@@ -745,10 +743,6 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       const t74 = loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2');
       verifyIconFieldMetadata(t74, 'T', cycle, { hour: 6, level: 74 });
       expect(t74.values[0]).toBeCloseTo(288.935883, 4);
-
-      const mh = loadReal('icon-eu_europe_regular-lat-lon_single-level_2026100800_006_MH.grib2.bz2');
-      verifyIconFieldMetadata(mh, 'MH', cycle, { hour: 6 });
-      expect(mh.values[0]).toBeCloseTo(200.0, 4);
 
       const ashfl = loadReal('icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2');
       verifyIconFieldMetadata(ashfl, 'ASHFL_S', cycle, { hour: 6 });

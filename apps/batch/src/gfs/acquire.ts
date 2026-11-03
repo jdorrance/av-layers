@@ -234,7 +234,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
     const terrain = await instant(terrainField);
 
     const receipts: DecodedFieldReceipt[] = [terrainField.receipt];
-    const outputs: Partial<Record<'surfacePressure' | 'temp2m' | 'spfh2m' | 'pbl', SampledColumn<Float32Array>>> = {};
+    const outputs: Partial<Record<'surfacePressure' | 'temp2m' | 'spfh2m', SampledColumn<Float32Array>>> = {};
 
     const instantSpecs = surfaceSpecs.filter(spec => spec.statistic === 'instant' && spec.kind !== 'terrain');
     let surfaceIndex = 0;
@@ -245,7 +245,6 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
       if (spec.kind === 'surface-pressure') outputs.surfacePressure = sampled;
       else if (spec.kind === 'temp-2m') outputs.temp2m = sampled;
       else if (spec.kind === 'spfh-2m') outputs.spfh2m = sampled;
-      else if (spec.kind === 'pbl') outputs.pbl = sampled;
     }
 
     const intervalSpecs = surfaceSpecs.filter(
@@ -327,11 +326,10 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
     const surfacePressure = outputs.surfacePressure;
     const temp2m = outputs.temp2m;
     const spfh2m = outputs.spfh2m;
-    const pbl = outputs.pbl;
     const sensible = intervalOutputs.get('sensible-flux');
     const latent = intervalOutputs.get('latent-flux');
     const precipitation = intervalOutputs.get('precipitation');
-    if (!surfacePressure || !temp2m || !spfh2m || !pbl || !sensible || !latent || !precipitation) {
+    if (!surfacePressure || !temp2m || !spfh2m || !sensible || !latent || !precipitation) {
       throw new NoaaError('decode', 'Incomplete GFS surface acquisition');
     }
 
@@ -370,7 +368,6 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
       surfacePressurePa: surfacePressure.values,
       temp2mK: temp2m.values,
       specificHumidity2mKgKg: spfh2m.values,
-      pblHeightM: pbl.values,
       sensibleHeatFluxWm2: sensible.values,
       latentHeatFluxWm2: latent.values,
       precipitationMmPerHour: precipitation.values,
@@ -382,7 +379,6 @@ async function acquireFrame(context: AcquisitionContext, hour: number): Promise<
         surfacePressure: surfacePressure.missing,
         temp2m: temp2m.missing,
         humidity2m: spfh2m.missing,
-        pbl: pbl.missing,
         sensibleHeatFlux: sensible.missing,
         latentHeatFlux: latent.missing,
         precipitation: precipitation.missing,

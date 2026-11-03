@@ -99,7 +99,8 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   const workingSet = {
     samplePack: capacity.samplePackBytes,
     derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_CLEARANCE_METHOD.outputs.length) * CELL_BYTES,
-    normalizedFrame: activeCells * (8 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
+    normalizedFrame: activeCells * (7 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
+    diagnostics: refinements.length ? cells * 9 : 0,
     retainedGeometry: activeCells * retainedGeometryFields * CELL_BYTES,
     // Validation can hold encoded bytes and decoded arrays together.
     preparedTerrain: (terrainBytes + refinementTerrainBytes) * 2,

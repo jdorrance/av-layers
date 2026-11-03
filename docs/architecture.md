@@ -41,6 +41,7 @@ share their model's cycle, timeline, publication and URLs. See
 [GFS](../packages/contracts/config/gfs.json) and
 [ICON-EU](../packages/contracts/config/icon-eu.json) define each model's grid,
 forecast hours, layers, coverage, vertical coordinate, and freshness limits.
+Coverage masks exclude Russia, China, Antarctica, and Greenland.
 [products.ts](../packages/contracts/src/products.ts) loads them into the model
 registry, and the Python coverage-mask generator reads the same files. Source
 field selection and decoding live in the [GFS](../apps/batch/src/gfs/README.md)
@@ -118,7 +119,7 @@ flowchart LR
   plan --> workers[Local load once per shard]
   native[Native lift ceiling] --> clearance[Terrain clearance]
   workers --> clearance
-  clearance --> agl[Fine AGL pack and composited tiles]
+  clearance --> agl[Fine MSL/AGL pack and composited tiles]
 ```
 
 The [polygon configuration](../packages/contracts/config/refinement.json)
@@ -126,8 +127,9 @@ selects bounded 1 km grids. The prepare job freezes coverage and DEM references
 in the build plan and stages their files for workers to verify and load locally.
 
 [`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) derives
-terrain-referenced AGL from native lift ceilings and prepared DEMs. Native MSL
-and column calculations remain in the source pipeline; see
+terrain-referenced MSL and AGL from native convective depth, buoyancy, and
+prepared DEMs with `native-lift-terrain-clearance-v2`. Native column
+calculations remain in the source pipeline; see
 [science](science.md#terrain-clearance) for the method. The
 [build budget](../apps/batch/src/capacity.ts) includes every pack, terrain array,
 mapping and raster input.

@@ -24,11 +24,19 @@ daylight cells via [`@av/solar`](../solar/README.md).
 (`pressureLevelsHpa` or per-column `pressurePa`), and missingness masks before
 derivation.
 
+Pass caller-owned `diagnostics: { ceilingMslM, buoyancyM2S3, branch }` arrays
+(one element per native grid cell) to inspect lift derivation. Each call resets
+all slots. Arrays require separate buffers from inputs and coverage masks.
+`ceilingMslM` records the convective-depth top; `FRAME_BRANCH` distinguishes a
+parcel crossing, unresolved profile cap, surface-stable, non-convective and unavailable
+support. `buoyancyM2S3` records `w*³ / depth`, including convective columns below
+the usable-lift cutoff. Diagnostics preserve the published layer values.
+
 ## Entry points
 
 - [`@av/forecast/frame`](src/frame.ts): `deriveFrame` whole-grid calculation.
 - [`@av/forecast/refinement`](src/refinement.ts): reusable native-to-target
-  weights and terrain-referenced AGL from native MSL ceilings.
+  weights and terrain-referenced MSL/AGL from native depth and buoyancy.
 - [`@av/forecast/science`](src/science.ts): `deriveColumn` single-column MSL/AGL
   and status mapping around [`@av/soaring`](../soaring/README.md).
 - [`@av/forecast/sampler`](src/sampler.ts): bilinear/nearest-neighbor point
@@ -44,13 +52,15 @@ derivation.
 ## Terrain clearance
 
 `prepareTerrainClearance` compiles native-to-target weights. Its `derive` method
-reads caller-owned MSL and DEM arrays and a UTC interval, returning a new AGL
-field. `byteLength` reports retained mapping bytes. Missing terrain or native
-support, and mixed native lift/no-lift states, produce unavailable cells.
+reads caller-owned diagnostics, native support flags, DEM arrays and a UTC
+interval, returning new MSL and AGL fields. `byteLength` reports retained mapping bytes. Missing
+terrain or native support produces unavailable cells.
 
-The native MSL forecast stays unchanged. See
-[terrain clearance](../../docs/science.md#terrain-clearance) for the calculation,
-daylight rules and vertical-reference limits.
+Base fields stay on the parent grid. Patches use local terrain and complete
+convective-column support to publish both `usable-lift-msl` and
+`usable-lift-agl`; mixed convective and non-convective neighbors are unavailable.
+See [terrain clearance](../../docs/science.md#terrain-clearance)
+for the calculation, daylight rules and vertical references.
 
 See [data](../../docs/data.md) for units and status flags.
 

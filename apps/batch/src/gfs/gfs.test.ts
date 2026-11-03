@@ -348,7 +348,7 @@ describe('diagnostic proof and transport accounting', () => {
     expect(report.publicationEligible).toBe(false);
     expect(report.fields.find((f) => f.spec.key === 'precipitation' && f.spec.role === 'current')).toMatchObject({ status: 'failed', error: { code: 'transport' } });
     expect(report.fields.find((f) => f.spec.key === '850.tmp')).toMatchObject({ status: 'admitted', missing: [0] });
-    expect(report.fields).toHaveLength(53);
+    expect(report.fields).toHaveLength(52);
     expect(report.transport.networkRequests).toBe(5);
   });
 });

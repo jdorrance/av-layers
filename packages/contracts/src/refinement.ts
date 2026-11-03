@@ -118,25 +118,31 @@ export const refinementGeometrySchema = geometrySchema.superRefine((geometry, co
   } catch (error) { context.addIssue({ code: 'custom', message: (error as Error).message }); }
 });
 
+const autoZoneId = (index: number): string => `zone-${String(index + 1).padStart(3, '0')}`;
 export const refinementConfigSchema = z.strictObject({
   type: z.literal('FeatureCollection'),
   features: z.array(z.strictObject({
-    type: z.literal('Feature'), id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+    type: z.literal('Feature'), id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/).optional(),
     properties: z.strictObject({}), geometry: geometrySchema
   })).max(MAX_REFINEMENT_ZONES)
-}).superRefine((config, context) => {
+}).transform((config, context) => {
   try {
     const coordinates = config.features.reduce((sum, feature) => sum + coordinateCount(feature.geometry), 0);
     if (coordinates > MAX_COORDINATES) throw new Error('Refinement coordinate budget exceeded');
+    const resolved = config.features.map((feature, index) => ({ ...feature, id: feature.id ?? autoZoneId(index) }));
     const ids = new Set<string>();
-    for (const feature of config.features) {
+    for (const feature of resolved) {
       if (ids.has(feature.id)) throw new Error('Refinement IDs must be unique');
       ids.add(feature.id); validateGeometry(feature.geometry);
     }
-    for (let i = 0; i < config.features.length; i++) for (let j = 0; j < i; j++) {
-      if (geometriesOverlap(config.features[i].geometry, config.features[j].geometry)) throw new Error('Refinement zones must not overlap or touch');
+    for (let i = 0; i < resolved.length; i++) for (let j = 0; j < i; j++) {
+      if (geometriesOverlap(resolved[i].geometry, resolved[j].geometry)) throw new Error('Refinement zones must not overlap or touch');
     }
-  } catch (error) { context.addIssue({ code: 'custom', message: (error as Error).message }); }
+    return { ...config, features: resolved };
+  } catch (error) {
+    context.addIssue({ code: 'custom', message: (error as Error).message });
+    return z.NEVER;
+  }
 });
 export type RefinementConfig = z.infer<typeof refinementConfigSchema>;
 export function parseRefinementConfig(raw: unknown): RefinementConfig { return refinementConfigSchema.parse(raw); }

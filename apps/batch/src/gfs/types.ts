@@ -67,7 +67,6 @@ export type GfsFieldKind =
   | 'surface-pressure'
   | 'temp-2m'
   | 'spfh-2m'
-  | 'pbl'
   | 'sensible-flux'
   | 'latent-flux'
   | 'precipitation'

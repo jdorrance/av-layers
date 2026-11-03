@@ -37,7 +37,8 @@ frame/layer. `validateArtifactRecords` checks manifest references;
 [gfs.json](config/gfs.json) and [icon-eu.json](config/icon-eu.json) configure
 each model's grid, forecast hours, layers, vertical coordinate, daylight policy,
 and coverage mask; [products.ts](src/products.ts) loads them with
-`defineProduct`. [layers.ts](src/layers.ts) defines layer units and palettes,
+`defineProduct`. Coverage masks exclude Russia, China, Antarctica, and
+Greenland. [layers.ts](src/layers.ts) defines layer units and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.
 See [extensions](../../docs/extensions.md) to add a model or layer.
 

@@ -399,7 +399,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
     for (const key of fluxCache.keys()) if (!key.endsWith(`:${hour - 1}`)) fluxCache.delete(key);
     const staticGeom = await getStaticGeometry();
 
-    const surfaceFields = ['PS', 'T_2M', 'QV_2M', 'MH', 'ASHFL_S', 'ALHFL_S'];
+    const surfaceFields = ['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S'];
     const requests = [
       ...surfaceFields.map(field => ({ field, hour, level: null })),
       ...(hour > 1 ? ['ASHFL_S', 'ALHFL_S'].map(field => ({ field, hour: hour - 1, level: null })) : []),
@@ -410,7 +410,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
         ? getFluxField(request.field, request.hour)
         : loadDecodedField(request.field, request.hour, request.level)
     );
-    const [psRes, t2mRes, qv2mRes, mhRes, ashflCurr, alhflCurr] = fields;
+    const [psRes, t2mRes, qv2mRes, ashflCurr, alhflCurr] = fields;
     const ashflPrev = hour > 1 ? fields[surfaceFields.length] : null;
     const alhflPrev = hour > 1 ? fields[surfaceFields.length + 1] : null;
     const modelOffset = surfaceFields.length + (hour > 1 ? 2 : 0);
@@ -439,7 +439,6 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       psRes.receipt,
       t2mRes.receipt,
       qv2mRes.receipt,
-      mhRes.receipt,
       ashflCurr.receipt,
       alhflCurr.receipt,
       ...(ashflPrev ? [ashflPrev.receipt] : []),
@@ -459,7 +458,6 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       surfacePressurePa: psRes.decoded.values,
       temp2mK: t2mRes.decoded.values,
       specificHumidity2mKgKg: qv2mRes.decoded.values,
-      pblHeightM: mhRes.decoded.values,
       sensibleHeatFluxWm2: sensible.values,
       latentHeatFluxWm2: latent.values,
       pressurePa: modelPResults.map(r => r.decoded.values),
@@ -470,7 +468,6 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
         surfacePressure: psRes.decoded.missing,
         temp2m: t2mRes.decoded.missing,
         humidity2m: qv2mRes.decoded.missing,
-        pbl: mhRes.decoded.missing,
         sensibleHeatFlux: sensible.missing,
         latentHeatFlux: latent.missing,
         pressure: modelPResults.map(r => r.decoded.missing),

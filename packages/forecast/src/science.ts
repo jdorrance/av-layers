@@ -8,7 +8,6 @@ import {
   STATUS_UNAVAILABLE,
   STATUS_VALID,
   SUPPORT_PARCEL_CROSSING,
-  SUPPORT_PBL_CLOSURE,
   SUPPORT_PROFILE_TOP
 } from '@av/contracts';
 import {
@@ -29,7 +28,7 @@ export interface ColumnResult {
 const supportFlags: Record<DepthBranch, number> = {
   'parcel-crossing': SUPPORT_PARCEL_CROSSING,
   'profile-top': SUPPORT_PROFILE_TOP,
-  'model-pbl-fallback': SUPPORT_PBL_CLOSURE,
+  'surface-stable': 0,
   'non-convective': 0,
   unavailable: 0
 };

@@ -4,20 +4,26 @@ import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METH
 describe('implemented method snapshots', () => {
   it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain clearance separately from its native atmospheric method', product => {
     const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
-    expect(Object.keys(patch.layers)).toEqual(['usable-lift-agl']);
+    expect(Object.keys(patch.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
+    expect(patch.layers['usable-lift-msl']).toMatchObject({ methodId: TERRAIN_CLEARANCE_METHOD.id, verticalReference: 'MSL' });
     expect(patch.layers['usable-lift-agl']).toMatchObject({ methodId: TERRAIN_CLEARANCE_METHOD.id, verticalReference: 'terrain-AGL' });
     expect(patch.methods).toEqual({ [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });
     expect(patch.methods[TERRAIN_CLEARANCE_METHOD.id].spatialSupport).toBe('bilinear-neighborhood');
+    expect(patch.methods[TERRAIN_CLEARANCE_METHOD.id].outputs).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(patch.bounds).toEqual([1, 2, 3, 4]);
     expect(base.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
     expect(base.layers['usable-lift-msl'].methodId).not.toBe(TERRAIN_CLEARANCE_METHOD.id);
+    expect(TERRAIN_CLEARANCE_METHOD.requiredInputs).toEqual(['convectiveDepthTopMslM', 'buoyancyM2S3', 'branch', 'terrainElevationM']);
+    expect(TERRAIN_CLEARANCE_METHOD.inputs.branch).toMatchObject({ id: 'branch', quantity: 'convective-physical-support-branch', units: 'code' });
+    expect(TERRAIN_CLEARANCE_METHOD.caveats[0]).toContain('both MSL and AGL outputs');
+    expect(TERRAIN_CLEARANCE_METHOD.caveats[1]).toContain('All positive-weight contributors must be convective');
   });
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
     const descriptors = createProductDescriptors(GFS_PRODUCT);
-    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-v1', 'trailing-precipitation-rate-v1']);
+    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-v2', 'trailing-precipitation-rate-v1']);
     expect(descriptors.layers['usable-lift-msl'].methodId).toBe(descriptors.layers['usable-lift-agl'].methodId);
-    const lift = descriptors.methods['dry-lenschow-pbl-1p2-v1']!;
-    expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressureLevelsHpa', 'hgtM', 'tempK']);
+    const lift = descriptors.methods['dry-lenschow-1p2-v2']!;
+    expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressureLevelsHpa', 'hgtM', 'tempK']);
     expect(lift.parameters).toMatchObject({ sinkRateMps: 1.2, dryLapseRateKperM: 0.0098, gravityMps2: 9.80665, saturationRelativeTolerance: 1e-6, maximumProfileGapM: 1000, maximumBisectionIterations: 60 });
     expect(lift.inputs.sensibleHeatFluxWm2).toMatchObject({ quantity: 'upward-sensible-heat-flux', units: 'W/m2', timeSupport: 'interval-mean' });
     expect(lift.inputs.tempK).toMatchObject({ units: 'K', dimensions: 'level-cell', timeSupport: 'valid-time' });
@@ -29,9 +35,9 @@ describe('implemented method snapshots', () => {
   it('describes per-column model-level pressure and omits precipitation for ICON-EU lift-only product', () => {
     const descriptors = createProductDescriptors(ICON_EU_PRODUCT);
     expect(Object.keys(descriptors.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-model-levels-v1']);
+    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-model-levels-v2']);
     const lift = descriptors.methods[MODEL_LEVEL_LIFT_METHOD.id]!;
-    expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressurePa', 'hgtM', 'tempK']);
+    expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressurePa', 'hgtM', 'tempK']);
     expect(lift.inputs.pressurePa).toEqual({
       id: 'pressurePa',
       quantity: 'air-pressure',

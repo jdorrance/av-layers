@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { GFS_PRODUCT, manifestSchema, setBit, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { GFS_PRODUCT, manifestSchema, setBit, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
@@ -173,8 +173,8 @@ describe('refined hour-group builds', () => {
     expect(await readFile(localPath(out, manifest.samples.key))).toEqual(await readFile(localPath(serialRoot, serial.samples.key)));
     for (const [index, patch] of manifest.patches!.entries()) {
       const expected = serial.patches![index], input = plan.refinements![index];
-      expect(patch.layers).toEqual(['usable-lift-agl']);
-      expect(patch.samples.channelCount).toBe(product.frameHours.length);
+      expect(patch.layers).toEqual([...TERRAIN_CLEARANCE_METHOD.outputs]);
+      expect(patch.samples.channelCount).toBe(product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
       expect(patch.grid).toEqual(input.grid);
       expect(patch.coverage).toEqual(input.coverage);
       expect(patch.terrain).toEqual(expected.terrain);

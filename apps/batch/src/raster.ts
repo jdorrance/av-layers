@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { LAYERS, paletteBinIndex, PALETTES, prepareCoverageTester, type CoverageMask, type GeographicBounds, type LayerId } from '@av/contracts';
 import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
-import { MAX_PREPARED_SAMPLES, prepareGridSampling, QUAD_OFFSETS, type GridField, type PreparedGridSampling, type Sample } from '@av/forecast';
+import { MAX_PREPARED_SAMPLES, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, type GridField, type PreparedGridSampling, type Sample } from '@av/forecast';
 
 export interface RasterPixels { rgba: Uint8Array; blank: boolean }
 export interface RasterMetrics {
@@ -65,7 +65,8 @@ interface CompositeGeometry {
   byteLength: number;
   base: PreparedGridSampling;
   owners: Uint8Array;
-  patches: { index: number; x: number; y: number; sampling: PreparedGridSampling }[];
+  offsets: Uint32Array;
+  patches: { index: number; sampling: PreparedGridSampling }[];
 }
 type TileGeometry = PreparedGridSampling | CompositeGeometry;
 function span(axis: Float64Array, low: number, high: number): [number, number] | null {
@@ -77,7 +78,7 @@ function compositeGeometry(mask: CoverageMask, patches: readonly RasterPatch[], 
   const { lats, lons } = axes(z, x, y), base = prepareGridSampling(mask, lats, lons);
   const windows = patches.flatMap((patch, index) => {
     const [w, s, e, n] = patch.descriptors.bounds, xs = span(lons, w, e), ys = span(lats, s, n);
-    return xs && ys ? [{ patch, index, xs, ys, left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity }] : [];
+    return xs && ys ? [{ patch, index, xs, ys, count: 0 }] : [];
   });
   if (!windows.length) return base;
   const owners = new Uint8Array(lats.length * lons.length), candidates = windows.map(window => window.patch);
@@ -87,17 +88,28 @@ function compositeGeometry(mask: CoverageMask, patches: readonly RasterPatch[], 
       const lat = lats[py], lon = lons[px];
       if (baseCovered(lat, lon) && refinementCandidate(candidates, undefined, lat, lon) === window.patch && covered[window.index + 1](lat, lon)) {
         owners[py * lons.length + px] = window.index + 1;
-        window.left = Math.min(window.left, px); window.right = Math.max(window.right, px);
-        window.top = Math.min(window.top, py); window.bottom = Math.max(window.bottom, py);
+        window.count++;
       }
     }
   }
-  const owned = windows.filter(window => window.left !== Infinity);
+  const owned = windows.filter(window => window.count);
   if (!owned.length) return base;
-  const cells = owned.reduce((sum, window) => sum + (window.right - window.left + 1) * (window.bottom - window.top + 1), 0);
-  if (cells > MAX_PREPARED_SAMPLES) throw new RangeError('Composite raster geometry exceeds the prepared sample budget');
-  const prepared = owned.map(({ index, left, right, top, bottom }) => ({ index, x: left, y: top, sampling: prepareGridSampling(patches[index].mask, lats.subarray(top, bottom + 1), lons.subarray(left, right + 1)) }));
-  return { base, owners, patches: prepared, byteLength: base.byteLength + owners.byteLength + prepared.reduce((sum, item) => sum + item.sampling.byteLength, 0) };
+  const sampleCount = lats.length * lons.length, offsets = new Uint32Array(sampleCount), prepared: CompositeGeometry['patches'] = [];
+  let aggregate = 0;
+  for (const window of owned) {
+    aggregate += window.count;
+    if (aggregate > MAX_PREPARED_SAMPLES) throw new RangeError('Composite raster geometry exceeds the prepared sample budget');
+    const patchLats = new Float64Array(window.count), patchLons = new Float64Array(window.count);
+    let offset = 0;
+    for (let py = window.ys[0]; py < window.ys[1]; py++) for (let px = window.xs[0]; px < window.xs[1]; px++) {
+      const index = py * lons.length + px;
+      if (owners[index] !== window.index + 1) continue;
+      offsets[index] = offset;
+      patchLats[offset] = lats[py]; patchLons[offset] = lons[px]; offset++;
+    }
+    prepared.push({ index: window.index, sampling: preparePointSampling(patches[window.index].mask, patchLats, patchLons) });
+  }
+  return { base, owners, offsets, patches: prepared, byteLength: base.byteLength + owners.byteLength + offsets.byteLength + prepared.reduce((sum, item) => sum + item.sampling.byteLength, 0) };
 }
 
 function samplePixel(
@@ -133,14 +145,14 @@ function raster(field: GridField, prepared: TileGeometry, layer: LayerId, patche
   const baseInto = base.bind(field, layer), colors = palettes[LAYERS[layer].palette];
   let sampleInto = baseInto, composite = false;
   if ('base' in prepared) {
-    const samplers: (undefined | { x: number; y: number; sample: ReturnType<PreparedGridSampling['bind']> })[] = [];
+    const samplers: (undefined | ReturnType<PreparedGridSampling['bind']>)[] = [];
     for (const item of prepared.patches) if (patches[item.index].layers.includes(layer)) {
-      samplers[item.index + 1] = { x: item.x, y: item.y, sample: item.sampling.bind(patchFields[patches[item.index].id], layer) };
+      samplers[item.index + 1] = item.sampling.bind(patchFields[patches[item.index].id], layer);
       composite = true;
     }
     if (composite) sampleInto = (x, y, out) => {
-      const owner = samplers[prepared.owners[y * base.width + x]];
-      if (owner) owner.sample(x - owner.x, y - owner.y, out); else baseInto(x, y, out);
+      const index = y * base.width + x, owner = samplers[prepared.owners[index]];
+      if (owner) owner(prepared.offsets[index], 0, out); else baseInto(x, y, out);
     };
   }
   const colorCount = colors.length / 4;

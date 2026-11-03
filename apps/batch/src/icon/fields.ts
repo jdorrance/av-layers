@@ -88,18 +88,6 @@ export const ICON_FIELD_SPECS: Readonly<Record<string, IconFieldSpec>> = Object.
     secondFixedSurfaceType: 255,
     statisticalProcessCode: null
   }),
-  MH: Object.freeze({
-    field: 'MH',
-    kind: 'single-level',
-    discipline: 0,
-    parameterCategory: 19,
-    parameterNumber: 3,
-    templateNumber: 0,
-    firstFixedSurfaceType: 1,
-    firstFixedSurfaceValue: null,
-    secondFixedSurfaceType: 255,
-    statisticalProcessCode: null
-  }),
   ASHFL_S: Object.freeze({
     field: 'ASHFL_S',
     kind: 'single-level',

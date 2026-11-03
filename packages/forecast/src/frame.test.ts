@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
-import { STATUS_MASK, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, type CoverageMask, type Grid } from '@av/contracts';
+import { STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
-import { deriveFrame } from './frame.js';
-import { validateNormalizedFrame, type ModelLevelFrame } from './inputs.js';
+import { deriveFrame, FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
+import { validateNormalizedFrame, type ModelLevelFrame, type NormalizedFrame } from './inputs.js';
 
 const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 1, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false };
 const mask: CoverageMask = { grid, output: Uint8Array.of(1), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
@@ -18,6 +18,42 @@ function inversionFrame(): ModelLevelFrame {
   const pressurePa = [99000, 97000, 94000].map(pressure => Float32Array.of(pressure));
   return { ...frame, pressureLevelsHpa: undefined, pressurePa, missing: { ...frame.missing, pressure: pressurePa.map(() => Uint8Array.of(0)) } };
 }
+
+it.each([100, 500])('preserves a Float32-neutral column with its first level at %s m', firstLevel => {
+  const frame = normalizedFixtureFrame(grid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 12, 1);
+  const heights = [firstLevel, ...[500, 1000, 1500, 2000, 2500, 3000, 3500, 4000].filter(height => height > firstLevel)];
+  frame.terrainM[0] = 0;
+  frame.temp2mK[0] = 293.15;
+  frame.specificHumidity2mKgKg[0] = 0.005;
+  frame.sensibleHeatFluxWm2[0] = 250;
+  frame.latentHeatFluxWm2[0] = 50;
+  frame.pressureLevelsHpa = heights.map((_, i) => 990 - i * 40);
+  frame.hgtM = heights.map(height => Float32Array.of(height));
+  frame.tempK = heights.map(height => Float32Array.of(293.15 - 0.0098 * height));
+  frame.missing.hgt = heights.map(() => Uint8Array.of(0));
+  frame.missing.temp = heights.map(() => Uint8Array.of(0));
+  const diagnostic = diagnostics();
+  const surfaceK = frame.temp2mK[0];
+  for (const deltaK of [0, 2 ** -15]) {
+    frame.temp2mK[0] = surfaceK + deltaK;
+    const fields = deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+    expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.profileTop);
+    expect(diagnostic.ceilingMslM[0]).toBe(4000);
+    for (const layer of layers) {
+      expect(fields[layer]!.flags[0]).toBe(STATUS_VALID | SUPPORT_PROFILE_TOP);
+      expect(fields[layer]!.values[0]).toBe(4000);
+    }
+  }
+
+  frame.temp2mK[0] = surfaceK;
+  frame.tempK[0][0] += 0.001;
+  const stable = deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.surfaceStable);
+  for (const layer of layers) {
+    expect(stable[layer]!.flags[0]).toBe(STATUS_NO_LIFT);
+    expect(stable[layer]!.values[0]).toBe(0);
+  }
+});
 
 it('preserves a missing pressure observation instead of bridging an inversion into valid lift', () => {
   const frame = inversionFrame();
@@ -58,10 +94,145 @@ it.each(['height', 'pressure'] as const)('still screens a level established belo
   for (const layer of layers) expect(fields[layer]!.flags[0] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
 });
 
+it('exposes the level-screening jump at model terrain', () => {
+  const frame = normalizedFixtureFrame(grid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 12, 1);
+  frame.hgtM = [500, 1000, 1500].map(height => Float32Array.of(height));
+  frame.tempK = [21, 14, 11].map(temperature => Float32Array.of(temperature + 273.15));
+  const diagnostic = diagnostics();
+  frame.terrainM[0] = 499;
+  deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.surfaceStable);
+  expect(diagnostic.ceilingMslM[0] - 499).toBe(0);
+  frame.terrainM[0] = 500;
+  deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.parcelCrossing);
+  expect(diagnostic.ceilingMslM[0] - 500).toBeCloseTo(789.47, 1);
+});
+
 it.each(layers)('allocates only requested %s output without changing its result', layer => {
   const frame = inversionFrame();
   const both = deriveFrame(frame, mask, { layers });
   const single = deriveFrame(frame, mask, { layers: [layer] });
   expect(Object.keys(single)).toEqual([layer]);
   expect(single[layer]).toEqual(both[layer]);
+});
+
+function diagnostics(cells = 1): FrameDiagnostics {
+  return { ceilingMslM: new Float32Array(cells), buoyancyM2S3: new Float32Array(cells), branch: new Uint8Array(cells) };
+}
+
+function isobaricFrame(): NormalizedFrame {
+  return normalizedFixtureFrame(grid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 12, 1);
+}
+
+it.each(['isobaric', 'model-levels'] as const)('keeps %s layer bytes unchanged with diagnostics enabled', coordinate => {
+  const frame = coordinate === 'isobaric' ? isobaricFrame() : inversionFrame();
+  const before = structuredClone(frame);
+  const without = deriveFrame(frame, mask, { layers });
+  const diagnostic = diagnostics();
+  const withDiagnostics = deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  for (const layer of layers) {
+    expect(Buffer.from(withDiagnostics[layer]!.values.buffer)).toEqual(Buffer.from(without[layer]!.values.buffer));
+    expect(withDiagnostics[layer]!.flags).toEqual(without[layer]!.flags);
+  }
+  expect(frame).toEqual(before);
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.parcelCrossing);
+  expect(diagnostic.ceilingMslM[0]).toBeGreaterThan(frame.terrainM[0]);
+  expect(diagnostic.buoyancyM2S3[0]).toBeGreaterThan(0);
+});
+
+it('retains convective-depth diagnostics when the sink cutoff removes usable lift', () => {
+  const frame = isobaricFrame();
+  frame.sensibleHeatFluxWm2[0] = 0.1;
+  frame.latentHeatFluxWm2[0] = 0;
+  const diagnostic = diagnostics();
+  const fields = deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(fields['usable-lift-agl']!.flags[0] & STATUS_MASK).toBe(1);
+  expect(fields['usable-lift-agl']!.values[0]).toBe(0);
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.parcelCrossing);
+  expect(diagnostic.ceilingMslM[0]).toBeGreaterThan(frame.terrainM[0]);
+  expect(diagnostic.buoyancyM2S3[0]).toBeGreaterThan(0);
+});
+
+it('distinguishes non-convective, profile-top and surface-stable depth diagnostics', () => {
+  const frame = isobaricFrame();
+  const diagnostic = diagnostics();
+  frame.tempK.forEach((values, i) => { values[0] = 273.15 + [17, 12, 7][i]; });
+  deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.surfaceStable);
+  expect(diagnostic.ceilingMslM[0]).toBe(frame.terrainM[0]);
+  expect(diagnostic.buoyancyM2S3[0]).toBe(0);
+
+  frame.tempK.forEach((values, i) => { values[0] = 273.15 + [10, 0, -10][i]; });
+  deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.profileTop);
+  expect(diagnostic.ceilingMslM[0]).toBe(1600);
+
+  frame.sensibleHeatFluxWm2[0] = 0;
+  frame.latentHeatFluxWm2[0] = 0;
+  deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.nonConvective);
+  expect(diagnostic.ceilingMslM[0]).toBe(frame.terrainM[0]);
+  expect(diagnostic.buoyancyM2S3[0]).toBe(0);
+});
+
+it('clears unavailable and outside slots when caller-owned diagnostics are reused', () => {
+  const largerGrid = { ...grid, width: 2 };
+  const largerMask = { ...mask, grid: largerGrid };
+  const frame = normalizedFixtureFrame(largerGrid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 12, 1);
+  const diagnostic = diagnostics(2);
+  diagnostic.ceilingMslM.fill(999);
+  diagnostic.buoyancyM2S3.fill(999);
+  diagnostic.branch.fill(99);
+  deriveFrame(frame, largerMask, { layers, diagnostics: diagnostic });
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.parcelCrossing);
+  expect(diagnostic.ceilingMslM[1]).toBeNaN();
+  expect(diagnostic.buoyancyM2S3[1]).toBeNaN();
+  expect(diagnostic.branch[1]).toBe(FRAME_BRANCH.unavailable);
+  frame.missing.temp2m[0] = 1;
+  const without = deriveFrame(frame, largerMask, { layers });
+  const withDiagnostics = deriveFrame(frame, largerMask, { layers, diagnostics: diagnostic });
+  expect(withDiagnostics).toEqual(without);
+  expect([...diagnostic.ceilingMslM].every(Number.isNaN)).toBe(true);
+  expect([...diagnostic.buoyancyM2S3].every(Number.isNaN)).toBe(true);
+  expect([...diagnostic.branch]).toEqual([FRAME_BRANCH.unavailable, FRAME_BRANCH.unavailable]);
+});
+
+it('records skipped darkness without physics and preserves published outcomes', () => {
+  const frame = normalizedFixtureFrame(grid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 0, 1);
+  const diagnostic = diagnostics();
+  expect(deriveFrame(frame, mask, { layers, diagnostics: diagnostic })).toEqual(deriveFrame(frame, mask, { layers }));
+  const dark = deriveFrame(frame, mask, { layers, diagnostics: diagnostic });
+  expect(dark['usable-lift-msl']!.values[0]).toBe(frame.terrainM[0]);
+  expect(dark['usable-lift-agl']!.values[0]).toBe(0);
+  for (const layer of layers) expect(dark[layer]!.flags[0]).toBe(STATUS_NO_LIFT);
+  expect(diagnostic.ceilingMslM[0]).toBeNaN();
+  expect(diagnostic.buoyancyM2S3[0]).toBeNaN();
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.skippedDark);
+  frame.missing.terrain[0] = 1;
+  expect(deriveFrame(frame, mask, { layers, diagnostics: diagnostic })).toEqual(deriveFrame(frame, mask, { layers }));
+  expect(diagnostic.ceilingMslM[0]).toBeNaN();
+  expect(diagnostic.buoyancyM2S3[0]).toBeNaN();
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.skippedDark);
+
+  const day = isobaricFrame();
+  day.tempK[0][0] = 290.15;
+  day.missing.temp[0][0] = 1;
+  expect(deriveFrame(day, mask, { layers, diagnostics: diagnostic })).toEqual(deriveFrame(day, mask, { layers }));
+  expect(diagnostic.ceilingMslM[0]).toBeNaN();
+  expect(diagnostic.buoyancyM2S3[0]).toBeNaN();
+  expect(diagnostic.branch[0]).toBe(FRAME_BRANCH.unavailable);
+});
+
+it('rejects invalid diagnostics before modifying caller arrays or source data', () => {
+  const frame = isobaricFrame();
+  const before = structuredClone(frame);
+  expect(() => deriveFrame(frame, mask, { layers, diagnostics: diagnostics(2) })).toThrow('native grid');
+  expect(() => deriveFrame(frame, mask, { layers, diagnostics: { ...diagnostics(), ceilingMslM: new Uint8Array(1) as unknown as Float32Array } })).toThrow('declared types');
+  expect(() => deriveFrame(frame, mask, { layers, diagnostics: { ...diagnostics(), ceilingMslM: frame.terrainM } })).toThrow('alias frame inputs');
+  expect(() => deriveFrame(frame, mask, { layers, diagnostics: { ...diagnostics(), branch: mask.output } })).toThrow('alias frame inputs');
+  const shared = diagnostics();
+  expect(() => deriveFrame(frame, mask, { layers, diagnostics: { ...shared, buoyancyM2S3: shared.ceilingMslM } })).toThrow('alias each other');
+  expect(() => deriveFrame(frame, mask, { layers: ['precip-rate'], diagnostics: diagnostics() })).toThrow('require a usable-lift layer');
+  expect(frame).toEqual(before);
 });

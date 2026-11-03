@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, manifestSchema, setBit, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
+import { createRefinementDescriptors, GFS_PRODUCT, manifestSchema, setBit, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
 import { fixturePatch } from '../../../../tests/forecast-fixture.js';
@@ -21,7 +21,7 @@ const cycle = '2026-06-21T12:00:00.000Z';
 const product: ProductDefinition = {
   ...GFS_PRODUCT, modelId: 'refinement-fixture', id: 'refinement-fixture-recipe',
   coverageId: 'refinement-fixture-coverage', coverageDescription: 'Synthetic bounded validation grid',
-  bounds: [-1, -1, 1, 1], maxNativeZoom: 0, frameHours: [1], intervalHours: 1, layers: ['usable-lift-agl'],
+  bounds: [-1, -1, 1, 1], maxNativeZoom: 0, frameHours: [1], intervalHours: 1, layers: ['usable-lift-msl', 'usable-lift-agl'],
   grid: { kind: 'regular-latlon', width: 3, height: 3, earthRadiusM: 6371229, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }
 };
 const baseMask: CoverageMask = { grid: product.grid, bounds: product.bounds, maxZoom: 0, output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1) };
@@ -44,14 +44,18 @@ beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'av-refinement-validation-'));
   const path = await buildForecast({ out: root, product, mask: baseMask, provider, cycle });
   const base = manifestSchema.parse(JSON.parse(await readFile(path, 'utf8'))), patch = fixturePatch(base);
+  patch.descriptors = createRefinementDescriptors(product, patch.descriptors.bounds);
+  patch.layers = [...TERRAIN_CLEARANCE_METHOD.outputs];
+  patch.method.id = TERRAIN_CLEARANCE_METHOD.id;
   fineMask = { grid: patch.grid, bounds: patch.descriptors.bounds, maxZoom: 0, output: new Uint8Array(2), halo: Uint8Array.of(255, 1), tiles: Uint8Array.of(1) };
   setBit(fineMask.output, 4); setBit(fineMask.halo, 4, false);
   await writeFineCoverage(fineMask, patch);
-  const layout = prepareSamplePackLayout(fineMask.grid, fineMask.output, fineMask.halo), pack = createSamplePackBuilder(layout, 1);
+  const layout = prepareSamplePackLayout(fineMask.grid, fineMask.output, fineMask.halo), pack = createSamplePackBuilder(layout, patch.layers.length);
   try {
     pack.writeChannel(0, { values: new Float32Array(9).fill(900), flags: new Uint8Array(9) });
+    pack.writeChannel(1, { values: new Float32Array(9).fill(900), flags: new Uint8Array(9) });
     const result = await pack.finish(localPath(root, patch.samples.key));
-    patch.samples = { ...patch.samples, storedCells: layout.storedCells, ...result };
+    patch.samples = { ...patch.samples, storedCells: layout.storedCells, channelCount: patch.layers.length, ...result };
   } finally { pack.close(); }
   // This subpixel patch hits no zoom-zero quarter samples, so the real base archive is also the composite image.
   manifest = manifestSchema.parse({ ...base, version: 4, patches: [patch] });
@@ -61,7 +65,7 @@ afterAll(async () => { if (root) await rm(root, { recursive: true, force: true }
 it('fully validates a real version-four build with both numeric packs, coverage and PMTiles', async () => {
   const validated = await validateBuild(root, manifest, baseMask, manifest.coverage.hash, product);
   expect(validated.manifest.version).toBe(4);
-  expect(validated.manifest.patches?.[0].samples.bytes).toBe(45);
+  expect(validated.manifest.patches?.[0].samples.bytes).toBe(90);
   expect(() => assertValidatedBuild(root, manifest, validated)).not.toThrow();
 });
 

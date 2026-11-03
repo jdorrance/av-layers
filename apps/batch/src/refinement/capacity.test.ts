@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, setBit, STATUS_VALID, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { GFS_PRODUCT, setBit, STATUS_VALID, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import { prepareTerrainClearance } from '@av/forecast/refinement';
 import { buildForecast } from '../build.js';
@@ -108,18 +108,20 @@ describe('refinement build admission', () => {
     const prepared = prepareBuild(mask, product, { maxLevels: 2, refinements });
     const fields = product.layers.map((): GridField => ({ values: new Float32Array(63).fill(1000), flags: new Uint8Array(63).fill(STATUS_VALID) }));
     const mappings = refinements.map(patch => prepareTerrainClearance(mask, patch.mask));
-    const fineFields = refinements.map((patch, index) => mappings[index].derive(fields[0], patch.terrain, { intervalStart: '2026-06-21T11:00:00.000Z', validTime: '2026-06-21T12:00:00.000Z' }, false));
-    const packs = [createSamplePackBuilder(prepared.layout, product.frameHours.length * product.layers.length), ...prepared.refinements.map(patch => createSamplePackBuilder(patch.layout, product.frameHours.length))];
+    const diagnostics = { ceilingMslM: fields[0].values, buoyancyM2S3: new Float32Array(63).fill(1e10), branch: new Uint8Array(63).fill(2) };
+    const fineFields = refinements.map((patch, index) => mappings[index].derive(diagnostics, fields[0].flags, patch.terrain, { intervalStart: '2026-06-21T11:00:00.000Z', validTime: '2026-06-21T12:00:00.000Z' }, false));
+    const packs = [createSamplePackBuilder(prepared.layout, product.frameHours.length * product.layers.length), ...prepared.refinements.map(patch => createSamplePackBuilder(patch.layout, product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length))];
     try {
       const encodedTerrain = await Promise.all(refinements.flatMap(patch => Object.values(patch.terrain.descriptor.files).map(file => readFile(join(out, file.key)))));
       const decodedTerrain = refinements.reduce((sum, patch) => sum + bytes(patch.terrain.elevationM, patch.terrain.valid), 0);
-      const allFields = [...fields, ...fineFields].reduce((sum, field) => sum + fieldBytes(field), 0);
+      const allFields = [...fields, ...fineFields.flatMap(fields => Object.values(fields))].reduce((sum, field) => sum + fieldBytes(field), 0);
       const allMasks = [mask, ...refinements.map(patch => patch.mask)].reduce((sum, item) => sum + maskBytes(item), 0);
       const { workingSet } = prepared.capacity;
       expect(workingSet.samplePack).toBe(packs.reduce((sum, pack) => sum + pack.byteLength, 0));
       expect(workingSet.preparedTerrain).toBe(decodedTerrain + bytes(...encodedTerrain));
       expect(workingSet.refinementMapping).toBe(mappings.reduce((sum, mapping) => sum + mapping.byteLength, 0));
       expect(workingSet.derivedFields).toBe(allFields);
+      expect(workingSet.diagnostics).toBe(63 * 9);
       expect(workingSet.rasterSharedInputs).toBe(allFields + allMasks);
       expect(workingSet.indicesAndLayout).toBe(
         bytes(prepared.indices.active, prepared.indices.output) + prepared.layout.indexBytes
@@ -130,7 +132,10 @@ describe('refinement build admission', () => {
       expect(prepared.capacity.tiles).toBe(baseline.capacity.tiles);
       expect(workingSet.normalizedFrame).toBe(baseline.capacity.workingSet.normalizedFrame);
       expect(workingSet.rawCompanions).toBe(baseline.capacity.workingSet.rawCompanions);
-      expect(fineFields.every(field => field.values.some(value => value === 900))).toBe(true);
+      for (const fields of fineFields) {
+        expect(fields['usable-lift-agl'].values.some(value => value === 900)).toBe(true);
+        expect(fields['usable-lift-msl'].values.some(value => value === 1000)).toBe(true);
+      }
     } finally { packs.forEach(pack => pack.close()); }
   });
 
@@ -141,7 +146,7 @@ describe('refinement build admission', () => {
     const limit = prepared.capacity.samplePackBytes - 1;
     expect(baseline.capacity.samplePackBytes).toBeLessThan(limit);
     for (const patch of prepared.refinements) {
-      const pack = createSamplePackBuilder(patch.layout, options.product.frameHours.length);
+      const pack = createSamplePackBuilder(patch.layout, options.product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
       expect(pack.byteLength).toBeLessThan(limit); pack.close();
     }
     const configure = config.configuredRefinements;

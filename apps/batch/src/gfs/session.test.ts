@@ -96,7 +96,7 @@ it('reuses raw companion precision and immutable inventory/index state with iden
     expect(withoutClock(frame2)).toEqual(withoutClock(standalone2));
     expect(frame2.precipitationMmPerHour[0]).toBeCloseTo(0.001, 9);
     expect(frame2.missing.precipitation).toEqual(Uint8Array.of(0, 1));
-    expect(sample).toHaveBeenCalledTimes(100);
+    expect(sample).toHaveBeenCalledTimes(98);
     expect(session.stats.rawCompanionHits).toBe(3);
     expect(session.stats.peakPrefetchBytes).toBeLessThanOrEqual(128 * 1024 * 1024);
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(4);

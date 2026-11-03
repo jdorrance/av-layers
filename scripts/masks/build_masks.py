@@ -292,6 +292,8 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 def regeneration_command(args: argparse.Namespace) -> str:
     command = [
+        "uv", "run", "--python", "3.14.7",
+        "--with", "shapely==2.1.2", "--with", "pyproj==3.7.2", "--with", "pyshp==2.3.1",
         "python", "scripts/masks/build_masks.py",
         "--config", str(args.config), "--output", str(args.output),
     ]
@@ -539,7 +541,7 @@ def main() -> None:
                 ("big_sur_coast", 36.2700, -121.8100, True),
                 ("azores_sao_miguel", 37.7410, -25.6750, True),
                 ("canaries_tenerife", 28.2910, -16.6290, True),
-                ("armenia_yerevan", 40.1790, 44.4990, True),
+                ("caucasus_40n_44e", 40.1790, 44.4990, True),
                 ("new_zealand_wellington", -41.2865, 174.7762, True),
                 ("aleutians_unalaska", 53.8750, -166.5360, True),
                 ("dateline_east_attu", 52.9000, 173.2000, True),
@@ -547,13 +549,14 @@ def main() -> None:
                 ("exclude_russia_moscow", 55.7558, 37.6173, False),
                 ("exclude_greenland_nuuk", 64.1814, -51.6941, False),
                 ("exclude_antarctica", -77.8500, 166.6700, False),
+                ("exclude_china_beijing", 39.9042, 116.4074, False),
                 ("outside_band_north", 66.0000, 20.0000, False),
                 ("outside_band_south", -56.0000, 10.0000, False),
                 ("open_ocean_atlantic", 30.0000, -40.0000, False),
             ]
         else:
             cases = [
-                ("armenia_yerevan", 40.1790, 44.4990, True),
+                ("caucasus_40n_44e", 40.1790, 44.4990, True),
                 ("alps_chamonix", 45.9237, 6.8694, True),
                 ("pyrenees_ager", 42.0000, 0.7620, True),
                 ("dolomites_marmolada", 46.4336, 11.8511, True),
@@ -689,7 +692,7 @@ def main() -> None:
                 ),
                 "excludedPrecedence": (
                     "An output cell is cleared if its nearest-cell footprint "
-                    "intersects the filled raw ADM0 footprint of RUS, ATA or GRL, "
+                    "intersects the filled raw ADM0 footprint of RUS, CHN, ATA or GRL, "
                     "even when that removes a buffer strip outside the excluded polygon."
                 ),
                 "inlandLakes": (

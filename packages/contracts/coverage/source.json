@@ -15,6 +15,7 @@
       "excludeField": "ADM0_A3",
       "excludeValues": [
         "RUS",
+        "CHN",
         "ATA",
         "GRL"
       ],
@@ -92,15 +93,15 @@
     "latMin": -55,
     "latMax": 65,
     "seaBufferMeters": 50000,
-    "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core; antimeridian shifted and split at +/-180. No global LAEA or degree buffer.",
-    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
+    "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core.",
+    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
-    "cellFootprint": "GFS regular-grid nearest-cell rectangle: longitude center +/-0.125deg (periodic at +/-180), latitude center +/-0.125deg, clipped to -55..65. A cell is output-active when this rectangle intersects the admitted buffered geometry and does not intersect an excluded footprint.",
+    "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.125deg, latitude center +/-0.125deg, clipped to bounds [-180, -55, 180, 65].",
     "tileRule": "A z0-7 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
-    "outputDomain": "union of admitted nearest-cell footprints clipped to the latitude band"
+    "outputDomain": "union of admitted nearest-cell footprints clipped to the coverage bounds"
   },
   "grid": {
-    "name": "gfs-0p25-global",
+    "name": "noaa-gfs-0p25",
     "lon0": -180,
     "lat0": 90,
     "width": 1440,
@@ -110,7 +111,7 @@
     "lonPeriodic": true,
     "rowMajor": "north-to-south",
     "columns": "west-to-east",
-    "bitOrder": "lsb0: index = row*width + col; byte = index >> 3; bit = index & 7; bit value = 1 << bit. Row 0 is 90N, row 720 is 90S, column 0 is 180W.",
+    "bitOrder": "lsb0: index = row*width + col; byte = index >> 3; bit = index & 7; bit value = 1 << bit.",
     "cellCount": 1038240,
     "bitsetBytes": 129780
   },
@@ -125,24 +126,24 @@
     "bytes": 129780,
     "counts": {
       "totalCells": 1038240,
-      "activeCellsBeforeExclusion": 212699,
-      "clearedByExcludedFootprint": 2462,
-      "activeCells": 210237,
-      "inactiveCells": 828003
+      "activeCellsBeforeExclusion": 197968,
+      "clearedByExcludedFootprint": 3796,
+      "activeCells": 194172,
+      "inactiveCells": 844068
     },
-    "sha256": "e8f691c310d65bf025a5f5641b7dab08a2ac7547aefc7b4cab227d4281f1783a"
+    "sha256": "0dc14fcb94f7fd993e3085ee7320c50b8d7399b1adb4018c0f31f01bb5faaa7a"
   },
   "halo": {
     "file": "halo.bin",
     "encoding": "bitpacked-lsb0",
     "bytes": 129780,
-    "definition": "Input-only one-cell Chebyshev ring (8-neighbour, longitude wrapped, latitude clamped) around output-active cells, excluding output-active cells. It may cross the latitude band. Halo bits never make a cell output-active and are not query coverage.",
+    "definition": "Input-only one-cell Chebyshev ring (8-neighbour) around output-active cells, excluding output-active cells.",
     "counts": {
-      "haloOnlyCells": 15950,
-      "activePlusHaloCells": 226187,
-      "haloOverheadRatio": 0.075867
+      "haloOnlyCells": 16281,
+      "activePlusHaloCells": 210453,
+      "haloOverheadRatio": 0.083848
     },
-    "sha256": "484dcc65a05f60f92474f76ebc6bd2e1833187675165559ba92456ab6fde9793"
+    "sha256": "eb7c5d0b1cbd0c6fb9dccccb77587ec0ae1c2e9a397aaf5e00d0c98f9fddbac3"
   },
   "tiles": {
     "file": "tiles.bin",
@@ -185,9 +186,9 @@
       "2": 8,
       "3": 30,
       "4": 92,
-      "5": 267,
-      "6": 847,
-      "7": 2794
+      "5": 263,
+      "6": 818,
+      "7": 2655
     },
     "activeZ5Tiles": [
       "5/0/8",
@@ -390,7 +391,6 @@
       "5/23/15",
       "5/24/10",
       "5/24/11",
-      "5/24/12",
       "5/24/13",
       "5/24/14",
       "5/24/15",
@@ -398,7 +398,6 @@
       "5/24/17",
       "5/25/10",
       "5/25/11",
-      "5/25/12",
       "5/25/13",
       "5/25/14",
       "5/25/15",
@@ -406,7 +405,6 @@
       "5/25/18",
       "5/26/10",
       "5/26/11",
-      "5/26/12",
       "5/26/13",
       "5/26/14",
       "5/26/15",
@@ -414,7 +412,6 @@
       "5/26/17",
       "5/26/18",
       "5/26/19",
-      "5/27/10",
       "5/27/11",
       "5/27/12",
       "5/27/13",
@@ -458,12 +455,12 @@
       "5/31/20",
       "5/31/21"
     ],
-    "sha256": "1a61ce891485c9bbe015b21acefca7511743a2d24d233c1166d7b2a1b26a1544"
+    "sha256": "25385151fa23da909e158a927eb0d814d7f14688ead00f8c4ddb67d6e8a01dbe"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.353553,
     "cellDiagonalMetersAtEquator": 39225.9,
-    "statement": "Natural Earth 1:50m geometry is generalized; the 50 km buffer is source-geometry seaward buffering, not an exact pixel coastline. Tile-local azimuthal-equidistant projection has sub-0.5% metric distortion across a 10-degree tile (about 250 m at 50 km at the tile edge), reported as an approximation rather than a geodesic buffer guarantee. Conservative 0.25-degree cell-footprint intersection can overreach the coastal band or underfill an excluded border by about one cell diagonal (0.3536 deg, about 39 km at the equator and 17 km at 65N)."
+    "statement": "Natural Earth 1:50m geometry is generalized; the 50 km buffer is source-geometry seaward buffering, not an exact pixel coastline."
   },
   "tinyIslandInspection": {
     "requiredTestIslandsCovered": [
@@ -472,7 +469,7 @@
       "Aleutians/Unalaska",
       "New Zealand"
     ],
-    "knownNaturalEarth50mOmission": "Lord Howe Island is absent from this Natural Earth 1:50m admin-0 release and is not a required v1 test case; no runtime exception or invented geometry is used. Required v1 test islands are present or within the admitted 50 km buffer.",
+    "knownNaturalEarth50mOmission": "Lord Howe Island is absent from this Natural Earth 1:50m admin-0 release and is not a required v1 test case.",
     "versionedGeometryCorrection": null
   },
   "tests": {
@@ -488,7 +485,7 @@
         "nearestCell": {
           "row": 228,
           "col": 251,
-          "centerLat": 33,
+          "centerLat": 33.0,
           "centerLon": -117.25
         }
       },
@@ -553,7 +550,7 @@
         }
       },
       {
-        "name": "armenia_yerevan",
+        "name": "caucasus_40n_44e",
         "lat": 40.179,
         "lon": 44.499,
         "expectedOutput": true,
@@ -608,7 +605,7 @@
         "nearestCell": {
           "row": 148,
           "col": 1413,
-          "centerLat": 53,
+          "centerLat": 53.0,
           "centerLon": 173.25
         }
       },
@@ -624,7 +621,7 @@
           "row": 427,
           "col": 0,
           "centerLat": -16.75,
-          "centerLon": -180
+          "centerLon": -180.0
         }
       },
       {
@@ -673,9 +670,24 @@
         }
       },
       {
+        "name": "exclude_china_beijing",
+        "lat": 39.9042,
+        "lon": 116.4074,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 200,
+          "col": 1186,
+          "centerLat": 40.0,
+          "centerLon": 116.5
+        }
+      },
+      {
         "name": "outside_band_north",
-        "lat": 66,
-        "lon": 20,
+        "lat": 66.0,
+        "lon": 20.0,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -683,14 +695,14 @@
         "nearestCell": {
           "row": 96,
           "col": 800,
-          "centerLat": 66,
-          "centerLon": 20
+          "centerLat": 66.0,
+          "centerLon": 20.0
         }
       },
       {
         "name": "outside_band_south",
-        "lat": -56,
-        "lon": 10,
+        "lat": -56.0,
+        "lon": 10.0,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -698,14 +710,14 @@
         "nearestCell": {
           "row": 584,
           "col": 760,
-          "centerLat": -56,
-          "centerLon": 10
+          "centerLat": -56.0,
+          "centerLon": 10.0
         }
       },
       {
         "name": "open_ocean_atlantic",
-        "lat": 30,
-        "lon": -40,
+        "lat": 30.0,
+        "lon": -40.0,
         "expectedOutput": false,
         "observedOutput": false,
         "observedHalo": false,
@@ -713,8 +725,8 @@
         "nearestCell": {
           "row": 240,
           "col": 560,
-          "centerLat": 30,
-          "centerLon": -40
+          "centerLat": 30.0,
+          "centerLon": -40.0
         }
       }
     ],
@@ -726,8 +738,8 @@
           179.95000000000002
         ],
         "tileCoreLon": [
-          -180,
-          -170
+          -180.0,
+          -170.0
         ],
         "probeLon": -179.8,
         "expected": true,
@@ -740,8 +752,8 @@
           -179.89999999999998
         ],
         "tileCoreLon": [
-          170,
-          180
+          170.0,
+          180.0
         ],
         "probeLon": 179.8,
         "expected": true,
@@ -757,7 +769,7 @@
   "regional": {},
   "regeneration": {
     "tooling": "scripts/masks/build_masks.py",
-    "toolingSha256": "8dfb4a1eb50257978bbdd2e890950b5339726850cfd9a1bf853a43ee95f0af55",
+    "toolingSha256": "d0799a74276ae80a6995abb601e45c88b3c5157393d832b06deb86a9a0da333b",
     "python": "3.14.7",
     "pythonVersion": "3.14.7",
     "pythonImplementation": "CPython",
@@ -772,7 +784,7 @@
       "pyproj": "3.7.2",
       "pyshp": "2.3.1"
     },
-    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --source ne_50m_admin_0_countries.zip --output packages/contracts/coverage",
+    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/gfs.json --output packages/contracts/coverage",
     "scheduledBuildGIS": false
   }
 }
