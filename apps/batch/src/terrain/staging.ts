@@ -6,8 +6,20 @@ import { readLocalFile } from '../local-file.js';
 import type { ObjectStorage } from '../storage.js';
 import { localPath } from '../validate.js';
 import { readPreparedTerrain, type PreparedTerrainRef } from './prepare.js';
+import { CATALOG_MAX_BYTES, parseJson, sha256, terrainAssetSchema, terrainCatalogSchema, type TerrainAsset } from './contract.js';
 
 interface LocalTerrainOptions { ref: PreparedTerrainRef; out: string; grid: Grid; signal?: AbortSignal }
+
+/** Resolve one pinned catalog before preparation; forecast workers load only prepared files. */
+export async function loadTerrainCatalog(refInput: TerrainAsset, storage: Pick<ObjectStorage, 'get'>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const ref = terrainAssetSchema.parse(refInput);
+  if (ref.bytes > CATALOG_MAX_BYTES || ref.key !== `terrain/catalogs/${ref.sha256}.json`) throw new Error('Invalid terrain catalog reference');
+  const result = await storage.get(ref.key, undefined, ref.bytes, signal);
+  signal?.throwIfAborted();
+  if (!result || result.bytes.byteLength !== ref.bytes || sha256(result.bytes) !== ref.sha256) throw new Error(`Terrain catalog missing or corrupt: ${ref.key}`);
+  return parseJson(result.bytes, terrainCatalogSchema, CATALOG_MAX_BYTES);
+}
 
 /** Validate the pinned descriptor and arrays once per local forecast session. */
 export function loadPreparedTerrain({ ref, out, grid, signal }: LocalTerrainOptions) {

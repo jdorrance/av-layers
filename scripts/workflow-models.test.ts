@@ -51,6 +51,27 @@ describe('workflow model selection', () => {
 });
 
 describe('multi-model workflow isolation', () => {
+  it('resolves one catalog override or environment default only in the preparation job', () => {
+    const forecast = workflow('forecast'), model = workflow('forecast-model'), modelJobs = jobs('forecast-model');
+    const input = record(record(record(record(forecast.on).workflow_dispatch).inputs)['terrain-catalog-ref']);
+    expect(input).toMatchObject({ type: 'string', default: '' });
+    expect(record(record(jobs('forecast').forecast).with)['terrain-catalog-ref']).toBe("${{ inputs['terrain-catalog-ref'] || '' }}");
+    expect(record(record(record(model.on).workflow_call).inputs)['terrain-catalog-ref']).toEqual({ type: 'string', default: '' });
+    expect(record(record(modelJobs.prepare).env).TERRAIN_CATALOG_REF).toBe("${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF || '' }}");
+    for (const env of [record(model.env), record(record(modelJobs.shard).env), record(record(modelJobs['build-publish']).env)]) {
+      expect(env.TERRAIN_CATALOG_REF).toBeUndefined();
+      expect(env.TERRAIN_INPUTS).toBeUndefined();
+    }
+    const steps = record(modelJobs.prepare).steps as Record<string, unknown>[];
+    const upload = steps.find(step => step.name === 'Share immutable build plan')!;
+    expect(String(record(upload.with).path)).toContain('output/coverage/');
+    expect(String(record(upload.with).path)).toContain('output/terrain/');
+    const publisherSteps = record(modelJobs['build-publish']).steps as Record<string, unknown>[];
+    const full = publisherSteps.find(step => step.name === 'Upload full build artifacts on failure or explicit request')!;
+    expect(String(record(full.with).path)).toContain('output/plan.json');
+    expect(String(record(full.with).path)).not.toContain('output/terrain/');
+  });
+
   it('expands models before calling one independently serialized forecast per model', () => {
     const forecast = workflow('forecast'), job = record(jobs('forecast').forecast);
     expect(forecast.concurrency).toBeUndefined();

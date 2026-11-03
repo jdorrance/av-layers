@@ -40,10 +40,18 @@ mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
 
 ## Use in forecasts
 
-Pass `--terrain-ref PATH` to `pnpm forecast` locally, or pass a JSON map of
-model IDs to prepared terrain references via `terrain-inputs` in the Forecast
-workflow. The `prepare` job stages the arrays into the build plan artifact so
-each shard worker loads them from local disk before acquiring weather frames.
+The [refinement producer](../refinement/README.md) prepares configured grids
+from one pinned global catalog and stages their masks and elevation arrays in
+the build plan artifact. Shards validate and load these files once before
+weather acquisition. Models with no intersecting zones retain native output.
+
+[Operations](../../../../docs/operations.md#terrain-data) configures the hosted
+catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
+covers local builds with `--terrain-catalog-ref PATH`.
+
+The existing `--terrain-ref PATH` option loads a staged native-grid preparation.
+The hosted `terrain-inputs` model map stages equivalent references. These inputs
+keep their own recipe identity and must match the forecast product's grid.
 
 ```mermaid
 flowchart LR

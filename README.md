@@ -1,12 +1,14 @@
 # Aviation Forecast Layers
 
-Maps and point forecasts for usable lift above sea level, usable lift above model
-terrain, and precipitation rate. A batch job builds the forecast files; an API
+Maps and point forecasts for usable lift above sea level, usable lift above
+ground, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
 The builder supports NOAA GFS and regional DWD ICON-EU. The forecast workflow
-runs either model or both in parallel; scheduled runs build both. See
-[status](docs/status.md) for deployment validation.
+runs either model or both in parallel; scheduled runs build both. Configure
+[polygons](packages/contracts/config/refinement.json) to refine ground clearance
+on 1 km DEM grids. Atmospheric lift ceilings retain their source-model
+resolution. See [deployments](docs/status.md) for live applications and runs.
 
 ## Quick start
 
@@ -21,6 +23,8 @@ pnpm dev
 This starts the local API and map with generated test data. Open the URL printed
 by the development server. To build a real forecast, follow
 [the forecast setup guide](docs/development.md#build-a-real-forecast).
+The [terrain example](docs/development.md#terrain-refinement) uses
+`--terrain-catalog-ref` and `--terrain-store-dir` for a local DEM store.
 
 ## Development checks
 
@@ -48,7 +52,7 @@ pnpm installs the Node version declared in `package.json`.
 - [Science](docs/science.md): how lift and precipitation are calculated.
 - [Development](docs/development.md): working on the code.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
-- [Project status](docs/status.md): release checks and remaining work.
+- [Deployments](docs/status.md): live applications and build history.
 
 Source data and third-party license notices are in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

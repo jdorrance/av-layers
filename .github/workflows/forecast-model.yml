@@ -23,6 +23,9 @@ on:
       terrain-inputs:
         type: string
         default: ''
+      terrain-catalog-ref:
+        type: string
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -47,6 +50,7 @@ jobs:
       artifact: ${{ steps.plan.outputs.artifact }}
     env:
       TERRAIN_INPUTS: ${{ inputs['terrain-inputs'] || '' }}
+      TERRAIN_CATALOG_REF: ${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF || '' }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -183,6 +187,7 @@ jobs:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
           overwrite: true
           path: |
+            output/plan.json
             output/builds/
             output/coverage/
           if-no-files-found: warn

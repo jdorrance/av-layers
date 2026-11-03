@@ -75,7 +75,24 @@ export const PRECIPITATION_METHOD = Object.freeze({
     'Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.'
   ])
 } as const);
-export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD });
+export const TERRAIN_CLEARANCE_METHOD = Object.freeze({
+  id: 'native-lift-terrain-clearance-v1',
+  requiredInputs: Object.freeze(['sourceLiftMslM', 'terrainElevationM'] as const),
+  inputs: Object.freeze({
+    sourceLiftMslM: Object.freeze({ id: 'sourceLiftMslM', quantity: 'usable-lift-ceiling', units: 'm', dimensions: 'cell', verticalReference: 'model MSL', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }),
+    terrainElevationM: Object.freeze({ id: 'terrainElevationM', quantity: 'surface-elevation', units: 'm', dimensions: 'cell', verticalReference: 'prepared DEM datum recorded in the patch', timeSupport: 'static', missingness: 'explicit-cell-mask' })
+  }),
+  outputs: Object.freeze(['usable-lift-agl'] as const),
+  spatialSupport: 'bilinear-neighborhood',
+  parameters: Object.freeze({ minimumSolarElevationDeg: DEFAULT_HORIZON_DEG }),
+  caveats: Object.freeze([
+    'Bilinearly reconstructs the native lift ceiling and subtracts prepared DEM elevation, clipping depth at zero; it does not change the native MSL forecast.',
+    'Every positive-weight native contributor is required. Mixed lift/no-lift neighborhoods and missing contributors are unavailable; all-no-lift neighborhoods remain zero.',
+    'Uses the parent frame daylight interval. Nighttime with valid terrain and native geometric support emits no lift; missing terrain remains unavailable.',
+    'DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion or new atmospheric column calculation is applied.'
+  ])
+} as const);
+export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD, [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });
 export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: LIFT_METHOD,
   'model-levels': MODEL_LEVEL_LIFT_METHOD
@@ -98,7 +115,7 @@ export const methodDescriptorSchema = z.object({
   requiredInputs: z.array(inputIdSchema).min(1).max(16),
   inputs: z.record(inputIdSchema, normalizedInputSchema),
   outputs: z.array(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/)).min(1).max(16),
-  spatialSupport: z.literal('column'),
+  spatialSupport: z.enum(['column', 'bilinear-neighborhood']),
   parameters: z.record(parameterKeySchema, z.number().finite()),
   caveats: z.array(z.string().min(1).max(512)).min(1).max(8)
 }).strict().superRefine((method, ctx) => {

@@ -10,6 +10,9 @@ Verify a single upstream frame from the repository root:
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
 ```
 
+See [development](../../../../docs/development.md#build-a-real-forecast) to build
+map tiles and point samples with the configured terrain refinements.
+
 ## Offline checks
 
 ```sh

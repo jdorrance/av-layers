@@ -994,7 +994,8 @@
                                   },
                                   "spatialSupport": {
                                     "enum": [
-                                      "column"
+                                      "column",
+                                      "bilinear-neighborhood"
                                     ],
                                     "type": "string"
                                   }
@@ -1567,7 +1568,8 @@
                                         },
                                         "spatialSupport": {
                                           "enum": [
-                                            "column"
+                                            "column",
+                                            "bilinear-neighborhood"
                                           ],
                                           "type": "string"
                                         }
@@ -2927,7 +2929,8 @@
                               },
                               "spatialSupport": {
                                 "enum": [
-                                  "column"
+                                  "column",
+                                  "bilinear-neighborhood"
                                 ],
                                 "type": "string"
                               }
@@ -3500,7 +3503,8 @@
                                     },
                                     "spatialSupport": {
                                       "enum": [
-                                        "column"
+                                        "column",
+                                        "bilinear-neighborhood"
                                       ],
                                       "type": "string"
                                     }

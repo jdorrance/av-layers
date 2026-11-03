@@ -56,7 +56,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   lines.push('', '## Refinement grids', '',
     'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). See [status](status.md) for deployment state.', '');
+  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). See [deployments](status.md) for live applications and runs.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);

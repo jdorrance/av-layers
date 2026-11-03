@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE } from '@av/contracts';
+import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD } from '@av/contracts';
 import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
@@ -12,8 +12,13 @@ import { failureReason } from './failure.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
 import type { PreparedTerrainRef } from './terrain/prepare.js';
+import { prepareRefinements, loadRefinements } from './refinement/prepare.js';
+import type { TerrainAsset, TerrainStorage } from './terrain/contract.js';
 import { buildFrames, type FrameBuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
-export interface BuildOptions extends FrameBuildOptions { onValidated?: (result: ValidatedBuild, path: string) => Promise<void> }
+export interface BuildOptions extends FrameBuildOptions {
+  onValidated?: (result: ValidatedBuild, path: string) => Promise<void>;
+  refinement?: { catalogRef: TerrainAsset; storage: TerrainStorage };
+}
 
 export function createBuildStamp(): BuildStamp {
   const createdAt = new Date().toISOString();
@@ -28,9 +33,11 @@ export async function buildProduct(modelId: string, options: BuildOptions): Prom
 /** Local sequential execution and distributed workers share the same frame implementation. */
 export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
   const stamp = createBuildStamp();
-  const prepared = prepareBuild(options.mask, options.product, { ...options.provider, terrainBytes: options.terrain?.arrayBytes });
+  const inputs = options.refinement ? await prepareRefinements({ ...options.refinement, product: options.product, mask: options.mask, out: options.out, signal: options.signal }) : [];
+  const refinements = await loadRefinements({ inputs, out: options.out, baseMask: options.mask, signal: options.signal });
+  const prepared = prepareBuild(options.mask, options.product, { ...options.provider, terrainBytes: options.terrain?.arrayBytes, refinements });
   const coverageHash = await writeCoverage(resolve(options.out), options.mask, options.product);
-  const identity = await buildIdentity(options.product, coverageHash, options.terrain);
+  const identity = await buildIdentity(options.product, coverageHash, options.terrain, inputs);
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
   const result = await buildFrames({ ...options, ...stamp, prepared, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
   return finishForecast({ ...options, ...stamp, prepared, coverageHash, identity, result });
@@ -47,18 +54,29 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
   const channelCount = frames.length * product.layers.length;
   const capacity = frames.length === product.frameHours.length ? initialCapacity : {
     ...initialCapacity,
-    ...estimateCapacity(mask, product, layout.storedCells, { frames: frames.length })
+    ...estimateCapacity(mask, product, layout.storedCells, { frames: frames.length }, initialCapacity.refinement)
   };
   const descriptors = createProductDescriptors(product);
   await mkdir(localPath(root, prefix), { recursive: true });
   let phase = 'provenance';
   try {
+    const refined = result.refinements ?? [];
+    if (refined.length !== options.prepared.refinements.length || refined.some((item, index) => item.id !== options.prepared.refinements[index].input.id)) throw new Error('Incomplete or reordered refinement results');
+    const patches = options.prepared.refinements.map(({ input, layout, terrain }, index) => ({
+      id: input.id, grid: input.grid, coverage: input.coverage, geometry: input.geometry,
+      descriptors: createRefinementDescriptors(product, input.bounds), layers: [...TERRAIN_CLEARANCE_METHOD.outputs],
+      samples: { format: 'cell-major-blocks-v1' as const, blockSize: SAMPLE_BLOCK_SIZE, storedCells: layout.storedCells, ...refined[index].samples },
+      method: { id: TERRAIN_CLEARANCE_METHOD.id, hash: identity.scienceHash },
+      terrain: { dataId: terrain.descriptor.dataId, key: input.terrain.key, sha256: input.terrain.sha256,
+        verticalDatum: terrain.descriptor.source.verticalDatum, surface: terrain.descriptor.source.surface }
+    }));
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
     const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle, provider: provider.provider, temporalApproximation: 'interval flux with endpoint profile and PBL', frames: receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
     await mkdir(dirname(provenancePath), { recursive: true });
     await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });
     const baseManifest = {
-      version: 3 as const,
+      version: patches.length ? 4 as const : 3 as const,
+      ...(patches.length ? { patches } : {}),
       descriptors, recipe: identity.recipe,
       model: product.modelId,
       buildId,

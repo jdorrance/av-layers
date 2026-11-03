@@ -3,7 +3,7 @@
 Downloads GFS or ICON-EU weather data and builds map tiles, point sample packs,
 and a build manifest.
 
-Run from the repository root after [setup](../../README.md):
+Run from the repository root:
 
 ```sh
 pnpm forecast --model gfs --out output --cache-dir .cache/gfs
@@ -14,8 +14,12 @@ path. Pass `--model icon-eu` for regional ICON-EU lift and `--cycle` to select a
 specific UTC run. See [development](../../docs/development.md#build-a-real-forecast)
 to preview the build locally.
 
-Estimate build resources or verify a single upstream frame before running a full
-build:
+Add `--terrain-catalog-ref PATH` to enable configured refinement zones. Use
+`--terrain-store-dir PATH` for a local terrain store; otherwise the catalog and
+terrain come from R2. See [terrain setup](../../docs/development.md#terrain-refinement).
+
+Estimate build resources including configured refinement grids, or verify a
+single upstream frame:
 
 ```sh
 pnpm capacity --model icon-eu
@@ -37,7 +41,7 @@ Run batch tests with `pnpm test apps/batch`.
 - [src/icon](src/icon/README.md): DWD ICON-EU adapter.
 - [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
 - [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
-- [src/refinement](src/refinement/README.md): polygon configuration and 1 km grid planning.
+- [src/refinement](src/refinement/README.md): polygon grids, prepared terrain, and frozen shard inputs.
 - [pmtiles.json](pmtiles.json): pinned `pmtiles` binary version and SHA-256 digests.
 
 ## Parallel builds
@@ -45,9 +49,11 @@ Run batch tests with `pnpm test apps/batch`.
 The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
 `gfs`, or `icon-eu` and calls the reusable
 [model workflow](../../.github/workflows/forecast-model.yml) per model. Each
-model resolves its cycle and daylight-filtered hours, runs up to four parallel
-`forecast-shard` workers, and merges and validates the shards before publishing
-to R2.
+model resolves its cycle and daylight-filtered hours, prepares configured grids,
+and freezes their masks and terrain arrays in the plan artifact. Up to four
+`forecast-shard` workers load these inputs locally. Each acquired native frame
+supplies the base fields and every refinement patch. Assembly merges each grid's
+sample packs and validates the complete build before publication to R2.
 
 ```mermaid
 flowchart TB

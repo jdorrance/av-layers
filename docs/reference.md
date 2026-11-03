@@ -14,7 +14,7 @@ Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the opti
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`.
@@ -50,7 +50,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 ## Configured models
 
-Source: [product registry](../packages/contracts/src/products.ts). See [status](status.md) for deployment state.
+Source: [product registry](../packages/contracts/src/products.ts). See [deployments](status.md) for live applications and runs.
 
 ### GFS (gfs-soaring)
 
@@ -219,6 +219,23 @@ Caveats:
 - PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.
 - A profile without a resolved crossing is capped at its highest usable level and flagged.
 - MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.
+
+### native-lift-terrain-clearance-v1
+
+- Outputs: `usable-lift-agl`.
+- Required inputs: `sourceLiftMslM`, `terrainElevationM`.
+- Spatial support: `bilinear-neighborhood`.
+
+Parameters:
+
+- `minimumSolarElevationDeg`: `-0.833`.
+
+Caveats:
+
+- Bilinearly reconstructs the native lift ceiling and subtracts prepared DEM elevation, clipping depth at zero; it does not change the native MSL forecast.
+- Every positive-weight native contributor is required. Mixed lift/no-lift neighborhoods and missing contributors are unavailable; all-no-lift neighborhoods remain zero.
+- Uses the parent frame daylight interval. Nighttime with valid terrain and native geometric support emits no lift; missing terrain remains unavailable.
+- DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion or new atmospheric column calculation is applied.
 
 ### trailing-precipitation-rate-v1
 

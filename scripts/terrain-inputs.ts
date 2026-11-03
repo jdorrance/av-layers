@@ -1,5 +1,11 @@
 import { getProduct, parseBoundedJson } from '@av/contracts';
 import { preparedTerrainRefSchema } from '../apps/batch/src/terrain/prepare.js';
+import { parseJson, terrainAssetSchema } from '../apps/batch/src/terrain/contract.js';
+
+/** A single immutable catalog supplies every configured zone and selected model. */
+export function terrainCatalogInput(json: string) {
+  return parseJson(Buffer.from(json), terrainAssetSchema, 16 * 1024);
+}
 
 /** Optional model selections share the existing plan channel; absent models acquire no terrain. */
 export function terrainInputForModel(json: string, model: string) {

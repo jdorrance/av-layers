@@ -1,13 +1,12 @@
 # Roadmap
 
-See [status](status.md) for current deployment state and
-[extensions](extensions.md) for implementation checklists.
+See [deployments](status.md) for live applications and
+[extensions](extensions.md) for adding models and calculations.
 
 Next milestones, in order:
 
-1. **Qualify ICON-EU in production:** run `input:proof` and a full daylight-filtered
-   ICON-EU build on the hosted runner, record cold/warm timings and peak RSS,
-   and verify publication in both clients.
+1. **Terrain-aware lift:** evaluate atmospheric columns over DEM elevations
+   and validate fine MSL and AGL against observations.
 2. **Atmospheric profiles:** define vertical profile schemas, storage layout,
    and point-query limits for sounding charts.
 3. **Native-grid diagnostics:** validate grid-relative wind rotation, map-scale

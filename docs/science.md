@@ -70,14 +70,33 @@ requires updraft velocity to exceed `sinkRateMps` (`1.2 m/s` default in
 [`@av/soaring/parameters`](../packages/soaring/src/parameters.ts)); the upper
 crossing with `sinkRateMps` sets the usable thermal depth ([column.ts](../packages/soaring/src/column.ts)).
 
+## Terrain clearance
+
+Method `native-lift-terrain-clearance-v1` derives fine AGL in the configured
+polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
+compiles native neighbors and weights once per target grid. Each target cell
+requires every positive-weight native neighbor to have known, matching lift status.
+Valid lift gives `max(0, interpolated MSL ceiling − DEM elevation)`; all-no-lift
+neighbors give zero. Mixed lift/no-lift neighborhoods, missing DEM and missing
+native support remain unavailable.
+
+Daylight follows the same interval as the parent frame. A dark cell with valid
+terrain and complete native geometric support emits no lift without evaluating
+the atmospheric values. Missing terrain or geometric support stays unavailable.
+MSL and atmospheric column calculations remain native. Clearance can include
+space below model ground; it does not establish thermals originating at the
+local DEM surface. Each patch records the DEM datum and surface type. The
+calculation applies no vertical-datum transformation.
+
 ## Reconstruction and storage
 
 [`@av/forecast/sampler`](../packages/forecast/src/sampler.ts) checks coverage
 membership, snaps coordinates within $10^{-10}$ grid steps, wraps periodic
-longitudes, and bilinearly interpolates when all four surrounding cells are
-valid (using `0` AGL / terrain MSL for `no-usable-lift` neighbors). If any
-neighbor is `unavailable` or `outside-domain`, it falls back to the nearest
-cell.
+longitudes, and ignores zero-weight neighbors. Known contributors interpolate
+bilinearly, using `0` AGL / model-terrain MSL for no-lift cells; public no-lift
+results follow [data](data.md#layers-and-missing-values). If a contributing cell
+is `unavailable` or `outside-domain`, the nearest contributing cell supplies
+the value and status.
 
 Tile rendering evaluates four quarter-pixel subsamples in Web Mercator, applies
 the layer palette, and averages premultiplied RGBA before encoding lossless

@@ -108,6 +108,12 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
 }
 
 describe('build sample acquisition intervals', () => {
+  it('builds the native forecast when no terrain catalog is supplied', async () => {
+    const manifest = await run(frame);
+    expect(manifest.version).toBe(3);
+    expect(manifest.patches).toBeUndefined();
+    expect(manifest.metrics.capacity).toMatchObject({ refinement: { gridCells: 0, storedCells: 0 } });
+  });
   it.each(['acquire', 'render'])('records a structured %s failure and only completely rendered frames', async phase => {
     const failure = Object.assign(new Error('Injected field failure'), { code: 'fixture-failure', details: { reason: 'fixture', hour: 2 } });
     if (phase === 'render') {

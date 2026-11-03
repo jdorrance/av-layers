@@ -6,7 +6,8 @@ import { createTerrainReader, type TerrainReadStats } from './reader.js';
 
 export const PREPARED_TERRAIN_METHOD = 'bilinear-native-v1';
 export const PREPARED_DESCRIPTOR_MAX_BYTES = 16 * 1024;
-export const MAX_PREPARED_TERRAIN_BYTES = MAX_GRID_CELLS * 5;
+export const PREPARED_TERRAIN_CELL_BYTES = Float32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;
+export const MAX_PREPARED_TERRAIN_BYTES = MAX_GRID_CELLS * PREPARED_TERRAIN_CELL_BYTES;
 const preparedKey = z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/);
 export const preparedTerrainRefSchema = terrainAssetSchema.extend({
   key: preparedKey,
@@ -89,7 +90,7 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
   const prefix = preparationPrefix(catalog.dataId, grid), key = `${prefix}/manifest.json`;
   const existing = await storage.get(key, undefined, PREPARED_DESCRIPTOR_MAX_BYTES, signal);
   if (existing) {
-    const ref = preparedTerrainRefSchema.parse({ key, bytes: existing.bytes.byteLength, sha256: sha256(existing.bytes), arrayBytes: cells * 5 });
+    const ref = preparedTerrainRefSchema.parse({ key, bytes: existing.bytes.byteLength, sha256: sha256(existing.bytes), arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES });
     const prepared = await readPreparedTerrain(ref, async asset => {
       if (asset.key === key) return existing.bytes;
       const result = await storage.get(asset.key, undefined, asset.bytes, signal);
@@ -97,7 +98,7 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
       return result.bytes;
     }, grid, signal);
     if (prepared.descriptor.dataId !== catalog.dataId) throw new Error('Prepared terrain source identity mismatch');
-    options.onReport?.({ cacheHit: true, cells, arrayBytes: cells * 5, elapsedMs: Date.now() - started });
+    options.onReport?.({ cacheHit: true, cells, arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES, elapsedMs: Date.now() - started });
     return ref;
   }
   const elevationBytes = new Uint8Array(cells * 4), valid = new Uint8Array(cells);
@@ -124,6 +125,6 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
   await putImmutable(storage, descriptor.files.elevationM.key, elevationBytes, 'application/octet-stream', signal);
   await putImmutable(storage, descriptor.files.valid.key, valid, 'application/octet-stream', signal);
   await putImmutable(storage, key, bytes, 'application/json', signal);
-  options.onReport?.({ cacheHit: false, cells, arrayBytes: cells * 5, elapsedMs: Date.now() - started, reader: readerStats });
-  return preparedTerrainRefSchema.parse({ key, bytes: bytes.byteLength, sha256: sha256(bytes), arrayBytes: cells * 5 });
+  options.onReport?.({ cacheHit: false, cells, arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES, elapsedMs: Date.now() - started, reader: readerStats });
+  return preparedTerrainRefSchema.parse({ key, bytes: bytes.byteLength, sha256: sha256(bytes), arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES });
 }

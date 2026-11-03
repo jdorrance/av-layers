@@ -37,6 +37,10 @@ on:
         description: Optional JSON object mapping model IDs to prepared terrain references
         type: string
         default: ''
+      terrain-catalog-ref:
+        description: Enable terrain refinement with catalog JSON; defaults to the environment's TERRAIN_CATALOG_REF
+        type: string
+        default: ''
 permissions:
   contents: read
   actions: read
@@ -77,4 +81,5 @@ jobs:
       resume-run-id: ${{ inputs['resume-run-id'] || '' }}
       retain-full-artifacts: ${{ inputs['retain-full-artifacts'] || false }}
       terrain-inputs: ${{ inputs['terrain-inputs'] || '' }}
+      terrain-catalog-ref: ${{ inputs['terrain-catalog-ref'] || '' }}
     secrets: inherit

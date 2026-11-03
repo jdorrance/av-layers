@@ -14,8 +14,9 @@ flowchart LR
 ```
 
 GFS and ICON-EU share the build and serving pipeline. The scheduled workflow
-runs all registered models; manual runs can target one model. See
-[project status](status.md) for validation state.
+runs all registered models; manual runs can target one model. Refinement patches
+share their model's cycle, timeline, publication and URLs. See
+[deployments](status.md) for live apps and workflow runs.
 
 ## Workspace map
 
@@ -111,13 +112,25 @@ flowchart LR
   dem[Native DEM] --> ingest[One-time verified import]
   ingest --> terrain[Immutable terrain namespace]
   terrain --> prepare[Bounded grid preparation]
-  prepare --> inputs[Reusable arrays]
-  inputs --> plan[Optional pinned build-plan input]
+  zones[JSON polygons] --> prepare
+  prepare --> inputs[Reusable arrays and coverage]
+  inputs --> plan[Frozen build-plan inputs]
   plan --> workers[Local load once per shard]
+  native[Native lift ceiling] --> clearance[Terrain clearance]
+  workers --> clearance
+  clearance --> agl[Fine AGL pack and composited tiles]
 ```
 
-When terrain is requested, the prepare job stages the prepared arrays into the
-build plan artifact for shard workers to load locally.
+The [polygon configuration](../packages/contracts/config/refinement.json)
+selects bounded 1 km grids. The prepare job freezes coverage and DEM references
+in the build plan and stages their files for workers to verify and load locally.
+
+[`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) derives
+terrain-referenced AGL from native lift ceilings and prepared DEMs. Native MSL
+and column calculations remain in the source pipeline; see
+[science](science.md#terrain-clearance) for the method. The
+[build budget](../apps/batch/src/capacity.ts) includes every pack, terrain array,
+mapping and raster input.
 
 ## Serving and clients
 

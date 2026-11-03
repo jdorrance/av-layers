@@ -13,8 +13,9 @@ Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
 - Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit),
   `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` scoped to that environment's
   bucket.
-- Variables: `API_BASE_URL` and `PAGES_PROJECT_NAME`. Bucket names come from
-  [wrangler.json](../apps/api/wrangler.json).
+- Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
+  `TERRAIN_CATALOG_REF` to enable [terrain refinement](#terrain-data). Bucket names come
+  from [wrangler.json](../apps/api/wrangler.json).
 
 Create the R2 bucket (with `r2.dev` disabled) and Cloudflare Pages project once
 per environment:
@@ -25,9 +26,10 @@ pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
 pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
-For a new environment, run the Forecast workflow first (which commits to R2
-before the serving check), deploy the API and Pages, then
-[resume that build](#resume-or-promote-a-build) to complete serving verification.
+For a new environment, run the Forecast workflow (which commits to R2 before
+the serving check), deploy the API and
+Pages, then [resume that build](#resume-or-promote-a-build) to complete serving
+verification.
 
 ## Publish a forecast
 
@@ -51,6 +53,11 @@ live API serving. If a shard fails, `gh run rerun <run_id> --failed` reuses
 completed shard artifacts while the plan remains within the 50-minute build
 elapsed-time budget.
 
+Planning stages each configured grid's coverage and terrain arrays in the frozen
+plan artifact. Workers load them locally and derive patches from the same native
+weather frames. Assembly requires every grid's complete shard set before
+validating and publishing the build.
+
 Admission requires a source cycle at most **18 hours old**, at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
 Published builds are retained for 7 days.
@@ -68,6 +75,10 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
 Resume verifies the source workflow run on `main`, checks recipe and coverage
 hashes, uploads any missing R2 objects, commits the pointer, and verifies live
 serving.
+
+Refined builds retain `plan.json` with their full artifacts. Resume checks its
+original grid and terrain references against the manifest and recipe; it does
+not resolve current catalog defaults or prepare terrain again.
 
 ## Deploy the API and clients
 
@@ -106,6 +117,20 @@ Run the [Global terrain workflow](../.github/workflows/terrain.yml) from `main`
 to import and verify the Copernicus GLO-90 catalog in R2. See the
 [terrain guide](../apps/batch/src/terrain/README.md) for CLI commands and grid
 preparations.
+
+Deploy compatible API and clients, then set the environment's `TERRAIN_CATALOG_REF`
+variable to the complete JSON
+reference in the import's `terrain-catalog-ref.json` artifact. The catalog and
+tiles must exist in that environment's bucket. Both weather models use this pin
+and the shared [polygon configuration](../packages/contracts/config/refinement.json).
+
+The Forecast workflow's `terrain-catalog-ref` input overrides the default for
+one run and reaches only the preparation job. Without a catalog setting,
+forecasts use their native grids. A supplied missing or corrupt catalog fails
+preparation. Empty or out-of-domain zone configurations keep native output.
+
+The existing `terrain-inputs` model map remains available for staging prepared
+native-grid arrays alongside configured refinements.
 
 ## Check a failure
 

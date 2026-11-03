@@ -49,8 +49,12 @@ pnpm test packages/forecast/src/inputs.test.ts apps/batch/src/providers.test.ts
 pnpm test apps/batch/src/native-build.integration.test.ts apps/batch/src/parallel.test.ts
 pnpm capacity --model MODEL
 pnpm input:proof --model MODEL --cache-dir .cache/MODEL
-pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL
+pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL \
+  --terrain-catalog-ref output/terrain-catalog-ref.json
 ```
+
+[Development](development.md#build-a-real-forecast) covers catalog access for
+configured refinement zones.
 
 ### Adapter output
 
