@@ -34,30 +34,29 @@ async function openApiDocument(): Promise<{ openapi: string; paths: Record<strin
   return document;
 }
 
-/** Generated only from the production registry, never the offline fixture. */
+/** Generated from the production registry. */
 export async function referenceArtifacts(): Promise<Record<string, string>> {
   const api = await openApiDocument();
   const lines = [
     '# Generated reference', '',
     'Generated from the source files linked below. After editing them, run:', '',
     '```sh', regenerate, '```', '',
-    '`pnpm docs:check` rejects stale generated references. No live forecast, storage credentials or network access is required to generate them.', '',
-    'These are the current settings. Published builds include their own methods, units, and legends.', '',
+    '`pnpm docs:check` verifies that generated files and Markdown links are up to date.', '',
     '## Batch CLI', '',
-    'Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. Each option takes a value. These commands build and validate local forecasts; publication and deployment use the GitHub workflows in [operations](operations.md). See [development](development.md) for working examples.', '',
+    'Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the options below. See [development](development.md) for local usage and [operations](operations.md) for GitHub workflows.', '',
     'Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).', ''
   ];
   for (const [command, options] of entries(CLI_COMMANDS)) {
     lines.push(`- ${code(command)}: ${options.map((option: keyof typeof CLI_OPTIONS) => code(`--${option}${CLI_OPTIONS[option].type === 'string' ? ' <string>' : ''}`)).join(', ')}.`);
   }
-  lines.push('', '## Terrain CLI', '', 'Run `pnpm terrain COMMAND`. Options take string values; `--out` is required. The [terrain guide](../apps/batch/src/terrain/README.md) describes storage configuration, immutable references and local use.', '', 'Source: [terrain commands](../apps/batch/src/terrain/cli.ts).', '');
+  lines.push('', '## Terrain CLI', '', 'Run `pnpm terrain COMMAND`. `--out` is required. See the [terrain guide](../apps/batch/src/terrain/README.md).', '', 'Source: [terrain commands](../apps/batch/src/terrain/cli.ts).', '');
   for (const [command, options] of Object.entries(TERRAIN_COMMANDS)) lines.push(`- ${code(command)}: ${options.map(option => code(`--${option} <string>`)).join(', ')}.`);
-  lines.push('', 'Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)); callers may tighten them:', '');
+  lines.push('', 'Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):', '');
   for (const [name, value] of entries(TERRAIN_READ_LIMITS)) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Refinement grids', '',
-    'Run `pnpm refinement` to inspect the grids selected by the shared polygon configuration. This command performs no network or storage operations. See [refinement](../apps/batch/src/refinement/README.md) for configuration and examples.', '',
+    'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.', '');
+  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). See [status](status.md) for deployment state.', '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
@@ -76,7 +75,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Layers: ${product.layers.map(code).join(', ')}.`,
       `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
   }
-  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). The method below is the isobaric default; each configured product selects the method for its vertical coordinate. Published layers link to their selected descriptors. Interpret values and absence using [the data guide](data.md).', '');
+  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Each product selects the method matching its vertical coordinate. See [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {
     lines.push(`### ${layer.label} (${id})`, '',
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,
@@ -87,10 +86,10 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   }
   lines.push('## Status and support encodings', '',
     `Public sample statuses: ${contracts.SAMPLE_STATUSES.map(code).join(', ')}.`, '',
-    'The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. The layer settings above determine which flags a result can contain.', '');
+    'Packed status and support bitmasks from [layer definitions](../packages/contracts/src/layers.ts):', '');
   for (const [name, value] of entries(contracts).filter(([name]) => /^(STATUS_|SUPPORT_)/.test(name))) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', '## Methods and normalized inputs', '',
-    'Source: [method definitions](../packages/contracts/src/methods.ts). The descriptors record the defaults used by the science packages. Adapters supply the units listed below; frame calculations convert temperature to Celsius and pressure to hPa for the column solver. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.', '');
+    'Source: [method definitions](../packages/contracts/src/methods.ts). See [science](science.md) and [extensions](extensions.md).', '');
   for (const [id, method] of entries(contracts.METHODS)) {
     lines.push(`### ${id}`, '',
       `- Outputs: ${method.outputs.map(code).join(', ')}.`,
@@ -106,7 +105,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     lines.push(`- ${code(id)}: ${code(input.quantity)}; units ${code(input.units)}; dimensions ${code(input.dimensions)}; vertical reference ${code(input.verticalReference)}; time support ${code(input.timeSupport)}; missingness ${code(input.missingness)}.`);
   }
   lines.push('', '## Resource limits', '',
-    'These are configured limits. [capacity.ts](../apps/batch/src/capacity.ts) checks build limits; [serving budgets](serving-budgets.md) describes API memory and load checks.', '',
+    'Configured limits from [capacity.ts](../apps/batch/src/capacity.ts) and [serving budgets](serving-budgets.md).', '',
     'Complete-build limits:', '');
   for (const [name, value] of entries(BUILD_BUDGETS)) lines.push(`- ${code(name)}: ${code(value)}.`);
   lines.push('', 'Shared limits and storage constants:', '');
@@ -118,7 +117,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     `- ${code('RASTER_WORKER_NATIVE_RESERVE_MB')}: ${RASTER_WORKER_NATIVE_RESERVE_MB}.`,
     `- ${code('RASTER_WORKER_RESERVE_BYTES')}: ${RASTER_WORKER_RESERVE_BYTES}; memory reserved per worker derived from the V8 heap/stack ceiling plus native allowance.`, '',
     '## API reference', '',
-    'The checked-in [OpenAPI document](reference/openapi.json) is generated by invoking the actual Worker’s `GET /openapi.json` route without R2. The running service exposes the same schema at `/openapi.json`, with its interactive viewer at `/docs`. These route definitions describe structure; retained build descriptors supply available layers, frames, units and methods.', '');
+    'The checked-in [OpenAPI document](reference/openapi.json) is generated from the Worker’s `GET /openapi.json` route and served interactively at `/docs`.', '');
   for (const [path, operations] of entries(api.paths)) for (const method of Object.keys(operations).sort()) {
     if (['get', 'head', 'post', 'put', 'patch', 'delete', 'options'].includes(method)) lines.push(`- ${code(`${method.toUpperCase()} ${path}`)}.`);
   }
