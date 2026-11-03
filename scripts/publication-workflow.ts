@@ -9,9 +9,10 @@ import { checkPerformance } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
-import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel.js';
+import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import type { ValidatedBuild } from '../apps/batch/src/validate.js';
+import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
 
 /** Check at entry and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
@@ -42,6 +43,7 @@ export async function publicationWorkflow<T>(work: (run: {
   try {
     return await work({ root, signal: controller.signal, store: storage, model: authority.model, async commit(manifest, path, resumedFromRun, validated) {
       controller.signal.throwIfAborted();
+      const apiUrl = validateApiBaseUrl(process.env.API_BASE_URL);
       const budget = checkPerformance(manifest);
       await writeFile(join(dirname(path), 'performance.json'), JSON.stringify(budget, null, 2));
       if (!budget.passed) throw new Error(`Performance budget failed: ${budget.failures.join('; ')}`);
@@ -68,6 +70,14 @@ export async function publicationWorkflow<T>(work: (run: {
         throw new Error(`Publication committed; maintenance failed: ${String(error)}`);
       }
       controller.signal.throwIfAborted();
+      const servingPath = join(dirname(path), 'serving.json');
+      try {
+        await verifyPublishedForecast({ baseUrl: apiUrl.origin, manifest, signal: controller.signal });
+        await writeFile(servingPath, JSON.stringify({ status: 'verified', model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers, apiBaseUrl: apiUrl.origin }, null, 2));
+      } catch (error) {
+        await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2));
+        throw new Error(`Publication committed; serving verification failed: ${String(error)}`);
+      }
     } });
   } catch (error) {
     await mkdir(root, { recursive: true });
@@ -79,7 +89,7 @@ export async function publicationWorkflow<T>(work: (run: {
 }
 
 /** Resolve the cycle once before independent workers receive the immutable plan. */
-export async function planForecast(store?: ObjectStorage): Promise<number[] | null> {
+export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | null> {
   return publicationWorkflow(async ({ root, signal, store, model }) => {
     const cacheDir = `.cache/${model}`;
     const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });

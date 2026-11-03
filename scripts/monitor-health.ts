@@ -13,12 +13,21 @@ export function forecastFindings(manifest: Manifest, now: number): string[] {
   const horizonHours = (Math.max(...manifest.frames.map(f => Date.parse(f.validTime))) - now) / 3600000;
   if (ageHours > 14) findings.push('missed-publication: latest build is more than 14 hours old');
   if (cycleAgeHours > product.freshness.maxCycleAgeHours) findings.push('upstream-lag: source cycle exceeds the admitted age');
-  if (horizonHours < product.freshness.minHorizonHours) findings.push(`shrinking-horizon: less than ${product.freshness.minHorizonHours} hours of forecast remain`);
+  const daylightFiltered = product.capabilities.daylightFrames === 'regional-daylight';
+  // Publication validates the exact selected frame list; omitted night hours do not shorten source coverage.
+  const coverageHours = daylightFiltered ? product.frameHours.at(-1)! - cycleAgeHours : horizonHours;
+  if (coverageHours < product.freshness.minHorizonHours) findings.push(`shrinking-horizon: less than ${product.freshness.minHorizonHours} hours of forecast remain`);
+  if (daylightFiltered && horizonHours <= 0) findings.push('exhausted-horizon: no published forecast times remain');
   if (Date.parse(manifest.expiresAt) <= now) findings.push('expired-publication: retained build expired');
   return findings;
 }
 
-export interface ObservedWorkflowRun { status: string; conclusion: string | null; created_at: string; html_url: string; display_title: string; event: string }
+interface ObservedWorkflowJob { name: string; status: string; conclusion: string | null }
+export interface ObservedWorkflowRun {
+  id?: number;
+  status: string; conclusion: string | null; created_at: string; html_url: string; display_title: string; event: string;
+  jobs?: readonly ObservedWorkflowJob[];
+}
 export function maintenanceFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model = 'gfs'): string[] {
   const findings: string[] = [];
   for (const action of ['cleanup', 'rollback']) {
@@ -28,33 +37,48 @@ export function maintenanceFindings(runs: readonly ObservedWorkflowRun[], enviro
   }
   return findings;
 }
-export function forecastWorkflowFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model = 'gfs'): string[] {
-  const matching = runs.filter(run => run.display_title === `Forecast ${environment} ${model}` || (environment === 'production' && model === 'gfs' && run.event === 'schedule' && run.display_title === 'Forecast'))
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  const latestCompleted = matching.find(run => run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000);
-  return latestCompleted && latestCompleted.conclusion !== 'success' ? [`publisher-or-cleanup-failure: ${latestCompleted.html_url}`] : [];
+function matchesForecast(run: ObservedWorkflowRun, environment: string, model: string): boolean {
+  return run.display_title === `Forecast ${environment} ${model}` || run.display_title === `Forecast ${environment} all`
+    || (environment === 'production' && model === 'gfs' && run.event === 'schedule' && run.display_title === 'Forecast');
 }
-export function forecastScheduleFindings(runs: readonly ObservedWorkflowRun[], now: number): string[] {
-  const scheduled = runs.filter(run => run.event === 'schedule').sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+function latestCompletedForecast(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model: string): ObservedWorkflowRun | undefined {
+  return runs.filter(run => matchesForecast(run, environment, model) && run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+}
+export function forecastWorkflowFindings(runs: readonly ObservedWorkflowRun[], environment: string, now: number, model = 'gfs'): string[] {
+  const latest = latestCompletedForecast(runs, environment, now, model);
+  if (!latest) return [];
+  if (latest.display_title === `Forecast ${environment} all`) {
+    const jobs = latest.jobs?.filter(job => job.name.startsWith(`Forecast ${model} / `));
+    if (!jobs?.length || jobs.some(job => job.status !== 'completed')) return [`workflow-observation (forecast): missing completed ${model} jobs: ${latest.html_url}`];
+    if (jobs.some(job => job.conclusion !== 'success' && job.conclusion !== 'skipped')) return [`publisher-or-cleanup-failure: ${latest.html_url}`];
+    // A successful plan may skip an already-published cycle; a resume may skip planning.
+    if (!jobs.some(job => job.conclusion === 'success')) return [`workflow-observation (forecast): no completed ${model} work: ${latest.html_url}`];
+    return [];
+  }
+  return latest.conclusion !== 'success' ? [`publisher-or-cleanup-failure: ${latest.html_url}`] : [];
+}
+export function forecastScheduleFindings(runs: readonly ObservedWorkflowRun[], now: number, model = 'gfs'): string[] {
+  const scheduled = runs.filter(run => run.event === 'schedule' && matchesForecast(run, 'production', model))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   const latest = scheduled[0];
   const findings = !latest || now - Date.parse(latest.created_at) > 14 * 3600000 ? ['missed-schedule: no scheduled forecast run within 14 hours'] : [];
-  const latestCompleted = scheduled.find(run => run.status === 'completed' && now - Date.parse(run.created_at) <= 24 * 3600000);
-  if (latestCompleted && latestCompleted.conclusion !== 'success') {
-    const recovered = runs.some(run =>
-      (run.display_title === 'Forecast production gfs' || (run.event === 'schedule' && run.display_title === 'Forecast')) &&
-      run.status === 'completed' &&
-      run.conclusion === 'success' &&
-      Date.parse(run.created_at) > Date.parse(latestCompleted.created_at) &&
-      now - Date.parse(run.created_at) <= 24 * 3600000
-    );
-    if (!recovered) findings.push(`publisher-or-cleanup-failure: ${latestCompleted.html_url}`);
-  }
-  return findings;
+  return [...findings, ...forecastWorkflowFindings(runs, 'production', now, model)];
 }
 function workflowRuns(raw: unknown): ObservedWorkflowRun[] {
   const runs = (raw as { workflow_runs?: unknown })?.workflow_runs;
   if (!Array.isArray(runs) || runs.length > 100 || runs.some(run => !run || typeof run.status !== 'string' || (run.conclusion !== null && typeof run.conclusion !== 'string') || !Number.isFinite(Date.parse(run.created_at)) || typeof run.html_url !== 'string' || typeof run.display_title !== 'string' || typeof run.event !== 'string')) throw new Error('Invalid workflow observation');
   return runs;
+}
+
+async function observeModelJobs(run: ObservedWorkflowRun, repository: string): Promise<void> {
+  if (!Number.isSafeInteger(run.id) || run.id! < 1) throw new Error('Invalid forecast run ID');
+  const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/runs/${run.id}/jobs?filter=latest&per_page=100`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
+  const result = JSON.parse(stdout) as { jobs?: ObservedWorkflowJob[]; total_count?: number };
+  const jobs = result.jobs;
+  if (!Array.isArray(jobs) || jobs.length > 100 || result.total_count !== jobs.length
+      || jobs.some(job => !job || typeof job.name !== 'string' || typeof job.status !== 'string' || (job.conclusion !== null && typeof job.conclusion !== 'string'))) throw new Error('Incomplete or invalid forecast job observation');
+  run.jobs = jobs;
 }
 
 /** Read-only checks. A failed workflow is the alert; successful unchanged checks send no messages. */
@@ -72,7 +96,7 @@ export async function monitor(baseUrl: string, model = 'gfs') {
   const environment = process.env.TARGET_ENV;
   if (repository && /^[\w.-]+\/[\w.-]+$/.test(repository) && (environment === 'production' || environment === 'staging')) {
     const workflows: Array<'forecast' | 'maintenance' | 'schedule'> = ['forecast', 'maintenance'];
-    if (environment === 'production' && model === 'gfs') workflows.push('schedule');
+    if (environment === 'production') workflows.push('schedule');
     const observations = await Promise.allSettled(workflows.map(async workflow => {
       // A separate schedule query cannot be crowded out by staging/manual runs.
       const query = workflow === 'schedule' ? 'event=schedule&branch=main&per_page=10' : workflow === 'forecast' ? 'branch=main&per_page=50' : 'event=workflow_dispatch&branch=main&per_page=50';
@@ -90,14 +114,19 @@ export async function monitor(baseUrl: string, model = 'gfs') {
       else forecastRuns.push(...observation.value);
     });
     const combinedForecastRuns = [...forecastRuns, ...scheduleRuns.filter(s => !forecastRuns.some(f => f.html_url === s.html_url))];
+    const latest = latestCompletedForecast(combinedForecastRuns, environment, Date.now(), model);
+    if (latest?.display_title === `Forecast ${environment} all`) {
+      try { await observeModelJobs(latest, repository); }
+      catch (error) { findings.push(`workflow-observation (forecast jobs): ${String(error)}`); }
+    }
     if (combinedForecastRuns.length) findings.push(...forecastWorkflowFindings(combinedForecastRuns, environment, Date.now(), model));
     if (workflows.includes('schedule') && observations[workflows.indexOf('schedule')]?.status === 'fulfilled') {
-      for (const item of forecastScheduleFindings([...scheduleRuns, ...forecastRuns], Date.now())) {
+      for (const item of forecastScheduleFindings(combinedForecastRuns, Date.now(), model)) {
         if (!findings.includes(item)) findings.push(item);
       }
     }
   }
-  return { version: 1, checkedAt, baseUrl, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#check-a-failure' };
+  return { version: 1, checkedAt, baseUrl, model, buildId, sourceRevision, healthy: findings.length === 0, findings, runbook: 'docs/operations.md#check-a-failure' };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

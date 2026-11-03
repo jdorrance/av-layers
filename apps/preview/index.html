@@ -15,10 +15,12 @@
         </header>
         <div class="controls">
           <label>Model <select id="model"></select></label>
+          <button id="refresh-latest" type="button">Refresh latest forecast</button>
           <label>Layer <select id="layer"></select></label>
           <label>Frame <select id="frame"></select></label>
           <label>Opacity <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5" /></label>
         </div>
+        <p id="refresh-status" class="muted" role="status" hidden></p>
         <p id="timestamp" class="badge">No frame selected</p>
         <p id="horizon-notice" class="notice" role="status" hidden></p>
         <p id="tile-error" class="error" role="alert" hidden></p>

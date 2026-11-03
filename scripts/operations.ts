@@ -1,12 +1,12 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { getProduct } from '@av/contracts';
-import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel.js';
+import { getProduct, MODEL_IDS } from '@av/contracts';
+import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { r2Storage } from '../apps/batch/src/storage.js';
 import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, resumePublication, runForecastShard } from './publication-workflow.js';
-import { probeApi, readResponseBytes, retryProbe, type RetryOptions } from './smoke-api.js';
+import { probeApi, readResponseBytes, retryProbe, validateApiBaseUrl, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
 export type WranglerConfig = Record<EnvironmentName, { name: string; bucket: string }>;
@@ -48,8 +48,7 @@ export function validateCiEnvironment(env: NodeJS.ProcessEnv, config = loadWrang
   const common = environment(env), apiToken = required(env, 'CLOUDFLARE_API_TOKEN');
   const pagesProjectName = required(env, 'PAGES_PROJECT_NAME');
   if (!/^[a-z0-9](?:[a-z0-9-]{0,56}[a-z0-9])?$/.test(pagesProjectName)) throw new Error('PAGES_PROJECT_NAME must be a lowercase project slug');
-  const url = new URL(required(env, 'API_BASE_URL'));
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('API_BASE_URL must be a root HTTPS URL without credentials, query or fragment');
+  const url = validateApiBaseUrl(env.API_BASE_URL);
   const workerName = config[common.targetEnv].name;
   if (url.hostname.endsWith('.workers.dev') && !url.hostname.startsWith(`${workerName}.`)) throw new Error(`API_BASE_URL must name Worker ${workerName}`);
   return { ...common, apiToken, pagesProjectName, apiBaseUrl: url.origin };
@@ -105,6 +104,13 @@ export async function verifyWindyPluginBundle(options: RetryOptions & {
   }, options);
 }
 
+export function forecastPlanReport(plan: Pick<BuildPlan, 'model' | 'cycle' | 'groups'> | null, model: string) {
+  if (!plan) return { shards: [], summary: `## ${model}\n\nThe selected cycle is already published; no batches needed.\n` };
+  const shards = plan.groups.map((hours, id) => ({ id, hours: hours.map(hour => `f${String(hour).padStart(3, '0')}`).join(', ') }));
+  const rows = plan.groups.map((hours, id) => `| ${id} | ${shards[id].hours} | ${hours.map(hour => new Date(Date.parse(plan.cycle) + hour * 3_600_000).toISOString()).join(', ')} |`);
+  return { shards, summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
+}
+
 const OPERATIONS = ['deploy', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
 type Operation = typeof OPERATIONS[number];
 const OPERATION_USAGE = `Usage: pnpm operations ${OPERATIONS.join('|')}`;
@@ -156,10 +162,13 @@ export async function runOperation(command: string): Promise<void> {
     const config = validatePublicationEnvironment(process.env);
     const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
     if (command === 'forecast-plan') {
-      const shards = await planForecast(store);
+      validateApiBaseUrl(process.env.API_BASE_URL);
+      const plan = await planForecast(store);
+      const { shards, summary } = forecastPlanReport(plan, required(process.env, 'MODEL'));
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
       if (process.env.GITHUB_OUTPUT) {
         const artifact = `forecast-plan-${process.env.MODEL ?? 'gfs'}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
-        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${shards !== null}\nshards=${JSON.stringify(shards ?? [])}\nartifact=${artifact}\n`);
+        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\n`);
       }
     } else if (command === 'forecast') {
       if (process.env.RESUME_RUN_ID) await resumePublication(await downloadForecastArtifact(process.env.RESUME_RUN_ID), store);
@@ -177,7 +186,7 @@ export async function runOperation(command: string): Promise<void> {
   await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
   await assertCurrentMain();
   await pnpm(['--filter', '@av/api', 'exec', 'wrangler', 'deploy', '--env', cloud.targetEnv, '--var', `AV_DEPLOYMENT_ID:${deploymentId}`]);
-  await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? 'gfs', expectedDeploymentId: deploymentId });
+  await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? 'gfs', expectedDeploymentId: deploymentId, expectedModels: MODEL_IDS });
   await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
   await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
   await verifyWindyPluginBundle({ url: pages.url, expectedApiBaseUrl: cloud.apiBaseUrl });

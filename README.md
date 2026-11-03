@@ -4,8 +4,9 @@ Maps and point forecasts for usable lift above sea level, usable lift above mode
 terrain, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
-This project is in alpha. The builder supports NOAA GFS and regional DWD ICON-EU;
-the scheduled workflow publishes GFS. ICON-EU can be built locally and is still being tested for deployment.
+This project is in alpha. The builder supports NOAA GFS and regional DWD ICON-EU.
+The forecast workflow supports either model or both in parallel; scheduled runs
+select both. See [status](docs/status.md) for completed deployment validation.
 Forecasts use model resolution; zooming in does not add local weather or terrain detail.
 
 ## Quick start

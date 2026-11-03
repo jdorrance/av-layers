@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { type Manifest } from '@av/contracts';
+import { createProductDescriptors, ICON_EU_PRODUCT, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
@@ -25,6 +25,7 @@ class OptionElement extends Element {
   constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; }
 }
 class Document extends EventTarget {
+  visibilityState: DocumentVisibilityState = 'visible';
   elements = new Map<string, Element>();
   constructor() {
     super();
@@ -55,7 +56,7 @@ class MapMock {
   }
   emit(name: string, event: Record<string, unknown> = {}): void { for (const handler of this.handlers.get(name) ?? []) handler(event); }
   addControl(): void {}
-  fitBounds(): void {}
+  fitBounds = vi.fn();
   setPaintProperty(): void {}
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
   getSource(id: string): unknown { return this.sources.get(id); }
@@ -103,6 +104,15 @@ beforeEach(() => {
 afterEach(() => {
   page('pagehide', false);
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
+});
+
+it('waits for the map to load before a focus event can request a forecast', async () => {
+  await import('./main');
+  win.dispatchEvent(new Event('focus'));
+  expect(fetchMock).not.toHaveBeenCalled();
+  map().emit('load');
+  await vi.waitFor(() => expect(ui('frame').disabled).toBe(false));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 it('keeps the incomplete-map warning until every failed tile recovers or leaves the viewport', async () => {
@@ -183,19 +193,19 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
   expect(ui('freshness').textContent).not.toContain('Loading');
 });
 
-it('preserves a loaded build across BFCache restoration and renews its raster generation', async () => {
+it('checks for a newer build on BFCache restoration and renews its raster generation', async () => {
   manifest.source.provenanceUrl = 'https://api.test/v1/models/gfs/runs/build/provenance';
   await start();
   const links = ui('meta').children.flatMap(child => child.children);
   expect(links.some(link => link.href === manifest.source.provenanceUrl)).toBe(true);
   const currentSource = sourceId();
   page('pagehide', true); page('pageshow', true);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(sourceId()).not.toBe(currentSource);
   expect(map().removed).toBe(false);
 });
 
-it('stops the previous freshness interval when a replacement load fails', async () => {
+it('replaces the freshness interval and keeps model switching and retry available after a load fails', async () => {
   const schedule = vi.spyOn(win, 'setInterval'), cancel = vi.spyOn(win, 'clearInterval');
   await start();
   const interval = schedule.mock.results[0].value;
@@ -203,7 +213,11 @@ it('stops the previous freshness interval when a replacement load fails', async 
   ui('model').dispatchEvent(new Event('change'));
   expect(cancel).toHaveBeenCalledWith(interval);
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
-  expect(vi.getTimerCount()).toBe(0);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(ui('model').disabled).toBe(false);
+  expect(ui('refresh-latest').disabled).toBe(false);
+  expect(ui('frame').children).toHaveLength(0);
+  expect(ui('frame').disabled).toBe(true);
 });
 
 it('allows retrying a point request interrupted by BFCache navigation', async () => {
@@ -222,7 +236,7 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
   await Promise.resolve(); await Promise.resolve();
   expect(ui('series-button').disabled).toBe(false);
   expect(ui('series-status').textContent).toContain('Point request interrupted');
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
 });
 
 it('makes point values keyboard-scrollable only while the series has results', async () => {
@@ -317,4 +331,140 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
   expect(ui('series-button').disabled).toBe(true);
   expect(protocols.size).toBe(0);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('loads ICON layers and hourly frames directly from its published manifest', async () => {
+  await start();
+  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...ICON_EU_PRODUCT.layers],
+    grid: ICON_EU_PRODUCT.grid, descriptors: createProductDescriptors(ICON_EU_PRODUCT),
+    frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
+      validTime: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z`,
+      intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
+      intervalEnd: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z` }))
+  });
+  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
+  expect(ui('layer').children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
+  expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f007']);
+  expect(fetchMock.mock.calls.at(-1)![0]).toContain('/models/icon-eu/latest?');
+  expect(fetchMock.mock.calls.at(-1)![1]?.cache).toBe('no-store');
+});
+
+it('lets a user switch back to GFS when ICON has no publication yet', async () => {
+  await start();
+  fetchMock.mockImplementation(async url => String(url).includes('/icon-eu/')
+    ? new Response(JSON.stringify({ detail: 'No publication available for icon-eu' }), { status: 503 }) : latest());
+  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('error').textContent).toContain('No publication available'));
+  expect(ui('model').disabled).toBe(false);
+  expect(ui('refresh-latest').disabled).toBe(false);
+  expect(ui('frame').children).toHaveLength(0);
+  ui('model').value = 'gfs'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('frame').disabled).toBe(false));
+  expect(ui('error').hidden).toBe(true);
+  expect(ui('frame').children.map(option => option.value)).toEqual(manifest.frames.map(frame => frame.id));
+});
+
+it.each([2, 3])('adopts a new build and preserves layer, nearest valid time and map position for frame %i', async selected => {
+  await start();
+  ui('layer').value = 'usable-lift-agl'; ui('layer').dispatchEvent(new Event('change'));
+  ui('frame').value = manifest.frames[selected].id; ui('frame').dispatchEvent(new Event('change'));
+  manifest = fixtureManifest({ buildId: 'new-cycle', layers: ['usable-lift-agl'],
+    frames: [1, 2, 4].map((index, i) => ({ ...manifest.frames[index], id: `f00${i + 4}` })) });
+  await vi.advanceTimersByTimeAsync(59_000);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('new-cycle'));
+  expect(ui('layer').value).toBe('usable-lift-agl');
+  expect(ui('frame').value).toBe('f005');
+  expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f006']);
+  expect(map().fitBounds).toHaveBeenCalledTimes(1);
+  const currentSource = sourceId();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(sourceId()).toBe(currentSource);
+});
+
+it('pauses polling in a hidden page and adopts the latest on one deduplicated wake check', async () => {
+  await start();
+  doc.visibilityState = 'hidden'; doc.dispatchEvent(new Event('visibilitychange'));
+  manifest = fixtureManifest({ buildId: 'published-while-hidden' });
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange'));
+  win.dispatchEvent(new Event('focus'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('published-while-hidden'));
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('keeps the current map after a refresh failure and allows an immediate retry', async () => {
+  await start();
+  const currentSource = sourceId();
+  fetchMock.mockResolvedValueOnce(new Response('', { status: 400 }));
+  ui('refresh-latest').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('refresh-status').hidden).toBe(false));
+  expect(ui('refresh-latest').disabled).toBe(false);
+  expect(ui('frame').disabled).toBe(false);
+  expect(sourceId()).toBe(currentSource);
+  ui('refresh-latest').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('refresh-status').hidden).toBe(true));
+  expect(sourceId()).toBe(currentSource);
+});
+
+it('cancels a refresh on model switch and ignores its late response', async () => {
+  await start();
+  let finishOld!: (value: Response) => void;
+  let oldSignal: AbortSignal | null | undefined;
+  const old = fixtureLatest(fixtureManifest({ buildId: 'stale-gfs-response' }));
+  fetchMock.mockImplementationOnce((_url, init) => {
+    oldSignal = init?.signal;
+    return new Promise(resolve => { finishOld = resolve; });
+  });
+  win.dispatchEvent(new Event('focus'));
+  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'current-icon', layers: [...ICON_EU_PRODUCT.layers],
+    descriptors: createProductDescriptors(ICON_EU_PRODUCT) });
+  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('current-icon'));
+  expect(oldSignal?.aborted).toBe(true);
+  const currentSource = sourceId();
+  finishOld(new Response(JSON.stringify(old)));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(ui('model').value).toBe('icon-eu');
+  expect(sourceId()).toBe(currentSource);
+});
+
+it('cancels point sampling from the previous build when a new build is adopted', async () => {
+  await start();
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  let sampleSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementationOnce((_url, init) => {
+    sampleSignal = init?.signal;
+    return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(sampleSignal?.reason)));
+  });
+  ui('series-button').dispatchEvent(new Event('click'));
+  manifest = fixtureManifest({ buildId: 'new-build' });
+  win.dispatchEvent(new Event('focus'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('new-build'));
+  expect(sampleSignal?.aborted).toBe(true);
+  expect(ui('series').children).toHaveLength(0);
+  expect(ui('series-status').textContent).toBe('');
+  expect(ui('series-button').disabled).toBe(false);
+});
+
+it('recovers an expired forecast on focus while preserving layer, valid time and map position', async () => {
+  manifest = fixtureManifest({ expiresAt: new Date(Date.now() + 10_000).toISOString() });
+  await start();
+  ui('layer').value = 'usable-lift-agl'; ui('layer').dispatchEvent(new Event('change'));
+  ui('frame').value = manifest.frames[2].id; ui('frame').dispatchEvent(new Event('change'));
+  vi.setSystemTime(Date.parse(manifest.expiresAt) + 1);
+  manifest = fixtureManifest({ buildId: 'replacement' });
+  win.dispatchEvent(new Event('focus'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('replacement'));
+  expect(ui('error').hidden).toBe(true);
+  expect(ui('model').disabled).toBe(false);
+  expect(ui('frame').disabled).toBe(false);
+  expect(ui('layer').value).toBe('usable-lift-agl');
+  expect(ui('frame').value).toBe(manifest.frames[2].id);
+  expect(map().fitBounds).toHaveBeenCalledTimes(1);
+  expect(map().layers.has(OVERLAY_LAYER_ID)).toBe(true);
 });

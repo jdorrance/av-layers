@@ -15,8 +15,9 @@ flowchart LR
 ```
 
 GFS and ICON-EU use the same build and serving code. The scheduled workflow
-publishes GFS; ICON-EU still needs a complete real build and deployment checks.
-See [project status](status.md) for the recorded results.
+selects all registered models; a manual run can select one model. ICON-EU still
+needs recorded full-run and deployment checks. See [project status](status.md)
+for completed validation.
 
 ## Workspace map
 
@@ -78,8 +79,11 @@ packages; [science](science.md) explains them.
 
 [build.ts](../apps/batch/src/build.ts) runs a sequential build.
 [parallel.ts](../apps/batch/src/parallel.ts) splits the same frame pipeline across
-workers for the hosted workflow. It fixes one source cycle and frame list before
-starting workers, then checks and assembles their files into a complete build.
+workers for the hosted workflow. The
+[caller](../.github/workflows/forecast.yml) selects models from the registry, and
+each invokes the same [model workflow](../.github/workflows/forecast-model.yml).
+Each model fixes its own source cycle and frame list before starting workers,
+then checks and assembles their files into a complete build.
 Each worker opens its own source session and fetches any earlier records needed
 to calculate its time intervals. Sessions close after success or failure. The
 [batch guide](../apps/batch/README.md#parallel-builds) shows the worker flow.
@@ -100,7 +104,11 @@ for coverage and missing-value behavior.
 
 Publication uploads and checks the complete build before changing the
 latest-build pointer. The pointer update is conditional, so concurrent
-publishers cannot silently overwrite each other. [Operations](operations.md)
+publishers cannot silently overwrite each other. Workflow exclusion is per
+environment and model, so `all`, individual runs, and maintenance share the same
+lock for that model. Publication checks the live API's new build and frame list;
+Pages reads that API without a new app deployment for each forecast.
+[Operations](operations.md)
 covers publication, retention, and rollback.
 
 ## Serving and clients

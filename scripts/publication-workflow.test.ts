@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Manifest, ModelPointer } from '@av/contracts';
-const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn() }));
+const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn() }));
+vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
 vi.mock('../apps/batch/src/providers.js', async () => {
   const { validateCycle } = await import('../apps/batch/src/gfs/fields.js');
@@ -21,12 +22,13 @@ const revision = 'a'.repeat(40);
 let manifest: Manifest;
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', CYCLE: '', RESUME_RUN_ID: '100', ALLOW_SAME_CYCLE: 'false' })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: revision, MODEL: 'gfs', API_BASE_URL: 'https://api.example', CYCLE: '', RESUME_RUN_ID: '100', ALLOW_SAME_CYCLE: 'false' })) vi.stubEnv(key, value);
   manifest = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'));
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
   fake.storage.mockReturnValue({});
-  fake.plan.mockResolvedValue([0, 1, 2, 3]);
+  fake.plan.mockResolvedValue({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
+  fake.verifyServing.mockResolvedValue(undefined);
   fake.shard.mockResolvedValue('output/shards/0/receipt.json');
   fake.finalize.mockImplementation(async (_plan, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
   fake.discover.mockResolvedValue({ cycle: manifest.cycle });
@@ -71,7 +73,7 @@ it.each(['schedule', 'workflow_dispatch'])('permits an intentional same-cycle re
 });
 it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered new cycle once using the inventory cache', async pointer => {
   fake.pointer.mockResolvedValue({ pointer });
-  await expect(planForecast()).resolves.toEqual([0, 1, 2, 3]);
+  await expect(planForecast()).resolves.toEqual({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
@@ -253,4 +255,27 @@ it('rejects a plan for another workflow model before worker computation or final
   await expect(runForecastShard(0)).rejects.toThrow('workflow model');
   await expect(finalizeAndPublish()).rejects.toThrow('workflow model');
   expect(fake.shard).not.toHaveBeenCalled(); expect(fake.finalize).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
+});
+
+it('verifies the committed build and hour listing through the live API after cleanup', async () => {
+  await finalizeAndPublish();
+  expect(fake.verifyServing).toHaveBeenCalledWith({ baseUrl: 'https://api.example', manifest, signal: expect.any(AbortSignal) });
+  expect(fake.verifyServing.mock.invocationCallOrder[0]).toBeGreaterThan(fake.cleanup.mock.invocationCallOrder[0]);
+  const record = JSON.parse(fake.write.mock.calls.find(([path]) => String(path).endsWith('/serving.json'))![1]);
+  expect(record).toMatchObject({ status: 'verified', model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers });
+});
+
+it('preserves committed publication when the API cannot serve the new build', async () => {
+  fake.verifyServing.mockRejectedValueOnce(new Error('API still shows previous build'));
+  await expect(finalizeAndPublish()).rejects.toThrow('Publication committed; serving verification failed');
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/serving.json', expect.stringContaining('"publication": "committed"'));
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "committed"'));
+});
+
+it('rejects missing or invalid serving destinations before publishing', async () => {
+  for (const url of ['', 'http://api.example', 'https://api.example/path']) {
+    vi.stubEnv('API_BASE_URL', url);
+    await expect(finalizeAndPublish()).rejects.toThrow('API_BASE_URL');
+  }
+  expect(fake.publish).not.toHaveBeenCalled();
 });

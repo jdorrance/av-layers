@@ -24,6 +24,7 @@ describe('ApiClient.latest', () => {
     const build = await client.latest('gfs');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/v1/models/gfs/latest?expand=manifest');
+    expect(fetchImpl.mock.calls[0][1]?.cache).toBe('no-store');
     expect(build.manifest.buildId).toBe('20261030T000000Z-abc');
     expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.webp');
     expect(build.manifest.coverage.maxZoom).toBe(manifest().coverage.maxZoom);

@@ -4,7 +4,13 @@ import { manifestSchema } from '@av/contracts';
 import { forecastFindings, forecastScheduleFindings, forecastWorkflowFindings, maintenanceFindings, monitor, type ObservedWorkflowRun } from './monitor-health.js';
 import * as serving from './smoke-api.js';
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
+const fake = vi.hoisted(() => ({ gh: vi.fn() }));
+vi.mock('node:child_process', async () => {
+  const { promisify } = await import('node:util');
+  return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
+});
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); fake.gh.mockReset(); });
 
 it('keeps forecast identity and expiry findings when a later serving probe fails', async () => {
   const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
@@ -25,6 +31,40 @@ describe('forecast health decisions', () => {
   it('keeps a fresh complete horizon quiet', () => {
     const manifest = fixture();
     expect(forecastFindings(manifest, Date.parse(manifest.cycle) + 6 * 3600000)).toEqual([]);
+  });
+  const regionalFixture = (cycle = '2026-12-21T00:00:00Z') => {
+    const manifest = fixture(), cycleMs = Date.parse(cycle);
+    manifest.model = 'icon-eu';
+    manifest.cycle = cycle;
+    manifest.createdAt = new Date(cycleMs + 6 * 3600000).toISOString();
+    manifest.expiresAt = new Date(cycleMs + 7 * 86400000).toISOString();
+    manifest.frames = [18, 19].map(hour => ({
+      id: `f${String(hour).padStart(3, '0')}`,
+      validTime: new Date(cycleMs + hour * 3600000).toISOString(),
+      intervalStart: new Date(cycleMs + (hour - 1) * 3600000).toISOString(),
+      intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
+    }));
+    return manifest;
+  };
+  it.each(['2026-11-03T00:00:00Z', '2026-12-21T00:00:00Z'])('keeps a complete winter ICON horizon quiet before the next scheduled build (%s)', cycle => {
+    const manifest = regionalFixture(cycle);
+    for (const hour of [13.5, 17.5]) expect(forecastFindings(manifest, Date.parse(cycle) + hour * 3600000)).toEqual([]);
+  });
+  it.each(['missing', 'exhausted'])('reports %s useful daylight slots even with six hours of source coverage remaining', state => {
+    const manifest = regionalFixture();
+    manifest.frames = state === 'missing' ? [] : manifest.frames.map(frame => ({ ...frame, validTime: manifest.createdAt }));
+    expect(forecastFindings(manifest, Date.parse(manifest.cycle) + 13 * 3600000)).toEqual(['exhausted-horizon: no published forecast times remain']);
+  });
+  it('still detects the end of configured source coverage before the last daylight frame expires', () => {
+    const manifest = regionalFixture(), findings = forecastFindings(manifest, Date.parse(manifest.cycle) + 18.5 * 3600000);
+    expect(findings.join(';')).toContain('shrinking-horizon');
+    expect(findings.join(';')).toContain('upstream-lag');
+    expect(findings.join(';')).not.toContain('exhausted-horizon');
+  });
+  it('keeps the six-hour check tied to published frames for an all-hours model', () => {
+    const manifest = regionalFixture();
+    manifest.model = 'gfs';
+    expect(forecastFindings(manifest, Date.parse(manifest.cycle) + 17.5 * 3600000)).toEqual(['shrinking-horizon: less than 6 hours of forecast remain']);
   });
   it('distinguishes lag, missed publication and exhausted horizon from retention expiry', () => {
     const manifest = fixture(), findings = forecastFindings(manifest, Date.parse(manifest.cycle) + 25 * 3600000);
@@ -66,7 +106,39 @@ describe('maintenance and forecast workflow observations', () => {
     expect(forecastWorkflowFindings([manual, oldScheduled], 'production', now)).toEqual([]);
     expect(forecastScheduleFindings([manual, oldScheduled], now)).toEqual(['missed-schedule: no scheduled forecast run within 14 hours']);
     expect(forecastScheduleFindings([manual], now)).toEqual(['missed-schedule: no scheduled forecast run within 14 hours']);
-    expect(forecastScheduleFindings([run({ event: 'schedule', status: 'in_progress', conclusion: null })], now)).toEqual([]);
+    expect(forecastScheduleFindings([run({ display_title: 'Forecast production gfs', event: 'schedule', status: 'in_progress', conclusion: null })], now)).toEqual([]);
+  });
+  const modelJobs = (model: string, conclusion: string, skipped = false) => [
+    { name: `Forecast ${model} / Plan ${model}`, status: 'completed', conclusion: 'success' },
+    { name: `Forecast ${model} / Build ${model} batch 0`, status: 'completed', conclusion: skipped ? 'skipped' : conclusion },
+    { name: `Forecast ${model} / Publish ${model}`, status: 'completed', conclusion: skipped || conclusion !== 'success' ? 'skipped' : 'success' }
+  ];
+  it('attributes all-model failures to the model whose jobs failed', () => {
+    const all = run({ display_title: 'Forecast production all', event: 'schedule', jobs: [...modelJobs('gfs', 'success'), ...modelJobs('icon-eu', 'failure')] });
+    expect(forecastWorkflowFindings([all], 'production', now, 'gfs')).toEqual([]);
+    expect(forecastWorkflowFindings([all], 'production', now, 'icon-eu')).toEqual([`publisher-or-cleanup-failure: ${all.html_url}`]);
+    expect(forecastScheduleFindings([all], now, 'gfs')).toEqual([]);
+    expect(forecastScheduleFindings([all], now, 'icon-eu')).toEqual([`publisher-or-cleanup-failure: ${all.html_url}`]);
+    expect(forecastWorkflowFindings([all], 'staging', now, 'icon-eu')).toEqual([]);
+  });
+  it('accepts an already-published model while another model fails', () => {
+    const all = run({ display_title: 'Forecast production all', event: 'schedule', jobs: [...modelJobs('gfs', 'success', true), ...modelJobs('icon-eu', 'failure')] });
+    expect(forecastScheduleFindings([all], now, 'gfs')).toEqual([]);
+  });
+  it('keeps missing model work visible instead of trusting an all-run conclusion', () => {
+    const all = run({ display_title: 'Forecast production all', conclusion: 'success', jobs: modelJobs('gfs', 'success') });
+    expect(forecastWorkflowFindings([all], 'production', now, 'icon-eu').join(';')).toContain('workflow-observation');
+    expect(forecastWorkflowFindings([{ ...all, jobs: undefined }], 'production', now).join(';')).toContain('workflow-observation');
+    const skipped = { ...all, jobs: [{ name: 'Forecast icon-eu / Publish icon-eu', status: 'completed', conclusion: 'skipped' }] };
+    expect(forecastWorkflowFindings([skipped], 'production', now, 'icon-eu').join(';')).toContain('no completed icon-eu work');
+  });
+  it('requires a scheduled run for each model and isolates manual recovery', () => {
+    const gfs = run({ display_title: 'Forecast production gfs', event: 'schedule', conclusion: 'success' });
+    expect(forecastScheduleFindings([gfs], now, 'icon-eu')).toEqual(['missed-schedule: no scheduled forecast run within 14 hours']);
+    const all = run({ display_title: 'Forecast production all', event: 'schedule', jobs: [...modelJobs('gfs', 'success'), ...modelJobs('icon-eu', 'failure')] });
+    const recovery = run({ display_title: 'Forecast production icon-eu', conclusion: 'success', created_at: '2026-11-01T11:30:00Z' });
+    expect(forecastScheduleFindings([all, recovery], now, 'icon-eu')).toEqual([]);
+    expect(forecastScheduleFindings([all, { ...recovery, display_title: 'Forecast production gfs' }], now, 'icon-eu')).toEqual([`publisher-or-cleanup-failure: ${all.html_url}`]);
   });
   it('does not attribute an old unlabelled manual staging run to production', () => {
     const legacyManual = run({ display_title: 'Forecast' });
@@ -76,4 +148,29 @@ describe('maintenance and forecast workflow observations', () => {
     expect(forecastScheduleFindings([scheduled], now)).toEqual([`publisher-or-cleanup-failure: ${scheduled.html_url}`]);
     expect(forecastScheduleFindings([run({ ...scheduled, conclusion: 'success' })], now)).toEqual([]);
   });
+});
+
+it.each(['gfs', 'icon-eu'])('observes only the latest all-run jobs for %s and checks its schedule', async model => {
+  vi.stubEnv('GITHUB_REPOSITORY', 'owner/repo');
+  vi.stubEnv('TARGET_ENV', 'production');
+  vi.spyOn(serving, 'probeApi').mockResolvedValue(manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8'))));
+  const latest: ObservedWorkflowRun = {
+    id: 2, status: 'completed', conclusion: 'failure', created_at: new Date(Date.now() - 60_000).toISOString(),
+    html_url: 'https://github.com/owner/repo/actions/runs/2', display_title: 'Forecast production all', event: 'schedule'
+  };
+  fake.gh.mockImplementation(async (_command: string, args: string[]) => {
+    const path = args[1];
+    if (path.includes('/maintenance.yml/')) return { stdout: JSON.stringify({ workflow_runs: [] }) };
+    if (path.includes('/forecast.yml/')) return { stdout: JSON.stringify({ workflow_runs: [latest, { ...latest, id: 1, created_at: new Date(Date.now() - 3600_000).toISOString() }] }) };
+    expect(path).toBe('repos/owner/repo/actions/runs/2/jobs?filter=latest&per_page=100');
+    return { stdout: JSON.stringify({ total_count: 2, jobs: [
+      { name: 'Forecast gfs / Publish gfs', status: 'completed', conclusion: 'success' },
+      { name: 'Forecast icon-eu / Build icon-eu batch 0', status: 'completed', conclusion: 'failure' }
+    ] }) };
+  });
+  const result = await monitor('https://api.example', model);
+  expect(result.healthy).toBe(model === 'gfs');
+  expect(result.findings).toEqual(model === 'gfs' ? [] : [`publisher-or-cleanup-failure: ${latest.html_url}`]);
+  expect(fake.gh).toHaveBeenCalledTimes(4);
+  expect(fake.gh.mock.calls.some(([, args]) => args[1].includes('event=schedule'))).toBe(true);
 });

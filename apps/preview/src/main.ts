@@ -16,6 +16,7 @@ import {
   formatBuildFreshness,
   formatSeriesSummary,
   frameBadge,
+  matchHostFrame,
   normalizePoint,
   sampleRequestText,
   populateModelOptions,
@@ -36,6 +37,8 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const modelSelect = element<HTMLSelectElement>('model');
+const refreshButton = element<HTMLButtonElement>('refresh-latest');
+const refreshStatus = element<HTMLParagraphElement>('refresh-status');
 const layerSelect = element<HTMLSelectElement>('layer');
 const frameSelect = element<HTMLSelectElement>('frame');
 const opacityInput = element<HTMLInputElement>('opacity');
@@ -101,10 +104,13 @@ function startPreview(): void {
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
   let loadAbort: AbortController | null = null;
+  let refreshAbort: AbortController | null = null;
   let seriesAbort: AbortController | null = null;
   let clicked: GeoPoint | null = null;
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
+  let suspended = false;
+  let lastLatestCheckAt = 0;
 
   function clearSeries(): void {
     seriesPanel.replaceChildren();
@@ -140,6 +146,8 @@ function startPreview(): void {
       mapFailed = true;
       loadAbort?.abort();
       loadAbort = null;
+      refreshAbort?.abort();
+      refreshAbort = null;
       seriesAbort?.abort();
       seriesAbort = null;
       pendingModel = null;
@@ -192,7 +200,8 @@ function startPreview(): void {
   }
 
   function setControlsEnabled(enabled: boolean): void {
-    modelSelect.disabled = !enabled;
+    modelSelect.disabled = mapFailed || pendingModel !== null;
+    refreshButton.disabled = modelSelect.disabled || refreshAbort !== null;
     layerSelect.disabled = !enabled;
     frameSelect.disabled = !enabled;
     opacityInput.disabled = !enabled;
@@ -217,10 +226,6 @@ function startPreview(): void {
     resetTileErrors();
     horizonNotice.hidden = true;
     horizonNotice.textContent = '';
-    if (expiryTimer !== null) {
-      window.clearInterval(expiryTimer);
-      expiryTimer = null;
-    }
     loadAbort?.abort();
     seriesAbort?.abort();
     seriesAbort = null;
@@ -230,7 +235,7 @@ function startPreview(): void {
     seriesButton.disabled = true;
     timestampBadge.textContent = frameBadge(null, null, null, true).text;
     freshness.textContent = 'Expired immutable build';
-    showError('This build has expired. Reload to discover the latest retained build.');
+    showError('This build has expired. Refresh the latest forecast or choose another model.');
   }
 
   function ensureLive(): boolean {
@@ -274,9 +279,10 @@ function startPreview(): void {
     }
   }
 
-  function populateFrames(buildValue: PinnedBuild): void {
+  function populateFrames(buildValue: PinnedBuild, selectedTime?: number): void {
     frameSelect.replaceChildren(...buildValue.manifest.frames.map(frame => new Option(`${frame.id} · ${frame.validTime}`, frame.id)));
-    selectedFrame = buildValue.manifest.frames[0]?.id ?? null;
+    selectedFrame = (selectedTime === undefined ? null : matchHostFrame(buildValue.manifest.frames, selectedTime, Infinity))?.id
+      ?? buildValue.manifest.frames[0]?.id ?? null;
     if (selectedFrame) frameSelect.value = selectedFrame;
     frameSelect.disabled = false;
   }
@@ -287,6 +293,67 @@ function startPreview(): void {
     layerSelect.disabled = false;
   }
 
+  function installBuild(next: PinnedBuild, preserveView = false): void {
+    const selectedTime = preserveView && build
+      ? Date.parse(build.manifest.frames.find(frame => frame.id === selectedFrame)?.validTime ?? '') : undefined;
+    const selectedLayer = layerSelect.value as LayerId;
+    disposeExpiry();
+    seriesAbort?.abort();
+    seriesAbort = null;
+    clearSeries();
+    build = next;
+    expired = false;
+    populateLayers(next);
+    if (preserveView && next.manifest.layers.includes(selectedLayer)) layerSelect.value = selectedLayer;
+    populateFrames(next, selectedTime);
+    coverageNote.textContent = coverageSummaryText(next);
+    renderBuildDiagnostics(meta, next);
+    if (!preserveView) map.fitBounds(
+      [[next.manifest.descriptors.bounds[0], next.manifest.descriptors.bounds[1]],
+        [next.manifest.descriptors.bounds[2], next.manifest.descriptors.bounds[3]]],
+      { padding: 24, duration: 0 }
+    );
+    updateOverlay();
+    updateFreshness();
+    setControlsEnabled(!expired);
+    disposeExpiry = watchBuildExpiry(next.expiresAtMs, expireView, [document, window]);
+  }
+
+  function scheduleFreshness(): void {
+    if (expiryTimer !== null || mapFailed || suspended) return;
+    expiryTimer = window.setInterval(() => {
+      updateFreshness();
+      if (Date.now() - lastLatestCheckAt >= 60_000) void refreshLatest();
+    }, 5000);
+  }
+
+  async function refreshLatest(): Promise<void> {
+    if (mapFailed || suspended || document.visibilityState === 'hidden' || loadAbort || refreshAbort) return;
+    if (!build && expiryTimer === null) return;
+    if (!build) return loadModel(modelSelect.value);
+    const previous = build;
+    const requestAbort = new AbortController();
+    refreshAbort = requestAbort;
+    lastLatestCheckAt = Date.now();
+    refreshButton.disabled = true;
+    try {
+      const next = await api.latest(previous.manifest.model, { signal: requestAbort.signal });
+      if (requestAbort.signal.aborted || refreshAbort !== requestAbort || build !== previous) return;
+      refreshStatus.hidden = true;
+      refreshStatus.textContent = '';
+      if (next.manifest.buildId !== previous.manifest.buildId) installBuild(next, true);
+    } catch (error) {
+      if (requestAbort.signal.aborted || refreshAbort !== requestAbort || build !== previous) return;
+      refreshStatus.hidden = false;
+      refreshStatus.textContent = `Latest forecast refresh failed: ${error instanceof Error ? error.message : String(error)}. Use Refresh latest to retry.`;
+    } finally {
+      if (refreshAbort === requestAbort) {
+        refreshAbort = null;
+        refreshButton.disabled = mapFailed || pendingModel !== null;
+      }
+    }
+  }
+
   async function loadModel(model: ModelId): Promise<void> {
     if (mapFailed) return;
     disposeExpiry();
@@ -295,12 +362,15 @@ function startPreview(): void {
       expiryTimer = null;
     }
     loadAbort?.abort();
+    refreshAbort?.abort();
+    refreshAbort = null;
     seriesAbort?.abort();
     seriesAbort = null;
     clearSeries();
     const requestAbort = new AbortController();
     loadAbort = requestAbort;
     pendingModel = model;
+    lastLatestCheckAt = Date.now();
     resumeModel = null;
     modelSelect.value = model;
     expired = false;
@@ -308,6 +378,13 @@ function startPreview(): void {
     horizonNotice.hidden = true;
     horizonNotice.textContent = '';
     build = null;
+    selectedFrame = null;
+    layerSelect.replaceChildren();
+    frameSelect.replaceChildren();
+    legend.replaceChildren();
+    meta.replaceChildren();
+    refreshStatus.hidden = true;
+    refreshStatus.textContent = '';
     clicked = null;
     setControlsEnabled(false);
     removeOverlay();
@@ -318,25 +395,7 @@ function startPreview(): void {
     try {
       const next = await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
-      build = next;
-      populateLayers(next);
-      populateFrames(next);
-      coverageNote.textContent = coverageSummaryText(next);
-      renderBuildDiagnostics(meta, next);
-      map.fitBounds(
-        [
-          [next.manifest.descriptors.bounds[0], next.manifest.descriptors.bounds[1]],
-          [next.manifest.descriptors.bounds[2], next.manifest.descriptors.bounds[3]]
-        ],
-        { padding: 24, duration: 0 }
-      );
-      updateOverlay();
-      updateFreshness();
-      setControlsEnabled(true);
-      disposeExpiry = watchBuildExpiry(next.expiresAtMs, expireView, [document, window]);
-      if (expiryTimer === null) {
-        expiryTimer = window.setInterval(updateFreshness, 5000);
-      }
+      installBuild(next);
     } catch (error) {
       if (requestAbort.signal.aborted || loadAbort !== requestAbort || (error instanceof DOMException && error.name === 'AbortError')) return;
       const message = error instanceof Error ? error.message : String(error);
@@ -347,6 +406,9 @@ function startPreview(): void {
       if (loadAbort === requestAbort) {
         loadAbort = null;
         pendingModel = null;
+        modelSelect.disabled = mapFailed;
+        refreshButton.disabled = mapFailed;
+        scheduleFreshness();
       }
     }
   }
@@ -363,6 +425,7 @@ function startPreview(): void {
   modelSelect.addEventListener('change', () => {
     void loadModel(modelSelect.value as ModelId);
   });
+  refreshButton.addEventListener('click', () => { void refreshLatest(); });
 
   seriesButton.addEventListener('click', async () => {
     if (!build || !clicked || expired || mapFailed) return;
@@ -404,8 +467,11 @@ function startPreview(): void {
   });
 
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
+    suspended = true;
     resumeModel = event.persisted ? pendingModel : null;
     loadAbort?.abort();
+    refreshAbort?.abort();
+    refreshAbort = null;
     if (event.persisted && seriesAbort) seriesStatus.textContent = 'Point request interrupted. Sample this point again.';
     seriesAbort?.abort();
     seriesAbort = null;
@@ -420,6 +486,7 @@ function startPreview(): void {
   });
 
   window.addEventListener('pageshow', (event: PageTransitionEvent) => {
+    suspended = false;
     if (!event.persisted) return;
     if (resumeModel !== null) {
       const model = resumeModel;
@@ -431,19 +498,19 @@ function startPreview(): void {
       updateOverlay();
       setControlsEnabled(true);
       updateFreshness();
-      if (expiryTimer === null) {
-        expiryTimer = window.setInterval(updateFreshness, 5000);
-      }
     }
+    scheduleFreshness();
+    void refreshLatest();
   });
 
-  document.addEventListener('visibilitychange', updateFreshness);
-  window.addEventListener('focus', updateFreshness);
+  const wake = () => { updateFreshness(); void refreshLatest(); };
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('focus', wake);
 
 }
 
 function showMapFailure(error: unknown): void {
-  for (const control of [modelSelect, layerSelect, frameSelect, opacityInput, seriesButton]) control.disabled = true;
+  for (const control of [modelSelect, refreshButton, layerSelect, frameSelect, opacityInput, seriesButton]) control.disabled = true;
   errorBox.hidden = false;
   errorBox.textContent = error instanceof maplibregl.GPUInitializationError
     ? 'Map unavailable: this browser needs WebGL2. Enable graphics acceleration or try another browser.'
