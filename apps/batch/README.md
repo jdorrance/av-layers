@@ -57,7 +57,7 @@ for the [forecast calculations](../../packages/forecast/README.md).
 
 The hosted [forecast workflow](../../.github/workflows/forecast.yml) accepts
 `all`, `gfs`, or `icon-eu`. It selects models from the product registry and runs
-up to two models concurrently. Each uses the same
+them concurrently as GitHub runners and account limits allow. Each uses the same
 [model workflow](../../.github/workflows/forecast-model.yml), with its own cycle,
 daylight-filtered hours, and up to four parallel hour batches. Job names list
 the included hours; the planning summary includes their UTC valid times.

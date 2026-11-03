@@ -41,7 +41,6 @@ jobs:
     needs: select
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         model: ${{ fromJSON(needs.select.outputs.models) }}
     concurrency:

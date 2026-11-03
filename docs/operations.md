@@ -52,12 +52,12 @@ accept 00, 06, 12 or 18 UTC. Production runs all models automatically at
 **05:17 and 17:17 UTC**. A model skips a cycle already published, and successful
 publication is followed by cleanup.
 
-The caller starts up to two model workflows concurrently. Each runs
-`forecast-plan`, up to four parallel `forecast-shard` jobs, then `forecast` to
-assemble and publish. Planning fixes that model's cycle and frame list, including
-its daylight filtering. The job names list the actual `fXXX` hours in each batch;
-the planning summary also shows their UTC valid times. GFS and ICON-EU can have
-different cycles, hour lists, and batch sizes.
+Selected models run concurrently as GitHub runners and account limits allow.
+Each runs `forecast-plan`, up to four parallel `forecast-shard` jobs, then
+`forecast` to assemble and publish. Planning fixes that model's cycle and frame
+list, including its daylight filtering. Job names list the actual `fXXX` hours in
+each batch; the planning summary also shows their UTC valid times. GFS and ICON-EU
+can have different cycles, hour lists, and batch sizes.
 
 Each model holds its own environment/model lock through planning, computation,
 publication, and cleanup. A single-model dispatch and an `all` dispatch therefore

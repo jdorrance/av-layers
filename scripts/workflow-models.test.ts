@@ -57,7 +57,7 @@ describe('multi-model workflow isolation', () => {
     expect(job.uses).toBe('./.github/workflows/forecast-model.yml');
     expect(job.needs).toBe('select');
     expect(record(job.strategy)['fail-fast']).toBe(false);
-    expect(record(job.strategy)['max-parallel']).toBe(2);
+    expect(record(job.strategy)['max-parallel']).toBeUndefined();
     expect(record(record(job.strategy).matrix).model).toBe('${{ fromJSON(needs.select.outputs.models) }}');
     expect(record(job.with).model).toBe('${{ matrix.model }}');
     expect(record(job.concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}", 'cancel-in-progress': false });
@@ -75,6 +75,7 @@ describe('multi-model workflow isolation', () => {
   it('runs independent health checks and retains model-specific results', () => {
     const check = record(jobs('health').check);
     expect(record(check.strategy)['fail-fast']).toBe(false);
+    expect(record(check.strategy)['max-parallel']).toBeUndefined();
     const steps = check.steps as Record<string, unknown>[];
     expect(record(steps.find(step => step.run === 'pnpm health')!.env).MODEL).toBe('${{ matrix.model }}');
     expect(record(steps.find(step => step.uses === 'actions/upload-artifact@v4')!.with).name).toBe("health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}");
