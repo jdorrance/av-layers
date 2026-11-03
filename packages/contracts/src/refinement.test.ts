@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import configuredZones from '../config/refinement.json';
 import { GFS_GRID, ICON_EU_GRID } from './products.js';
 import { prepareGridGeometry, type GeographicBounds } from './geometry.js';
-import { containsRefinement, parseRefinementConfig, planRefinements, REFINEMENT_SPACING_M } from './refinement.js';
+import { containsRefinement, parseRefinementConfig, planRefinements, refinementCandidate, refinementGeometrySchema, REFINEMENT_SPACING_M } from './refinement.js';
 
 const rectangle = (w: number, s: number, e: number, n: number) => [[w, s], [e, s], [e, n], [w, n], [w, s]];
 const feature = (id: string, coordinates = [rectangle(10, 39, 12, 41)]) => ({ type: 'Feature', id, properties: {}, geometry: { type: 'Polygon', coordinates } });
@@ -10,6 +10,24 @@ const config = (...features: ReturnType<typeof feature>[]) => parseRefinementCon
 const options = { sourceGrid: GFS_GRID, bounds: [-180, -55, 180, 65] as GeographicBounds, haloCells: 1 };
 
 describe('configured refinement geometry', () => {
+  it('validates standalone patch geometry and selects by exact polygon and supported layer', () => {
+    const geometry = refinementGeometrySchema.parse(feature('zone-001').geometry);
+    const patch = { geometry, descriptors: { bounds: [10, 39, 12, 41] as GeographicBounds }, layers: ['usable-lift-agl'] as const };
+    expect(refinementCandidate([patch], 'usable-lift-agl', 40, 11)).toBe(patch);
+    expect(refinementCandidate([patch], 'usable-lift-msl', 40, 11)).toBeUndefined();
+    expect(refinementCandidate([patch], undefined, 40, 11)).toBe(patch);
+    expect(refinementCandidate([patch], 'usable-lift-agl', 40, 13)).toBeUndefined();
+    expect(() => refinementGeometrySchema.parse({ type: 'Polygon', coordinates: [[[10, 39], [12, 41], [10, 41], [12, 39], [10, 39]]] })).toThrow('self-intersect');
+  });
+
+  it('aliases both dateline endpoints and rejects physically touching zones on opposite sides', () => {
+    for (const [west, east] of [[179, 180], [-180, -179]]) {
+      const [plan] = planRefinements(config(feature('zone-001', [rectangle(west, 39, east, 41)])), options);
+      expect(containsRefinement(plan, 40, 180)).toBe(true);
+      expect(containsRefinement(plan, 40, -180)).toBe(true);
+    }
+    expect(() => config(feature('zone-001', [rectangle(179, 39, 180, 41)]), feature('zone-002', [rectangle(-180, 39, -179, 41)]))).toThrow('overlap or touch');
+  });
   it('plans the configured polygon using each existing source without changing source geometry', () => {
     const configured = parseRefinementConfig(configuredZones);
     expect(configured.features).toHaveLength(1);

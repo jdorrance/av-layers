@@ -1,6 +1,7 @@
-import { MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, STATUS_OUTSIDE, isCovered, isLayerId, type Manifest } from '@av/contracts';
+import { MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, STATUS_OUTSIDE, isCovered, isLayerId, type ForecastGrid, type LayerId, type Manifest } from '@av/contracts';
+import { refinementCandidate } from '@av/contracts/refinement';
 import { packedCellsFromRange, planPackedSample, planSample, sampleCells, type Sample } from '@av/forecast';
-import { resolveCoverage } from './coverage';
+import { resolveCoverage, type ResolvedCoverage } from './coverage';
 import { binaryRead, countRead, readObjectBytes, type WaitContext } from './resources';
 import { artifact, servedSource } from './publication';
 import { cached, ensureLive, fail, json } from './http';
@@ -35,7 +36,7 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
       return f;
     })
     .sort((a, b) => a.validTime.localeCompare(b.validTime));
-  const jobs = frames.flatMap(frame => selectedLayers.map(layer => ({ frame, layer, channel: artifact(m, layer, frame.id).channel })));
+  for (const frame of frames) for (const layer of selectedLayers) artifact(m, layer, frame.id);
   const canonical = new URL(url.origin + url.pathname);
   canonical.searchParams.set('lat', String(lat));
   canonical.searchParams.set('lon', String(lon));
@@ -43,38 +44,61 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
   canonical.searchParams.set('layers', selectedLayers.join(','));
   const canonicalRequest = new Request(canonical, { headers: request.headers });
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
-    const { mask, layout: sampleLayout } = await resolveCoverage(bucket, m, ctx);
-    const outside = !isCovered(mask, lat, lon);
-    const plan = outside ? null : planSample(m.grid, lat, lon);
-    const packed = plan ? planPackedSample(sampleLayout, plan, m.samples.channelCount, jobs.map(job => job.channel)) : null;
-    if (packed) {
-      const { offset, length } = packed.byteRange;
-      if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > m.samples.bytes) {
-        fail(503, 'publication-invalid', 'Invalid sample range');
+    const base = await resolveCoverage(bucket, m, ctx), outside = !isCovered(base.mask, lat, lon);
+    const resolved = new Map<ForecastGrid, ResolvedCoverage>([[m, base]]);
+    const groups = new Map<ForecastGrid, { layers: LayerId[]; patchId?: string }>();
+    for (const layer of selectedLayers) {
+      let grid: ForecastGrid = m, patchId: string | undefined;
+      const patch = outside ? undefined : refinementCandidate(m.patches ?? [], layer, lat, lon);
+      if (patch) {
+        let coverage = resolved.get(patch);
+        if (!coverage) { coverage = await resolveCoverage(bucket, patch, ctx); resolved.set(patch, coverage); }
+        if (isCovered(coverage.mask, lat, lon)) { grid = patch; patchId = patch.id; }
       }
-      if (length > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample range exceeds the byte budget');
+      const group = groups.get(grid);
+      if (group) group.layers.push(layer);
+      else groups.set(grid, { layers: [layer], ...(patchId ? { patchId } : {}) });
     }
-    const source = servedSource(m, url.origin);
-    let bytes: Uint8Array = new Uint8Array();
-    if (packed) {
-      bytes = await binaryRead(bucket, `${m.samples.key}:${packed.byteRange.offset}:${packed.byteRange.length}`, async signal => {
-        countRead(ctx);
-        const object = await bucket.get(m.samples.key, { range: packed.byteRange });
-        if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
-        if (object.size !== m.samples.bytes) {
-          void object.body.cancel().catch(() => {});
-          fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
+    let rangeBytes = 0;
+    const plans = [...groups].map(([grid, group]) => {
+      const jobs = frames.flatMap(frame => group.layers.map(layer => ({ frame, layer, channel: m.frames.indexOf(frame) * grid.layers.length + grid.layers.indexOf(layer) })));
+      const plan = outside ? null : planSample(grid.grid, lat, lon);
+      if (!plan && group.patchId) fail(503, 'publication-invalid', 'Refinement coverage lacks sample support');
+      const packed = plan ? planPackedSample(resolved.get(grid)!.layout, plan, grid.samples.channelCount, jobs.map(job => job.channel)) : null;
+      if (packed) {
+        const { offset, length } = packed.byteRange;
+        if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > grid.samples.bytes) {
+          fail(503, 'publication-invalid', 'Invalid sample range');
         }
-        return readObjectBytes(object, packed.byteRange.length, true, ctx, signal);
-      }, ctx);
-      ensureLive(m.expiresAt);
-      if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-    }
-    const values = new Map<string, Sample>();
-    for (const job of jobs) {
-      values.set(`${job.frame.id}/${job.layer}`, plan && packed
-        ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), m.descriptors.layers[job.layer])
-        : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false });
+        rangeBytes += length;
+      }
+      return { grid, patchId: group.patchId, jobs, plan, packed };
+    });
+    if (rangeBytes > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
+    const source = servedSource(m, url.origin);
+    const values = new Map<string, Sample & { patchId?: string }>();
+    for (const { grid, patchId, jobs, plan, packed } of plans) {
+      let bytes: Uint8Array = new Uint8Array();
+      if (packed) {
+        bytes = await binaryRead(bucket, `${grid.samples.key}:${packed.byteRange.offset}:${packed.byteRange.length}`, async signal => {
+          countRead(ctx);
+          const object = await bucket.get(grid.samples.key, { range: packed.byteRange });
+          if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
+          if (object.size !== grid.samples.bytes) {
+            void object.body.cancel().catch(() => {});
+            fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
+          }
+          return readObjectBytes(object, packed.byteRange.length, true, ctx, signal);
+        }, ctx);
+        ensureLive(m.expiresAt);
+        if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
+      }
+      for (const job of jobs) {
+        const value = plan && packed
+          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer])
+          : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
+        values.set(`${job.frame.id}/${job.layer}`, { ...value, ...(patchId ? { patchId } : {}) });
+      }
     }
     const result = {
       model: m.model,
@@ -97,7 +121,7 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
     };
     const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString()));
     const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}-v3`);
-  }, 'sample-v3');
+    return json(result, m.expiresAt, `sample-${tag}-v4`);
+  }, 'sample-v4');
 }
 

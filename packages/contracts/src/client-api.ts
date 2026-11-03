@@ -1,5 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, sampleResponseSchema, validateArtifactRecords, type LayerId, type Manifest, type ModelId } from './index.ts';
 import type { PinnedBuild, SamplePayload } from './client-types.ts';
+import { refinementCandidate } from './refinement.ts';
 
 export interface RequestOptions {
   signal?: AbortSignal;
@@ -221,6 +222,7 @@ export class ApiClient {
     if (receivedFrames.size !== payload.frames.length || receivedFrames.size !== expectedFrames.length || expectedFrames.some(id => !receivedFrames.has(id))) {
       throw new InvalidApiResponseError('sample frames do not match the requested selection');
     }
+    const owners = new Map<string, string | undefined>();
     for (const frame of payload.frames) {
       const expected = build.manifest.frames.find(item => item.id === frame.id)!;
       if (frame.validTime !== expected.validTime || frame.intervalStart !== expected.intervalStart || frame.intervalEnd !== expected.intervalEnd) {
@@ -230,7 +232,14 @@ export class ApiClient {
         throw new InvalidApiResponseError(`sample frame ${frame.id} layers do not match the requested selection`);
       }
       for (const layer of layers) {
-        const cell = frame.layers[layer], spec = build.manifest.descriptors.layers[layer];
+        const cell = frame.layers[layer];
+        const patch = cell.patchId === undefined ? undefined : build.manifest.patches?.find(item => item.id === cell.patchId);
+        if (cell.patchId !== undefined && (!patch || refinementCandidate(build.manifest.patches ?? [], layer, request.lat, request.lon)?.id !== patch.id || cell.status === 'outside-domain')) {
+          throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} refinement`);
+        }
+        if (owners.has(layer) && owners.get(layer) !== cell.patchId) throw new InvalidApiResponseError(`sample ${layer} refinement changes between frames`);
+        owners.set(layer, cell.patchId);
+        const spec = (patch?.descriptors ?? build.manifest.descriptors).layers[layer];
         if (cell.support < 0 || cell.support > SUPPORT_MASK || (cell.support & ~SUPPORT_MASK) !== 0 || (!spec.supportsLiftFlags && cell.support !== 0) ||
             (cell.status === 'valid' && cell.value === null) ||
             (cell.status === 'no-usable-lift' && (!spec.supportsNoLift || cell.value !== spec.noLiftSampleValue)) ||

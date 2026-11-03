@@ -83,17 +83,18 @@ their output into a complete build. See the
 [batch guide](../apps/batch/README.md#parallel-builds) for the worker flow and
 [capacity checks](../apps/batch/src/capacity.ts) for build budgets.
 
-Each layer and frame writes a PMTiles archive. A single `samples.bin` file stores
-point values for all frames and layers in spatial blocks with a 1-cell halo so a
-point query reads one byte range. Tiles and point queries share the same
-interpolation logic.
+Each layer and frame writes one composited PMTiles archive. Each numeric grid
+has a `samples.bin` storing its frames and layers in spatial blocks with a
+1-cell halo. Point queries read one range per selected grid. Tiles and point
+queries share grid selection and interpolation logic.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells
 used for edge interpolation; see [the data guide](data.md).
 
-Publication verifies all build files in R2 before updating the model's
-latest-build pointer with a compare-and-swap write. Workflow concurrency locks
+Publication and rollback verify every grid's coverage and numeric pack plus the
+composited tile archives before changing the model's latest-build pointer with a
+compare-and-swap write. Workflow concurrency locks
 are scoped per environment and model. After pointer commit, the publisher checks
 that the live API serves the new build. See [operations](operations.md) for
 publication, retention, and rollback.

@@ -1,9 +1,9 @@
-import { MAX_COVERAGE_DESCRIPTOR_BYTES, coverageDescriptorSchema, coveragePrefix, type CoverageMask, type Manifest } from '@av/contracts';
+import { MAX_COVERAGE_DESCRIPTOR_BYTES, assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, type CoverageDescriptor, type CoverageMask, type ForecastGrid } from '@av/contracts';
 import { prepareSamplePackLayout, type SamplePackLayout } from '@av/forecast';
 import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, parseBoundedJson, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
-export interface ResolvedCoverage { id: string; mask: CoverageMask; layout: SamplePackLayout }
+export interface ResolvedCoverage { descriptor: CoverageDescriptor; mask: CoverageMask; layout: SamplePackLayout }
 const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedCoverage>>();
 const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedCoverage>>();
 export async function sha256(bytes: Uint8Array): Promise<string> {
@@ -11,7 +11,7 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
 }
 
 /** Only hash-verified materialized bytes cross request boundaries; R2 bodies never do. */
-export async function resolveCoverage(bucket: R2Bucket, manifest: Manifest, ctx?: WaitContext): Promise<ResolvedCoverage> {
+export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, ctx?: WaitContext): Promise<ResolvedCoverage> {
   const { hash, maskKey } = manifest.coverage;
   const prefix = coveragePrefix(hash);
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
@@ -49,17 +49,16 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: Manifest, ctx?
       const [output, halo, tiles] = values;
       const mask: CoverageMask = { grid: descriptor.grid, output, halo, tiles, maxZoom: descriptor.maxZoom, bounds: descriptor.bounds };
       const layout = prepareSamplePackLayout(mask.grid, output, halo);
-      const result = { id: descriptor.id, mask, layout };
+      const result = { descriptor, mask, layout };
       // Bitsets plus conservative accounting for layout indexes and parsed descriptor.
       const retainedBytes = output.length + halo.length + tiles.length + Math.ceil(mask.grid.width / 16) * Math.ceil(mask.grid.height / 16) * 32 + bytes.length * 4;
       cache!.set(hash, result, retainedBytes, Date.now() + 3_600_000);
       return result;
     }, ctx);
   }
-  if (resolved.id !== manifest.coverage.id || JSON.stringify(resolved.mask.grid) !== JSON.stringify(manifest.grid)
-      || resolved.mask.maxZoom !== manifest.coverage.maxZoom
-      || JSON.stringify(resolved.mask.bounds) !== JSON.stringify(manifest.descriptors.bounds)
-      || resolved.layout.storedCells !== manifest.samples.storedCells) {
+  try { assertCoverageBinding(resolved.descriptor, manifest); }
+  catch { throw new CoverageError('Coverage geometry or sample layout disagrees with publication'); }
+  if (resolved.layout.storedCells !== manifest.samples.storedCells) {
     throw new CoverageError('Coverage geometry or sample layout disagrees with publication');
   }
   return resolved;

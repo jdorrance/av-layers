@@ -2,7 +2,8 @@
 
 The API bounds concurrent requests, R2 range reads, cache memory, and response
 allocations in [apps/api/src/resources.ts](../apps/api/src/resources.ts). Latest
-validation measurements are recorded in [project status](status.md).
+validation measurements are recorded in [project status](status.md). Limits
+apply to the combined work across all grids selected by a request.
 
 ## Cache and in-flight limits
 
@@ -27,6 +28,10 @@ Per-object byte caps: pointer 128 KiB, manifest 512 KiB, coverage descriptor
 range 256 KiB. JSON structural token caps: 8,192 for metadata, 262,144 for
 provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
 at 16 KiB.
+
+Point requests group layers by grid and read one range per group. Base MSL plus
+refined AGL uses two reads whose combined size is capped by the sample range
+budget. Matching polygon masks load lazily through the shared coverage cache.
 
 ## Memory envelope
 

@@ -3,12 +3,14 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { readLocalFile } from './local-file.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { coverageDescriptorSchema, coveragePrefix, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ProductDefinition } from '@av/contracts';
 
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const names = ['output', 'halo', 'tiles'] as const;
 
-export function describeCoverage(mask: CoverageMask, product: ProductDefinition): { descriptor: CoverageDescriptor; bytes: Uint8Array; hash: string } {
+type CoverageDefinition = Pick<ProductDefinition, 'coverageId' | 'coverageDescription' | 'bounds' | 'supportHaloCells'>;
+
+export function describeCoverage(mask: CoverageMask, product: CoverageDefinition): { descriptor: CoverageDescriptor; bytes: Uint8Array; hash: string } {
   const descriptor = coverageDescriptorSchema.parse({
     version: 1, id: product.coverageId, grid: mask.grid, bounds: mask.bounds ?? product.bounds,
     policy: product.coverageDescription, maxZoom: mask.maxZoom, supportHaloCells: product.supportHaloCells,
@@ -20,7 +22,7 @@ export function describeCoverage(mask: CoverageMask, product: ProductDefinition)
 }
 
 /** Write once or prove equality. Repeated builds reuse the same immutable coverage object. */
-export async function writeCoverage(root: string, mask: CoverageMask, product: ProductDefinition): Promise<string> {
+export async function writeCoverage(root: string, mask: CoverageMask, product: CoverageDefinition): Promise<string> {
   const description = describeCoverage(mask, product), dir = join(root, coveragePrefix(description.hash));
   await mkdir(dir, { recursive: true });
   for (const [name, bytes] of [...names.map(name => [`${name}.bin`, mask[name]] as const), ['manifest.json', description.bytes] as const]) {
@@ -60,4 +62,10 @@ export async function loadCoverage(product: ProductDefinition): Promise<Coverage
 
 export async function readCoverage(root: string, coverageHash: string): Promise<CoverageMask> {
   return (await readCoverageDirectory(join(root, coveragePrefix(coverageHash)), coverageHash)).mask;
+}
+
+export async function readGridCoverage(root: string, grid: ForecastGrid): Promise<CoverageMask> {
+  const result = await readCoverageDirectory(join(root, coveragePrefix(grid.coverage.hash)), grid.coverage.hash);
+  assertCoverageBinding(result.descriptor, grid);
+  return result.mask;
 }

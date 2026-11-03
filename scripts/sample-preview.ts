@@ -5,8 +5,8 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { coverageDescriptorSchema, forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
-import { readCoverage } from '../apps/batch/src/coverage.js';
+import { coverageDescriptorSchema, forecastGrids, forecastObjects, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { readGridCoverage } from '../apps/batch/src/coverage.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
@@ -51,20 +51,23 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
   const outputRoot = dirname(dirname(dirname(dirname(manifestPath))));
   const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
   invariant(join(outputRoot, manifestKey) === manifestPath, 'Manifest path must match output/builds/{model}/{buildId}/manifest.json');
-  const manifestSha = sha256(manifestBytes), coverageDir = `coverage/${manifest.coverage.hash}`;
-  const mask = await readCoverage(outputRoot, manifest.coverage.hash);
-  const coverageBytes = await readFile(join(outputRoot, manifest.coverage.maskKey));
-  const coverage = coverageDescriptorSchema.parse(JSON.parse(coverageBytes.toString('utf8')));
-  invariant(coverage.id === manifest.coverage.id && coverage.maxZoom === manifest.coverage.maxZoom && JSON.stringify(mask.grid) === JSON.stringify(manifest.grid), 'Coverage descriptor does not match manifest');
+  const manifestSha = sha256(manifestBytes), dependencies = [];
+  for (const grid of forecastGrids(manifest)) {
+    await readGridCoverage(outputRoot, grid);
+    const coverageBytes = await readFile(join(outputRoot, grid.coverage.maskKey));
+    const coverage = coverageDescriptorSchema.parse(JSON.parse(coverageBytes.toString('utf8')));
+    dependencies.push(
+      ...(['output', 'halo', 'tiles'] as const).map(name => ({ key: `coverage/${grid.coverage.hash}/${name}.bin`, sha256: coverage.files[name].sha256, contentType: 'application/octet-stream' })),
+      { key: grid.coverage.maskKey, sha256: grid.coverage.hash, contentType: 'application/json' }
+    );
+  }
   const provenance = getProvenanceReference(manifest), provenanceBytes = await readFile(join(outputRoot, provenance.key));
   invariant(sha256(provenanceBytes) === provenance.sha256, `Provenance hash mismatch: ${provenance.key}`);
   parseProvenance(JSON.parse(provenanceBytes.toString('utf8')), manifest);
-  const dependencies = [
-    ...(['output', 'halo', 'tiles'] as const).map(name => ({ key: `${coverageDir}/${name}.bin`, sha256: coverage.files[name].sha256, contentType: 'application/octet-stream' })),
-    { key: manifest.coverage.maskKey, sha256: manifest.coverage.hash, contentType: 'application/json' },
+  dependencies.push(
     { ...provenance, contentType: 'application/json' },
     ...forecastObjects(manifest)
-  ];
+  );
   const objects = [];
   for (const object of dependencies) {
     const file = join(outputRoot, object.key), info = await stat(file);

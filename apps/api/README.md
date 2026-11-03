@@ -33,6 +33,11 @@ pnpm --filter @av/api build
 See the [OpenAPI spec](../../docs/reference/openapi.json) for parameters and
 [the data guide](../../docs/data.md) for units and status flags.
 
+Version-4 point requests select a grid per layer using patch polygons and output
+masks. Selected no-lift or unavailable results remain in effect. `patchId` names
+the applicable descriptors; missing patch assets return a publication error.
+Composited map tiles use the existing URLs and model selector.
+
 ## Source layout
 
 - [src/index.ts](src/index.ts): Hono OpenAPI routes and Worker entry point.

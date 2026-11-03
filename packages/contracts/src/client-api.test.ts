@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './client';
-import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
+import { fixtureManifest, fixtureLatest, fixturePatch } from '../../../tests/forecast-fixture';
+import type { SamplePayload } from './client-types';
+import { sampleResponseSchema } from './publication';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
@@ -132,6 +134,36 @@ describe('ApiClient.sample', () => {
     expect((await client.sample(build, { lat: -32.9, lon: -68.9, frames: ['f009'], layers: ['precip-rate'] })).frames).toHaveLength(1);
     await expect(client.sample(build, { lat: 0, lon: 0, frames: ['not-in-build'] })).rejects.toBeInstanceOf(RangeError);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts mixed base/refined ownership and applies the selected patch descriptor', async () => {
+    const base = manifest(), patch = fixturePatch(base);
+    patch.descriptors.layers['usable-lift-agl'].noLiftSampleValue = null;
+    const latest = fixtureLatest({ ...base, version: 4, patches: [patch] });
+    const payload: SamplePayload = sampleResponseSchema.parse({ ...samplePayload(), lat: 0, lon: 0 });
+    for (const frame of payload.frames) frame.layers['usable-lift-agl'] = { value: null, status: 'no-usable-lift', support: 4, interpolated: false, patchId: patch.id };
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latest)).mockResolvedValueOnce(jsonResponse(payload));
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const build = await client.latest('gfs');
+    const result = await client.sample(build, { lat: 0, lon: 0 });
+    expect(result.frames[0].layers['usable-lift-agl']).toMatchObject({ value: null, status: 'no-usable-lift', patchId: patch.id });
+    expect(result.frames[0].layers['precip-rate'].patchId).toBeUndefined();
+  });
+
+  it.each(['unknown', 'unsupported-layer', 'outside-polygon', 'outside-status', 'missing-frame-owner', 'old-manifest'] as const)('rejects %s refinement claims', async failure => {
+    const base = manifest(), patch = fixturePatch(base);
+    const latest = failure === 'old-manifest' ? fixtureLatest(base) : fixtureLatest({ ...base, version: 4, patches: [patch] });
+    const payload: SamplePayload = sampleResponseSchema.parse({ ...samplePayload(), lat: 0, lon: 0 });
+    for (const frame of payload.frames) frame.layers['usable-lift-agl'].patchId = patch.id;
+    if (failure === 'unknown') payload.frames[0].layers['usable-lift-agl'].patchId = 'zone-missing';
+    if (failure === 'unsupported-layer') payload.frames[0].layers['precip-rate'].patchId = patch.id;
+    if (failure === 'outside-polygon') payload.lon = 1;
+    if (failure === 'outside-status') Object.assign(payload.frames[0].layers['usable-lift-agl'], { value: null, support: 0, status: 'outside-domain' });
+    if (failure === 'missing-frame-owner') delete payload.frames[1].layers['usable-lift-agl'].patchId;
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latest)).mockResolvedValueOnce(jsonResponse(payload));
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const build = await client.latest('gfs');
+    await expect(client.sample(build, { lat: payload.lat, lon: payload.lon })).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
   it('supports more than eight frames within the admitted result budget', async () => {
     const latest = latestPayload(), extra = { ...frames[7], id: 'f027' };

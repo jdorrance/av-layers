@@ -13,6 +13,12 @@ export function parseManifest(json: string): Manifest {
 }
 ```
 
+Version 3 describes one numeric grid. Version 4 adds internal patches under the
+same model, build and frame times. `forecastGrids` visits every grid;
+`forecastObjects` lists their numeric packs and one composited tile archive per
+frame/layer. `validateArtifactRecords` checks manifest references;
+`assertCoverageBinding` checks each loaded mask against its grid.
+
 ## Entry points
 
 - [`@av/contracts`](src/index.ts): manifest/pointer/sample schemas, `getProduct`,
@@ -21,7 +27,8 @@ export function parseManifest(json: string): Manifest {
   builders, and sample formatting.
 - [`@av/contracts/client/dom`](src/client-dom.ts): DOM renderers for legends,
   diagnostics, and point sample tables.
-- [`@av/contracts/refinement`](src/refinement.ts): polygon validation and 1 km Lambert grids.
+- [`@av/contracts/refinement`](src/refinement.ts): polygon validation, 1 km Lambert grids,
+  and per-layer patch lookup.
 - [`@av/contracts/fixture-product`](src/fixture-product.ts): synthetic product
   definition used by `pnpm dev`.
 

@@ -26,7 +26,7 @@ export type PaletteId = z.infer<typeof paletteIdSchema>;
 export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional() });
 export const layerDescriptorSchema = z.object({
   id: layerIdSchema, kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
-  verticalReference: z.enum(['MSL', 'model-AGL', 'surface']), timeSupport: z.enum(['interval-mean', 'interval-flux-endpoint-profile']),
+  verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface']), timeSupport: z.enum(['interval-mean', 'interval-flux-endpoint-profile']),
   methodId: methodIdSchema, palette: paletteIdSchema, supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
   noLiftSampleValue: z.number().finite().nullable(), zeroOnNoLiftInterpolation: z.boolean(), hideNonPositiveValues: z.boolean()
 });

@@ -1,13 +1,14 @@
 # Reading the forecast
 
 Each build packages one model run's map tiles, point samples, and metadata. Tiles
-and point queries evaluate the same underlying grid and interpolation rules.
+and point queries evaluate the same grids and interpolation rules.
 
 ## Layers and missing values
 
 - `usable-lift-msl`: estimated usable thermal top in metres above model mean sea
   level.
-- `usable-lift-agl`: estimated usable thermal top in metres above model terrain.
+- `usable-lift-agl`: usable depth in metres above ground. The descriptor names
+  `model-AGL` for model terrain or `terrain-AGL` for prepared DEM terrain.
 - `precip-rate`: mean precipitation rate over the frame's trailing interval in
   millimetres per hour.
 
@@ -46,6 +47,25 @@ live in [`packages/contracts/coverage/source.json`](../packages/contracts/covera
 and [`packages/contracts/coverage/icon-eu-land-v1/source.json`](../packages/contracts/coverage/icon-eu-land-v1/source.json).
 Version-3 manifests pin the grid, bounds, coverage descriptor, and bitset
 digests so retained builds remain self-contained.
+
+Version-4 builds add internal patches with their own grids and methods under the
+same model and frame times. Polygon and output-mask membership select a patch
+per layer before values are read. Selected no-lift and unavailable values remain
+in effect; sampling never falls back to the coarse grid. Halo cells support
+interpolation at the mask edges. Missing advertised patch assets fail the request.
+
+```mermaid
+flowchart LR
+  B[Model build and timeline] --> N[Base grid]
+  B --> P[Polygon patches]
+  N --> S[Select grid by layer and coverage]
+  P --> S
+  S --> M[Composited map tiles]
+  S --> Q[Point values with patchId]
+```
+
+A point value's `patchId` selects its grid, method and ground-reference
+descriptors. One request can combine base MSL or precipitation with refined AGL.
 
 ## Time and retention
 

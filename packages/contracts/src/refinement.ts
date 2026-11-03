@@ -1,9 +1,11 @@
 import z from 'zod';
 import { MAX_GRID_CELLS } from './coverage.js';
 import { gridSchema, prepareGridGeometry, withinGeographicBounds, type GeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import type { LayerId } from './product.js';
 
 /** Shared projected spacing; geometry and source support determine each bounded grid. */
 export const REFINEMENT_SPACING_M = 1000;
+export const MAX_REFINEMENT_ZONES = 16;
 const MAX_COORDINATES = 1024;
 const EPSILON = 1e-12;
 const position = z.tuple([z.number().finite().min(-180).max(180), z.number().finite().min(-80).max(80)]);
@@ -50,9 +52,15 @@ function inPolygon(polygon: Polygon, point: Position): boolean {
 function overlaps(a: Polygon, b: Polygon): boolean {
   return a.some(ringA => b.some(ringB => ringsIntersect(ringA, ringB))) || inPolygon(a, b[0][0]) || inPolygon(b, a[0][0]);
 }
+function overlapsGeographically(a: Polygon, b: Polygon): boolean {
+  if (overlaps(a, b)) return true;
+  const shift = a[0].some(p => p[0] === 180) && b[0].some(p => p[0] === -180) ? 360
+    : a[0].some(p => p[0] === -180) && b[0].some(p => p[0] === 180) ? -360 : 0;
+  return shift !== 0 && overlaps(a, b.map(ring => ring.map(([lon, lat]) => [lon + shift, lat])));
+}
 function geometriesOverlap(a: RefinementGeometry, b: RefinementGeometry): boolean {
   const other = polygons(b);
-  return polygons(a).some(part => other.some(candidate => overlaps(part, candidate)));
+  return polygons(a).some(part => other.some(candidate => overlapsGeographically(part, candidate)));
 }
 function coordinateCount(geometry: RefinementGeometry): number {
   let count = 0;
@@ -98,16 +106,24 @@ function validateGeometry(geometry: RefinementGeometry): void {
   const parts = polygons(geometry);
   for (const part of parts) validatePolygon(part);
   for (let i = 0; i < parts.length; i++) for (let j = 0; j < i; j++) {
-    if (overlaps(parts[i], parts[j])) throw new Error('Refinement polygon components must not overlap or touch');
+    if (overlapsGeographically(parts[i], parts[j])) throw new Error('Refinement polygon components must not overlap or touch');
   }
 }
+
+/** The same admitted polygon topology used by configuration and immutable patch descriptors. */
+export const refinementGeometrySchema = geometrySchema.superRefine((geometry, context) => {
+  try {
+    if (coordinateCount(geometry) > MAX_COORDINATES) throw new Error('Refinement coordinate budget exceeded');
+    validateGeometry(geometry);
+  } catch (error) { context.addIssue({ code: 'custom', message: (error as Error).message }); }
+});
 
 export const refinementConfigSchema = z.strictObject({
   type: z.literal('FeatureCollection'),
   features: z.array(z.strictObject({
     type: z.literal('Feature'), id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
     properties: z.strictObject({}), geometry: geometrySchema
-  })).max(16)
+  })).max(MAX_REFINEMENT_ZONES)
 }).superRefine((config, context) => {
   try {
     const coordinates = config.features.reduce((sum, feature) => sum + coordinateCount(feature.geometry), 0);
@@ -137,7 +153,13 @@ export interface RefinementPlan {
 
 /** Exact lon/lat polygon ownership, including outer boundaries and excluding holes. */
 export function containsRefinement(plan: Pick<RefinementPlan, 'geometry' | 'bounds'>, lat: number, lon: number): boolean {
-  return withinGeographicBounds(lat, lon, plan.bounds) && polygons(plan.geometry).some(part => inPolygon(part, [lon, lat]));
+  if (!withinGeographicBounds(lat, lon, plan.bounds)) return false;
+  if (Math.abs(lon) === 180) lon = geometryBounds(plan.geometry)[0] === -180 ? -180 : 180;
+  return polygons(plan.geometry).some(part => inPolygon(part, [lon, lat]));
+}
+/** Find the sole polygon/layer candidate; undefined layer prepares ownership shared by all layers. Check its output mask separately. */
+export function refinementCandidate<T extends { geometry: RefinementGeometry; descriptors: { bounds: GeographicBounds }; layers: readonly LayerId[] }>(patches: readonly T[], layer: LayerId | undefined, lat: number, lon: number): T | undefined {
+  return patches.find(patch => (layer === undefined || patch.layers.includes(layer)) && containsRefinement({ geometry: patch.geometry, bounds: patch.descriptors.bounds }, lat, lon));
 }
 const intersection = (a: GeographicBounds, b: GeographicBounds): GeographicBounds | null => {
   const result: GeographicBounds = [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3])];

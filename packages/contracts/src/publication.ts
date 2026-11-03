@@ -2,8 +2,10 @@ import z from 'zod';
 import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, methodDescriptorSchema, methodIdSchema } from './methods.js';
 import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
 import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
-import { gridSchema } from './geometry.js';
+import { gridSchema, sameGrid } from './geometry.js';
+import type { CoverageDescriptor } from './coverage.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
+import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 export type ModelId = z.infer<typeof modelIdSchema>;
@@ -55,11 +57,42 @@ export const frameSchema = z.object({ id: key, validTime: timestamp, intervalSta
 export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, tilesSha256: sha256 });
 /** Channels follow frames, then layers, in manifest order; the coverage determines block offsets. */
 export const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
-export const manifestSchema = z.object({ version: z.literal(3), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema, buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: z.object({ id: key, hash: sha256 }), coverage: z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM) }), grid: gridSchema, frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length), artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), samples: samplePackSchema, source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()), tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown()) });
+const methodIdentitySchema = z.object({ id: key, hash: sha256 });
+const coverageReferenceSchema = z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM) });
+export const refinementPatchSchema = z.strictObject({
+  id: modelIdSchema,
+  grid: gridSchema,
+  coverage: coverageReferenceSchema,
+  geometry: refinementGeometrySchema,
+  descriptors: descriptorSchema,
+  layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  samples: samplePackSchema,
+  method: methodIdentitySchema,
+  terrain: z.strictObject({
+    dataId: sha256,
+    key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
+    sha256,
+    verticalDatum: z.string().min(1).max(80),
+    surface: z.string().min(1).max(80)
+  })
+});
+export type RefinementPatch = z.infer<typeof refinementPatchSchema>;
+export const manifestSchema = z.object({
+  version: z.union([z.literal(3), z.literal(4)]), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
+  buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
+  coverage: coverageReferenceSchema, grid: gridSchema,
+  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), samples: samplePackSchema,
+  patches: z.array(refinementPatchSchema).min(1).max(MAX_REFINEMENT_ZONES).optional(),
+  source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
+  tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
+}).superRefine((manifest, ctx) => {
+  if ((manifest.version === 4) !== (manifest.patches !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only version 4 publishes refinement patches' });
+});
 export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, provider: z.string().min(1).max(256).optional(), temporalApproximation: z.string().max(2048).optional(), frames: z.array(z.unknown()).max(MAX_SAMPLE_VALUES) }).strict();
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
-export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean() });
+export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean(), patchId: modelIdSchema.optional() });
 export const sampleResponseSchema = z.object({ model: z.string(), buildId: z.string(), lat: z.number().finite(), lon: z.number().finite(), method: manifestSchema.shape.method, source: manifestSchema.shape.source, coverage: manifestSchema.shape.coverage, expiresAt: z.string(), frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueSchema) })) });
 export const freshnessSchema = z.object({
   ageSeconds: z.number(),
@@ -76,10 +109,21 @@ export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
 export type FreshnessSummary = z.infer<typeof freshnessSchema>;
 
+/** One numerical surface; every surface inherits the parent model's frame axis. */
+export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'layers' | 'descriptors' | 'method'>;
+export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [manifest, ...(manifest.patches ?? [])]; }
+
+/** A coverage hash binds its geometry and public extent to one numeric surface. */
+export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: ForecastGrid): void {
+  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom
+    || !sameGrid(descriptor.grid, surface.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(surface.descriptors.bounds)
+    || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Coverage descriptor binding mismatch');
+}
+
 /** The immutable forecast payloads; manifest and provenance are published separately. */
 export function forecastObjects(manifest: Manifest): { key: string; sha256: string; contentType: string }[] {
   return [
-    { key: manifest.samples.key, sha256: manifest.samples.sha256, contentType: 'application/octet-stream' },
+    ...forecastGrids(manifest).map(grid => ({ key: grid.samples.key, sha256: grid.samples.sha256, contentType: 'application/octet-stream' })),
     ...manifest.artifacts.map(a => ({ key: a.tilesKey, sha256: a.tilesSha256, contentType: 'application/vnd.pmtiles' }))
   ];
 }
@@ -150,6 +194,28 @@ export function validateArtifactRecords(manifest: Manifest): void {
   const prefix = `builds/${manifest.model}/${manifest.buildId}`;
   if (manifest.samples.key !== `${prefix}/samples.bin` || manifest.samples.channelCount !== expectedRecords || !Number.isSafeInteger(manifest.samples.bytes) || manifest.samples.bytes !== manifest.samples.storedCells * expectedRecords * CELL_BYTES) {
     throw new Error('Invalid sample pack metadata');
+  }
+  const patches = manifest.patches ?? [];
+  if ((manifest.version === 4) !== (patches.length > 0)) throw new Error('Refinement manifest version mismatch');
+  parseRefinementConfig({ type: 'FeatureCollection', features: patches.map(patch => ({ type: 'Feature', id: patch.id, properties: {}, geometry: patch.geometry })) });
+  for (let i = 0; i < patches.length; i++) {
+    const patch = patches[i], channels = manifest.frames.length * patch.layers.length;
+    if ((i > 0 && patches[i - 1].id >= patch.id) || new Set(patch.layers).size !== patch.layers.length
+      || channels > patch.descriptors.maxSampleValues
+      || patch.layers.some(layer => !layers.has(layer)) || patch.coverage.maxZoom !== manifest.coverage.maxZoom
+      || patch.coverage.maskKey !== `coverage/${patch.coverage.hash}/manifest.json`
+      || patch.samples.key !== `${prefix}/refinements/${patch.id}/samples.bin`
+      || patch.samples.channelCount !== channels || !Number.isSafeInteger(patch.samples.bytes)
+      || patch.samples.bytes !== patch.samples.storedCells * channels * CELL_BYTES) {
+      throw new Error('Invalid refinement grid or sample pack metadata');
+    }
+    const selectedMethods = new Set<string>();
+    for (const layer of patch.layers) {
+      const spec = patch.descriptors.layers[layer];
+      if (!spec || spec.id !== layer || !patch.descriptors.palettes.some(p => p.id === spec.palette)) throw new Error('Incomplete refinement descriptors');
+      selectedMethods.add(spec.methodId);
+    }
+    if (patch.method.id !== [...selectedMethods].join('+') || patch.method.hash !== manifest.method.hash) throw new Error('Refinement method identity mismatch');
   }
   for (const artifact of manifest.artifacts) {
     if (!frames.has(artifact.frame)) throw new Error(`unknown artifact frame ${artifact.frame}`);
