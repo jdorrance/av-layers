@@ -4,7 +4,7 @@ import { resolve, sep } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
 import { CELL_BYTES, RASTER_TILE_SIZE, MAX_TILE_BYTES, createProductMethodId, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, manifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
-import { prepareSamplePackLayout } from '@av/forecast';
+import { prepareSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
 import { describeCoverage, loadCoverage } from './coverage.js';
@@ -153,13 +153,18 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   if (manifest.coverage.maskKey !== `coverage/${manifest.coverage.hash}/manifest.json` || !sameGrid(mask.grid, manifest.grid) || JSON.stringify(manifest.descriptors.bounds) !== JSON.stringify(mask.bounds ?? product.bounds)) throw new Error('Coverage descriptor binding mismatch');
   const cycle = Date.parse(manifest.cycle), created = Date.parse(manifest.createdAt), expiry = Date.parse(manifest.expiresAt);
   if (!(created < expiry) || expiry > created + RETENTION_DAYS * 86400000 || !Number.isFinite(cycle)) throw new Error('Invalid build timestamps');
-  const frames = product.frameHours.map(hour => `f${String(hour).padStart(3, '0')}`);
+  const daylightHours = resolveProductFrameHours(product, mask, manifest.cycle);
+  const expectedHours =
+    manifest.frames.length === product.frameHours.length
+      ? product.frameHours
+      : daylightHours;
+  const frames = expectedHours.map(hour => `f${String(hour).padStart(3, '0')}`);
   if (manifest.frames.length !== frames.length || manifest.layers.length !== product.layers.length || product.layers.some((layer, i) => manifest.layers[i] !== layer)) {
     throw new Error('Incomplete frame or layer set');
   }
   for (let i = 0; i < frames.length; i++) {
     const frame = manifest.frames[i];
-    const hour = product.frameHours[i], end = cycle + hour * 3600000;
+    const hour = expectedHours[i], end = cycle + hour * 3600000;
     if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== end - product.intervalHours * 3600000 || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) {
       throw new Error(`Invalid frame interval ${frame.id}`);
     }

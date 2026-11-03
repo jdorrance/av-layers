@@ -59,7 +59,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 }
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number }) {
+export function prepareBuild(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number; retainedGeometryFields?: number; frameCount?: number }) {
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
   if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
@@ -67,14 +67,18 @@ export function prepareBuild(mask: CoverageMask, product: ProductDefinition, res
   if (mask.grid.width * mask.grid.height > BUILD_BUDGETS.gridCells) throw new Error('Grid-cell budget exceeded');
   const indices = coverageIndices(mask), layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
   if (!indices.output.length || !indices.active.length) throw new Error('Coverage must contain output and active cells before acquisition');
-  const capacity = estimateCapacity(mask, product, layout.storedCells);
+  const capacity = estimateCapacity(mask, product, layout.storedCells, resources.frameCount !== undefined ? { frames: resources.frameCount } : {});
   if (!Number.isSafeInteger(resources.maxLevels) || resources.maxLevels < 1 || resources.maxLevels > 256) throw new Error('Invalid normalized level budget');
+  const retainedGeometryFields = resources.retainedGeometryFields ?? 0;
+  if (!Number.isSafeInteger(retainedGeometryFields) || retainedGeometryFields < 0 || retainedGeometryFields > 257) throw new Error('Invalid retained geometry budget');
   const cells = mask.grid.width * mask.grid.height, activeCells = indices.active.length;
   const rasterWorkers = rasterWorkerCount();
+  const fieldsPerLevel = product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2;
   const workingSet = {
     samplePack: capacity.samplePackBytes,
-    derivedFields: cells * 3 * CELL_BYTES,
-    normalizedFrame: activeCells * (8 + 2 * resources.maxLevels) * CELL_BYTES,
+    derivedFields: cells * product.layers.length * CELL_BYTES,
+    normalizedFrame: activeCells * (8 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
+    retainedGeometry: activeCells * retainedGeometryFields * CELL_BYTES,
     rawCompanions: activeCells * 6 * 9,
     decoderReservations: 128 * 1024 * 1024,
     rendererAndEncoder: 64 * 1024 * 1024,

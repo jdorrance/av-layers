@@ -18,12 +18,12 @@ Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](
 
 - `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
-- `input-proof`: `--cycle <string>`, `--cache-dir <string>`.
+- `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`.
 
-## Live models
+## Configured models
 
-Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate.
+Source: [product registry](../packages/contracts/src/products.ts). Test fixtures are separate; [status](status.md) lists deployed models and current development work.
 
 ### GFS (gfs-soaring)
 
@@ -33,9 +33,25 @@ Source: [product registry](../packages/contracts/src/products.ts). Test fixtures
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, Greenland and Antarctica excluded.
 - Native tile zoom: 0–7.
-- Forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
+- Vertical coordinate: `isobaric`; maximum levels: 21.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `precipitationMmPerHour`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
-- Publishing freshness: cycle age at most 18 hours; remaining horizon at least 6 hours.
+- Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
+
+### ICON-EU (icon-eu-soaring)
+
+- Public model ID: `icon-eu`; model family: `icon`; source configuration: `dwd-icon-eu-regular-0p0625`; domain: `europe`.
+- Attribution: DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers.
+- Grid: `regular-latlon`; 1377 columns × 657 rows; spherical Earth radius 6371229 m; periodic longitude: false.
+- Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
+- Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, Greenland and Antarctica excluded.
+- Native tile zoom: 0–8.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
+- Vertical coordinate: `model-levels`; maximum levels: 30.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `pblHeightM`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`.
+- Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
 ## Scalar quantities and units
 
@@ -46,7 +62,7 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret valu
 - Kind: `scalar`; quantity: `precipitation-rate`; units: `mm/h`.
 - Vertical reference: `surface`; time support: `interval-mean`.
 - Method: `trailing-precipitation-rate-v1`; palette: `rain`.
-- Admits physical no-lift status: false; public no-lift value: `null`; admits lift support flags: false.
+- Supports no-lift status: false; public no-lift value: `null`; supports lift flags: false.
 - Zero on no-lift interpolation: false; hide nonpositive rendered values: false.
 
 ### Usable lift depth (model AGL) (usable-lift-agl)
@@ -54,7 +70,7 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret valu
 - Kind: `scalar`; quantity: `usable-lift-top`; units: `m AGL`.
 - Vertical reference: `model-AGL`; time support: `interval-flux-endpoint-profile`.
 - Method: `dry-lenschow-pbl-1p2-v1`; palette: `lift`.
-- Admits physical no-lift status: true; public no-lift value: `0`; admits lift support flags: true.
+- Supports no-lift status: true; public no-lift value: `0`; supports lift flags: true.
 - Zero on no-lift interpolation: true; hide nonpositive rendered values: true.
 
 ### Usable lift top (MSL) (usable-lift-msl)
@@ -62,14 +78,14 @@ Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret valu
 - Kind: `scalar`; quantity: `usable-lift-top`; units: `m MSL`.
 - Vertical reference: `MSL`; time support: `interval-flux-endpoint-profile`.
 - Method: `dry-lenschow-pbl-1p2-v1`; palette: `lift`.
-- Admits physical no-lift status: true; public no-lift value: `null`; admits lift support flags: true.
+- Supports no-lift status: true; public no-lift value: `null`; supports lift flags: true.
 - Zero on no-lift interpolation: false; hide nonpositive rendered values: false.
 
 ## Status and support encodings
 
 Public sample statuses: `valid`, `no-usable-lift`, `unavailable`, `outside-domain`.
 
-The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. Layer definitions above restrict admissible combinations.
+The packed status and support constants below come from the same [layer definitions](../packages/contracts/src/layers.ts) used by derivation and sampling. Status occupies the low bits; support is a bitwise union. The layer settings above determine which flags a result can contain.
 
 - `STATUS_MASK`: `3`.
 - `STATUS_NO_LIFT`: `1`.
@@ -83,7 +99,7 @@ The packed status and support constants below come from the same [layer definiti
 
 ## Methods and normalized inputs
 
-Source: [method definitions](../packages/contracts/src/methods.ts). The numerical kernel consumes these exact parameter constants. The adapter boundary supplies the declared input units; the column bridge performs its explicit Celsius/hPa conversion. No vector input is currently admitted. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.
+Source: [method definitions](../packages/contracts/src/methods.ts). The descriptors record the defaults used by the science packages. Adapters supply the units listed below; frame calculations convert temperature to Celsius and pressure to hPa for the column solver. See [science](science.md) and [extension guide](extensions.md) for assumptions and future additions.
 
 ### dry-lenschow-pbl-1p2-v1
 
@@ -149,21 +165,22 @@ Caveats:
 
 ### Normalized input vocabulary
 
-- `hgtM`: `geopotential-height`; units `m`; dimensions `level-cell`; vertical reference `MSL at isobaric levels`; time support `valid-time`; missingness `explicit-cell-mask`.
+- `hgtM`: `geopotential-height`; units `m`; dimensions `level-cell`; vertical reference `MSL at profile levels (isobaric or model levels)`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `latentHeatFluxWm2`: `upward-latent-heat-flux`; units `W/m2`; dimensions `cell`; vertical reference `surface`; time support `interval-mean`; missingness `explicit-cell-mask`.
 - `pblHeightM`: `boundary-layer-depth`; units `m`; dimensions `cell`; vertical reference `model AGL`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `precipitationMmPerHour`: `liquid-water-equivalent-precipitation-rate`; units `mm/h`; dimensions `cell`; vertical reference `surface`; time support `interval-mean`; missingness `explicit-cell-mask`.
 - `pressureLevelsHpa`: `air-pressure-coordinate`; units `hPa`; dimensions `level`; vertical reference `strictly decreasing isobaric levels`; time support `static`; missingness `all-levels-required`.
+- `pressurePa`: `air-pressure`; units `Pa`; dimensions `level-cell`; vertical reference `terrain-following model levels`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `sensibleHeatFluxWm2`: `upward-sensible-heat-flux`; units `W/m2`; dimensions `cell`; vertical reference `surface`; time support `interval-mean`; missingness `explicit-cell-mask`.
 - `specificHumidity2mKgKg`: `specific-humidity`; units `kg/kg`; dimensions `cell`; vertical reference `2 m model AGL`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `surfacePressurePa`: `air-pressure`; units `Pa`; dimensions `cell`; vertical reference `surface`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `temp2mK`: `air-temperature`; units `K`; dimensions `cell`; vertical reference `2 m model AGL`; time support `valid-time`; missingness `explicit-cell-mask`.
-- `tempK`: `air-temperature`; units `K`; dimensions `level-cell`; vertical reference `isobaric levels`; time support `valid-time`; missingness `explicit-cell-mask`.
+- `tempK`: `air-temperature`; units `K`; dimensions `level-cell`; vertical reference `profile levels (isobaric or model levels)`; time support `valid-time`; missingness `explicit-cell-mask`.
 - `terrainM`: `geopotential-height`; units `m`; dimensions `cell`; vertical reference `MSL`; time support `static`; missingness `explicit-cell-mask`.
 
 ## Resource limits
 
-These are configured limits. [Capacity checks](../apps/batch/src/capacity.ts) owns complete-build checks; [serving budgets](serving-budgets.md) describes API memory and load checks.
+These are configured limits. [capacity.ts](../apps/batch/src/capacity.ts) checks build limits; [serving budgets](serving-budgets.md) describes API memory and load checks.
 
 Complete-build limits:
 
@@ -173,7 +190,7 @@ Complete-build limits:
 - `samplePackBytes`: `268435456`.
 - `tiles`: `300000`.
 
-Shared producer/consumer contract limits and storage constants:
+Shared limits and storage constants:
 
 - `CELL_BYTES`: `5`.
 - `DEFAULT_PROBE_TIMEOUT_MS`: `30000`.
@@ -200,7 +217,7 @@ Raster worker limits ([source](../apps/batch/src/raster-pool.ts)):
 - `MAX_RASTER_SHARED_INPUT_BYTES`: 67108864.
 - `RASTER_WORKER_RESOURCE_LIMITS`: `{"maxOldGenerationSizeMb":64,"maxYoungGenerationSizeMb":16,"stackSizeMb":4}` (V8 heap/stack ceiling per worker).
 - `RASTER_WORKER_NATIVE_RESERVE_MB`: 44.
-- `RASTER_WORKER_RESERVE_BYTES`: 134217728; admission reserve per worker derived from the V8 heap/stack ceiling plus native allowance.
+- `RASTER_WORKER_RESERVE_BYTES`: 134217728; memory reserved per worker derived from the V8 heap/stack ceiling plus native allowance.
 
 ## API reference
 

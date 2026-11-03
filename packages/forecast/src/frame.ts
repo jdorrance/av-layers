@@ -1,15 +1,18 @@
 import {
   getBit,
+  LAYER_IDS,
   LIFT_METHOD_PARAMETERS,
   PRECIPITATION_METHOD_PARAMETERS,
-   prepareGridGeometry,
   STATUS_NO_LIFT,
   STATUS_OUTSIDE,
   STATUS_UNAVAILABLE,
   type CoverageMask,
   type LayerId
 } from '@av/contracts';
-import { createGridDaylightTester } from '@av/solar';
+import {
+  buildIntervalDaylightTimestampsMs,
+  createMaskDaylightTester
+} from './daylight.js';
 import {
   deriveColumn,
   precipitationRateStatus,
@@ -21,6 +24,11 @@ import type { NormalizedFrame } from './inputs.js';
 const { kelvinOffset: KELVIN_OFFSET, pascalsPerHectopascal: PA_PER_HPA } = LIFT_METHOD_PARAMETERS;
 
 export interface DeriveFrameOptions extends ColumnDerivationOptions {
+  /**
+   * Subset of layers to allocate and derive. When omitted, derives all layers
+   * whose required inputs are present in `frame`.
+   */
+  readonly layers?: readonly LayerId[];
   /**
    * When true (default), cells that are in darkness across the trailing flux/precipitation
    * window and valid time skip column physics and precipitation evaluation.
@@ -51,25 +59,45 @@ const buildDaylightTimestampsMs = (frame: NormalizedFrame): readonly number[] =>
   }
   const startRaw = frame.intervals?.fluxWindow?.start;
   const startMs = typeof startRaw === 'string' ? Date.parse(startRaw) : NaN;
-  if (Number.isFinite(startMs) && startMs < endMs) {
-    return [startMs, 0.5 * (startMs + endMs), endMs];
-  }
-  return [endMs];
+  return buildIntervalDaylightTimestampsMs(startMs, endMs);
 };
 
 export function deriveFrame(
   frame: NormalizedFrame,
   mask: CoverageMask,
   options?: DeriveFrameOptions
-): Record<LayerId, GridField> {
-  const result = {
-    'usable-lift-msl': field(mask),
-    'usable-lift-agl': field(mask),
-    'precip-rate': field(mask)
-  };
+): Partial<Record<LayerId, GridField>> {
+  const activeLayers: readonly LayerId[] =
+    options?.layers ??
+    (frame.precipitationMmPerHour instanceof Float32Array
+      ? LAYER_IDS
+      : (['usable-lift-msl', 'usable-lift-agl'] as const));
+
+  const requiresLift = activeLayers.some(
+    layer => layer === 'usable-lift-msl' || layer === 'usable-lift-agl'
+  );
+  const requiresPrecip = activeLayers.includes('precip-rate');
+  if (
+    requiresPrecip &&
+    (!(frame.precipitationMmPerHour instanceof Float32Array) ||
+      !(frame.missing.precipitation instanceof Uint8Array))
+  ) {
+    throw new Error('precip-rate layer requires precipitationMmPerHour and missing.precipitation');
+  }
+
+  const liftMsl = activeLayers.includes('usable-lift-msl') ? field(mask) : undefined;
+  const liftAgl = activeLayers.includes('usable-lift-agl') ? field(mask) : undefined;
+  const precipitation = requiresPrecip ? field(mask) : undefined;
+  const result: Partial<Record<LayerId, GridField>> = {};
+  if (liftMsl) result['usable-lift-msl'] = liftMsl;
+  if (liftAgl) result['usable-lift-agl'] = liftAgl;
+  if (precipitation) result['precip-rate'] = precipitation;
+
   const read = (values: Float32Array, missing: Uint8Array, i: number): number =>
     missing[i] ? NaN : values[i];
-  const levels = Array.from({ length: frame.pressureLevelsHpa.length }, () => ({
+
+  const totalLevels = frame.pressurePa !== undefined ? frame.pressurePa.length : frame.pressureLevelsHpa.length;
+  const levels = Array.from({ length: totalLevels }, () => ({
     heightM: NaN,
     temperatureC: NaN
   }));
@@ -81,24 +109,11 @@ export function deriveFrame(
     options?.minimumRateMmPerHour ?? PRECIPITATION_METHOD_PARAMETERS.minimumRateMmPerHour;
 
   const timestampsMs = daylightOnly ? buildDaylightTimestampsMs(frame) : [];
-  const isDaylight =
-    timestampsMs.length === 0
-      ? () => true
-      : mask.grid.kind === 'regular-latlon'
-        ? createGridDaylightTester(mask.grid, timestampsMs, minimumSolarElevationDeg)
-        : (() => {
-            const geom = prepareGridGeometry(mask.grid);
-            return createGridDaylightTester(
-              {
-                kind: 'projected',
-                width: mask.grid.width,
-                height: mask.grid.height,
-                gridToGeographic: (col, row) => geom.gridToGeographic(col, row)
-              },
-              timestampsMs,
-              minimumSolarElevationDeg
-            );
-          })();
+  const isDaylight = createMaskDaylightTester(
+    mask.grid,
+    timestampsMs,
+    minimumSolarElevationDeg
+  );
 
   for (let i = 0; i < frame.activeIndices.length; i++) {
     const index = frame.activeIndices[i];
@@ -108,59 +123,82 @@ export function deriveFrame(
     const terrain = read(frame.terrainM, frame.missing.terrain, i);
 
     if (!isDaylight(index)) {
-      const finiteTerrain = Number.isFinite(terrain);
-      result['usable-lift-msl'].values[index] = finiteTerrain ? terrain : NaN;
-      result['usable-lift-msl'].flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
-      result['usable-lift-agl'].values[index] = finiteTerrain ? 0 : NaN;
-      result['usable-lift-agl'].flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
-      result['precip-rate'].values[index] = NaN;
-      result['precip-rate'].flags[index] = STATUS_UNAVAILABLE;
+      if (requiresLift) {
+        const finiteTerrain = Number.isFinite(terrain);
+        if (liftMsl) {
+          liftMsl.values[index] = finiteTerrain ? terrain : NaN;
+          liftMsl.flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
+        }
+        if (liftAgl) {
+          liftAgl.values[index] = finiteTerrain ? 0 : NaN;
+          liftAgl.flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
+        }
+      }
+      if (precipitation) {
+        precipitation.values[index] = NaN;
+        precipitation.flags[index] = STATUS_UNAVAILABLE;
+      }
       continue;
     }
 
-    const pressure =
-      read(frame.surfacePressurePa, frame.missing.surfacePressure, i) / PA_PER_HPA;
-    let levelCount = 0;
-    for (let j = 0; j < frame.pressureLevelsHpa.length; j++) {
-      const p = frame.pressureLevelsHpa[j];
-      const heightM = read(frame.hgtM[j], frame.missing.hgt[j], i);
-      if (p >= pressure || (Number.isFinite(heightM) && heightM <= terrain)) continue;
-      const level = levels[levelCount++];
-      level.heightM = heightM;
-      level.temperatureC = read(frame.tempK[j], frame.missing.temp[j], i) - KELVIN_OFFSET;
-    }
-    const lift = deriveColumn(
-      {
-        terrainM: terrain,
-        surfaceTemperatureC: read(frame.temp2mK, frame.missing.temp2m, i) - KELVIN_OFFSET,
-        surfacePressureHpa: pressure,
-        humidity: {
-          specificHumidityKgKg: read(
-            frame.specificHumidity2mKgKg,
-            frame.missing.humidity2m,
+    if (requiresLift) {
+      const pressure =
+        read(frame.surfacePressurePa, frame.missing.surfacePressure, i) / PA_PER_HPA;
+      let levelCount = 0;
+      for (let j = 0; j < totalLevels; j++) {
+        const p = frame.pressurePa !== undefined
+          ? read(frame.pressurePa[j], frame.missing.pressure[j], i) / PA_PER_HPA
+          : frame.pressureLevelsHpa[j];
+        const heightM = read(frame.hgtM[j]!, frame.missing.hgt[j]!, i);
+        const validPressure = Number.isFinite(p) && p > 0;
+        if ((validPressure && p >= pressure) || (Number.isFinite(heightM) && heightM <= terrain)) {
+          continue;
+        }
+        const level = levels[levelCount++]!;
+        // Unknown pressure cannot establish a below-ground level or bridge a missing observation.
+        level.heightM = validPressure ? heightM : NaN;
+        level.temperatureC = read(frame.tempK[j]!, frame.missing.temp[j]!, i) - KELVIN_OFFSET;
+      }
+      const lift = deriveColumn(
+        {
+          terrainM: terrain,
+          surfaceTemperatureC: read(frame.temp2mK, frame.missing.temp2m, i) - KELVIN_OFFSET,
+          surfacePressureHpa: pressure,
+          humidity: {
+            specificHumidityKgKg: read(
+              frame.specificHumidity2mKgKg,
+              frame.missing.humidity2m,
+              i
+            )
+          },
+          sensibleHeatFluxWm2: read(
+            frame.sensibleHeatFluxWm2,
+            frame.missing.sensibleHeatFlux,
             i
-          )
+          ),
+          latentHeatFluxWm2: read(frame.latentHeatFluxWm2, frame.missing.latentHeatFlux, i),
+          pblHeightM: read(frame.pblHeightM, frame.missing.pbl, i),
+          levels
         },
-        sensibleHeatFluxWm2: read(
-          frame.sensibleHeatFluxWm2,
-          frame.missing.sensibleHeatFlux,
-          i
-        ),
-        latentHeatFluxWm2: read(frame.latentHeatFluxWm2, frame.missing.latentHeatFlux, i),
-        pblHeightM: read(frame.pblHeightM, frame.missing.pbl, i),
-        levels
-      },
-      levelCount,
-      options
-    );
-    result['usable-lift-msl'].values[index] = lift.msl.value ?? NaN;
-    result['usable-lift-msl'].flags[index] = lift.msl.flags;
-    result['usable-lift-agl'].values[index] = lift.agl.value ?? NaN;
-    result['usable-lift-agl'].flags[index] = lift.agl.flags;
-    const rain = read(frame.precipitationMmPerHour, frame.missing.precipitation, i);
-    const rainStatus = precipitationRateStatus(rain, minimumRateMmPerHour);
-    result['precip-rate'].values[index] = rainStatus === STATUS_UNAVAILABLE ? NaN : rain;
-    result['precip-rate'].flags[index] = rainStatus;
+        levelCount,
+        options
+      );
+      if (liftMsl) {
+        liftMsl.values[index] = lift.msl.value ?? NaN;
+        liftMsl.flags[index] = lift.msl.flags;
+      }
+      if (liftAgl) {
+        liftAgl.values[index] = lift.agl.value ?? NaN;
+        liftAgl.flags[index] = lift.agl.flags;
+      }
+    }
+
+    if (precipitation) {
+      const rain = read(frame.precipitationMmPerHour!, frame.missing.precipitation!, i);
+      const rainStatus = precipitationRateStatus(rain, minimumRateMmPerHour);
+      precipitation.values[index] = rainStatus === STATUS_UNAVAILABLE ? NaN : rain;
+      precipitation.flags[index] = rainStatus;
+    }
   }
   return result;
 }

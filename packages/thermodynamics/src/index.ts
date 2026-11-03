@@ -1,29 +1,20 @@
-/**
- * Pure atmospheric thermodynamics, dry-adiabatic lapse rate, and buoyancy equations.
- *
- * Ported from windgrams/packages/meteorology/src/thermodynamics.ts and @av/forecast/science.
- * All physical constants are consumed directly from `@av/contracts` `LIFT_METHOD_PARAMETERS`
- * so there is a single source of truth across contracts and scientific kernels.
- */
-import { LIFT_METHOD_PARAMETERS } from '@av/contracts';
+/** Dry-air thermodynamic kernels. Inputs and outputs use the units in each name. */
+import {
+  DRY_AIR_CP,
+  DRY_LAPSE_RATE_K_PER_M,
+  POISSON_EXPONENT_DRY_AIR,
+  STANDARD_PRESSURE_HPA,
+  THERMODYNAMIC_CONSTANTS,
+  WATER_DRY_AIR_MOLAR_MASS_RATIO,
+  ZERO_CELSIUS_K
+} from './constants.js';
+export * from './constants.js';
 
-export const ZERO_CELSIUS_K = LIFT_METHOD_PARAMETERS.kelvinOffset;
-export const GRAVITY_MPS2 = LIFT_METHOD_PARAMETERS.gravityMps2;
-export const DRY_AIR_GAS_CONSTANT = LIFT_METHOD_PARAMETERS.dryAirGasConstantJkgK;
-export const DRY_AIR_CP = LIFT_METHOD_PARAMETERS.dryAirHeatCapacityJkgK;
-export const WATER_DRY_AIR_MOLAR_MASS_RATIO = LIFT_METHOD_PARAMETERS.waterDryAirMolarMassRatio;
-export const STANDARD_PRESSURE_HPA = 1000;
-export const POISSON_EXPONENT_DRY_AIR = DRY_AIR_GAS_CONSTANT / DRY_AIR_CP; // ~0.285906
-
-/**
- * Standard dry-adiabatic lapse rate Γ_d = g / c_p in K/m (or °C/m),
- * sourced from `@av/contracts` `LIFT_METHOD_PARAMETERS.dryLapseRateKperM` (0.0098 K/m).
- */
-export const DRY_LAPSE_RATE_K_PER_M = LIFT_METHOD_PARAMETERS.dryLapseRateKperM;
-
-const SATURATION_SCALE_HPA = LIFT_METHOD_PARAMETERS.saturationVaporPressureScaleHpa;
-const SATURATION_EXPONENT = LIFT_METHOD_PARAMETERS.saturationExponent;
-const SATURATION_OFFSET_C = LIFT_METHOD_PARAMETERS.saturationTemperatureOffsetC;
+const {
+  saturationVaporPressureScaleHpa: SATURATION_SCALE_HPA,
+  saturationExponent: SATURATION_EXPONENT,
+  saturationTemperatureOffsetC: SATURATION_OFFSET_C
+} = THERMODYNAMIC_CONSTANTS;
 
 export const kelvinToCelsius = (kelvin: number): number => kelvin - ZERO_CELSIUS_K;
 
@@ -58,7 +49,7 @@ export const virtualPotentialTemperatureK = (
 
 /**
  * Bolton (1980) saturation vapor pressure e_s (hPa) over liquid water from temperature (°C),
- * using the shared `LIFT_METHOD_PARAMETERS` constants.
+ * using the shared thermodynamic constants.
  */
 export const saturationVaporPressureHpa = (tempC: number): number => {
   if (!Number.isFinite(tempC)) {
@@ -72,7 +63,7 @@ export const saturationVaporPressureHpa = (tempC: number): number => {
 
 /**
  * Saturation mixing ratio w_s (g/kg) from pressure (hPa) and temperature (°C),
- * using `1000 * LIFT_METHOD_PARAMETERS.waterDryAirMolarMassRatio` (622 g/kg).
+ * using `1000 * WATER_DRY_AIR_MOLAR_MASS_RATIO` (622 g/kg).
  */
 export const saturationMixingRatioGPerKg = (pressureHpa: number, tempC: number): number => {
   const es = saturationVaporPressureHpa(tempC);

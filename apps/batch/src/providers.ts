@@ -1,43 +1,17 @@
-import { getProduct, GFS_PRODUCT } from '@av/contracts';
-import type { NormalizedFrame } from '@av/forecast';
-import { createGfsAcquisitionSession, discoverGfsRun } from './noaa/index.js';
-import { validateCycle } from './noaa/acquire.js';
-import { GFS_PRESSURE_LEVELS_HPA } from './noaa/constants.js';
+import { getProduct } from '@av/contracts';
+import type { ResolvableForecastProvider } from './provider.js';
+import { gfsProvider } from './gfs/provider.js';
+import { iconEuProvider } from './icon/provider.js';
 
-export interface ForecastSession {
-  cycle: string;
-  readonly stats: Record<string, unknown>;
-  acquire(hour: number): Promise<NormalizedFrame>;
-  close(): Promise<void>;
-}
-export interface ForecastProvider {
-  id: string;
-  provider: string;
-  maxLevels: number;
-  open(options: { cycle?: string; activeIndices: Uint32Array; cacheDir: string; signal?: AbortSignal }): Promise<ForecastSession>;
-}
-
-/** NOAA inventory, GRIB encoding and source-grid details terminate at this adapter. */
-export const gfsProvider: ForecastProvider & {
-  resolveCycle(options: { cycle?: string; cacheDir: string; signal?: AbortSignal }): Promise<string>;
-} = {
-  id: GFS_PRODUCT.source.configurationId, provider: 'NOAA', maxLevels: GFS_PRESSURE_LEVELS_HPA.length,
-  async resolveCycle(options) {
-    options.signal?.throwIfAborted();
-    return validateCycle(options.cycle ?? (await discoverGfsRun(options)).cycle);
-  },
-  async open(options) {
-    const session = await createGfsAcquisitionSession(options);
-    return {
-      cycle: session.cycle, get stats() { return { ...session.stats }; },
-      acquire: hour => session.acquire(hour), close: () => session.close()
-    };
-  }
-};
+const PROVIDERS_BY_CONFIG_ID: Readonly<Record<string, ResolvableForecastProvider>> = Object.freeze({
+  [gfsProvider.id]: gfsProvider,
+  [iconEuProvider.id]: iconEuProvider
+});
 
 /** Explicit production binding; test providers are passed directly to buildForecast. */
-export function getForecastProvider(modelId: string): typeof gfsProvider {
+export function getForecastProvider(modelId: string): ResolvableForecastProvider {
   const product = getProduct(modelId);
-  if (!product || product.source.configurationId !== gfsProvider.id) throw new Error(`No forecast provider for ${modelId}`);
-  return gfsProvider;
+  const provider = product ? PROVIDERS_BY_CONFIG_ID[product.source.configurationId] : undefined;
+  if (!product || !provider) throw new Error(`No forecast provider for ${modelId}`);
+  return provider;
 }

@@ -1,96 +1,121 @@
 # Architecture
 
-A batch job downloads weather data, calculates the forecast, and writes files.
-The API serves those files to the standalone map and Windy plugin. Each client
-uses one completed build until the user reloads it or its data expires.
+The batch app downloads weather data and builds forecast files. A Cloudflare
+Worker serves those files from a private R2 bucket to the standalone map, Windy
+plugin, and other API clients. Forecast calculations happen during the build;
+serving a map or sampling a point does not download weather data.
 
-```text
-Source adapter → calculations → tiles + point data → private R2 bucket
-                                                         ↓
-                                                    API Worker
-                                                         ↓
-                                              preview / Windy / API clients
+```mermaid
+flowchart LR
+  sources["NOAA GFS / DWD ICON-EU"] --> batch["Batch builder"]
+  batch --> files["Tiles, point data<br/>and manifest"]
+  files --> r2["Private R2 bucket"]
+  r2 --> api["API Worker"]
+  api --> clients["Preview / Windy<br/>API clients"]
 ```
+
+GFS and ICON-EU use the same build and serving code. The scheduled workflow
+publishes GFS; ICON-EU still needs a complete real build and deployment checks.
+See [project status](status.md) for the recorded results.
 
 ## Workspace map
 
-- [contracts](../packages/contracts/README.md): model settings, shared schemas,
-  grids, layers, palettes, and client helpers.
-- [forecast](../packages/forecast/README.md): whole-frame derivation, normalized input
-  arrays, interpolation, and sample-pack layout.
-- [solar](../packages/solar/README.md): NOAA solar position, sunrise/sunset, and
-  separable grid daylight evaluation.
-- [thermodynamics](../packages/thermodynamics/README.md): pure dry-air thermodynamics
-  and parcel equations.
-- [soaring](../packages/soaring/README.md): dry convective parcel crossing, Deardorff
-  $w_*$ (`m/s`), Lenschow updraft profile, and configurable sink-rate thresholds (`m/s`).
-- [batch](../apps/batch/README.md): downloads, file generation, validation,
-  publication, and cleanup.
-- [api](../apps/api/README.md): HTTP requests, storage reads, and caching.
-- [preview](../apps/preview/README.md): standalone MapLibre map.
-- [windy-plugin](../apps/windy-plugin/README.md): Windy's map and time controls.
+- [apps/batch](../apps/batch/README.md): source downloads, forecast builds,
+  validation, uploads, and cleanup.
+- [apps/api](../apps/api/README.md): HTTP routes, R2 reads, and caching.
+- [apps/preview](../apps/preview/README.md): standalone MapLibre map.
+- [apps/windy-plugin](../apps/windy-plugin/README.md): Windy map and time controls.
+- [packages/contracts](../packages/contracts/README.md): shared types, model and
+  layer definitions, grids, palettes, and client helpers.
+- [packages/forecast](../packages/forecast/README.md): whole-frame calculations,
+  grid sampling, and the numeric file format.
+- [packages/solar](../packages/solar/README.md): solar position, sunrise/sunset,
+  and grid daylight checks.
+- [packages/thermodynamics](../packages/thermodynamics/README.md): dry-air
+  thermodynamics and parcel equations.
+- [packages/soaring](../packages/soaring/README.md): convective depth, thermal
+  velocity, and usable lift calculations.
 
-## Settings have an owner
+## Configuration and calculations
 
-[GFS settings](../packages/contracts/config/gfs.json) define its grid, forecast
-hours, source products and pressure levels, coverage, and freshness rules. The
-[NOAA field mapping](../apps/batch/src/noaa/fields.ts) selects the actual input fields.
-TypeScript and the Python
-mask generator read the same file. The [product registry](../packages/contracts/src/products.ts)
-lists available models. A public model ID is separate from its upstream model
-family, configuration, and domain.
+[GFS](../packages/contracts/config/gfs.json) and
+[ICON-EU](../packages/contracts/config/icon-eu.json) settings specify the grid,
+forecast hours, layers, coverage, vertical coordinate, and freshness settings.
+[products.ts](../packages/contracts/src/products.ts) loads them into the model
+registry. The Python coverage-mask generator reads the same files. Source
+field selection and decoding live in the [GFS](../apps/batch/src/gfs/README.md)
+and [ICON](../apps/batch/src/icon/README.md) adapters. Each adapter keeps its
+provider, downloads, decoding, tests, and fixtures together. The shared
+[provider types](../apps/batch/src/provider.ts) describe cycle discovery, input
+proof, and acquisition sessions; [providers.ts](../apps/batch/src/providers.ts)
+selects an implementation by source configuration.
 
-[Methods](../packages/contracts/src/methods.ts) define calculation parameters and
-input units. [Build budgets](../apps/batch/src/capacity.ts) limit memory, tiles,
-point data, and build time. [Serving budgets](serving-budgets.md) describe API
-limits. [Wrangler settings](../apps/api/wrangler.json) own deployed bucket and
-Worker bindings. Node and pnpm versions live in [package.json](../package.json);
-the PMTiles version and download checksums live in [pmtiles.json](../apps/batch/pmtiles.json).
-Shared dependency versions use the pnpm catalog in
-[pnpm-workspace.yaml](../pnpm-workspace.yaml).
+```mermaid
+flowchart TB
+  registry["providers.ts"] --> gfs["gfs/provider.ts"]
+  registry --> icon["icon/provider.ts"]
+  gfs --> gfsInput["GFS downloads and decoding"]
+  icon --> iconInput["ICON downloads and decoding"]
+  gfsInput --> normalized["NormalizedFrame"]
+  iconInput --> normalized
+  normalized --> frame["Shared frame calculations"]
+  frame --> solar["@av/solar<br/>daylight checks"]
+  frame --> science["forecast/science<br/>MSL, AGL and status flags"]
+  science --> soaring["@av/soaring<br/>lift calculations"]
+  soaring --> thermo["@av/thermodynamics<br/>parcel equations"]
+```
+
+Adapters return [normalized arrays](../packages/forecast/src/inputs.ts) with
+explicit units, missing-data masks, and time intervals. GFS uses a shared
+isobaric pressure axis; ICON-EU supplies pressure for each model-level column.
+[frame.ts](../packages/forecast/src/frame.ts) applies daylight checks and calls
+the scientific calculations, deriving both lift layers from one column result.
+[Method descriptors](../packages/contracts/src/methods.ts) record the inputs and
+parameters used in a build. The equations and defaults live in the pure math
+packages; [science](science.md) explains them.
 
 ## Build and storage
 
-An adapter returns normalized arrays with units, missing-value flags, a grid,
-and explicit time intervals. The builder checks the full workload before
-opening the source session. Related lift outputs share one calculation. Tile
-encoding uses bounded concurrency and shares geometry between a frame's layers.
+[build.ts](../apps/batch/src/build.ts) runs a sequential build.
+[parallel.ts](../apps/batch/src/parallel.ts) splits the same frame pipeline across
+workers for the hosted workflow. It fixes one source cycle and frame list before
+starting workers, then checks and assembles their files into a complete build.
+Each worker opens its own source session and fetches any earlier records needed
+to calculate its time intervals. Sessions close after success or failure. The
+[batch guide](../apps/batch/README.md#parallel-builds) shows the worker flow.
+[Capacity checks](../apps/batch/src/capacity.ts) estimate memory, numeric file
+size, and tile count before downloads begin. Publication also checks measured
+runtime and peak memory against the build limits.
 
-The hosted workflow plans one source cycle and divides the product's frame list
-among at most four independent workers. Each uses the same frame pipeline as a
-local sequential build. Private completion receipts bind worker outputs to the
-plan, source revision, recipe and coverage. Receipts carry hashes, observed source
-intervals and metrics; frame names, paths and sizes come from the plan. The finalizer checks every group,
-interleaves its numeric channels, and validates the complete product before
-publication. Whole-product limits apply before partitioning; worker memory
-limits apply separately. Elapsed build time includes worker startup and transfers,
-while summed worker durations record the work performed.
+Each layer and frame gets a PMTiles archive. A single numeric file stores point
+data for all frames and layers in spatial blocks. Each block includes neighboring
+cells so a point can be sampled with one storage range. Tiles and point results
+use the same interpolation; colors and display zoom do not change the numbers.
 
-Each layer and frame has a PMTiles archive. One numeric file holds point data
-for all frames and layers in spatial blocks. Block edges include neighboring
-cells so a point can be read in one storage range. Colors and display zoom do
-not alter the numeric results. Tiles and point results use the same interpolation.
+The build's manifest lists its files, hashes, frames, layers, methods, source
+records, and expiry. Separate coverage files distinguish public output from the
+extra cells needed for calculations and block padding. Those extra cells do not
+extend the area where the API returns forecasts. See [the data guide](data.md)
+for coverage and missing-value behavior.
 
-Each build has a manifest containing its files, hashes, layers, method details,
-source records, and expiry. Coverage has a separate descriptor and bitsets for
-public output, supporting cells, and tiles. Its content hash names the files.
-Supporting cells and block padding do not extend public coverage.
-
-Publication uploads and checks every file before changing the latest-build
-pointer. That final write uses a storage condition, so concurrent publishers
-cannot silently overwrite each other. See [operations](operations.md) for
-deployment, retention, and rollback.
+Publication uploads and checks the complete build before changing the
+latest-build pointer. The pointer update is conditional, so concurrent
+publishers cannot silently overwrite each other. [Operations](operations.md)
+covers publication, retention, and rollback.
 
 ## Serving and clients
 
-The API reads completed builds. It checks storage membership and expiry, shares
-identical reads, and bounds requests, memory, read sizes, and timeouts. Forecast
-downloads and calculations stay in the batch job.
+The API checks that a requested build is published and unexpired before serving
+it. It caches metadata and archive directories, shares identical storage reads,
+and limits concurrent work and allocations. [Serving budgets](serving-budgets.md)
+describes those limits; [wrangler.json](../apps/api/wrangler.json) configures the
+Worker and R2 bindings.
 
-Clients use the selected build's layer names, units, colors, and available times.
-They share API, tile-request, and display helpers while keeping their map-specific
-lifecycle code separate. A local Worker entry point supplies synthetic data for
-development; production uses the live registry.
+Clients select a build and use its ID for tiles and point requests, keeping one
+forecast run on screen. Its stored descriptors supply the available layers,
+times, units, and colors. Shared request and display helpers live in
+[@av/contracts/client](../packages/contracts/src/client.ts); map events and
+cleanup stay in each app. [Local development](development.md) supplies a small
+synthetic build through a separate Worker entry point.
 
-GFS is the only live model. New models and products remain [deferred](roadmap.md).
-The [extension guide](extensions.md) describes the seams to use when adding them.
+For changes to a model, layer, or grid, follow [the extension guide](extensions.md).

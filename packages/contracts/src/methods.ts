@@ -1,6 +1,10 @@
 import z from 'zod';
+import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
+import { DEFAULT_SOARING_PARAMETERS } from '@av/soaring/parameters';
+import { DEFAULT_HORIZON_DEG } from '@av/solar/parameters';
 
-/** Current adapter outputs only. Pressure levels are a coordinate, not a sampled field.
+/** Current adapter outputs only. Isobaric pressure levels are a shared coordinate;
+ * terrain-following model levels supply per-column pressures with an explicit mask.
  * Missing cell values have an explicit mask; a masked PBL value is permitted until
  * the first-level closure needs it. No vector field/basis is admitted yet.
  */
@@ -14,73 +18,50 @@ export const NORMALIZED_INPUTS = {
   latentHeatFluxWm2: { id: 'latentHeatFluxWm2', quantity: 'upward-latent-heat-flux', units: 'W/m2', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' },
   precipitationMmPerHour: { id: 'precipitationMmPerHour', quantity: 'liquid-water-equivalent-precipitation-rate', units: 'mm/h', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' },
   pressureLevelsHpa: { id: 'pressureLevelsHpa', quantity: 'air-pressure-coordinate', units: 'hPa', dimensions: 'level', verticalReference: 'strictly decreasing isobaric levels', timeSupport: 'static', missingness: 'all-levels-required' },
-  hgtM: { id: 'hgtM', quantity: 'geopotential-height', units: 'm', dimensions: 'level-cell', verticalReference: 'MSL at isobaric levels', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
-  tempK: { id: 'tempK', quantity: 'air-temperature', units: 'K', dimensions: 'level-cell', verticalReference: 'isobaric levels', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }
+  pressurePa: { id: 'pressurePa', quantity: 'air-pressure', units: 'Pa', dimensions: 'level-cell', verticalReference: 'terrain-following model levels', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
+  hgtM: { id: 'hgtM', quantity: 'geopotential-height', units: 'm', dimensions: 'level-cell', verticalReference: 'MSL at profile levels (isobaric or model levels)', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
+  tempK: { id: 'tempK', quantity: 'air-temperature', units: 'K', dimensions: 'level-cell', verticalReference: 'profile levels (isobaric or model levels)', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }
 } as const;
 export type NormalizedInputId = keyof typeof NORMALIZED_INPUTS;
 for (const input of Object.values(NORMALIZED_INPUTS)) Object.freeze(input);
 Object.freeze(NORMALIZED_INPUTS);
 
-/**
- * These exact values are consumed by the column kernel, never copied into it.
- *
- * All soaring velocity thresholds in m/s (`sinkRateMps`, `minimumThermalVelocityMps`),
- * dry boundary-layer lapse rates (`dryLapseRateKperM`), Lenschow profile shape constants,
- * and solar elevation daylight cutoffs (`minimumSolarElevationDeg`) are explicitly
- * parameterized here so callers and method descriptors can inspect or override them.
- */
+/** Descriptors publish the same defaults that the pure kernels consume. */
 export const LIFT_METHOD_PARAMETERS = Object.freeze({
-  sinkRateMps: 1.2,
-  minimumThermalVelocityMps: 0,
-  minimumSolarElevationDeg: -0.833,
-  lenschowScale: 4,
-  lenschowShape: 0.8,
-  lenschowPeakZeta: 0.3125,
-  waterDryAirMolarMassRatio: 0.622,
-  dryAirGasConstantJkgK: 287.05,
-  dryAirHeatCapacityJkgK: 1004,
-  latentHeatVaporizationJkg: 2501000,
-  gravityMps2: 9.80665,
-  kelvinOffset: 273.15,
-  pascalsPerHectopascal: 100,
-  dryLapseRateKperM: 0.0098,
-  saturationRelativeTolerance: 1e-6,
-  saturationVaporPressureScaleHpa: 6.112,
-  saturationExponent: 17.67,
-  saturationTemperatureOffsetC: 243.5,
-  minimumSurfaceTemperatureC: -100,
-  maximumSurfaceTemperatureC: 60,
-  minimumSurfacePressureHpa: 100,
-  maximumSurfacePressureHpa: 1100,
-  minimumProfileTemperatureC: -120,
-  maximumProfileTemperatureC: 60,
-  maximumProfileGapM: 1000,
-  crossingEpsilonMultiplier: 8,
-  maximumBisectionIterations: 60
-} as const);
+  ...THERMODYNAMIC_CONSTANTS,
+  ...DEFAULT_SOARING_PARAMETERS,
+  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG
+});
 export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
   minimumRateMmPerHour: 0,
-  minimumSolarElevationDeg: -0.833
+  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG
 } as const);
 
-const liftInputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressureLevelsHpa', 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
 const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readonly NormalizedInputId[];
-export const LIFT_METHOD = Object.freeze({
-  id: 'dry-lenschow-pbl-1p2-v1',
-  requiredInputs: Object.freeze(liftInputs),
-  inputs: Object.freeze(Object.fromEntries(liftInputs.map(id => [id, NORMALIZED_INPUTS[id]]))),
-  outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
-  spatialSupport: 'column',
-  parameters: LIFT_METHOD_PARAMETERS,
-  caveats: Object.freeze([
-    'Dry parcel calculation; no moist parcel or cloud treatment.',
-    'Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.',
-    'Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
-    'PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.',
-    'A profile without a resolved crossing is capped at its highest usable level and flagged.',
-    'MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.'
-  ])
-} as const);
+const liftCaveats = Object.freeze([
+  'Dry parcel calculation; no moist parcel or cloud treatment.',
+  'Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.',
+  'Interval-mean surface fluxes are paired with the endpoint profile and PBL, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
+  'PBL may be missing unless the first resolved profile level is neutral or stable; that branch uses the smaller of its height and the PBL depth.',
+  'A profile without a resolved crossing is capped at its highest usable level and flagged.',
+  'MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.'
+] as const);
+
+function defineLiftMethod(pressureInput: 'pressureLevelsHpa' | 'pressurePa') {
+  const inputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', pressureInput, 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
+  return Object.freeze({
+    id: 'dry-lenschow-pbl-1p2-v1',
+    requiredInputs: Object.freeze(inputs),
+    inputs: Object.freeze(Object.fromEntries(inputs.map(id => [id, NORMALIZED_INPUTS[id]]))),
+    outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
+    spatialSupport: 'column',
+    parameters: LIFT_METHOD_PARAMETERS,
+    caveats: liftCaveats
+  } as const);
+}
+export const LIFT_METHOD = defineLiftMethod('pressureLevelsHpa');
+export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('pressurePa');
+
 export const PRECIPITATION_METHOD = Object.freeze({
   id: 'trailing-precipitation-rate-v1',
   requiredInputs: Object.freeze(precipitationInputs),
@@ -95,6 +76,10 @@ export const PRECIPITATION_METHOD = Object.freeze({
   ])
 } as const);
 export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD });
+export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
+  isobaric: LIFT_METHOD,
+  'model-levels': MODEL_LEVEL_LIFT_METHOD
+} as const);
 export type MethodId = keyof typeof METHODS;
 /** Wire snapshots describe their own inputs and parameters. Do not compare a
  * retained build with today's constants or require its old executable kernel.

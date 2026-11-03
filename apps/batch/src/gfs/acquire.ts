@@ -1,5 +1,5 @@
 import {
-  GFS_GRID, GFS_NATIVE_GRID, GFS_CYCLE_HOURS_UTC, GFS_FORECAST_HOURS, GFS_INTERVAL_HOURS,
+  GFS_GRID, GFS_NATIVE_GRID, GFS_FORECAST_HOURS, GFS_INTERVAL_HOURS,
   GFS_PRESSURE_LEVELS_HPA,
   GFS_PRODUCTS,
 } from './constants.ts';
@@ -14,6 +14,7 @@ import {
   gfsProductName,
   gfsWindowNeedsCompanion,
   cycleStamp,
+  validateCycle,
 } from './fields.ts';
 import {
   admitNoaaWindowPair,
@@ -43,17 +44,6 @@ export function estimateDecodeWorkingBytes(compressedBytes: number, activeCells:
 
 function invalid(message: string, details?: Record<string, unknown>): never {
   throw new NoaaError('invalid-option', message, details);
-}
-
-export function validateCycle(cycle: string): string {
-  const normalized = cycle.replace(/\.000Z$/, 'Z');
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/.test(normalized) || !GFS_CYCLE_HOURS_UTC.includes(new Date(normalized).getUTCHours()) ||
-    !Number.isFinite(Date.parse(normalized)) || new Date(normalized).toISOString().replace('.000Z', 'Z') !== normalized
-  ) {
-    invalid('GFS cycle must be an exact ISO UTC one of 00/06/12/18Z', { cycle });
-  }
-  return normalized;
 }
 
 export function validateHour(hour: number): void {

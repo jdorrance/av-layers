@@ -5,9 +5,8 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts"
-  },
-  "dependencies": {
-    "@av/contracts": "workspace:*"
+    ".": "./src/index.ts",
+    "./parameters": "./src/parameters.ts",
+    "./grid": "./src/grid.ts"
   }
 }

@@ -21,8 +21,10 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ ...report, currentProductAdmission: { model: product.modelId, frames: product.frameHours.length, layers: product.layers.length, nativeZoom: product.maxNativeZoom, rasterWorkers: capacity.rasterWorkers, workingSet: capacity.workingSet, estimatedPeakBytes: capacity.estimatedPeakBytes, budgetBytes: capacity.budgets.peakRssBytes, scope: 'Current build estimate with reserves. Scenario changes need their own memory estimate.' } }, null, 2));
     if (report.violations.length) process.exitCode = 1;
   } else if (command === 'input-proof') {
-    const { proveGfsInputs } = await import('./noaa/index.js');
-    console.log(JSON.stringify(await proveGfsInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));
+    const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
+    if (!product) throw new Error('No admitted product for this model');
+    const { getForecastProvider } = await import('./providers.js');
+    console.log(JSON.stringify(await getForecastProvider(product.modelId).proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));
   } else if (command === 'validate') {
     if (!values.manifest) throw new Error('--manifest is required');
     await validateLocalBuild(values.manifest);

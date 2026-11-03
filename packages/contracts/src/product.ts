@@ -1,0 +1,84 @@
+import z from 'zod';
+import { gridSchema, type Grid } from './geometry.js';
+import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES } from './format.js';
+
+export const LAYER_IDS = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
+export type LayerId = typeof LAYER_IDS[number];
+const capabilitiesSchema = z.object({
+  verticalCoordinate: z.enum(['isobaric', 'model-levels']),
+  maxVerticalLevels: z.number().int().positive().max(256),
+  daylightFrames: z.enum(['all-hours', 'regional-daylight'])
+}).strict().readonly();
+export type ProductCapabilities = z.infer<typeof capabilitiesSchema>;
+export type VerticalCoordinateKind = ProductCapabilities['verticalCoordinate'];
+export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
+
+export interface ProductDefinition {
+  /** Public catalog/URL identity, independent of the upstream family and domain. */
+  readonly modelId: string;
+  readonly id: string;
+  readonly configPath: string;
+  readonly coverageDir: string;
+  readonly source: { readonly modelFamily: string; readonly configurationId: string; readonly domainId: string };
+  readonly label: string;
+  readonly attribution: string;
+  readonly bounds: readonly [number, number, number, number];
+  readonly coverageDescription: string;
+  readonly freshness: { readonly maxCycleAgeHours: number; readonly minHorizonHours: number };
+  readonly grid: Grid;
+  readonly coverageId: string;
+  readonly maxNativeZoom: number;
+  readonly supportHaloCells: number;
+  readonly frameHours: readonly number[];
+  readonly intervalHours: number;
+  readonly layers: readonly LayerId[];
+  readonly capabilities: ProductCapabilities;
+}
+
+// The shared portion of source JSON. Adapter-specific upstream settings stay in
+// that adapter; adding a model never extends a union of existing config types.
+const identifier = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
+const productConfigSchema = z.object({
+  modelId: identifier, id: identifier,
+  configPath: z.string().regex(/^packages\/contracts\/config\/[a-z0-9-]+\.json$/),
+  coverageDir: z.string().regex(/^coverage(?:\/[a-z0-9-]+)*$/),
+  source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier }).readonly(),
+  label: z.string().min(1), attribution: z.string().min(1),
+  layers: z.array(z.enum(LAYER_IDS)).min(1).max(LAYER_IDS.length).refine(
+    layers => new Set(layers).size === layers.length, 'Product requires unique scalar layers'
+  ).readonly(),
+  capabilities: capabilitiesSchema,
+  grid: gridSchema.readonly(),
+  forecast: z.object({
+    hours: z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES).refine(
+      hours => hours.every((hour, i) => i === 0 || hour > hours[i - 1]),
+      'Product requires strictly ascending frame hours'
+    ).readonly(),
+    intervalHours: z.number().finite().positive()
+  }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour'),
+  freshness: z.object({ maxCycleAgeHours: z.number().positive(), minHorizonHours: z.number().nonnegative() }).readonly(),
+  coverage: z.object({
+    id: identifier, description: z.string().min(1),
+    west: z.number().min(-180).max(180), south: z.number().min(-90).max(90),
+    east: z.number().min(-180).max(180), north: z.number().min(-90).max(90),
+    maxNativeZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM),
+    interpolationHaloCells: z.number().int().nonnegative()
+  }).refine(coverage => coverage.west < coverage.east && coverage.south < coverage.north, 'Invalid coverage bounds')
+}).refine(config => config.layers.length * config.forecast.hours.length <= MAX_SAMPLE_VALUES, 'Product exceeds sample value budget');
+
+/** Validate declarative product settings without importing any source adapter. */
+export function defineProduct(raw: unknown): ProductDefinition {
+  const config = productConfigSchema.parse(raw);
+  return Object.freeze({
+    modelId: config.modelId, id: config.id, configPath: config.configPath,
+    coverageDir: config.coverageDir, source: config.source, label: config.label,
+    attribution: config.attribution,
+    bounds: Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const),
+    coverageDescription: config.coverage.description, freshness: config.freshness,
+    grid: config.grid, coverageId: config.coverage.id,
+    maxNativeZoom: config.coverage.maxNativeZoom,
+    supportHaloCells: config.coverage.interpolationHaloCells,
+    frameHours: config.forecast.hours, intervalHours: config.forecast.intervalHours,
+    layers: config.layers, capabilities: config.capabilities
+  });
+}

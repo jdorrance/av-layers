@@ -31,7 +31,7 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString(), 
   const prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: frameCount }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
   const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
-  const manifest = { version: 3, descriptors: createProductDescriptors(), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: createProductMethodId(), hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
+  const manifest = { version: 3, descriptors: createProductDescriptors(GFS_PRODUCT), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: createProductMethodId(GFS_PRODUCT), hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
 }
@@ -399,7 +399,7 @@ describe('read-only worker', () => {
   });
   it('advertises only admitted production products and returns 503 when a published manifest is invalid', async () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
-    expect(catalog.models.map(m => m.model)).toEqual(['gfs']);
+    expect(catalog.models.map(m => m.model)).toEqual(['gfs', 'icon-eu']);
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
     bucket = new MemoryBucket();
     const broken = publication('build-broken');
@@ -409,7 +409,12 @@ describe('read-only worker', () => {
     bucket = new MemoryBucket();
     const unavailable = await call('/v1/catalog');
     expect(unavailable.status).toBe(200);
-    expect(await unavailable.json()).toMatchObject({ models: [{ model: 'gfs', available: false, error: 'publication-unavailable' }] });
+    expect(await unavailable.json()).toMatchObject({
+      models: [
+        { model: 'gfs', available: false, error: 'publication-unavailable' },
+        { model: 'icon-eu', available: false, error: 'publication-unavailable' }
+      ]
+    });
   });
   it('validates resource and expiry before cached blank and reduces TTL on hits', async () => {
     const url = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';

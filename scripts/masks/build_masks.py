@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Build the soaring-land-v1 coverage bitsets from pinned Natural Earth 1:50m admin-0.
+"""Build coverage bitsets from pinned Natural Earth 1:50m admin-0.
 
-Regenerate with:
+Regenerate GFS (soaring-land-v1) with:
   uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
     --with pyshp==2.3.1 python scripts/masks/build_masks.py \
+    --config packages/contracts/config/gfs.json \
     --source ne_50m_admin_0_countries.zip \
     --output packages/contracts/coverage
+
+Regenerate ICON-EU (icon-eu-land-v1) with:
+  uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
+    --with pyshp==2.3.1 python scripts/masks/build_masks.py \
+    --config packages/contracts/config/icon-eu.json \
+    --source ne_50m_admin_0_countries.zip \
+    --output packages/contracts/coverage/icon-eu-land-v1
 """
 
 from __future__ import annotations
@@ -16,14 +24,19 @@ import json
 import math
 import os
 import platform
+import shlex
 import sys
 import tempfile
 import urllib.request
 import zipfile
-from importlib.metadata import version as distribution_version
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 
-import shapefile
+try:
+    import shapefile  # type: ignore
+except ImportError:
+    shapefile = None
+
 from pyproj import CRS, Transformer, proj_version_str
 from shapely import affinity, geos_version_string, intersects, make_valid, prepare, unary_union
 from shapely.geometry import MultiPolygon, Point, Polygon, box, shape
@@ -39,37 +52,6 @@ SOURCE_RELEASE = "5.1.1"
 SOURCE_DATASET = "Natural Earth 1:50m Admin 0 Countries"
 SOURCE_LICENSE = "public-domain"
 SOURCE_ARCHIVE_BYTES = 799734
-
-if geos_version_string != "3.13.1" or proj_version_str != "9.5.1":
-    raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1")
-
-SETTINGS = json.loads((Path(__file__).resolve().parents[2] / "packages/contracts/config/gfs.json").read_text())
-GRID = SETTINGS["grid"]
-COVERAGE = SETTINGS["coverage"]
-if GRID["kind"] != "regular-latlon" or not GRID["wrapLongitude"]:
-    raise SystemExit("This generator requires the declared global regular GFS grid")
-POLICY_ID = COVERAGE["id"]
-LAT_MIN, LAT_MAX = COVERAGE["south"], COVERAGE["north"]
-SEA_BUFFER_METERS = COVERAGE["seaBufferMeters"]
-EXCLUDED_A3 = tuple(COVERAGE["excludedA3"])
-HALO_CELLS = COVERAGE["interpolationHaloCells"]
-LON0, LAT0 = GRID["lon0"], GRID["lat0"]
-WIDTH, HEIGHT = GRID["width"], GRID["height"]
-DX, DY = GRID["dx"], GRID["dy"]
-CELL_HALF = abs(DX) / 2
-CELL_COUNT = WIDTH * HEIGHT
-CELL_BYTES = (CELL_COUNT + 7) // 8
-TILE_ZOOMS = tuple(range(COVERAGE["maxNativeZoom"] + 1))
-TILE_OFFSETS = {}
-_running = 0
-for _z in TILE_ZOOMS:
-    TILE_OFFSETS[str(_z)] = _running
-    _running += 4**_z
-TILE_TOTAL_BITS = _running
-TILE_BYTES = (TILE_TOTAL_BITS + 7) // 8
-
-ROW_MIN = int(round((LAT0 - LAT_MAX) / -DY))
-ROW_MAX = int(round((LAT0 - LAT_MIN) / -DY))
 
 TILE_DEG = 10.0
 TILE_HALF_DEG = TILE_DEG / 2.0
@@ -148,17 +130,30 @@ def polygon_parts(geom):
     return []
 
 
-def load_features(shp_path: Path):
-    reader = shapefile.Reader(str(shp_path))
+def iter_shapefile_records(shp_path: Path):
+    if shapefile is not None:
+        reader = shapefile.Reader(str(shp_path))
+        for sr in reader.iterShapeRecords():
+            yield sr.record.as_dict(), shape(sr.shape.__geo_interface__)
+        return
+    import geopandas as gpd  # type: ignore
+
+    gdf = gpd.read_file(shp_path)
+    cols = [c for c in gdf.columns if c != "geometry"]
+    for _, row in gdf.iterrows():
+        rec = {c: row[c] for c in cols}
+        yield rec, row.geometry
+
+
+def load_features(shp_path: Path, excluded_a3: tuple[str, ...]):
     admitted = []
     excluded = []
     iso_exceptions = []
-    for sr in reader.iterShapeRecords():
-        rec = sr.record.as_dict()
+    for rec, raw_geom in iter_shapefile_records(shp_path):
         adm0 = rec.get("ADM0_A3")
         iso3 = rec.get("ISO_A3")
         iso3_eh = rec.get("ISO_A3_EH")
-        if (iso3 == "-99" or iso3_eh != iso3) and adm0 not in EXCLUDED_A3:
+        if (iso3 == "-99" or iso3_eh != iso3) and adm0 not in excluded_a3:
             iso_exceptions.append(
                 {
                     "admin": rec.get("ADMIN"),
@@ -169,9 +164,9 @@ def load_features(shp_path: Path):
                     "iso_a2_eh": rec.get("ISO_A2_EH"),
                 }
             )
-        geom = fill_holes(shape(sr.shape.__geo_interface__))
+        geom = fill_holes(raw_geom)
         for part in polygon_parts(geom):
-            if adm0 in EXCLUDED_A3:
+            if adm0 in excluded_a3:
                 excluded.append(part)
             else:
                 admitted.append(part)
@@ -189,12 +184,22 @@ def local_aeqd(lat0: float) -> tuple[Transformer, Transformer]:
     return forward, inverse
 
 
-def build_tile_geometry(parts, lon_center: float, lat_center: float):
+def build_tile_geometry(
+    parts,
+    lon_center: float,
+    lat_center: float,
+    lat_min: float,
+    lat_max: float,
+    sea_buffer_meters: float,
+    lon_min: float = -180.0,
+    lon_max: float = 180.0,
+    wrap_longitude: bool = True,
+):
     core = box(
-        lon_center - TILE_HALF_DEG,
-        max(LAT_MIN, lat_center - TILE_HALF_DEG),
-        lon_center + TILE_HALF_DEG,
-        min(LAT_MAX, lat_center + TILE_HALF_DEG),
+        max(lon_min, lon_center - TILE_HALF_DEG),
+        max(lat_min, lat_center - TILE_HALF_DEG),
+        min(lon_max, lon_center + TILE_HALF_DEG),
+        min(lat_max, lat_center + TILE_HALF_DEG),
     )
     if core.is_empty or core.area <= 0:
         return None
@@ -204,10 +209,11 @@ def build_tile_geometry(parts, lon_center: float, lat_center: float):
         lon_center + TILE_HALF_DEG + TILE_LON_PAD,
         min(90.0, lat_center + TILE_HALF_DEG + TILE_LAT_PAD),
     )
+    shifts = (-360.0, 0.0, 360.0) if wrap_longitude else (0.0,)
     pieces = []
     for part in parts:
-        for shift in (-360.0, 0.0, 360.0):
-            moved = affinity.translate(part, xoff=shift)
+        for shift in shifts:
+            moved = affinity.translate(part, xoff=shift) if shift else part
             if not moved.intersects(expanded):
                 continue
             clipped = moved.intersection(expanded)
@@ -219,7 +225,7 @@ def build_tile_geometry(parts, lon_center: float, lat_center: float):
     fwd, inv = local_aeqd(lat_center)
     local = transform(lambda x, y, z=None: (x - lon_center, y), merged)
     project = transform(fwd.transform, local)
-    buffered = project.buffer(SEA_BUFFER_METERS, quad_segs=BUFFER_QUAD_SEGS)
+    buffered = project.buffer(sea_buffer_meters, quad_segs=BUFFER_QUAD_SEGS)
     if buffered.is_empty:
         return None
     unprojected = transform(inv.transform, buffered)
@@ -229,9 +235,9 @@ def build_tile_geometry(parts, lon_center: float, lat_center: float):
         return None
 
     normalized = []
-    for shift in (-360.0, 0.0, 360.0):
-        moved = affinity.translate(clipped, xoff=shift)
-        piece = moved.intersection(box(-180.0, -90.0, 180.0, 90.0))
+    for shift in shifts:
+        moved = affinity.translate(clipped, xoff=shift) if shift else clipped
+        piece = moved.intersection(box(lon_min, -90.0, lon_max, 90.0))
         if not piece.is_empty:
             normalized.extend(polygon_parts(piece))
     if not normalized:
@@ -239,7 +245,7 @@ def build_tile_geometry(parts, lon_center: float, lat_center: float):
     return unary_union(normalized)
 
 
-def dateline_shift_selfchecks():
+def dateline_shift_selfchecks(lat_min: float, lat_max: float, sea_buffer_meters: float):
     cases = [
         ("east_179_9_into_west_tile", 179.90, -175.0, -179.80),
         ("west_neg179_9_into_east_tile", -179.95, 175.0, 179.80),
@@ -247,7 +253,9 @@ def dateline_shift_selfchecks():
     results = []
     for name, source_lon, tile_lon, probe_lon in cases:
         strip = box(source_lon, -0.05, source_lon + 0.05, 0.05)
-        geom = build_tile_geometry([strip], tile_lon, 0.0)
+        geom = build_tile_geometry(
+            [strip], tile_lon, 0.0, min(-1.0, lat_min), max(1.0, lat_max), sea_buffer_meters
+        )
         observed = bool(geom is not None and geom.contains(Point(probe_lon, 0.0)))
         results.append(
             {
@@ -264,126 +272,6 @@ def dateline_shift_selfchecks():
     return results
 
 
-def cell_lon_intervals(col: int):
-    center = LON0 + col * DX
-    if col == 0:
-        return (
-            (center - CELL_HALF, center + CELL_HALF),
-            (180.0 - CELL_HALF, 180.0 + CELL_HALF),
-        )
-    return ((center - CELL_HALF, center + CELL_HALF),)
-
-
-def build_cell_boxes(rows, cols, lon_center, lat_center, clip_to_core: bool):
-    tiles = []
-    for row in rows:
-        lat_center_cell = LAT0 + row * DY
-        y0 = max(LAT_MIN, lat_center_cell - CELL_HALF)
-        y1 = min(LAT_MAX, lat_center_cell + CELL_HALF)
-        if clip_to_core:
-            y0 = max(y0, lat_center - TILE_HALF_DEG)
-            y1 = min(y1, lat_center + TILE_HALF_DEG)
-        if y1 <= y0:
-            continue
-        for col in cols:
-            for x0, x1 in cell_lon_intervals(col):
-                a = max(-180.0, x0)
-                b = min(180.0, x1)
-                if clip_to_core:
-                    a = max(a, lon_center - TILE_HALF_DEG)
-                    b = min(b, lon_center + TILE_HALF_DEG)
-                if b <= a:
-                    continue
-                tiles.append((row, col, box(a, y0, b, y1)))
-    return tiles
-
-
-def rasterize_admitted(tile_geoms) -> bytearray:
-    active = bytearray(CELL_COUNT)
-    for entry in tile_geoms:
-        if entry is None:
-            continue
-        lon_center, lat_center, geom = entry
-        if geom.is_empty:
-            continue
-        prepare(geom)
-        lo = lon_center - TILE_HALF_DEG
-        hi = lon_center + TILE_HALF_DEG
-        col_min = max(0, math.ceil((lo - CELL_HALF - LON0) / DX - 1e-9))
-        col_max = min(WIDTH - 1, math.floor((hi + CELL_HALF - LON0) / DX + 1e-9))
-        cols = list(range(col_min, col_max + 1))
-        if hi >= 180.0 - CELL_HALF and 0 not in cols:
-            cols.append(0)
-        row_min = max(
-            ROW_MIN,
-            math.ceil((LAT0 - (lat_center + TILE_HALF_DEG + CELL_HALF)) / -DY - 1e-9),
-        )
-        row_max = min(
-            ROW_MAX,
-            math.floor((LAT0 - (lat_center - TILE_HALF_DEG - CELL_HALF)) / -DY + 1e-9),
-        )
-        rows = list(range(row_min, row_max + 1))
-        candidates = build_cell_boxes(rows, cols, lon_center, lat_center, True)
-        if not candidates:
-            continue
-        boxes = [item[2] for item in candidates]
-        hits = intersects(geom, boxes)
-        for (row, col, _), hit in zip(candidates, hits):
-            if hit:
-                active[row * WIDTH + col] = 1
-    return active
-
-
-def apply_exclusions(active: bytearray, excluded_geom) -> int:
-    if excluded_geom.is_empty:
-        return 0
-    prepare(excluded_geom)
-    indices = [i for i, v in enumerate(active) if v]
-    boxes = []
-    owners = []
-    for idx in indices:
-        row, col = divmod(idx, WIDTH)
-        lat = LAT0 + row * DY
-        y0 = max(LAT_MIN, lat - CELL_HALF)
-        y1 = min(LAT_MAX, lat + CELL_HALF)
-        for x0, x1 in cell_lon_intervals(col):
-            a = max(-180.0, x0)
-            b = min(180.0, x1)
-            if b <= a:
-                continue
-            boxes.append(box(a, y0, b, y1))
-            owners.append(idx)
-    if not boxes:
-        return 0
-    hits = intersects(excluded_geom, boxes)
-    cleared = set()
-    for idx, hit in zip(owners, hits):
-        if hit and active[idx]:
-            active[idx] = 0
-            cleared.add(idx)
-    return len(cleared)
-
-
-def build_halo(active: bytearray) -> bytearray:
-    halo = bytearray(CELL_COUNT)
-    for idx, is_active in enumerate(active):
-        if not is_active:
-            continue
-        row, col = divmod(idx, WIDTH)
-        for dr in range(-HALO_CELLS, HALO_CELLS + 1):
-            rr = row + dr
-            if rr < 0 or rr >= HEIGHT:
-                continue
-            for dc in range(-HALO_CELLS, HALO_CELLS + 1):
-                if dr == 0 and dc == 0:
-                    continue
-                cc = (col + dc) % WIDTH
-                k = rr * WIDTH + cc
-                if not active[k]:
-                    halo[k] = 1
-    return halo
-
-
 def pack_bits(bits: bytearray) -> bytes:
     out = bytearray((len(bits) + 7) // 8)
     for idx, value in enumerate(bits):
@@ -396,134 +284,346 @@ def tile_lat(y: int, n: int) -> float:
     return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
 
 
-def build_tiles(active: bytearray):
-    boxes = []
-    for idx, is_active in enumerate(active):
-        if not is_active:
-            continue
-        row, col = divmod(idx, WIDTH)
-        lat = LAT0 + row * DY
-        y0 = max(LAT_MIN, lat - CELL_HALF)
-        y1 = min(LAT_MAX, lat + CELL_HALF)
-        for x0, x1 in cell_lon_intervals(col):
-            a = max(-180.0, x0)
-            b = min(180.0, x1)
-            if b > a:
-                boxes.append(box(a, y0, b, y1))
-    tree = STRtree(boxes)
-    bits = bytearray(TILE_TOTAL_BITS)
-    counts = {}
-    active_tiles = []
-    for z in TILE_ZOOMS:
-        n = 2**z
-        offset = TILE_OFFSETS[str(z)]
-        count = 0
-        for x in range(n):
-            lon_min = -180.0 + x * 360.0 / n
-            lon_max = -180.0 + (x + 1) * 360.0 / n
-            for y in range(n):
-                lat_max = tile_lat(y, n)
-                lat_min = tile_lat(y + 1, n)
-                probe = box(lon_min, lat_min, lon_max, lat_max)
-                if len(tree.query(probe)) > 0:
-                    bits[offset + y * n + x] = 1
-                    count += 1
-                    if z == 5:
-                        active_tiles.append(f"{z}/{x}/{y}")
-        counts[str(z)] = count
-    return pack_bits(bits), counts, active_tiles
-
-
-def nearest_cell(lat: float, lon: float) -> tuple[int, int, float, float]:
-    row = int(math.floor((LAT0 - lat) / -DY + 0.5))
-    col = int(math.floor((lon - LON0) / DX + 0.5)) % WIDTH
-    row = max(0, min(HEIGHT - 1, row))
-    return row, col, LAT0 + row * DY, LON0 + col * DX
-
-
-def run_tests(output_bits: bytes, halo_bits: bytes, tile_bits: bytes):
-    cases = [
-        ("torrey_pines", 32.9200, -117.2400, True),
-        ("karioitahi_offshore_4km", -37.2900, 174.6400, True),
-        ("big_sur_coast", 36.2700, -121.8100, True),
-        ("azores_sao_miguel", 37.7410, -25.6750, True),
-        ("canaries_tenerife", 28.2910, -16.6290, True),
-        ("armenia_yerevan", 40.1790, 44.4990, True),
-        ("new_zealand_wellington", -41.2865, 174.7762, True),
-        ("aleutians_unalaska", 53.8750, -166.5360, True),
-        ("dateline_east_attu", 52.9000, 173.2000, True),
-        ("dateline_west_taveuni", -16.8500, -179.9700, True),
-        ("exclude_russia_moscow", 55.7558, 37.6173, False),
-        ("exclude_greenland_nuuk", 64.1814, -51.6941, False),
-        ("exclude_antarctica", -77.8500, 166.6700, False),
-        ("outside_band_north", 66.0000, 20.0000, False),
-        ("outside_band_south", -56.0000, 10.0000, False),
-        ("open_ocean_atlantic", 30.0000, -40.0000, False),
-    ]
-    results = []
-    for name, lat, lon, expected in cases:
-        row, col, cell_lat, cell_lon = nearest_cell(lat, lon)
-        idx = row * WIDTH + col
-        observed = bool(output_bits[idx >> 3] & (1 << (idx & 7)))
-        observed_halo = bool(halo_bits[idx >> 3] & (1 << (idx & 7)))
-        results.append(
-            {
-                "name": name,
-                "lat": lat,
-                "lon": lon,
-                "expectedOutput": expected,
-                "observedOutput": observed,
-                "observedHalo": observed_halo,
-                "withinLatitudeBand": LAT_MIN <= lat <= LAT_MAX,
-                "nearestCell": {
-                    "row": row,
-                    "col": col,
-                    "centerLat": round(cell_lat, 6),
-                    "centerLon": round(cell_lon, 6),
-                },
-            }
-        )
-    failures = [
-        r["name"] for r in results if r["expectedOutput"] != r["observedOutput"]
-    ]
-    if failures:
-        raise SystemExit(f"coverage test failures: {', '.join(failures)}")
-
-    z2x = 2
-    z2y = 1
-    tile_index = TILE_OFFSETS["2"] + z2y * 4 + z2x
-    tile_observed = bool(tile_bits[tile_index >> 3] & (1 << (tile_index & 7)))
-    return results, tile_observed, "2/2/1"
-
-
 def write_atomic(path: Path, data: bytes) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
     os.replace(tmp, path)
 
 
+def regeneration_command(args: argparse.Namespace) -> str:
+    command = [
+        "python", "scripts/masks/build_masks.py",
+        "--config", str(args.config), "--output", str(args.output),
+    ]
+    if args.source is not None:
+        command.extend(["--source", str(args.source)])
+    if args.allow_local_libs:
+        command.append("--allow-local-libs")
+    return shlex.join(command)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", type=Path, default=None)
     parser.add_argument(
-        "--output", type=Path, default=Path("packages/contracts/coverage")
+        "--config",
+        type=Path,
+        default=Path("packages/contracts/config/gfs.json"),
     )
+    parser.add_argument("--source", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--allow-local-libs", action="store_true")
     args = parser.parse_args()
+
+    settings = json.loads(args.config.resolve().read_text())
+    grid = settings["grid"]
+    coverage = settings["coverage"]
+    if args.output is None:
+        args.output = Path("packages/contracts") / settings["coverageDir"]
+    if grid["kind"] != "regular-latlon":
+        raise SystemExit("This generator requires a regular-latlon grid")
+    if grid["dx"] <= 0 or grid["dy"] >= 0 or not math.isclose(grid["dx"], -grid["dy"]):
+        raise SystemExit("This generator requires square cells ordered west-to-east and north-to-south")
+    if grid["wrapLongitude"] and (
+        grid["lon0"] != -180 or not math.isclose(grid["width"] * grid["dx"], 360)
+    ):
+        raise SystemExit("This generator requires wrapping grids to start at -180 and cover 360 degrees")
+    if coverage["id"] not in ("soaring-land-v1", "icon-eu-land-v1"):
+        raise SystemExit("Add coverage-specific regression probes before generating a new policy")
+    if coverage["maxNativeZoom"] < 2:
+        raise SystemExit("Coverage regression probes require zoom 2")
+
+    if not args.allow_local_libs and (
+        geos_version_string != "3.13.1" or proj_version_str != "9.5.1"
+    ):
+        raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1 (or --allow-local-libs)")
+
+    policy_id = coverage["id"]
+    lon_min_bound, lon_max_bound = coverage["west"], coverage["east"]
+    lat_min, lat_max = coverage["south"], coverage["north"]
+    sea_buffer_meters = coverage["seaBufferMeters"]
+    excluded_a3 = tuple(coverage["excludedA3"])
+    halo_cells = coverage["interpolationHaloCells"]
+    lon0, lat0 = grid["lon0"], grid["lat0"]
+    width, height = grid["width"], grid["height"]
+    dx, dy = grid["dx"], grid["dy"]
+    wrap_longitude = bool(grid["wrapLongitude"])
+    cell_half = abs(dx) / 2
+    cell_count = width * height
+    cell_bytes = (cell_count + 7) // 8
+    tile_zooms = tuple(range(coverage["maxNativeZoom"] + 1))
+    tile_offsets: dict[str, int] = {}
+    running = 0
+    for z in tile_zooms:
+        tile_offsets[str(z)] = running
+        running += 4**z
+    tile_total_bits = running
+
+    row_min = max(0, int(round((lat0 - lat_max) / -dy)))
+    row_max = min(height - 1, int(round((lat0 - lat_min) / -dy)))
+
+    def cell_lon_intervals(col: int):
+        center = lon0 + col * dx
+        if wrap_longitude and col == 0:
+            return (
+                (center - cell_half, center + cell_half),
+                (180.0 - cell_half, 180.0 + cell_half),
+            )
+        return ((center - cell_half, center + cell_half),)
+
+    def build_cell_boxes(rows, cols, lon_center, lat_center, clip_to_core: bool):
+        tiles = []
+        for row in rows:
+            lat_center_cell = lat0 + row * dy
+            y0 = max(lat_min, lat_center_cell - cell_half)
+            y1 = min(lat_max, lat_center_cell + cell_half)
+            if clip_to_core:
+                y0 = max(y0, lat_center - TILE_HALF_DEG)
+                y1 = min(y1, lat_center + TILE_HALF_DEG)
+            if y1 <= y0:
+                continue
+            for col in cols:
+                for x0, x1 in cell_lon_intervals(col):
+                    a = max(lon_min_bound, x0)
+                    b = min(lon_max_bound, x1)
+                    if clip_to_core:
+                        a = max(a, lon_center - TILE_HALF_DEG)
+                        b = min(b, lon_center + TILE_HALF_DEG)
+                    if b <= a:
+                        continue
+                    tiles.append((row, col, box(a, y0, b, y1)))
+        return tiles
+
+    def rasterize_admitted(tile_geoms) -> bytearray:
+        active = bytearray(cell_count)
+        for entry in tile_geoms:
+            if entry is None:
+                continue
+            lon_center, lat_center, geom = entry
+            if geom.is_empty:
+                continue
+            prepare(geom)
+            lo = lon_center - TILE_HALF_DEG
+            hi = lon_center + TILE_HALF_DEG
+            col_min = max(0, math.ceil((lo - cell_half - lon0) / dx - 1e-9))
+            col_max = min(width - 1, math.floor((hi + cell_half - lon0) / dx + 1e-9))
+            cols = list(range(col_min, col_max + 1))
+            if wrap_longitude and hi >= 180.0 - cell_half and 0 not in cols:
+                cols.append(0)
+            r_min = max(
+                row_min,
+                math.ceil((lat0 - (lat_center + TILE_HALF_DEG + cell_half)) / -dy - 1e-9),
+            )
+            r_max = min(
+                row_max,
+                math.floor((lat0 - (lat_center - TILE_HALF_DEG - cell_half)) / -dy + 1e-9),
+            )
+            rows = list(range(r_min, r_max + 1))
+            candidates = build_cell_boxes(rows, cols, lon_center, lat_center, True)
+            if not candidates:
+                continue
+            boxes = [item[2] for item in candidates]
+            hits = intersects(geom, boxes)
+            for (row, col, _), hit in zip(candidates, hits):
+                if hit:
+                    active[row * width + col] = 1
+        return active
+
+    def apply_exclusions(active: bytearray, excluded_geom) -> int:
+        if excluded_geom.is_empty:
+            return 0
+        prepare(excluded_geom)
+        indices = [i for i, v in enumerate(active) if v]
+        boxes = []
+        owners = []
+        for idx in indices:
+            row, col = divmod(idx, width)
+            lat = lat0 + row * dy
+            y0 = max(lat_min, lat - cell_half)
+            y1 = min(lat_max, lat + cell_half)
+            for x0, x1 in cell_lon_intervals(col):
+                a = max(lon_min_bound, x0)
+                b = min(lon_max_bound, x1)
+                if b <= a:
+                    continue
+                boxes.append(box(a, y0, b, y1))
+                owners.append(idx)
+        if not boxes:
+            return 0
+        hits = intersects(excluded_geom, boxes)
+        cleared = set()
+        for idx, hit in zip(owners, hits):
+            if hit and active[idx]:
+                active[idx] = 0
+                cleared.add(idx)
+        return len(cleared)
+
+    def build_halo(active: bytearray) -> bytearray:
+        halo = bytearray(cell_count)
+        for idx, is_active in enumerate(active):
+            if not is_active:
+                continue
+            row, col = divmod(idx, width)
+            for dr in range(-halo_cells, halo_cells + 1):
+                rr = row + dr
+                if rr < 0 or rr >= height:
+                    continue
+                for dc in range(-halo_cells, halo_cells + 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    if wrap_longitude:
+                        cc = (col + dc) % width
+                    else:
+                        cc = col + dc
+                        if cc < 0 or cc >= width:
+                            continue
+                    k = rr * width + cc
+                    if not active[k]:
+                        halo[k] = 1
+        return halo
+
+    def build_tiles(active: bytearray):
+        boxes = []
+        for idx, is_active in enumerate(active):
+            if not is_active:
+                continue
+            row, col = divmod(idx, width)
+            lat = lat0 + row * dy
+            y0 = max(lat_min, lat - cell_half)
+            y1 = min(lat_max, lat + cell_half)
+            for x0, x1 in cell_lon_intervals(col):
+                a = max(lon_min_bound, x0)
+                b = min(lon_max_bound, x1)
+                if b > a:
+                    boxes.append(box(a, y0, b, y1))
+        tree = STRtree(boxes)
+        bits = bytearray(tile_total_bits)
+        counts = {}
+        active_tiles = []
+        for z in tile_zooms:
+            n = 2**z
+            offset = tile_offsets[str(z)]
+            count = 0
+            for x in range(n):
+                t_lon_min = -180.0 + x * 360.0 / n
+                t_lon_max = -180.0 + (x + 1) * 360.0 / n
+                if t_lon_max < lon_min_bound or t_lon_min > lon_max_bound:
+                    continue
+                for y in range(n):
+                    t_lat_max = tile_lat(y, n)
+                    t_lat_min = tile_lat(y + 1, n)
+                    if t_lat_max < lat_min or t_lat_min > lat_max:
+                        continue
+                    probe = box(t_lon_min, t_lat_min, t_lon_max, t_lat_max)
+                    if len(tree.query(probe)) > 0:
+                        bits[offset + y * n + x] = 1
+                        count += 1
+                        if z == 5:
+                            active_tiles.append(f"{z}/{x}/{y}")
+            counts[str(z)] = count
+        return pack_bits(bits), counts, active_tiles
+
+    def nearest_cell(lat: float, lon: float) -> tuple[int, int, float, float]:
+        row = int(math.floor((lat0 - lat) / -dy + 0.5))
+        if wrap_longitude:
+            col = int(math.floor((lon - lon0) / dx + 0.5)) % width
+        else:
+            col = max(0, min(width - 1, int(math.floor((lon - lon0) / dx + 0.5))))
+        row = max(0, min(height - 1, row))
+        return row, col, lat0 + row * dy, lon0 + col * dx
+
+    def run_tests(output_bits: bytes, halo_bits: bytes, tile_bits: bytes):
+        if policy_id == "soaring-land-v1":
+            cases = [
+                ("torrey_pines", 32.9200, -117.2400, True),
+                ("karioitahi_offshore_4km", -37.2900, 174.6400, True),
+                ("big_sur_coast", 36.2700, -121.8100, True),
+                ("azores_sao_miguel", 37.7410, -25.6750, True),
+                ("canaries_tenerife", 28.2910, -16.6290, True),
+                ("armenia_yerevan", 40.1790, 44.4990, True),
+                ("new_zealand_wellington", -41.2865, 174.7762, True),
+                ("aleutians_unalaska", 53.8750, -166.5360, True),
+                ("dateline_east_attu", 52.9000, 173.2000, True),
+                ("dateline_west_taveuni", -16.8500, -179.9700, True),
+                ("exclude_russia_moscow", 55.7558, 37.6173, False),
+                ("exclude_greenland_nuuk", 64.1814, -51.6941, False),
+                ("exclude_antarctica", -77.8500, 166.6700, False),
+                ("outside_band_north", 66.0000, 20.0000, False),
+                ("outside_band_south", -56.0000, 10.0000, False),
+                ("open_ocean_atlantic", 30.0000, -40.0000, False),
+            ]
+        else:
+            cases = [
+                ("armenia_yerevan", 40.1790, 44.4990, True),
+                ("alps_chamonix", 45.9237, 6.8694, True),
+                ("pyrenees_ager", 42.0000, 0.7620, True),
+                ("dolomites_marmolada", 46.4336, 11.8511, True),
+                ("exclude_russia_moscow", 55.7558, 37.6173, False),
+                ("open_ocean_atlantic", 45.0000, -20.0000, False),
+            ]
+        results = []
+        for name, lat, lon, expected in cases:
+            row, col, cell_lat, cell_lon = nearest_cell(lat, lon)
+            idx = row * width + col
+            observed = bool(output_bits[idx >> 3] & (1 << (idx & 7)))
+            observed_halo = bool(halo_bits[idx >> 3] & (1 << (idx & 7)))
+            results.append(
+                {
+                    "name": name,
+                    "lat": lat,
+                    "lon": lon,
+                    "expectedOutput": expected,
+                    "observedOutput": observed,
+                    "observedHalo": observed_halo,
+                    "withinLatitudeBand": lat_min <= lat <= lat_max,
+                    "nearestCell": {
+                        "row": row,
+                        "col": col,
+                        "centerLat": round(cell_lat, 6),
+                        "centerLon": round(cell_lon, 6),
+                    },
+                }
+            )
+        failures = [
+            r["name"] for r in results if r["expectedOutput"] != r["observedOutput"]
+        ]
+        if failures:
+            raise SystemExit(f"coverage test failures: {', '.join(failures)}")
+
+        z2x = 2
+        z2y = 1
+        tile_index = tile_offsets["2"] + z2y * 4 + z2x
+        tile_observed = bool(tile_bits[tile_index >> 3] & (1 << (tile_index & 7)))
+        return results, tile_observed, "2/2/1"
+
     args.output.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="soaring-mask-") as tmp:
         archive, shp_path = materialize_source(args.source, Path(tmp))
-        admitted, excluded_geom, iso_exceptions = load_features(shp_path)
-        dateline_checks = dateline_shift_selfchecks()
+        admitted, excluded_geom, iso_exceptions = load_features(shp_path, excluded_a3)
+        dateline_checks = dateline_shift_selfchecks(lat_min, lat_max, sea_buffer_meters)
 
         tile_geoms = []
-        lat_centers = [
-            LAT_MIN + TILE_DEG * i for i in range(int((LAT_MAX - LAT_MIN) / TILE_DEG) + 1)
-        ]
-        lon_centers = [-175.0 + 10.0 * i for i in range(36)]
+        lat_steps = int(math.ceil((lat_max - lat_min) / TILE_DEG)) + 1
+        lat_centers = [lat_min + TILE_DEG * i for i in range(lat_steps)]
+        if wrap_longitude:
+            lon_centers = [-175.0 + 10.0 * i for i in range(36)]
+        else:
+            lon_start = math.floor(lon_min_bound / TILE_DEG) * TILE_DEG + TILE_HALF_DEG
+            lon_steps = int(math.ceil((lon_max_bound - lon_min_bound) / TILE_DEG)) + 1
+            lon_centers = [lon_start + TILE_DEG * i for i in range(lon_steps)]
         for lat_center in lat_centers:
             for lon_center in lon_centers:
-                geom = build_tile_geometry(admitted, lon_center, lat_center)
+                geom = build_tile_geometry(
+                    admitted,
+                    lon_center,
+                    lat_center,
+                    lat_min,
+                    lat_max,
+                    sea_buffer_meters,
+                    lon_min_bound,
+                    lon_max_bound,
+                    wrap_longitude,
+                )
                 if geom is not None:
                     tile_geoms.append((lon_center, lat_center, geom))
 
@@ -549,11 +649,18 @@ def main() -> None:
         script_path = Path(__file__).resolve()
         script_sha = sha256_file(script_path)
 
+        python_packages = {}
+        for pkg in ("shapely", "pyproj", "pyshp", "geopandas", "pyogrio"):
+            try:
+                python_packages[pkg] = distribution_version(pkg)
+            except PackageNotFoundError:
+                pass
+
         manifest = {
             "schemaVersion": 1,
-            "id": POLICY_ID,
+            "id": policy_id,
             "kind": "coverage-mask",
-            "maxZoom": TILE_ZOOMS[-1],
+            "maxZoom": tile_zooms[-1],
             "crs": "EPSG:4326",
             "source": {
                 "dataset": SOURCE_DATASET,
@@ -564,22 +671,21 @@ def main() -> None:
                 "license": SOURCE_LICENSE,
                 "attributes": {
                     "excludeField": "ADM0_A3",
-                    "excludeValues": list(EXCLUDED_A3),
+                    "excludeValues": list(excluded_a3),
                     "isoFallback": "ISO_A3_EH",
                     "isoExceptionRows": iso_exceptions,
                 },
             },
             "policy": {
-                "id": POLICY_ID,
-                "latMin": LAT_MIN,
-                "latMax": LAT_MAX,
-                "seaBufferMeters": SEA_BUFFER_METERS,
+                "id": policy_id,
+                "latMin": lat_min,
+                "latMax": lat_max,
+                "seaBufferMeters": sea_buffer_meters,
                 "bufferMethod": (
                     "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; "
                     "per-tile WGS84 azimuthal-equidistant local metric projection; "
                     "50 km planar buffer with 16 quad segments; inverse-projected and "
-                    "clipped to the 10-degree core; antimeridian shifted and split at "
-                    "+/-180. No global LAEA or degree buffer."
+                    "clipped to the 10-degree core."
                 ),
                 "excludedPrecedence": (
                     "An output cell is cleared if its nearest-cell footprint "
@@ -591,38 +697,36 @@ def main() -> None:
                     "buffering, so inland lakes and enclosed water remain included."
                 ),
                 "cellFootprint": (
-                    "GFS regular-grid nearest-cell rectangle: longitude center +/-0.125deg "
-                    "(periodic at +/-180), latitude center +/-0.125deg, clipped to "
-                    "-55..65. A cell is output-active when this rectangle intersects the "
-                    "admitted buffered geometry and does not intersect an excluded footprint."
+                    f"Regular-grid nearest-cell rectangle: longitude center +/-{cell_half}deg, "
+                    f"latitude center +/-{cell_half}deg, clipped to bounds "
+                    f"[{lon_min_bound}, {lat_min}, {lon_max_bound}, {lat_max}]."
                 ),
                 "tileRule": (
-                    "A z0-7 XYZ bit is set iff the tile's exact EPSG:4326 "
+                    f"A z0-{tile_zooms[-1]} XYZ bit is set iff the tile's exact EPSG:4326 "
                     "Web-Mercator lon/lat bounding box intersects at least one active "
                     "cell footprint; tile centers are not tested."
                 ),
                 "outputDomain": (
-                    "union of admitted nearest-cell footprints clipped to the latitude band"
+                    "union of admitted nearest-cell footprints clipped to the coverage bounds"
                 ),
             },
             "grid": {
-                "name": "gfs-0p25-global",
-                "lon0": LON0,
-                "lat0": LAT0,
-                "width": WIDTH,
-                "height": HEIGHT,
-                "dx": DX,
-                "dy": DY,
-                "lonPeriodic": True,
+                "name": settings["source"]["configurationId"],
+                "lon0": lon0,
+                "lat0": lat0,
+                "width": width,
+                "height": height,
+                "dx": dx,
+                "dy": dy,
+                "lonPeriodic": wrap_longitude,
                 "rowMajor": "north-to-south",
                 "columns": "west-to-east",
                 "bitOrder": (
                     "lsb0: index = row*width + col; byte = index >> 3; "
-                    "bit = index & 7; bit value = 1 << bit. Row 0 is 90N, "
-                    "row 720 is 90S, column 0 is 180W."
+                    "bit = index & 7; bit value = 1 << bit."
                 ),
-                "cellCount": CELL_COUNT,
-                "bitsetBytes": CELL_BYTES,
+                "cellCount": cell_count,
+                "bitsetBytes": cell_bytes,
             },
             "files": {
                 "output": "output.bin",
@@ -634,11 +738,11 @@ def main() -> None:
                 "encoding": "bitpacked-lsb0",
                 "bytes": len(output_bytes),
                 "counts": {
-                    "totalCells": CELL_COUNT,
+                    "totalCells": cell_count,
                     "activeCellsBeforeExclusion": admitted_count,
                     "clearedByExcludedFootprint": cleared,
                     "activeCells": active_count,
-                    "inactiveCells": CELL_COUNT - active_count,
+                    "inactiveCells": cell_count - active_count,
                 },
                 "sha256": output_sha,
             },
@@ -647,10 +751,8 @@ def main() -> None:
                 "encoding": "bitpacked-lsb0",
                 "bytes": len(halo_bytes),
                 "definition": (
-                    "Input-only one-cell Chebyshev ring (8-neighbour, longitude "
-                    "wrapped, latitude clamped) around output-active cells, excluding "
-                    "output-active cells. It may cross the latitude band. Halo bits "
-                    "never make a cell output-active and are not query coverage."
+                    "Input-only one-cell Chebyshev ring (8-neighbour) around "
+                    "output-active cells, excluding output-active cells."
                 ),
                 "counts": {
                     "haloOnlyCells": halo_count,
@@ -662,30 +764,23 @@ def main() -> None:
             "tiles": {
                 "file": "tiles.bin",
                 "encoding": "bitpacked-lsb0",
-                "zooms": list(TILE_ZOOMS),
-                "offsets": TILE_OFFSETS,
-                "tileCounts": {str(z): 4**z for z in TILE_ZOOMS},
-                "totalBits": TILE_TOTAL_BITS,
+                "zooms": list(tile_zooms),
+                "offsets": tile_offsets,
+                "tileCounts": {str(z): 4**z for z in tile_zooms},
+                "totalBits": tile_total_bits,
                 "bytes": len(tile_bytes),
                 "countsByZoom": tile_counts,
                 "activeZ5Tiles": active_z5_tiles,
                 "sha256": tile_sha,
             },
             "approximation": {
-                "cellDiagonalDegrees": round(math.hypot(DX, abs(DY)), 6),
+                "cellDiagonalDegrees": round(math.hypot(dx, abs(dy)), 6),
                 "cellDiagonalMetersAtEquator": round(
-                    math.hypot(DX * 111_320.0, abs(DY) * 110_574.0), 1
+                    math.hypot(dx * 111_320.0, abs(dy) * 110_574.0), 1
                 ),
                 "statement": (
                     "Natural Earth 1:50m geometry is generalized; the 50 km buffer is "
-                    "source-geometry seaward buffering, not an exact pixel coastline. "
-                    "Tile-local azimuthal-equidistant projection has sub-0.5% metric "
-                    "distortion across a 10-degree tile (about 250 m at 50 km at the "
-                    "tile edge), reported as an approximation rather than a geodesic "
-                    "buffer guarantee. Conservative 0.25-degree cell-footprint "
-                    "intersection can overreach the coastal band or underfill an "
-                    "excluded border by about one cell diagonal (0.3536 deg, about "
-                    "39 km at the equator and 17 km at 65N)."
+                    "source-geometry seaward buffering, not an exact pixel coastline."
                 ),
             },
             "tinyIslandInspection": {
@@ -694,12 +789,10 @@ def main() -> None:
                     "Canaries/Tenerife",
                     "Aleutians/Unalaska",
                     "New Zealand",
-                ],
+                ] if policy_id == "soaring-land-v1" else [],
                 "knownNaturalEarth50mOmission": (
                     "Lord Howe Island is absent from this Natural Earth 1:50m admin-0 "
-                    "release and is not a required v1 test case; no runtime exception "
-                    "or invented geometry is used. Required v1 test islands are present "
-                    "or within the admitted 50 km buffer."
+                    "release and is not a required v1 test case."
                 ),
                 "versionedGeometryCorrection": None,
             },
@@ -725,17 +818,8 @@ def main() -> None:
                     "GEOS": geos_version_string,
                     "PROJ": proj_version_str,
                 },
-                "pythonPackages": {
-                    name: distribution_version(name)
-                    for name in ("shapely", "pyproj", "pyshp")
-                },
-                "command": (
-                    "uv run --python 3.14.7 --with shapely==2.1.2 "
-                    "--with pyproj==3.7.2 --with pyshp==2.3.1 "
-                    "python scripts/masks/build_masks.py "
-                    "--source ne_50m_admin_0_countries.zip "
-                    "--output packages/contracts/coverage"
-                ),
+                "pythonPackages": python_packages,
+                "command": regeneration_command(args),
                 "scheduledBuildGIS": False,
             },
         }
@@ -750,12 +834,14 @@ def main() -> None:
             json.dumps(manifest, indent=2, ensure_ascii=True) + "\n"
         ).encode("utf-8")
         write_atomic(args.output / "source.json", manifest_bytes)
-        # The batch process and API read this same compact, content-addressed format.
         descriptor = {
-            "version": 1, "id": POLICY_ID, "grid": GRID,
-            "bounds": [COVERAGE["west"], LAT_MIN, COVERAGE["east"], LAT_MAX],
-            "policy": COVERAGE["description"], "maxZoom": TILE_ZOOMS[-1],
-            "supportHaloCells": HALO_CELLS,
+            "version": 1,
+            "id": policy_id,
+            "grid": grid,
+            "bounds": [lon_min_bound, lat_min, lon_max_bound, lat_max],
+            "policy": coverage["description"],
+            "maxZoom": tile_zooms[-1],
+            "supportHaloCells": halo_cells,
             "sampleLayout": {"format": "cell-major-blocks-v1", "blockSize": 16},
             "files": {
                 "output": {"bytes": len(output_bytes), "sha256": output_sha},
@@ -763,7 +849,10 @@ def main() -> None:
                 "tiles": {"bytes": len(tile_bytes), "sha256": tile_sha},
             },
         }
-        write_atomic(args.output / "manifest.json", json.dumps(descriptor, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        write_atomic(
+            args.output / "manifest.json",
+            json.dumps(descriptor, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+        )
 
     print(
         json.dumps(

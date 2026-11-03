@@ -1,6 +1,6 @@
 import z from 'zod';
-import { METHODS, methodDescriptorSchema, methodIdSchema } from './methods.js';
-import { GFS_PRODUCT, LAYER_IDS, type ProductDefinition } from './products.js';
+import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, methodDescriptorSchema, methodIdSchema } from './methods.js';
+import { LAYER_IDS, type ProductDefinition } from './product.js';
 import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
 import { gridSchema } from './geometry.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
@@ -31,13 +31,17 @@ export const recipeIdentitySchema = z.object({
 export function createRecipeIdentity(product: ProductDefinition, hash: string, sourceRevision = 'fixture', sourceDirty = false, lockHash = hash): z.infer<typeof recipeIdentitySchema> {
   return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
 }
-export function createProductMethodId(product: Pick<ProductDefinition, 'layers'> = GFS_PRODUCT): string {
+export function createProductMethodId(product: Pick<ProductDefinition, 'layers'>): string {
   return [...new Set(product.layers.map(id => LAYERS[id].methodId))].join('+');
 }
-export function createProductDescriptors(product: ProductDefinition = GFS_PRODUCT): z.infer<typeof descriptorSchema> {
+export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
+  const verticalCoordinate = product.capabilities.verticalCoordinate;
   return descriptorSchema.parse({
     layers: Object.fromEntries(product.layers.map(id => [id, LAYERS[id]])),
-    methods: Object.fromEntries([...new Set(product.layers.map(id => LAYERS[id].methodId))].map(id => [id, METHODS[id]])),
+    methods: Object.fromEntries([...new Set(product.layers.map(id => LAYERS[id].methodId))].map(id => [
+      id,
+      id === LIFT_METHOD.id ? LIFT_METHODS_BY_VERTICAL_COORDINATE[verticalCoordinate] : METHODS[id]
+    ])),
     palettes: [...new Set(product.layers.map(id => LAYERS[id].palette))].map(id => PALETTES[id]),
     attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
   });

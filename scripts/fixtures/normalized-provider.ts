@@ -1,8 +1,8 @@
 import type { Grid } from '@av/contracts';
-import type { NormalizedFrame } from '@av/forecast';
+import type { IsobaricFrame } from '@av/forecast';
 
 /** Deterministic SI values shared by native-grid integration tests and the offline preview. */
-export function normalizedFixtureFrame(grid: Grid, activeIndices: Uint32Array, cycle: string, hour: number, intervalHours: number): NormalizedFrame {
+export function normalizedFixtureFrame(grid: Grid, activeIndices: Uint32Array, cycle: string, hour: number, intervalHours: number): IsobaricFrame {
   const values = (value: number) => new Float32Array(activeIndices.length).fill(value);
   const missing = () => new Uint8Array(activeIndices.length);
   const validAt = (offset: number) => new Date(Date.parse(cycle) + offset * 3600000).toISOString();

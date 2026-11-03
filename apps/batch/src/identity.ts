@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createProductDescriptors, createRecipeIdentity, type ProductDefinition } from '@av/contracts';
+import { createProductDescriptors, createRecipeIdentity, PRODUCTS, type ProductDefinition } from '@av/contracts';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const digest = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
@@ -44,6 +44,7 @@ async function sourceFiles(directory: string): Promise<string[]> {
 }
 /** Content identity includes actual files, even in a dirty local checkout; Git SHA alone is not a recipe. */
 export async function buildIdentity(product: ProductDefinition, coverageHash: string) {
+  const contractConfigSettings = [...new Set(PRODUCTS.map(p => p.configPath))].sort();
   const groups = {
     adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
     science: {
@@ -55,7 +56,7 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
       ],
       settings: []
     },
-    contracts: { directories: ['packages/contracts/src'], settings: ['packages/contracts/config/gfs.json'] }
+    contracts: { directories: ['packages/contracts/src'], settings: contractConfigSettings }
   };
   const components: Record<string, string> = {};
   for (const [group, { directories, settings }] of Object.entries(groups)) {

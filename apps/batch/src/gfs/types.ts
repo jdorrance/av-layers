@@ -1,4 +1,4 @@
-import type { NormalizedFrame } from '@av/forecast';
+import type { IsobaricFrame } from '@av/forecast';
 import type { IdxRecord } from '@azohra/meteo.grib';
 import type { NoaaTransportStats } from './transport.ts';
 import type { FieldSamplingStats } from './sampling.ts';
@@ -186,9 +186,18 @@ export interface DecodedFieldReceipt {
   unit: string;
 }
 
-export interface GfsFrameAcquisition extends NormalizedFrame {
+export interface GfsFrameAcquisition extends IsobaricFrame {
   schemaVersion: 1;
   model: 'gfs';
+  precipitationMmPerHour: Float32Array;
+  pressureLevelsHpa: readonly number[];
+  missing: IsobaricFrame['missing'] & {
+    precipitation: Uint8Array;
+  };
+  intervals: IsobaricFrame['intervals'] & {
+    precipitationWindow: { start: string; end: string };
+    precipitationSourceWindow: { start: string; end: string };
+  };
   receipt: {
     schemaVersion: 1;
     cycle: string;

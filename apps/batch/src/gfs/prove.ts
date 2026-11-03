@@ -1,9 +1,9 @@
 import { GFS_GRID, GFS_INTERVAL_HOURS, GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
-import { acquireGfsFrame, contractIndexToNativeIndex, validateActiveIndices, validateCycle, validateHour } from './acquire.ts';
+import { acquireGfsFrame, contractIndexToNativeIndex, validateActiveIndices, validateHour } from './acquire.ts';
 import { discoverGfsRun } from './discover.ts';
 import { NoaaError } from './errors.ts';
 import { loadAndInspectGfsField } from './load.ts';
-import { gfsCompanionSpecs, gfsCurrentSpecs, gfsWindowNeedsCompanion } from './fields.ts';
+import { gfsCompanionSpecs, gfsCurrentSpecs, gfsWindowNeedsCompanion, validateCycle } from './fields.ts';
 import { admitNoaaWindowPair, gfsWindowStart } from './intervals.ts';
 import { NoaaFieldSampler } from './sampling.ts';
 import { NoaaTransport, type NoaaTransportStats } from './transport.ts';

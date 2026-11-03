@@ -1,4 +1,4 @@
-import { MODEL_IDS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type Manifest } from './index.ts';
+import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 
 export function noLiftLabel(color: string): string {
@@ -195,8 +195,8 @@ export function windyTileOptions(maxNativeZoom: number, opacity = DEFAULT_OPACIT
 export function populateModelOptions(select: { add(option: unknown): void }): void {
   const OptionCtor = (globalThis as { Option?: new (text: string, value: string) => { disabled: boolean } }).Option;
   if (!OptionCtor) throw new Error('Global Option constructor is not available');
-  for (const model of MODEL_IDS) {
-    const option = new OptionCtor(model.toUpperCase(), model);
+  for (const product of PRODUCTS) {
+    const option = new OptionCtor(product.label, product.modelId);
     option.disabled = false;
     select.add(option);
   }

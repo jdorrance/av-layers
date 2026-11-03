@@ -9,6 +9,6 @@ export const CLI_OPTIONS = {
 export const CLI_COMMANDS: Readonly<Record<string, readonly (keyof typeof CLI_OPTIONS)[]>> = {
   build: ['model', 'out', 'cycle', 'cache-dir'],
   capacity: ['model', 'frames', 'layers', 'models', 'native-zoom', 'cadence-hours', 'retention-days'],
-  'input-proof': ['cycle', 'cache-dir'],
+  'input-proof': ['model', 'cycle', 'cache-dir'],
   validate: ['manifest']
 };

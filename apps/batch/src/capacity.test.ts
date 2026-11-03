@@ -1,8 +1,9 @@
 import { loadCoverage } from './coverage.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, type Manifest } from '@av/contracts';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, type Manifest } from '@av/contracts';
+import { getForecastProvider } from './providers.js';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
-import { GFS_PRESSURE_LEVELS_HPA } from './noaa/constants.js';
+import { GFS_PRESSURE_LEVELS_HPA } from './gfs/constants.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -32,11 +33,11 @@ describe('build capacity admission and performance budgets', () => {
     expect(report.violations.length).toBeGreaterThan(0);
   });
   it('rejects empty public coverage before opening a provider', async () => {
-    const mask = await loadCoverage();
+    const mask = await loadCoverage(GFS_PRODUCT);
     expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('before acquisition');
   });
   it('counts the real z0-z7 product before acquisition and leaves hourly retention headroom', async () => {
-    const mask = await loadCoverage(), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
+    const mask = await loadCoverage(GFS_PRODUCT), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     expect(indices.active.length).toBe(226187);
     expect(capacity).toMatchObject({
       tilesByZoom: Z7_TILES_BY_ZOOM,
@@ -54,7 +55,7 @@ describe('build capacity admission and performance budgets', () => {
     expect(capacity.estimatedPeakBytes).toBe(Object.values(capacity.workingSet).reduce((total, bytes) => total + bytes, 0));
   });
   it('projects native tile growth and rejects it until a trusted product and budget support it', async () => {
-    const mask = await loadCoverage(), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
+    const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
     expect(doubled.tiles).toBe(Z7_TOTAL_TILES * 8);
     expect(doubled.totalSamplePackBytes).toBe(131506560 * 8);
@@ -63,8 +64,22 @@ describe('build capacity admission and performance budgets', () => {
     expect(deeper.violations.join()).toContain('trusted product');
     expect(() => prepareBuild({ ...mask, maxZoom: 24 }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('trusted product');
   });
+  it('admits ICON with per-column pressures and retained geometry, but rejects an oversized provider cache', async () => {
+    const mask = await loadCoverage(ICON_EU_PRODUCT), provider = getForecastProvider('icon-eu');
+    const { capacity, indices } = prepareBuild(mask, ICON_EU_PRODUCT, provider);
+    const bytesPerField = new Float32Array(indices.active.length).byteLength + new Uint8Array(indices.active.length).byteLength;
+    const isobaric = { ...ICON_EU_PRODUCT, capabilities: { ...ICON_EU_PRODUCT.capabilities, verticalCoordinate: 'isobaric' as const } };
+    const sharedPressure = prepareBuild(mask, isobaric, provider).capacity;
+    expect(capacity.workingSet.normalizedFrame - sharedPressure.workingSet.normalizedFrame).toBe(bytesPerField * provider.maxLevels);
+    expect(capacity.workingSet.retainedGeometry).toBe(bytesPerField * (provider.maxLevels + 1));
+    expect(capacity.estimatedPeakBytes).toBeLessThan(BUILD_BUDGETS.peakRssBytes);
+    expect(() => prepareBuild(mask, ICON_EU_PRODUCT, { ...provider, retainedGeometryFields: 257 })).toThrow('working-set budget');
+    for (const retainedGeometryFields of [-1, 0.5, NaN, 258]) {
+      expect(() => prepareBuild(mask, ICON_EU_PRODUCT, { ...provider, retainedGeometryFields })).toThrow('retained geometry budget');
+    }
+  });
   it('rejects invalid scenarios and oversized point products', async () => {
-    const mask = await loadCoverage(), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
+    const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames })).toThrow('Invalid capacity');
     expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { layers: 100 }).violations.join()).toContain('result budget');
   });

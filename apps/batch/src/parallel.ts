@@ -1,6 +1,7 @@
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import z from 'zod';
+import { resolveProductFrameHours } from '@av/forecast';
 import { CELL_BYTES, encodeBoundedJson, getProduct, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson } from '@av/contracts';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
@@ -51,9 +52,9 @@ function partition(hours: readonly number[], count: number): number[][] {
 export async function createBuildPlan(options: PlanOptions & ForecastInputs): Promise<BuildPlan> {
   options.signal?.throwIfAborted();
   const { product, provider, mask } = options, root = resolve(options.out);
-  prepareBuild(mask, product, { maxLevels: provider.maxLevels });
-  const groups = partition(product.frameHours, options.shards ?? MAX_FORECAST_SHARDS);
+  prepareBuild(mask, product, provider);
   if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
+  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? MAX_FORECAST_SHARDS);
   const stamp = createBuildStamp(), coverageHash = await writeCoverage(root, mask, product);
   const identity = await buildIdentity(product, coverageHash);
   const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups });
@@ -70,13 +71,13 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs) {
   plan = parsed.data;
   if (plan.model !== product.modelId || plan.providerId !== provider.id
       || !plan.buildId.startsWith(plan.createdAt.replace(/[-:]/g, '').slice(0, 15) + 'Z-')
-      || !same(plan.groups, partition(product.frameHours, plan.groups.length))) {
+      || !same(plan.groups, partition(resolveProductFrameHours(product, mask, plan.cycle), plan.groups.length))) {
     throw new Error('Invalid forecast plan identity or frame groups');
   }
   const age = Date.now() - Date.parse(plan.createdAt);
   if (age < -60_000 || age > MAX_BUILD_LIFETIME_MS) throw new Error('Forecast plan exceeds publisher lifetime');
   if (age > BUILD_BUDGETS.elapsedMs) throw new Error('Forecast plan exceeds elapsed-time budget; start a new build');
-  const prepared = prepareBuild(mask, product, { maxLevels: provider.maxLevels });
+  const prepared = prepareBuild(mask, product, provider);
   if (plan.coverageHash !== describeCoverage(mask, product).hash) throw new Error('Forecast plan coverage changed');
   const identity = await buildIdentity(product, plan.coverageHash);
   if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
@@ -114,7 +115,7 @@ function readResult(raw: unknown, plan: BuildPlan, shard: number, options: Forec
   if (receipt.planHash !== planHash(plan) || receipt.shard !== shard) throw new Error('Forecast shard receipt identity mismatch');
   const frames = hours.map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours)), channelCount = hours.length * layers.length;
   if (receipt.tileSha256.length !== channelCount) throw new Error('Forecast shard artifact count mismatch');
-  if (receipt.provenance.length !== hours.length || receipt.provenance.some((entry, i) => entry.hour !== hours[i] || !matchesFrameIntervals(entry.intervals, frames[i]))) throw new Error('Forecast shard provenance interval mismatch');
+  if (receipt.provenance.length !== hours.length || receipt.provenance.some((entry, i) => entry.hour !== hours[i] || !matchesFrameIntervals(entry.intervals, frames[i], layers.includes('precip-rate')))) throw new Error('Forecast shard provenance interval mismatch');
   if (!same(Object.keys(receipt.metrics.frames), frames.map(frame => frame.id))) throw new Error('Forecast shard metric frames mismatch');
   const artifacts = frames.flatMap((frame, i) => layers.map((layer, j) => ({
     layer, frame: frame.id, tilesKey: `builds/${plan.model}/${plan.buildId}/${layer}/${frame.id}.pmtiles`,
@@ -145,7 +146,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan 
   const totalWorkerElapsedMs = results.reduce((sum, result) => sum + result.metrics.elapsedMs, 0);
   const merged: FrameBuildResult = {
     cycle: plan.cycle, frames: results.flatMap(result => result.frames), artifacts: results.flatMap(result => result.artifacts), receipts: results.flatMap(result => result.receipts),
-    samples: { ...packed, key: samplesKey, channelCount: options.product.frameHours.length * options.product.layers.length },
+    samples: { ...packed, key: samplesKey, channelCount: plan.groups.flat().length * options.product.layers.length },
     metrics: {
       frames: Object.assign({}, ...results.map(result => result.metrics.frames)), phasesMs,
       renderer: { shards: results.map(result => result.metrics.renderer) }, acquisition: { shards: results.map(result => result.metrics.acquisition) },

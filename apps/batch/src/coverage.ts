@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { readLocalFile } from './local-file.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { coverageDescriptorSchema, coveragePrefix, GFS_PRODUCT, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { coverageDescriptorSchema, coveragePrefix, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition } from '@av/contracts';
 
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const names = ['output', 'halo', 'tiles'] as const;
@@ -46,9 +46,14 @@ async function readCoverageDirectory(dir: string, expectedHash?: string): Promis
 }
 
 /** Bundled and published masks use the same descriptor and hash validation. */
-export async function loadCoverage(product: ProductDefinition = GFS_PRODUCT): Promise<CoverageMask> {
-  const dir = fileURLToPath(new URL('../../../packages/contracts/coverage', import.meta.url));
-  const result = await readCoverageDirectory(dir);
+export async function loadCoverage(product: ProductDefinition): Promise<CoverageMask> {
+  const dir = fileURLToPath(new URL(`../../../packages/contracts/${product.coverageDir}`, import.meta.url));
+  let result: { mask: CoverageMask; descriptor: CoverageDescriptor };
+  try {
+    result = await readCoverageDirectory(dir);
+  } catch {
+    throw new Error('Coverage does not match the trusted product');
+  }
   if (!sameGrid(result.mask.grid, product.grid) || result.mask.maxZoom !== product.maxNativeZoom || JSON.stringify(result.mask.bounds) !== JSON.stringify(product.bounds) || JSON.stringify(describeCoverage(result.mask, product).descriptor) !== JSON.stringify(result.descriptor)) throw new Error('Coverage does not match the trusted product');
   return result.mask;
 }

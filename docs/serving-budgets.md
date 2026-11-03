@@ -1,6 +1,6 @@
 # Serving resource budgets
 
-The API limits concurrent work, storage reads, cache size, and response size. Check these estimates against measurements when changing the limits or workload; the latest results belong in [project status](status.md). GFS is the only live model; synthetic tests use a local Worker entry point.
+The API limits concurrent work, storage reads, cache size, and response size. Check these estimates against measurements when changing the limits or workload; the latest results belong in [project status](status.md). GFS is the scheduled live model; synthetic tests use a local Worker entry point.
 
 ## Cache and in-flight limits
 
