@@ -38,7 +38,7 @@ on:
         type: string
         default: ''
       terrain-catalog-ref:
-        description: Enable terrain refinement with catalog JSON; defaults to the environment's TERRAIN_CATALOG_REF
+        description: Override the terrain catalog JSON; defaults to TERRAIN_CATALOG_REF or the production pin
         type: string
         default: ''
 permissions:
