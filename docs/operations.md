@@ -6,6 +6,11 @@ Forecast and maintenance jobs for the same environment and model wait for each
 other. Different models can build and publish independently. Keep write
 credentials in GitHub.
 
+Forecast and maintenance through `pnpm operations` require an explicit registered `MODEL`; their
+workflows set it from the selection. Health defaults to all registered models in
+Actions. Local preview reads the model from its manifest, while `pnpm dev` creates
+the separate synthetic fixture without downloading any model.
+
 ## Set up an environment
 
 Store the shared `CLOUDFLARE_ACCOUNT_ID` as a repository secret. Create protected

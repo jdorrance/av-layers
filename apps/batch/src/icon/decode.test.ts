@@ -26,7 +26,7 @@ it('rejects exhausted fixed-width and unary payloads within a bounded subprocess
   expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
 });
 
-function simpleField(bits: 8 | 16, scanningMode: 0 | 64, values: readonly (number | null)[], options: { drt?: 0 | 42; codedCount?: number } = {}): Uint8Array {
+function simpleField(bits: 0 | 8 | 16, scanningMode: 0 | 64, values: readonly (number | null)[], options: { drt?: 0 | 42; codedCount?: number; decimalScale?: number } = {}): Uint8Array {
   const section = (number: number, length: number) => {
     const bytes = new Uint8Array(length), view = new DataView(bytes.buffer);
     view.setUint32(0, length); bytes[4] = number;
@@ -46,14 +46,17 @@ function simpleField(bits: 8 | 16, scanningMode: 0 | 64, values: readonly (numbe
   const coded = values.filter((value): value is number => value !== null);
   const s5 = section(5, options.drt === 42 ? 25 : 21);
   s5.view.setUint32(5, options.codedCount ?? coded.length); s5.view.setUint16(9, options.drt ?? 0);
-  s5.view.setFloat32(11, 250); s5.bytes[19] = options.drt === 42 ? 0 : bits;
+  s5.view.setFloat32(11, 250);
+  const decimalScale = options.decimalScale ?? 0;
+  s5.view.setUint16(17, Math.abs(decimalScale) | (decimalScale < 0 ? 0x8000 : 0)); s5.bytes[19] = bits;
+  if (options.drt === 42) { s5.bytes[21] = 14; s5.bytes[22] = 32; s5.view.setUint16(23, 128); }
   const s6 = section(6, coded.length === values.length ? 6 : 7);
   s6.bytes[5] = coded.length === values.length ? 255 : 0;
   if (s6.bytes.length > 6) values.forEach((value, index) => { if (value !== null) s6.bytes[6] |= 0x80 >> index; });
   const s7 = section(7, 5 + coded.length * bits / 8);
   coded.forEach((value, index) => {
     if (bits === 8) s7.bytes[5 + index] = value - 250;
-    else s7.view.setUint16(5 + index * 2, value - 250);
+    else if (bits === 16) s7.view.setUint16(5 + index * 2, value - 250);
   });
   const sections = [s1, s3, s4, s5, s6, s7], length = 20 + sections.reduce((sum, value) => sum + value.bytes.length, 0);
   const message = new Uint8Array(length);
@@ -73,6 +76,29 @@ it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning 
   }
 });
 
+it.each([0, 64] as const)('rejects latitude endpoints contradicting scanning mode %s', scanningMode => {
+  const message = simpleField(8, scanningMode, [300, 301, 280, 281]);
+  message[16 + 21 + 71] = scanningMode === 64 ? 0 : 64;
+  expect(() => decodeIconGribField(message, Uint32Array.of(0))).toThrow('scanning mode disagrees with latitude endpoints');
+});
+
+it.each([0, 42] as const)('decodes zero-bit template 5.%s as the unscaled reference with empty payload and bitmap masks', drt => {
+  const active = Uint32Array.of(3, 0, 2, 1);
+  for (const scanningMode of [0, 64] as const) for (const decimalScale of [-1, 0, 1]) {
+    // These zero-bit fixtures were cross-checked with ecCodes 2.50.0: D is ignored.
+    const value = 250;
+    const complete = decodeIconGribField(simpleField(0, scanningMode, [250, 250, 250, 250], { drt, decimalScale }), active);
+    expect([...complete.values]).toEqual([value, value, value, value]);
+    expect([...complete.missing]).toEqual([0, 0, 0, 0]);
+    const masked = decodeIconGribField(simpleField(0, scanningMode, [250, null, 250, 250], { drt, decimalScale }), active);
+    expect([...masked.values]).toEqual(scanningMode === 64 ? [NaN, value, value, value] : [value, value, value, NaN]);
+    expect([...masked.missing]).toEqual(scanningMode === 64 ? [1, 0, 0, 0] : [0, 0, 0, 1]);
+  }
+  const missing = decodeIconGribField(simpleField(0, 64, [null, null, null, null], { drt }), active);
+  expect([...missing.values]).toEqual([NaN, NaN, NaN, NaN]);
+  expect([...missing.missing]).toEqual([1, 1, 1, 1]);
+});
+
 it.each([0, 64] as const)('rejects truncated 8-bit payloads with valid message framing in scanning mode %s', scanningMode => {
   const complete = simpleField(8, scanningMode, [300, 301, 280, 281]);
   const section7Offset = complete.length - 4 - (5 + 4);
@@ -86,10 +112,10 @@ it.each([0, 64] as const)('rejects truncated 8-bit payloads with valid message f
   }
 });
 
-it('normalizes bitmap missingness while preserving a valid value equal to the library default sentinel', () => {
-  const decoded = decodeIconGribField(simpleField(16, 64, [null, 9999, 280, 281]), Uint32Array.of(0, 1, 2, 3));
-  expect([...decoded.values]).toEqual([280, 281, NaN, 9999]);
-  expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
+it.each([0, 64] as const)('normalizes bitmap and active-index order in scan %s, preserving a valid sentinel-like value', scanningMode => {
+  const decoded = decodeIconGribField(simpleField(16, scanningMode, [null, 9999, 280, 281]), Uint32Array.of(3, 0, 2, 1));
+  expect([...decoded.values]).toEqual(scanningMode === 64 ? [9999, 280, NaN, 281] : [281, NaN, 280, 9999]);
+  expect([...decoded.missing]).toEqual(scanningMode === 64 ? [0, 0, 1, 0] : [0, 1, 0, 0]);
 });
 
 it('rejects huge CCSDS counts before allocating their advertised output', () => {

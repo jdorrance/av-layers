@@ -24,8 +24,10 @@ pnpm test apps/batch/src/icon
 The default suite runs without network access. Synthetic GRIB messages exercise
 packing, row order, missingness, statistical metadata and acquisition.
 The CCSDS test includes a nonconstant libaec 1.1.3 reference payload and its
-encoding options. The bzip2 fixture is generated independently by Python's
-standard library; neither reference library is required to run tests.
+encoding options. Zero-bit 5.0/5.42 fixtures were cross-checked with ecCodes 2.50.0
+for both row orders, bitmaps, and nonzero decimal scale factors. The bzip2 fixture
+is generated independently by Python's standard library. These reference tools
+are not required to run the suite.
 
 If you have the retained 2026-10-08 00Z Skyjuice ICON probe, run this additional
 check. It reads six fields, verifies their bytes against `manifest.json`, and

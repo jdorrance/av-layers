@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
+import { createProductDescriptors, ICON_EU_PRODUCT } from '@av/contracts';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -40,6 +41,35 @@ class FakeElement {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('replaces GFS precipitation and frame options with the selected ICON build contents', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  const state: ControllerState = { phase: 'ready', model: 'gfs', buildId: 'same-build-id', frameId: 'f003', layerId: 'precip-rate', opacity: 0.5, badge: '', message: null, horizonNotice: null };
+  panel.renderBuild(fixtureBuild({ buildId: state.buildId! }));
+  panel.renderState(state);
+  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+  const nodes = visit(panel.root as unknown as FakeElement);
+  const layer = nodes.find(element => element.id === 'av-layer')!;
+  const frame = nodes.find(element => element.id === 'av-frame')!;
+  expect(layer.value).toBe('precip-rate');
+  expect(layer.children.some(option => option.value === 'precip-rate')).toBe(true);
+
+  const frames = [
+    { id: 'f007', validTime: '2026-10-29T19:00:00.000Z', intervalStart: '2026-10-29T18:00:00.000Z', intervalEnd: '2026-10-29T19:00:00.000Z' },
+    { id: 'f020', validTime: '2026-10-30T08:00:00.000Z', intervalStart: '2026-10-30T07:00:00.000Z', intervalEnd: '2026-10-30T08:00:00.000Z' }
+  ];
+  panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: state.buildId!, frames,
+    layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) }));
+  expect(nodes.find(element => element.id === 'av-model')?.value).toBe('icon-eu');
+  expect(layer.children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
+  expect(layer.value).toBe(ICON_EU_PRODUCT.layers[0]);
+  expect(frame.children.map(option => [option.value, option.textContent])).toEqual(frames.map(value => [value.id, `${value.id} · ${value.validTime}`]));
+  const legend = nodes.find(element => element.className === 'av-legend')!;
+  expect(visit(legend).some(element => element.textContent === 'rain · mm/h')).toBe(false);
+  expect(visit(legend).some(element => element.textContent === 'lift · m')).toBe(true);
+});
 
 it('associates visible labels with each keyboard control and exposes failures as alerts', () => {
   vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });

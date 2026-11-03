@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
+import { createProductDescriptors, ICON_EU_PRODUCT } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
@@ -297,6 +298,52 @@ describe('PluginController', () => {
     controller.setOpacity(0.7);
     expect(stub.added[0].opacity).toBe(0.7);
     expect(controller.state().opacity).toBe(0.7);
+  });
+
+  it('falls back from GFS precipitation to an available ICON layer when switching models', async () => {
+    const stub = stubHost();
+    const previous = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+    await previous.start();
+    const previousLayer = previous.selectLayer('precip-rate').layerId!;
+    previous.dispose();
+    const build = fixtureBuild({ model: 'icon-eu', buildId: 'build-1', createdAt: created, expiresAt,
+      layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) });
+    const controller = new PluginController({ model: 'icon-eu', initialLayer: previousLayer, loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
+    try {
+      expect(await controller.start()).toMatchObject({ phase: 'ready', model: 'icon-eu', layerId: build.manifest.layers[0] });
+      expect(stub.removed).toEqual([stub.added[0]]);
+      expect(stub.listeners.size).toBe(1);
+      expect(stub.added[1].url).toContain(`/icon-eu/build-1/${build.manifest.layers[0]}/`);
+      expect(controller.selectLayer('precip-rate')).toMatchObject({ layerId: build.manifest.layers[0], message: 'Unknown layer precip-rate' });
+      expect(stub.added[1].url).not.toContain('/precip-rate/');
+    } finally { controller.dispose(); }
+  });
+
+  it('keeps the actual selected time through an overnight gap and follows the next exact frame', async () => {
+    const cycle = '2026-10-29T12:00:00.000Z';
+    const sparseFrames = [6, 7, 20, 21].map(hour => {
+      const end = Date.parse(cycle) + hour * 3600_000;
+      return { id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(end).toISOString(),
+        intervalStart: new Date(end - 3600_000).toISOString(), intervalEnd: new Date(end).toISOString() };
+    });
+    const stub = stubHost(Date.parse(sparseFrames[1].validTime));
+    const loadBuild = vi.fn(async () => fixtureBuild({ model: 'icon-eu', createdAt: cycle, cycle, expiresAt, frames: sparseFrames,
+      layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) }));
+    const controller = new PluginController({ model: 'icon-eu', loadBuild, host: stub.host, now: () => Date.parse(created) });
+    try {
+      expect(await controller.start()).toMatchObject({ frameId: 'f007' });
+      const gap = controller.syncHost(Date.parse('2026-10-30T07:00:00.000Z'));
+      expect(gap.frameId).toBe('f007');
+      expect(gap.badge).toContain('Host time 2026-10-30T07:00:00.000Z is off-frame');
+      expect(gap.badge).toContain('keeping f007 · 2026-10-29T19:00:00.000Z');
+      expect(stub.added[0].url).toContain('/f007/');
+      const next = controller.syncHost(Date.parse('2026-10-30T08:00:00.000Z'));
+      expect(next.frameId).toBe('f020');
+      expect(next.badge).toContain('Host frame f020 · 2026-10-30T08:00:00.000Z');
+      expect(stub.added[0].url).toContain('/f020/');
+      expect(loadBuild).toHaveBeenCalledTimes(1);
+      expect(stub.added).toHaveLength(1);
+    } finally { controller.dispose(); }
   });
 
   it('removes the layer, aborts in-flight work and disposes on expiry', async () => {

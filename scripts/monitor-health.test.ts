@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { manifestSchema } from '@av/contracts';
+import { computeFreshness, ICON_EU_PRODUCT, manifestSchema } from '@av/contracts';
+import { resolveProductFrameHours } from '@av/forecast';
+import { loadCoverage } from '../apps/batch/src/coverage.js';
+import { assertUsefulHorizon } from '../apps/batch/src/publication.js';
 import { forecastFindings, forecastScheduleFindings, forecastWorkflowFindings, maintenanceFindings, monitor, type ObservedWorkflowRun } from './monitor-health.js';
 import * as serving from './smoke-api.js';
 
@@ -32,13 +35,13 @@ describe('forecast health decisions', () => {
     const manifest = fixture();
     expect(forecastFindings(manifest, Date.parse(manifest.cycle) + 6 * 3600000)).toEqual([]);
   });
-  const regionalFixture = (cycle = '2026-12-21T00:00:00Z') => {
+  const regionalFixture = (cycle = '2026-12-21T00:00:00Z', hours: readonly number[] = [18, 19]) => {
     const manifest = fixture(), cycleMs = Date.parse(cycle);
     manifest.model = 'icon-eu';
     manifest.cycle = cycle;
     manifest.createdAt = new Date(cycleMs + 6 * 3600000).toISOString();
     manifest.expiresAt = new Date(cycleMs + 7 * 86400000).toISOString();
-    manifest.frames = [18, 19].map(hour => ({
+    manifest.frames = hours.map(hour => ({
       id: `f${String(hour).padStart(3, '0')}`,
       validTime: new Date(cycleMs + hour * 3600000).toISOString(),
       intervalStart: new Date(cycleMs + (hour - 1) * 3600000).toISOString(),
@@ -46,9 +49,22 @@ describe('forecast health decisions', () => {
     }));
     return manifest;
   };
-  it.each(['2026-11-03T00:00:00Z', '2026-12-21T00:00:00Z'])('keeps a complete winter ICON horizon quiet before the next scheduled build (%s)', cycle => {
-    const manifest = regionalFixture(cycle);
-    for (const hour of [13.5, 17.5]) expect(forecastFindings(manifest, Date.parse(cycle) + hour * 3600000)).toEqual([]);
+  it.each(['2026-11-03', '2026-12-21', '2027-02-15'])('retains useful ICON hours across winter cycles on %s', async day => {
+    const product = ICON_EU_PRODUCT, mask = await loadCoverage(product);
+    for (const cycleHour of [0, 6, 12, 18]) {
+      const cycle = `${day}T${String(cycleHour).padStart(2, '0')}:00:00Z`;
+      const hours = resolveProductFrameHours(product, mask, cycle), manifest = regionalFixture(cycle, hours);
+      expect(hours.length).toBeLessThan(product.frameHours.length);
+      expect(hours.at(-1)).toBe(cycleHour === 0 ? 19 : product.frameHours.at(-1));
+      const published = computeFreshness(manifest, Date.parse(manifest.createdAt));
+      expect(published.horizonRemainingSeconds).toBeGreaterThanOrEqual(product.freshness.minHorizonHours * 3600);
+      expect(() => assertUsefulHorizon(manifest, Date.parse(manifest.createdAt))).not.toThrow();
+      const admissionDeadline = Date.parse(published.latestValidTime) - product.freshness.minHorizonHours * 3600000;
+      expect(() => assertUsefulHorizon(manifest, admissionDeadline)).not.toThrow();
+      expect(() => assertUsefulHorizon(manifest, admissionDeadline + 1)).toThrow('useful forecast horizon');
+      for (const age of [13.5, 17.5]) expect(forecastFindings(manifest, Date.parse(cycle) + age * 3600000)).toEqual([]);
+      expect(forecastFindings(manifest, Date.parse(published.latestValidTime))).toContain('exhausted-horizon: no published forecast times remain');
+    }
   });
   it.each(['missing', 'exhausted'])('reports %s useful daylight slots even with six hours of source coverage remaining', state => {
     const manifest = regionalFixture();

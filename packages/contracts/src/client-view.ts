@@ -38,11 +38,12 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
   const model = typeof source.model === 'string' ? source.model : build.manifest.model.toUpperCase();
   const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native columns` : 'native model columns';
   const validTimes = manifest.frames.map(f => Date.parse(f.validTime)).filter(Number.isFinite);
+  const horizonStart = validTimes.length > 0 ? new Date(Math.min(...validTimes)).toISOString() : manifest.cycle;
   const horizonEnd = validTimes.length > 0 ? new Date(Math.max(...validTimes)).toISOString() : manifest.cycle;
   const rows: Array<[string, string]> = [
     ['Build', manifest.buildId],
     ['Cycle', manifest.cycle],
-    ['Horizon', `${manifest.frames[0]?.validTime ?? manifest.cycle} → ${horizonEnd}`],
+    ['Horizon', `${horizonStart} → ${horizonEnd}`],
     ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
     ['Source', `${model} · ${native}`],
     ['Display', `z0–${build.manifest.coverage.maxZoom} · ${RASTER_TILE_SIZE} px raster · overzoomed above z${build.manifest.coverage.maxZoom}`],

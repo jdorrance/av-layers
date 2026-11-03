@@ -19,9 +19,9 @@ export function workflowContext(env: NodeJS.ProcessEnv = process.env): { reposit
 /** Operational exclusion comes from the shared workflow concurrency group, not this receipt. */
 export function workflowAuthority(env: NodeJS.ProcessEnv = process.env): PublicationAuthority {
   const { repository } = workflowContext(env);
-  const model = env.MODEL ?? 'gfs';
+  const model = env.MODEL;
   const publisher = ['forecast', 'maintenance'].some(name => env.GITHUB_WORKFLOW_REF === `${repository}/.github/workflows/${name}.yml@refs/heads/main`);
-  if (!publisher || !/^\d+$/.test(env.GITHUB_RUN_ID ?? '') || !['staging', 'production'].includes(env.TARGET_ENV ?? '') || !getProduct(model)) {
+  if (!publisher || !/^\d+$/.test(env.GITHUB_RUN_ID ?? '') || !['staging', 'production'].includes(env.TARGET_ENV ?? '') || !model || !getProduct(model)) {
     throw new Error('Publication mutations require the serialized forecast or maintenance workflow on main');
   }
   const environment = env.TARGET_ENV as 'staging' | 'production';

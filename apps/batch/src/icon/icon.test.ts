@@ -318,8 +318,8 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t/icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2'
     );
     const sentinels = iconRunSentinelUrls(cycle);
-    expect(sentinels).toHaveLength(7);
-    expect(sentinels.some(u => u.endsWith('_024_MH.grib2.bz2'))).toBe(true);
+    expect(sentinels).toHaveLength(13);
+    expect(sentinels).toContain(iconRegularFieldUrl('MH', cycle, { hour: ICON_EU_PRODUCT.frameHours.at(-1)! }));
   });
 
   it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', () => {
@@ -565,7 +565,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error('Unexpected download'); });
     const session = await createIconEuAcquisitionSession({ cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     try {
-      for (const hour of [0, -1, 1.5, NaN, 25, 78, 79]) {
+      for (const hour of [0, -1, 1.5, NaN, Infinity, ICON_EU_PRODUCT.frameHours.at(-1)! + 1]) {
         await expect(session.acquire(hour)).rejects.toThrow('Unsupported ICON-EU forecast hour');
       }
       expect(fetchImpl).not.toHaveBeenCalled();
