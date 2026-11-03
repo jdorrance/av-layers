@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, createProductDescriptors, descriptorSchema } from './index.js';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, createProductDescriptors, createProductMethodId, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
@@ -19,8 +19,8 @@ describe('implemented method snapshots', () => {
   it('describes per-column model-level pressure and omits precipitation for ICON-EU lift-only product', () => {
     const descriptors = createProductDescriptors(ICON_EU_PRODUCT);
     expect(Object.keys(descriptors.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-v1']);
-    const lift = descriptors.methods['dry-lenschow-pbl-1p2-v1']!;
+    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-pbl-1p2-model-levels-v1']);
+    const lift = descriptors.methods[MODEL_LEVEL_LIFT_METHOD.id]!;
     expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressurePa', 'hgtM', 'tempK']);
     expect(lift.inputs.pressurePa).toEqual({
       id: 'pressurePa',
@@ -32,6 +32,28 @@ describe('implemented method snapshots', () => {
       missingness: 'explicit-cell-mask'
     });
     expect(Object.isFrozen(MODEL_LEVEL_LIFT_METHOD.requiredInputs)).toBe(true);
+  });
+
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('resolves every current $modelId method ID to its exact input descriptor', product => {
+    const descriptors = createProductDescriptors(product);
+    const ids = product.layers.map(layer => descriptors.layers[layer].methodId);
+    expect(createProductMethodId(product)).toBe([...new Set(ids)].join('+'));
+    for (const id of ids) expect(METHODS[id as keyof typeof METHODS]).toEqual(descriptors.methods[id]);
+    expect(MODEL_LEVEL_LIFT_METHOD.id).not.toBe(LIFT_METHOD.id);
+    expect(METHODS[LIFT_METHOD.id].requiredInputs).toContain('pressureLevelsHpa');
+    expect(METHODS[MODEL_LEVEL_LIFT_METHOD.id].requiredInputs).toContain('pressurePa');
+  });
+
+  it('retains historic ICON snapshots under their original shared ID without rewriting their inputs', () => {
+    const stored = createProductDescriptors(ICON_EU_PRODUCT), historic = stored.methods[MODEL_LEVEL_LIFT_METHOD.id];
+    delete stored.methods[MODEL_LEVEL_LIFT_METHOD.id];
+    historic.id = LIFT_METHOD.id;
+    stored.methods[LIFT_METHOD.id] = historic;
+    for (const layer of Object.values(stored.layers)) layer.methodId = LIFT_METHOD.id;
+    const parsed = descriptorSchema.parse(stored);
+    expect(parsed).toEqual(stored);
+    expect(parsed.methods[LIFT_METHOD.id].requiredInputs).toContain('pressurePa');
+    expect(parsed.methods[LIFT_METHOD.id].requiredInputs).not.toContain('pressureLevelsHpa');
   });
 
   it('admits only the needed precipitation definition for a precipitation-only product', () => {

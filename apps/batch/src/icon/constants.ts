@@ -6,18 +6,12 @@ export const ICON_EU_BASE_URL = ICON_EU_SETTINGS.upstream.baseUrl;
 export const ICON_EU_GRID_TOKEN = ICON_EU_SETTINGS.upstream.gridToken;
 export const ICON_EU_NATIVE_SCANNING_MODE = ICON_EU_SETTINGS.upstream.nativeScanningMode;
 
-/**
- * Lowest 30 ICON-EU terrain-following model levels (45..74), ordered bottom-up (74 -> 45)
- * so level index 0 is closest to the surface and height increases monotonically with index.
- */
+/** Selected model levels ordered from the surface upward. */
 export const ICON_EU_MODEL_LEVELS: readonly number[] = Object.freeze(
   [...ICON_EU_SETTINGS.upstream.modelLevels].sort((a, b) => b - a)
 );
 
-/**
- * Half-level interfaces (45..75) bounding the 30 full model levels (45..74).
- * Level 75 coincides with model terrain (HSURF).
- */
+/** Interfaces ordered from top to bottom; the last coincides with model terrain (HSURF). */
 export const ICON_EU_HALF_LEVELS: readonly number[] = Object.freeze(
   [...ICON_EU_SETTINGS.upstream.halfLevels].sort((a, b) => a - b)
 );

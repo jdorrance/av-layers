@@ -8,6 +8,7 @@ import { readLocalFile } from '../local-file.js';
 import {
   ICON_EU_BASE_URL,
   ICON_EU_GRID,
+  ICON_EU_FORECAST_HOURS,
   ICON_EU_HALF_LEVELS,
   ICON_EU_INTERVAL_HOURS,
   ICON_EU_MODEL_LEVELS,
@@ -266,11 +267,24 @@ export function computeIconModelLevelHeights(
   return { hgtM, missingHgt };
 }
 
+function copyActiveIndices(input: Uint32Array): Uint32Array {
+  const cells = ICON_EU_GRID.width * ICON_EU_GRID.height;
+  if (!(input instanceof Uint32Array) || !input.length || input.length > cells) throw new Error('Invalid ICON active index array');
+  const indices = new Uint32Array(input), seen = new Uint8Array(Math.ceil(cells / 8));
+  for (const index of indices) {
+    const byte = index >> 3, bit = 1 << (index & 7);
+    if (index >= cells || (seen[byte] & bit)) throw new Error(`Invalid or duplicate ICON active index ${index}`);
+    seen[byte] |= bit;
+  }
+  return indices;
+}
+
 export async function createIconEuAcquisitionSession(options: IconAcquisitionOptions) {
   options.signal?.throwIfAborted();
   const baseUrl = options.baseUrl ?? ICON_EU_BASE_URL;
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > DEFAULT_CONCURRENCY) throw new Error(`ICON concurrency must be an integer from 1 to ${DEFAULT_CONCURRENCY}`);
+  const activeIndices = copyActiveIndices(options.activeIndices);
   const cycle = validateIconCycle(
     options.cycle ??
       (
@@ -311,7 +325,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       stats,
       { fetchImpl: options.fetchImpl, signal },
       bytes => {
-        const decoded = decodeIconGribField(bytes, options.activeIndices);
+        const decoded = decodeIconGribField(bytes, activeIndices);
         verifyIconFieldMetadata(decoded, field, cycle, { hour, level });
         return decoded;
       }
@@ -440,7 +454,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       validAt: endIso,
       capturedAt,
       grid: ICON_EU_GRID,
-      activeIndices: new Uint32Array(options.activeIndices),
+      activeIndices: new Uint32Array(activeIndices),
       terrainM: new Float32Array(staticGeom.terrainM),
       surfacePressurePa: psRes.decoded.values,
       temp2mK: t2mRes.decoded.values,
@@ -494,7 +508,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
     },
     async acquire(hour: number): Promise<ModelLevelFrame> {
       signal.throwIfAborted();
-      if (!Number.isInteger(hour) || hour < 1 || hour > 78) {
+      if (!ICON_EU_FORECAST_HOURS.includes(hour)) {
         throw new Error(`Unsupported ICON-EU forecast hour ${hour}`);
       }
       if (active) throw new Error('ICON acquisition session already has an active frame');

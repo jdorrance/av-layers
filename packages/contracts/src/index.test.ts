@@ -80,6 +80,7 @@ describe('contracts', () => {
       model: 'gfs',
       descriptors: createProductDescriptors({ ...GFS_PRODUCT, layers: ['precip-rate'] }),
       recipe: createRecipeIdentity(GFS_PRODUCT, hash),
+      method: { id: 'trailing-precipitation-rate-v1', hash },
       buildId: 'b1',
       frames: [
         { id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z' },
@@ -94,6 +95,15 @@ describe('contracts', () => {
         tilesSha256: hash
       }))
     } as unknown as Manifest;
+    expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
+    twoFrameManifest.method.id = 'unrelated-method-v1';
+    expect(() => validateArtifactRecords(twoFrameManifest)).toThrow('published descriptor snapshots');
+    twoFrameManifest.method.id = 'retained-precipitation-rate-v0';
+    const stored = twoFrameManifest.descriptors.methods['trailing-precipitation-rate-v1'];
+    delete twoFrameManifest.descriptors.methods[stored.id];
+    stored.id = twoFrameManifest.method.id;
+    twoFrameManifest.descriptors.methods[stored.id] = stored;
+    twoFrameManifest.descriptors.layers['precip-rate'].methodId = stored.id;
     expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
   });
   it('requires latest membership and caps retained builds', () => {

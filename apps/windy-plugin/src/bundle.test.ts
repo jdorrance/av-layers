@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
-import { computeFreshness, latestSchema, manifestSchema, validateArtifactRecords } from '@av/contracts';
+import { computeFreshness, latestSchema } from '@av/contracts';
+import { fixtureManifest } from '../../../tests/forecast-fixture.js';
 
 class FakeElement {
   children: FakeElement[] = [];
@@ -80,17 +81,7 @@ it.each([
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
   const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: `2026-10-30T${hour}:00:00.000Z` }));
-  const fixture = manifestSchema.parse(JSON.parse(readFileSync(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
-  const manifest = manifestSchema.parse({
-    ...fixture, buildId: 'b1', source: { ...fixture.source, provenanceKey: 'builds/gfs/b1/provenance.json' }, expiresAt, frames, layers: ['precip-rate'],
-    samples: { ...fixture.samples, key: 'builds/gfs/b1/samples.bin', channelCount: frames.length, bytes: fixture.samples.storedCells * frames.length * 5 },
-    artifacts: frames.map(frame => ({
-      layer: 'precip-rate', frame: frame.id,
-      tilesKey: `builds/gfs/b1/precip-rate/${frame.id}.pmtiles`,
-      tilesSha256: 'a'.repeat(64)
-    }))
-  });
-  validateArtifactRecords(manifest);
+  const manifest = fixtureManifest({ buildId: 'b1', expiresAt, frames, layers: ['precip-rate'] });
   const latest = latestSchema.parse({
     pointer: { version: 1, model: 'gfs', latestBuildId: 'b1', retained: [{
       buildId: 'b1', manifestKey: 'builds/gfs/b1/manifest.json', cycle: manifest.cycle, expiresAt

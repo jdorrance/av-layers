@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, type Grid, type Manifest, type ProductDefinition } from '@av/contracts';
+import { LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
 import { resolveCoverage } from '../src/coverage';
@@ -11,10 +11,11 @@ const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
 const regular: Grid = gridSchema.parse({ kind: 'regular-latlon', width: 3, height: 3, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false, earthRadiusM: 6371229 });
 const lambert: Grid = gridSchema.parse({ kind: 'lambert-conformal', width: 3, height: 3, centralMeridianDeg: 0, latitudeOfOriginDeg: 40, standardParallel1Deg: 30, standardParallel2Deg: 60, x0M: -10000, y0M: -10000, dxM: 10000, dyM: 10000, earthRadiusM: 6371229, wrapLongitude: false });
 
-function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string; policy?: string; value?: number } = {}) {
+function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string; policy?: string; value?: number; layer?: LayerId; verticalCoordinate?: VerticalCoordinateKind } = {}) {
   const model = options.model ?? 'synthetic', buildId = 'fixture-1', prefix = `builds/${model}/${buildId}`;
+  const layer = options.layer ?? 'precip-rate';
   const bounds: [number, number, number, number] = grid.kind === 'regular-latlon' ? [-2, -2, 2, 2] : [-2, 38, 2, 42];
-  const product: ProductDefinition = { id: 'synthetic-test', modelId: model, configPath: `packages/contracts/config/${model}.json`, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers: ['precip-rate'], capabilities: { verticalCoordinate: 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
+  const product: ProductDefinition = { id: 'synthetic-test', modelId: model, configPath: `packages/contracts/config/${model}.json`, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers: [layer], capabilities: { verticalCoordinate: options.verticalCoordinate ?? 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
   const output = Uint8Array.of(255, 1), halo = Uint8Array.of(0, 0), tiles = Uint8Array.of(0);
   const descriptor = { version: 1, id: product.coverageId, grid, bounds, policy: product.coverageDescription, maxZoom: 0, supportHaloCells: 0, sampleLayout: { format: 'cell-major-blocks-v1', blockSize: 16 }, files: Object.fromEntries(Object.entries({ output, halo, tiles }).map(([name, data]) => [name, { bytes: data.length, sha256: hash(data) }])) };
   const descriptorBytes = json(descriptor), coverageHash = hash(descriptorBytes), coveragePrefix = `coverage/${coverageHash}`;
@@ -24,7 +25,7 @@ function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string
   const samples = new Uint8Array(layout.storedCells * frames.length * 5), view = new DataView(samples.buffer);
   for (let offset = 0; offset < samples.length; offset += 5) view.setFloat32(offset, options.value ?? 7, true);
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
-  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: createProductMethodId(product), hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers: ['precip-rate'], artifacts: frames.map(frame => ({ layer: 'precip-rate', frame: frame.id, tilesKey: `${prefix}/precip-rate/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: ['rain'], tool: {}, metrics: {} };
+  const manifest: Manifest = { version: 3, model, buildId, cycle, createdAt: cycle, expiresAt, descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)), method: { id: createProductMethodId(product), hash: 'a'.repeat(64) }, coverage: { id: product.coverageId, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: 0 }, grid, frames, layers: [layer], artifacts: frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })), samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: frames.length, bytes: samples.length, key: `${prefix}/samples.bin`, sha256: hash(samples) }, source: { provider: 'Synthetic test', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) }, palettes: [layer === 'precip-rate' ? 'rain' : 'lift'], tool: {}, metrics: {} };
   const objects = new Map<string, Uint8Array>([
     [`${coveragePrefix}/manifest.json`, descriptorBytes], [`${coveragePrefix}/output.bin`, output], [`${coveragePrefix}/halo.bin`, halo], [`${coveragePrefix}/tiles.bin`, tiles],
     [`${prefix}/manifest.json`, json(manifest)], [`${prefix}/samples.bin`, samples], [`${prefix}/provenance.json`, provenance],
@@ -40,6 +41,29 @@ function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string
 }
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now); vi.stubGlobal('caches', { default: { match: async () => undefined, put: async () => undefined } }); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it.each(['current', 'historic', 'mismatched'] as const)('checks the %s ICON method against its published pressure-input snapshot', async variant => {
+  const { product, manifest, bucket, objects } = fixture(regular, 1, { model: 'icon-eu', layer: 'usable-lift-msl', verticalCoordinate: 'model-levels' });
+  if (variant !== 'current') {
+    const method = manifest.descriptors.methods[MODEL_LEVEL_LIFT_METHOD.id];
+    delete manifest.descriptors.methods[MODEL_LEVEL_LIFT_METHOD.id];
+    method.id = LIFT_METHOD.id;
+    manifest.descriptors.methods[method.id] = method;
+    manifest.descriptors.layers['usable-lift-msl'].methodId = method.id;
+    manifest.method.id = variant === 'historic' ? method.id : MODEL_LEVEL_LIFT_METHOD.id;
+    objects.set(`builds/icon-eu/${manifest.buildId}/manifest.json`, json(manifest));
+  }
+  const app = createApp({ products: { 'icon-eu': product } });
+  const response = await app.fetch(new Request(`https://api.test/v1/models/icon-eu/runs/${manifest.buildId}`),
+    { BUCKET: bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+  expect(response.status).toBe(variant === 'mismatched' ? 503 : 200);
+  if (variant !== 'mismatched') {
+    const body = await response.json() as Manifest;
+    expect(body.method.id).toBe(manifest.method.id);
+    expect(body.descriptors.methods[body.method.id].requiredInputs).toContain('pressurePa');
+    expect(body.descriptors.methods[body.method.id].requiredInputs).not.toContain('pressureLevelsHpa');
+  }
+});
 
 it.each([regular, lambert])('serves a synthetic %s product with five frames, one layer and explicit descriptors', async grid => {
   const { product, bucket, get } = fixture(grid);

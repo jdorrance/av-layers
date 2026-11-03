@@ -1,6 +1,6 @@
 import z from 'zod';
 import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, methodDescriptorSchema, methodIdSchema } from './methods.js';
-import { LAYER_IDS, type ProductDefinition } from './product.js';
+import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
 import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
 import { gridSchema } from './geometry.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
@@ -31,17 +31,18 @@ export const recipeIdentitySchema = z.object({
 export function createRecipeIdentity(product: ProductDefinition, hash: string, sourceRevision = 'fixture', sourceDirty = false, lockHash = hash): z.infer<typeof recipeIdentitySchema> {
   return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
 }
-export function createProductMethodId(product: Pick<ProductDefinition, 'layers'>): string {
-  return [...new Set(product.layers.map(id => LAYERS[id].methodId))].join('+');
+function methodForLayer(product: Pick<ProductDefinition, 'capabilities'>, layer: LayerId) {
+  const method = METHODS[LAYERS[layer].methodId];
+  return method.id === LIFT_METHOD.id ? LIFT_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate] : method;
+}
+export function createProductMethodId(product: Pick<ProductDefinition, 'layers' | 'capabilities'>): string {
+  return [...new Set(product.layers.map(id => methodForLayer(product, id).id))].join('+');
 }
 export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
-  const verticalCoordinate = product.capabilities.verticalCoordinate;
+  const layers = product.layers.map(id => ({ ...LAYERS[id], methodId: methodForLayer(product, id).id }));
   return descriptorSchema.parse({
-    layers: Object.fromEntries(product.layers.map(id => [id, LAYERS[id]])),
-    methods: Object.fromEntries([...new Set(product.layers.map(id => LAYERS[id].methodId))].map(id => [
-      id,
-      id === LIFT_METHOD.id ? LIFT_METHODS_BY_VERTICAL_COORDINATE[verticalCoordinate] : METHODS[id]
-    ])),
+    layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
+    methods: Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId]])),
     palettes: [...new Set(product.layers.map(id => LAYERS[id].palette))].map(id => PALETTES[id]),
     attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
   });
@@ -128,10 +129,13 @@ export function computeFreshness(
 export function validateArtifactRecords(manifest: Manifest): void {
   const frames = new Set(manifest.frames.map(frame => frame.id));
   if (manifest.layers.length * manifest.frames.length > manifest.descriptors.maxSampleValues) throw new Error('Sample value budget exceeded');
+  const methods = new Set<string>();
   for (const layer of manifest.layers) {
     const descriptor = manifest.descriptors.layers[layer];
     if (!descriptor || descriptor.id !== layer || !manifest.descriptors.palettes.some(p => p.id === descriptor.palette)) throw new Error('Incomplete product descriptors');
+    methods.add(descriptor.methodId);
   }
+  if (manifest.method.id !== [...methods].join('+')) throw new Error('Method identity does not match published descriptor snapshots');
   for (const frame of manifest.frames) {
     if (Date.parse(frame.intervalStart) > Date.parse(frame.intervalEnd) || Date.parse(frame.validTime) !== Date.parse(frame.intervalEnd)) throw new Error('Invalid frame time support');
   }

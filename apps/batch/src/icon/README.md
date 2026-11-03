@@ -46,7 +46,9 @@ and attribution; the weather files are not committed here.
 - [acquire.ts](acquire.ts): acquisition options, sessions, cached geometry, and
   hourly normalization. Acquire frames sequentially and close the session in
   `finally` to cancel pending downloads and release its caches. Closing waits for
-  active acquisition to finish; a closed session cannot acquire another frame.
+  active acquisition to finish; a closed session cannot acquire another frame. Static
+  geometry is decoded once per session; each returned frame receives its own
+  buffers so caller edits cannot change later forecasts.
 - [fields.ts](fields.ts): field selection, URLs, and metadata checks.
 - [ICON-EU settings](../../../../packages/contracts/config/icon-eu.json): grid,
   levels, and forecast schedule.

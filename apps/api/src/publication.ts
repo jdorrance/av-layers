@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, createProductMethodId, getProduct, gridSchema, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type LayerId, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, getProduct, gridSchema, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type LayerId, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
 import { resolveCoverage } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -112,7 +112,7 @@ export async function manifest(
     fail(503, 'publication-invalid', 'Manifest does not match retained entry');
   }
   ensureLive(m.expiresAt);
-  if (!product || m.recipe.id !== product.id || m.method.id !== createProductMethodId(product) || m.recipe.source.modelFamily !== product.source.modelFamily
+  if (!product || m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.coverage.id !== product.coverageId || m.coverage.maxZoom > product.maxNativeZoom
       || m.layers.some(layer => !product.layers.includes(layer)) || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid))) {

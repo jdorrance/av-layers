@@ -39,6 +39,10 @@ numerical defaults from the science packages. Builds save these settings in
 their manifests, so previously published forecasts retain their original labels
 and methods.
 
+Lift method IDs distinguish shared isobaric pressure levels from per-column
+model-level pressures. `createProductDescriptors` selects the matching method
+and layer references; retained manifests use their embedded descriptors.
+
 These workspace packages export TypeScript directly; each app bundles the code
 it imports. See [extensions](../../docs/extensions.md) for adding a model or layer.
 

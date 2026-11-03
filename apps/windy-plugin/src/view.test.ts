@@ -230,9 +230,9 @@ it('reuses legend nodes for unchanged state and refreshes them for layer or immu
   panel.renderState({ ...state, layerId: 'precip-rate', opacity: 0.2 });
   expect(legend.children[0]).toBe(rain);
 
-  panel.renderBuild(fixtureBuild({ ...build.manifest, buildId: 'recolored', layers: ['precip-rate'], descriptors: {
+  panel.renderBuild(fixtureBuild({ buildId: 'recolored', layers: ['precip-rate'], descriptors: {
     ...build.manifest.descriptors, palettes: build.manifest.descriptors.palettes.map(palette => palette.id === 'rain' ? { ...palette, colors: ['#123456'] } : palette)
-  }, artifacts: undefined }));
+  } }));
   const recolored = legend.children[0];
   expect(recolored).not.toBe(rain);
   expect(recolored.children[1].children[0].style.background).toBe('#123456');

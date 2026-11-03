@@ -57,6 +57,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
+    const methods = Object.values(contracts.createProductDescriptors(product).methods);
     lines.push(`### ${product.label} (${product.id})`, '',
       `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,
@@ -66,11 +67,12 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
       `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
       `- Vertical coordinate: ${code(product.capabilities.verticalCoordinate)}; maximum levels: ${product.capabilities.maxVerticalLevels}.`,
-      `- Required calculation inputs: ${[...new Set(Object.values(contracts.createProductDescriptors(product).methods).flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
+      `- Calculation methods: ${methods.map(method => code(method.id)).join(', ')}.`,
+      `- Required calculation inputs: ${[...new Set(methods.flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
       `- Layers: ${product.layers.map(code).join(', ')}.`,
       `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
   }
-  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Interpret values and absence using [the data guide](data.md).', '');
+  lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). The method below is the isobaric default; each configured product selects the method for its vertical coordinate. Published layers link to their selected descriptors. Interpret values and absence using [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {
     lines.push(`### ${layer.label} (${id})`, '',
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,

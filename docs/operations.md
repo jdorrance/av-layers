@@ -38,6 +38,9 @@ verification. The forecast does not need to be rebuilt.
 
 ## Publish a forecast
 
+For an existing environment, deploy API changes before publishing forecasts with
+new method IDs. Retained builds continue to use their embedded method descriptors.
+
 Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow's model dropdown,
 or run:
 

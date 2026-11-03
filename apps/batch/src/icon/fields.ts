@@ -211,6 +211,7 @@ export function iconRegularFieldUrl(
   }
 
   const hour = options.hour ?? 0;
+  // Source URL hours include f000 and are independent of published frame selection.
   if (!Number.isInteger(hour) || hour < 0 || hour > 120) {
     throw new Error(`ICON-EU forecast hour out of range: ${hour}`);
   }

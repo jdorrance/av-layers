@@ -47,10 +47,10 @@ const liftCaveats = Object.freeze([
   'MSL and model-AGL outputs share one column evaluation; model terrain is not a high-resolution terrain correction.'
 ] as const);
 
-function defineLiftMethod(pressureInput: 'pressureLevelsHpa' | 'pressurePa') {
+function defineLiftMethod<const Id extends string>(id: Id, pressureInput: 'pressureLevelsHpa' | 'pressurePa') {
   const inputs = ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'pblHeightM', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', pressureInput, 'hgtM', 'tempK'] as const satisfies readonly NormalizedInputId[];
   return Object.freeze({
-    id: 'dry-lenschow-pbl-1p2-v1',
+    id,
     requiredInputs: Object.freeze(inputs),
     inputs: Object.freeze(Object.fromEntries(inputs.map(id => [id, NORMALIZED_INPUTS[id]]))),
     outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
@@ -59,8 +59,8 @@ function defineLiftMethod(pressureInput: 'pressureLevelsHpa' | 'pressurePa') {
     caveats: liftCaveats
   } as const);
 }
-export const LIFT_METHOD = defineLiftMethod('pressureLevelsHpa');
-export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('pressurePa');
+export const LIFT_METHOD = defineLiftMethod('dry-lenschow-pbl-1p2-v1', 'pressureLevelsHpa');
+export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('dry-lenschow-pbl-1p2-model-levels-v1', 'pressurePa');
 
 export const PRECIPITATION_METHOD = Object.freeze({
   id: 'trailing-precipitation-rate-v1',
@@ -75,7 +75,7 @@ export const PRECIPITATION_METHOD = Object.freeze({
     'Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.'
   ])
 } as const);
-export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD });
+export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD });
 export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: LIFT_METHOD,
   'model-levels': MODEL_LEVEL_LIFT_METHOD
