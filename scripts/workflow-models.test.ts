@@ -96,7 +96,7 @@ describe('multi-model workflow isolation', () => {
     expect(terrain.if).toBe(mainFreshRun);
     expect(prepare.if).toBe(mainFreshRun);
     expect(prepare.needs).toBe('terrain');
-    expect(terrain['timeout-minutes']).toBe(60);
+    expect(terrain['timeout-minutes']).toBe(160);
     expect(prepare['timeout-minutes']).toBe(15);
     const steps = terrain.steps as Record<string, unknown>[];
     expect(steps.some(step => step.run === 'pnpm operations forecast-terrain')).toBe(true);

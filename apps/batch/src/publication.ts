@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -341,9 +341,9 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       if (!safeId(id)) continue;
       const group = groups.get(id) ?? []; group.push(object); groups.set(id, group);
     }
-    const deletes: string[] = [], eligible = emptyCleanupObjects();
+    const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
     for (const [id, group] of groups) {
-      if (protectedIds.has(id) || buildIdTime(id) > now - 86400000 || group.some(object => object.lastModified.getTime() > now - 86400000)) continue;
+      if (protectedIds.has(id) || buildIdTime(id) > cutoff || group.some(object => object.lastModified.getTime() > cutoff)) continue;
       for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
     }
     summary.eligible = eligible;

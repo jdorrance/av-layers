@@ -427,6 +427,20 @@ describe('R2 S3 client configuration', () => {
     } finally { send.mockRestore(); }
   });
 
+  it.each(['deadline', 'cancellation'])('preserves the %s reason when the SDK aborts a HEAD request', async kind => {
+    const controller = new AbortController();
+    const reason = kind === 'deadline' ? new DOMException('The operation was aborted due to timeout', 'TimeoutError') : new Error('Publication interrupted');
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async () => {
+      controller.abort(reason);
+      throw Object.assign(new Error('Request aborted'), { name: 'AbortError' });
+    });
+    try {
+      const store = r2Storage({ ...env, R2_BUCKET: 'test' });
+      await expect(store.head('terrain/checkpoints/window.bin', controller.signal)).rejects.toBe(reason);
+      expect(send).toHaveBeenCalledOnce();
+    } finally { send.mockRestore(); }
+  });
+
   it('uses the R2 endpoint and required-only SDK checksums', () => {
     const options = r2ClientOptions(env)!;
     expect(options.endpoint).toBe(`https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`);

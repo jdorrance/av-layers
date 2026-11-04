@@ -56,12 +56,14 @@ cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
 
-Each selected model runs `forecast-terrain` (60m job timeout), `forecast-plan`
+Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
 (15m timeout), up to four parallel `forecast-shard` jobs (60m timeout), and
 `forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. Terrain preparation has its
-own 50-minute operation budget; forecast elapsed time starts with planning. If a
-shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
+own 50-minute operation budget per attempt; forecast elapsed time starts with
+planning.
+
+If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the plan remains within the 50-minute build elapsed-time budget and its environment
 secret has not been rotated by a later same-model build. After rotation, start a
 new build.
@@ -71,8 +73,10 @@ reporting progress in the job log. Planning requires that cache; a missing cache
 fails planning immediately.
 
 Cold preparation stages verified source files in a bounded local cache and
-commits each completed window to R2. Retrying a failed terrain job reuses its
-verified windows. The [terrain CLI](../apps/batch/src/terrain/README.md#use-in-forecasts)
+commits each completed window to R2. `forecast-terrain` retries transport failures
+and operation deadlines up to three attempts, reusing verified windows and the
+local cache. Integrity and configuration failures stop immediately. The
+[terrain CLI](../apps/batch/src/terrain/README.md#use-in-forecasts)
 can prepare and upload the same arrays locally.
 
 The prepare job signs [temporary R2 credentials](https://developers.cloudflare.com/r2/examples/authenticate-r2-temp-credentials/)
@@ -99,10 +103,8 @@ complete shard set before validating and publishing the build.
 Admission requires a source cycle at most **18 hours old**, at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
 Published builds are retained for 7 days.
-Bucket locks retain each object for at least seven days from its upload, so
-cleanup may encounter protected objects for up to the 50-minute build budget
-after build expiry. A locked multi-object delete reports an error and cleanup
-can have partial progress; retry cleanup after the affected objects unlock.
+Cleanup waits until every object in an unreferenced build has aged seven days,
+matching the `builds/` bucket lock.
 
 ## Resume a build
 
@@ -147,7 +149,7 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
-Delete unreferenced build objects older than the 24-hour grace period:
+Delete unreferenced build prefixes whose newest object is at least seven days old:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \

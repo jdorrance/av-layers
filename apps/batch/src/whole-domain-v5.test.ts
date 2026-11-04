@@ -417,9 +417,9 @@ describe('whole-domain v5 production', () => {
 
   it('builds native precipitation and fine lift surfaces sequentially and frozen-parallel with byte-identical shards and tiles', async () => {
     const setup = await fixture(), serialRoot = await root('wd-serial'), parallelRoot = await root('wd-parallel');
-    const source = fixtureProvider();
+    const source = fixtureProvider(), configured = { ...product, frameHours: [2, 4, 8] };
     let sealed = false;
-    const serialPath = await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask: nativeMask, provider: source.provider, wholeDomain: setup,
+    const serialPath = await buildForecast({ out: serialRoot, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup,
       onValidated: async result => { assertValidatedBuild(serialRoot, result.manifest, result); sealed = true; } });
     expect(sealed).toBe(true);
     const serial = await readV5(serialPath);
@@ -433,27 +433,27 @@ describe('whole-domain v5 production', () => {
     const wrongMethod = structuredClone(serial);
     wrongMethod.descriptors = createProductDescriptors(product);
     wrongMethod.method.id = createProductMethodId(product);
-    await expect(validateBuild(serialRoot, wrongMethod, nativeMask, undefined, product)).rejects.toThrow('Unsupported model, grid or layers');
+    await expect(validateBuild(serialRoot, wrongMethod, nativeMask, undefined, configured)).rejects.toThrow('Unsupported model, grid or layers');
     const wrongGround = structuredClone(serial);
     wrongGround.descriptors.layers['usable-lift-agl'].verticalReference = 'model-AGL';
-    await expect(validateBuild(serialRoot, wrongGround, nativeMask, undefined, product)).rejects.toThrow('Unsupported model, grid or layers');
+    await expect(validateBuild(serialRoot, wrongGround, nativeMask, undefined, configured)).rejects.toThrow('Unsupported model, grid or layers');
     const wrongClearance = structuredClone(serial);
     wrongClearance.tool.terrainClearance = TERRAIN_COLUMN_METHOD.id;
-    await expect(validateBuild(serialRoot, wrongClearance, nativeMask, undefined, product)).rejects.toThrow('Terrain source or method mismatch');
+    await expect(validateBuild(serialRoot, wrongClearance, nativeMask, undefined, configured)).rejects.toThrow('Terrain source or method mismatch');
     expect(surface(serial, 'native').layers).toEqual(['precip-rate']);
     expect(surface(serial, 'fine').layers).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(surface(serial, 'fine').terrain).toMatchObject({ coverageHash: surface(serial, 'fine').coverage.hash, layoutVersion: 1 });
     expect(serial.metrics.capacity).toMatchObject({ rasterWorkers: 0 });
     expect((serial.metrics.capacity as { estimatedPeakBytes: number }).estimatedPeakBytes).toBeLessThan(2 * 1024 ** 3);
-    expect(checkPerformance(serial)).toMatchObject({ passed: true, observed: { tiles: 6 } });
+    expect(checkPerformance(serial)).toMatchObject({ passed: true, observed: { tiles: 9 } });
 
-    const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, product, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2 });
+    const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2 });
     expect(plan.version).toBe(2);
     expect(plan.wholeDomain).toMatchObject({ k: 2, nativeCoverageHash: plan.coverageHash });
-    expect(plan.groups).toHaveLength(2);
-    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, product, mask: nativeMask, provider: source.provider });
+    expect(plan.groups).toEqual([[2, 4], [8]]);
+    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, product: configured, mask: nativeMask, provider: source.provider });
     let parallelSealed = false;
-    const parallelPath = await finalizeBuild({ plan, out: parallelRoot, product, mask: nativeMask, provider: source.provider,
+    const parallelPath = await finalizeBuild({ plan, out: parallelRoot, product: configured, mask: nativeMask, provider: source.provider,
       onValidated: async result => { assertValidatedBuild(parallelRoot, result.manifest, result); parallelSealed = true; } });
     expect(parallelSealed).toBe(true);
     const parallel = await readV5(parallelPath);

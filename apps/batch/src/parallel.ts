@@ -142,7 +142,7 @@ async function stagePlanTerrain(root: string, plan: BuildPlan, whole: WholeDomai
 function partition(hours: readonly number[], count: number): number[][] {
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_FORECAST_SHARDS) throw new Error('Invalid forecast shard count');
   const n = Math.min(count, hours.length);
-  return Array.from({ length: n }, (_, i) => hours.slice(Math.floor(i * hours.length / n), Math.floor((i + 1) * hours.length / n)));
+  return Array.from({ length: n }, (_, i) => hours.slice(Math.ceil(i * hours.length / n), Math.ceil((i + 1) * hours.length / n)));
 }
 
 /** Freeze the resolved cycle and complete-product admission. No provider data is acquired here. */

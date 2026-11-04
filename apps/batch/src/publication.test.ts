@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, MAX_PROVENANCE_BYTES, LAYER_IDS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, MAX_PROVENANCE_BYTES, LAYER_IDS, RETENTION_DAYS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { writeCoverage } from './coverage.js';
@@ -565,10 +565,10 @@ describe('immutable publication', () => {
     expect(() => workflowAuthority({})).toThrow('workflow on main');
     await rollback(store, 'gfs', id, authority, now);
     await expect(rollback(store, 'gfs', id, authority, Date.parse(manifest.expiresAt))).rejects.toThrow('not retained');
-    const stale = '20261028T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';
+    const stale = '20261020T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';
     await store.put(`builds/gfs/${stale}/part`, Buffer.from('x'), { ifNoneMatch: '*' });
     await store.put(`builds/gfs/${fresh}/part`, Buffer.from('x'), { ifNoneMatch: '*' });
-    store.objects.get(`builds/gfs/${stale}/part`)!.lastModified = new Date(now - 2 * 86400000);
+    store.objects.get(`builds/gfs/${stale}/part`)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000);
     expect(await cleanup(store, 'gfs', authority, now)).toBe(1);
     expect(await store.get(`builds/gfs/${fresh}/part`)).not.toBeNull();
     expect(await store.get(`builds/gfs/${id}/manifest.json`)).not.toBeNull();
@@ -686,12 +686,42 @@ describe('immutable publication', () => {
   it('protects a stale build prefix containing a recently modified object', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });
-    const stale = '20261028T000000Z-12345678-1234-4234-8234-123456789abc';
+    const stale = '20261020T000000Z-12345678-1234-4234-8234-123456789abc';
     await store.put(`builds/gfs/${stale}/old`, Buffer.from('x'), { ifNoneMatch: '*' });
     await store.put(`builds/gfs/${stale}/new`, Buffer.from('x'), { ifNoneMatch: '*' });
-    store.objects.get(`builds/gfs/${stale}/old`)!.lastModified = new Date(now - 2 * 86400000);
+    store.objects.get(`builds/gfs/${stale}/old`)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000);
     store.objects.get(`builds/gfs/${stale}/new`)!.lastModified = new Date(now - 1000);
     expect(await cleanup(store, 'gfs', authority, now)).toBe(0);
+  });
+
+  it('waits for the newest orphan object to pass retention before deleting a locked build prefix', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    await publish(store, root, manifest, { authority, now: () => now });
+    const prefix = 'builds/gfs/20261020T000000Z-12345678-1234-4234-8234-123456789abc';
+    const retention = RETENTION_DAYS * 86400000;
+    for (const name of ['old', 'last']) {
+      const key = `${prefix}/${name}`;
+      await store.put(key, Buffer.from(name), { ifNoneMatch: '*' });
+      store.objects.get(key)!.lastModified = new Date(now - retention - 86400000);
+    }
+    const last = store.objects.get(`${prefix}/last`)!;
+    const remove = store.delete.bind(store);
+    store.delete = vi.fn(async (keys: string[]) => {
+      if (keys.some(key => store.objects.get(key)!.lastModified.getTime() > now - retention)) throw new Error('ObjectLockedByBucketPolicy');
+      await remove(keys);
+    });
+    for (const age of [86400000 + 1, retention - 1]) {
+      last.lastModified = new Date(now - age);
+      expect(await cleanup(store, 'gfs', authority, now)).toBe(0);
+      expect(store.delete).not.toHaveBeenCalled();
+      expect(store.objects.has(`${prefix}/old`)).toBe(true);
+      expect(store.objects.has(`${prefix}/last`)).toBe(true);
+    }
+    last.lastModified = new Date(now - retention - 1);
+    expect(await cleanup(store, 'gfs', authority, now)).toBe(2);
+    expect(store.delete).toHaveBeenCalledOnce();
+    expect(store.objects.has(`${prefix}/old`)).toBe(false);
+    expect(store.objects.has(`${prefix}/last`)).toBe(false);
   });
 });
 
@@ -714,10 +744,10 @@ it('reports protected and orphan costs without treating missing object sizes as 
   await publish(store, root, manifest, { authority, now: () => now });
   const protectedObjects = await store.list('builds/gfs/');
   const protectedBytes = protectedObjects.reduce((sum, item) => sum + item.size!, 0);
-  const stale = '20261028T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';
+  const stale = '20261020T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';
   for (const [key, bytes] of [[`builds/gfs/${stale}/known`, 'abc'], [`builds/gfs/${stale}/unknown`, 'four'], [`builds/gfs/${fresh}/part`, 'fresh']]) {
     await store.put(key, Buffer.from(bytes), { ifNoneMatch: '*' });
-    if (key.includes(stale)) store.objects.get(key)!.lastModified = new Date(now - 2 * 86400000);
+    if (key.includes(stale)) store.objects.get(key)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000);
   }
   const list = store.list.bind(store);
   store.list = async prefix => (await list(prefix)).map(item => item.key.endsWith('/unknown') ? { key: item.key, lastModified: item.lastModified } : item);
@@ -736,8 +766,8 @@ it('reports protected and orphan costs without treating missing object sizes as 
 it('reports unknown deletion progress after partial provider failure and unknown costs after listing failure', async () => {
   const { root, manifest } = await fixture(), store = new MemoryStore();
   await publish(store, root, manifest, { authority, now: () => now });
-  const stale = '20261028T000000Z-12345678-1234-4234-8234-123456789abc';
-  for (const name of ['one', 'two']) { const key = `builds/gfs/${stale}/${name}`; await store.put(key, Buffer.from('x'), { ifNoneMatch: '*' }); store.objects.get(key)!.lastModified = new Date(now - 2 * 86400000); }
+  const stale = '20261020T000000Z-12345678-1234-4234-8234-123456789abc';
+  for (const name of ['one', 'two']) { const key = `builds/gfs/${stale}/${name}`; await store.put(key, Buffer.from('x'), { ifNoneMatch: '*' }); store.objects.get(key)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000); }
   const remove = store.delete.bind(store);
   store.delete = async keys => { await remove(keys.slice(0, 1)); throw new Error('partial provider failure'); };
   let summary: CleanupSummary | undefined;
