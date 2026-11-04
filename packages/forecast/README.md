@@ -41,7 +41,7 @@ apply daylight gating when deriving target clearance.
 
 - [`@av/forecast/frame`](src/frame.ts): `deriveFrame` whole-grid calculation.
 - [`@av/forecast/refinement`](src/refinement.ts): reusable native-to-target
-  weights and terrain-referenced MSL/AGL from native depth and buoyancy.
+  weights, terrain-column MSL/AGL and terrain-clearance fallback.
 - [`@av/forecast/science`](src/science.ts): `deriveColumn` single-column MSL/AGL
   and status mapping around [`@av/soaring`](../soaring/README.md).
 - [`@av/forecast/sampler`](src/sampler.ts): bilinear/nearest-neighbor point
@@ -61,13 +61,12 @@ reads caller-owned diagnostics, native support flags, DEM arrays and a UTC
 interval, returning new MSL and AGL fields. `byteLength` reports retained mapping bytes. Missing
 terrain or native support produces unavailable cells.
 
-Base fields stay on the parent grid. Patches use local terrain and complete
-convective-column support to publish both `usable-lift-msl` and
-`usable-lift-agl`; mixed convective and non-convective neighbors are unavailable.
-See [terrain clearance](../../docs/science.md#terrain-clearance)
-for the calculation, daylight rules and vertical references.
+Terrain clearance supplies unsupported-valley fallback and evaluation controls.
+It requires complete native diagnostics; mixed convective and non-convective
+neighbors are unavailable. See [terrain clearance](../../docs/science.md#terrain-clearance)
+for the calculation.
 
-## Terrain-column evaluation
+## Terrain columns
 
 `prepareTerrainColumns` compiles compact donor slots and returns a per-frame
 `derive` operation for DEM elevations. [terrain-column.ts](src/terrain-column.ts)
@@ -78,17 +77,21 @@ and merges their breakpoints into an environmental profile above each fine cell.
 `byteLength` counts retained mapping buffers. `workspaceBufferBytes` and
 `daylightBufferBytes` count typed-array storage; `workspaceObjectBudgetBytes`
 estimates JavaScript overhead. Returned field buffers and preparation temporaries
-have separate lifetimes. Measure full-process RSS before production promotion.
+have separate lifetimes. [Build admission](../../apps/batch/src/capacity.ts) retains
+the prepared mapping for frame execution and accounts for these buffers.
 
-The [evaluation command](../../apps/batch/src/refinement/README.md#evaluation)
-compares donor-ground surface-anomaly transfer against stored clearance and
-native columns. Production uses `prepareTerrainClearance`. Terrain-column
-promotion requires observational, support-preservation and resource gates.
+Production uses `prepareTerrainColumns` with unsupported-valley clearance
+fallback. The [evaluation command](../../apps/batch/src/refinement/README.md#evaluation)
+compares its fields against stored clearance and native columns.
 
 Surface excess is evaluated at each donor's native terrain and interpolated with
 the original horizontal weights. Environmental weights are renormalized among
 height-supported donors. Support-entry knots retain their one-sided temperature
-limits in the reconstructed profile.
+limits in the reconstructed profile. Donor relative humidity uses the supported
+weights before conversion to fine-cell specific humidity;
+[science](../../docs/science.md#terrain-columns) owns the equations.
+[Method descriptors](../contracts/src/methods.ts) select the pressure coordinate
+for GFS or ICON-EU and publish the shared parameters.
 
 `clearanceFallback: 'unsupported'` accepts same-frame
 `clearance: { methodId, validTime, grid, fields }` in `derive` for an unsupported

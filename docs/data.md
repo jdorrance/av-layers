@@ -50,7 +50,8 @@ digests so retained builds remain self-contained.
 
 Version-4 builds add internal patches with their own grids and methods under the
 same model and frame times. Patches derive both `usable-lift-msl` and
-`usable-lift-agl` on 1 km grids with `native-lift-terrain-clearance-v2`.
+`usable-lift-agl` on 1 km grids with [terrain columns](science.md#terrain-columns)
+and unsupported-valley terrain-clearance fallback.
 Polygon and output-mask membership select a patch per layer before values are
 read. Selected no-lift and unavailable values remain
 in effect; sampling never falls back to the coarse grid. Halo cells support

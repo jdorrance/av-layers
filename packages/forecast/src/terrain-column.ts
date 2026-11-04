@@ -1,6 +1,6 @@
 import {
   getBit, gridSchema, MAX_GRID_CELLS, prepareGridGeometry, sameGrid,
-  STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, TERRAIN_CLEARANCE_METHOD,
+  STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS,
   type CoverageMask, type Grid
 } from '@av/contracts';
 import { ReconstructedProfileWorkspace } from '@av/soaring';
@@ -86,7 +86,7 @@ export function terrainColumnCapacity(sourceActiveCells: number, targetActiveCel
   }
   const mappingBufferBytes = sourceActiveCells * 4 + targetActiveCells * 53 + donorCount * 8;
   const daylightBufferBytes = terrainColumnDaylightBufferBytes(targetGrid, 3);
-  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 29) + 4 * (maxLevels + 3) * 24 + daylightBufferBytes;
+  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 24 + daylightBufferBytes;
   const workspaceObjectBudgetBytes = 65536 + maxLevels * 256;
   const workspaceBytes = workspaceBufferBytes + workspaceObjectBudgetBytes;
   if (![mappingBufferBytes, workspaceBufferBytes, workspaceObjectBudgetBytes, workspaceBytes].every(Number.isSafeInteger)) {
@@ -112,10 +112,10 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
     if (index >= sourceCells || (i > 0 && index <= sourceActiveIndices[i - 1]!) ||
         (!getBit(sourceMask.output, index) && !getBit(sourceMask.halo, index))) throw new RangeError('Invalid active indices');
   }
-  const bridgeM = evaluationOptions.maximumBelowGroundExtrapolationM ?? 1000;
+  const bridgeM = evaluationOptions.maximumBelowGroundExtrapolationM ?? TERRAIN_COLUMN_PARAMETERS.maximumBelowGroundExtrapolationM;
   const bridgeMode = evaluationOptions.bridgeMode ?? 'neutral';
   const fallbackMode = evaluationOptions.clearanceFallback ?? 'none';
-  if ((bridgeM !== 1000 && bridgeM !== 1500) || (bridgeMode !== 'neutral' && bridgeMode !== 'lowest-layer') ||
+  if ((bridgeM !== TERRAIN_COLUMN_PARAMETERS.maximumBelowGroundExtrapolationM && bridgeM !== 1500) || (bridgeMode !== 'neutral' && bridgeMode !== 'lowest-layer') ||
       (fallbackMode !== 'unsupported' && fallbackMode !== 'none')) throw new RangeError('Invalid terrain column options');
   let targetCount = 0;
   for (let i = 0; i < targetCells; i++) if (getBit(targetMask.output, i) || getBit(targetMask.halo, i)) targetCount++;
@@ -198,6 +198,7 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
         filledBelowGroundBridgeExceeded: 0, belowGroundBridgeExceededObserved: 0, column: 0, clearance: 0 };
       const workspace = new ReconstructedProfileWorkspace(compactSlots.length, maxLevels);
       const donorState = new Uint8Array(compactSlots.length), scratch = createNativeColumnScratch(maxLevels);
+      const donorSpecificHumidity = new Float64Array(compactSlots.length), donorRelativeHumidity = new Float64Array(compactSlots.length);
       for (let t = 0; t < targetCount; t++) {
         const index = targets[t]!, h = terrain.elevationM[index]!, count = counts[t]!, offset = t * 4;
         msl.values[index] = NaN; agl.values[index] = NaN;
@@ -229,16 +230,15 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
               scratch.humidity.specificHumidityKgKg, scratch.sensibleHeatFluxWm2, scratch.latentHeatFluxWm2].every(Number.isFinite);
             for (let j = 0; j < n; j++) missing ||= !Number.isFinite(scratch.levels[j]!.heightM) || !Number.isFinite(scratch.levels[j]!.temperatureC);
             donorState[donor] = missing ? 2 : workspace.admit(donor, scratch, n) ? 1 : 3;
+            if (donorState[donor] === 1) {
+              const q = scratch.humidity.specificHumidityKgKg, r = q / (1 - q);
+              donorSpecificHumidity[donor] = q;
+              donorRelativeHumidity[donor] = scratch.surfacePressureHpa * r / (EPSILON + r) / saturationVaporPressureHpa(scratch.surfaceTemperatureC);
+            }
           }
           if (donorState[donor] !== 1) { bad = donorState[donor] === 2 ? 'missingDonor' : 'invalidDonorInput'; break; }
         }
         if (bad) { fail(bad); continue; }
-        let t0 = 0, p0 = 0, q0 = 0, sh = 0, lh = 0;
-        for (let i = 0; i < count; i++) {
-          const j = compactSlots[slots[offset + i]!]!, w = weights[offset + i]!;
-          t0 += w * frame.temp2mK[j]!; p0 += w * frame.surfacePressurePa[j]!; q0 += w * frame.specificHumidity2mKgKg[j]!;
-          sh += w * frame.sensibleHeatFluxWm2[j]!; lh += w * frame.latentHeatFluxWm2[j]!;
-        }
         let excess = 0;
         for (let i = 0; i < count; i++) {
           const slot = slots[offset + i]!, weight = weights[offset + i]!;
@@ -264,11 +264,6 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
           if (workspace.failure !== 'belowGroundBridgeExceeded' || !clearanceKnown) {
             fail(workspace.failure ?? 'unsupportedHeight'); continue;
           }
-          const r = q0 / (1 - q0), vapor = p0 / PA * r / (EPSILON + r);
-          const rh = vapor / saturationVaporPressureHpa(t0 - K);
-          if (!Number.isFinite(rh) || rh < 0 || rh > 1 + DEFAULT_SOARING_PARAMETERS.saturationRelativeTolerance) {
-            fail('invalidSurfaceState'); continue;
-          }
           msl.values[index] = mv!; agl.values[index] = cv!; msl.flags[index] = mf!; agl.flags[index] = cf!;
           metrics.filledBelowGroundBridgeExceeded!++; metrics.clearance!++;
           if ((cf! & STATUS_MASK) === STATUS_VALID) metrics.valid++; else metrics.noLift++;
@@ -277,13 +272,13 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
         }
         if (workspace.bridgeUsed) metrics.belowGroundBridge++;
         const h0 = workspace.referenceTerrainM, ef = workspace.surfaceEnvironmentAtGroundC + K;
-        t0 = 0; p0 = 0; q0 = 0; sh = 0; lh = 0;
-        let hSup = 0;
+        let t0 = 0, p0 = 0, q0 = 0, rh = 0, sh = 0, lh = 0, hSup = 0;
         for (let i = 0; i < count; i++) {
           const slot = slots[offset + i]!, j = compactSlots[slot]!;
           const gw = workspace.groundEnvironmentWeight(slot, weights[offset + i]!);
           if (probe) probe.donorGroundWeights.push(gw);
-          t0 += gw * frame.temp2mK[j]!; p0 += gw * frame.surfacePressurePa[j]!; q0 += gw * frame.specificHumidity2mKgKg[j]!;
+          t0 += gw * frame.temp2mK[j]!; p0 += gw * frame.surfacePressurePa[j]!; q0 += gw * donorSpecificHumidity[slot]!;
+          rh += gw * donorRelativeHumidity[slot]!;
           sh += gw * frame.sensibleHeatFluxWm2[j]!; lh += gw * frame.latentHeatFluxWm2[j]!;
           hSup += gw * frame.terrainM[j]!;
         }
@@ -298,7 +293,6 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
           const tf = ef + excess;
           const r0 = q0 / (1 - q0), tv = (t0 + tf) / 2 * (1 + r0 / EPSILON) / (1 + r0);
           const pf = p0 * Math.exp(-G * (h - hSup) / (RD * tv));
-          const vapor = p0 / PA * r0 / (EPSILON + r0), rh = vapor / saturationVaporPressureHpa(t0 - K);
           const vf = rh * saturationVaporPressureHpa(tf - K), rf = EPSILON * vf / (pf / PA - vf), qf = rf / (1 + rf);
           if (![t0, tf, p0, q0, tv, pf, rh, vf, qf].every(Number.isFinite) || t0 <= 0 || tf <= 0 || tv <= 0 || pf <= 0 ||
               q0 < 0 || q0 >= 1 || rh < 0 || rh > 1 + DEFAULT_SOARING_PARAMETERS.saturationRelativeTolerance ||

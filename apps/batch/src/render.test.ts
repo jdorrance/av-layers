@@ -86,7 +86,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
     };
     const step = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: 'step' }).renderTileRgba(lift, 'usable-lift-msl', 5, 16, 16);
     const stepPack = await pack();
-    const linear = createRenderer(mask, { rasterWorkers: 0 }).renderTileRgba(lift, 'usable-lift-msl', 5, 16, 16);
+    const linear = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: 'linear-rgb' }).renderTileRgba(lift, 'usable-lift-msl', 5, 16, 16);
     const linearPack = await pack();
     expect(pixel({ data: step }, 30, 30)).toEqual([85, 24, 77, 255]);
     expect(pixel({ data: linear }, 30, 30)).toEqual([135, 42, 107, 255]);

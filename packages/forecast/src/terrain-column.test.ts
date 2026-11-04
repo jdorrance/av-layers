@@ -135,7 +135,7 @@ it('maps sparse global contributors to compact slots and conserves RH at zero di
   expect(capacity.workspaceBytes).toBe(prepared.workspaceBytes);
   expect(terrainColumnCapacity(4, 1, 3, targetMask.grid).mappingBufferBytes).toBeGreaterThanOrEqual(prepared.byteLength);
   expect(prepared.workspaceBytes).toBe(prepared.workspaceBufferBytes + prepared.workspaceObjectBudgetBytes);
-  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 29) + 4 * (3 + 3) * 24 + 88);
+  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 45) + 4 * (3 + 3) * 24 + 88);
   const result = prepared.derive(input, terrain(250), day, { daylightOnly: false, probeIndices: [0] });
   expect(result.daylightBufferBytes).toBe(0);
   const probe = result.probes[0]!;
@@ -374,15 +374,50 @@ it('uses empirical clearance beyond the bound without inventing a local surface 
     surfaceTemperatureK: null, surfacePressurePa: null, humidityKgKg: null, branch: null, depthM: null });
 });
 
-it('does not replace an actually invalid weighted surface state with clearance', () => {
+it.each([
+  { lon: 1.5, humidity: [0.99, 0.99], expected: 0.99 },
+  { lon: 1.25, humidity: [0.4, 0.9], expected: 0.525 }
+])('interpolates donor RH across different temperatures at longitude $lon', ({ lon, humidity, expected }) => {
+  const { input, active, sourceMask, targetMask } = sparseFixture(lon, 1);
+  input.terrainM.fill(1000);
+  input.temp2mK.set([273.15, 293.15, 273.15, 293.15]);
+  input.surfacePressurePa.fill(100000);
+  input.sensibleHeatFluxWm2.fill(200);
+  input.latentHeatFluxWm2.fill(0);
+  input.pressureLevelsHpa = [900, 850, 800, 750, 700];
+  input.hgtM = [1500, 2000, 2500, 3000, 3500].map(h => new Float32Array(4).fill(h));
+  input.tempK = [-4, -7, -10, -13, -16].map(t => Float32Array.of(t + 273.15, t + 293.15, t + 273.15, t + 293.15));
+  input.missing.hgt = input.hgtM.map(() => new Uint8Array(4));
+  input.missing.temp = input.tempK.map(() => new Uint8Array(4));
+  const epsilon = THERMODYNAMIC_CONSTANTS.waterDryAirMolarMassRatio;
+  for (let i = 0; i < active.length; i++) {
+    const vapor = humidity[i % 2]! * saturationVaporPressureHpa(input.temp2mK[i]! - 273.15);
+    const r = epsilon * vapor / (1000 - vapor);
+    input.specificHumidity2mKgKg[i] = r / (1 + r);
+  }
+  const native = deriveFrame(input, sourceMask, { daylightOnly: false });
+  for (const index of active) expect(native['usable-lift-agl']!.flags[index]! & STATUS_MASK).toBe(STATUS_VALID);
+  const prepared = prepareTerrainColumns(sourceMask, targetMask, active, 5, { clearanceFallback: 'unsupported' });
+  const column = prepared.derive(input, terrain(1100), day, { daylightOnly: false, probeIndices: [0] });
+  expect(column.metrics.invalidSurfaceState).toBe(0);
+  expect(column.metrics.column).toBe(1);
+  const probe = column.probes[0]!, q = probe.humidityKgKg!, r = q / (1 - q);
+  const rh = probe.surfacePressurePa! / 100 * r / (epsilon + r) / saturationVaporPressureHpa(probe.surfaceTemperatureK! - 273.15);
+  expect(rh).toBeCloseTo(expected, 6);
+  const fallback = prepared.derive(input, terrain(-1), day, { daylightOnly: false,
+    clearance: { ...clearance(-1), grid: targetMask.grid } });
+  expect(fallback.metrics.clearance).toBe(1);
+  expect(fallback.fields['usable-lift-agl'].values[0]).toBe(400);
+});
+
+it('rejects corrupt donor humidity before using column or clearance fields', () => {
   const { input, active, sourceMask, targetMask } = sparseFixture();
-  input.temp2mK.set([283.15, 303.15, 283.15, 303.15]);
-  input.specificHumidity2mKgKg.set([0.0075, 0.026, 0.0075, 0.026]);
+  input.specificHumidity2mKgKg[0] = 0.1;
   const prepared = prepareTerrainColumns(sourceMask, targetMask, active, 3, { clearanceFallback: 'unsupported' });
   for (const height of [-500, -700]) {
     const result = prepared.derive(input, terrain(height), day, { daylightOnly: false, probeIndices: [0],
       clearance: { ...clearance(height), grid: targetMask.grid } });
-    expect(result.metrics.invalidSurfaceState).toBe(1);
+    expect(result.metrics.invalidDonorInput).toBe(1);
     expect(result.metrics.clearance).toBe(0);
     expect(result.fields['usable-lift-agl'].flags[0]! & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
   }

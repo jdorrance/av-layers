@@ -28,7 +28,8 @@ Object.freeze(NORMALIZED_INPUTS);
 export const LIFT_METHOD_PARAMETERS = Object.freeze({
   ...THERMODYNAMIC_CONSTANTS,
   ...DEFAULT_SOARING_PARAMETERS,
-  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG
+  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG,
+  gribQuantizationRelativeHumidityLimit: 1.05
 });
 export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
   minimumRateMmPerHour: 0,
@@ -38,6 +39,7 @@ export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
 const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readonly NormalizedInputId[];
 const liftCaveats = Object.freeze([
   'Dry parcel calculation; no moist parcel or cloud treatment.',
+  'Clamps normalized surface humidity up to gribQuantizationRelativeHumidityLimit times saturation vapor pressure to saturation.',
   'Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.',
   'Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).',
   'A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.',
@@ -93,7 +95,42 @@ export const TERRAIN_CLEARANCE_METHOD = Object.freeze({
     'DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion is applied.'
   ])
 } as const);
-export const METHODS = Object.freeze({ [LIFT_METHOD.id]: LIFT_METHOD, [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD, [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD, [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });
+export const TERRAIN_COLUMN_PARAMETERS = Object.freeze({
+  ...LIFT_METHOD_PARAMETERS,
+  maximumBelowGroundExtrapolationM: 1000
+} as const);
+
+function defineTerrainColumnMethod<const Id extends string>(id: Id, nativeMethod: typeof LIFT_METHOD | typeof MODEL_LEVEL_LIFT_METHOD) {
+  return Object.freeze({
+    id,
+    requiredInputs: Object.freeze([...nativeMethod.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs]),
+    inputs: Object.freeze(Object.fromEntries([...Object.entries(nativeMethod.inputs), ...Object.entries(TERRAIN_CLEARANCE_METHOD.inputs)])),
+    outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
+    spatialSupport: 'bilinear-neighborhood',
+    parameters: TERRAIN_COLUMN_PARAMETERS,
+    caveats: Object.freeze([
+      'Reconstructs environmental temperature profiles at each DEM cell over height-supported bilinear donor columns (up to maximumBelowGroundExtrapolationM below native ground) and transfers horizontal donor-ground surface anomalies.',
+      'Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.',
+      'Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.',
+      'When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.',
+      'Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.'
+    ])
+  } as const);
+}
+export const TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-v1', LIFT_METHOD);
+export const MODEL_LEVEL_TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-model-levels-v1', MODEL_LEVEL_LIFT_METHOD);
+export const TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
+  isobaric: TERRAIN_COLUMN_METHOD,
+  'model-levels': MODEL_LEVEL_TERRAIN_COLUMN_METHOD
+} as const);
+export const METHODS = Object.freeze({
+  [LIFT_METHOD.id]: LIFT_METHOD,
+  [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD,
+  [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD,
+  [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD,
+  [TERRAIN_COLUMN_METHOD.id]: TERRAIN_COLUMN_METHOD,
+  [MODEL_LEVEL_TERRAIN_COLUMN_METHOD.id]: MODEL_LEVEL_TERRAIN_COLUMN_METHOD
+});
 export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: LIFT_METHOD,
   'model-levels': MODEL_LEVEL_LIFT_METHOD

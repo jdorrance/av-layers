@@ -63,7 +63,8 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
   let channel = 0;
   const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: FrameBuildResult['receipts'] = [], summaries: FrameBuildResult['metrics']['frames'] = {};
   const refinements = options.prepared.refinements.map(patch => ({ ...patch,
-    clearance: prepareTerrainClearance(mask, patch.mask), pack: undefined as ReturnType<typeof createSamplePackBuilder> | undefined,
+    clearance: prepareTerrainClearance(mask, patch.mask),
+    pack: undefined as ReturnType<typeof createSamplePackBuilder> | undefined,
     samplesKey: `${options.refinementPrefix ?? `${prefix}/refinements`}/${patch.input.id}/samples.bin`
   }));
   const cells = mask.grid.width * mask.grid.height;
@@ -110,7 +111,11 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
       const fields = deriveFrame(frame, mask, { ...deriveOptions, layers: product.layers, diagnostics });
       const fineFields = refinements.map(patch => {
         if (!fields['usable-lift-msl']) throw new Error('Terrain clearance requires the native MSL field');
-        return patch.clearance.derive(diagnostics!, fields['usable-lift-msl'].flags, patch.terrain, descriptor, deriveOptions.daylightOnly);
+        const clearanceFields = patch.clearance.derive(diagnostics!, fields['usable-lift-msl'].flags, patch.terrain, descriptor, deriveOptions.daylightOnly);
+        return patch.columns.derive(frame, patch.terrain, descriptor, {
+          daylightOnly: deriveOptions.daylightOnly,
+          clearance: { methodId: TERRAIN_CLEARANCE_METHOD.id, validTime: descriptor.validTime, grid: patch.mask.grid, fields: clearanceFields }
+        }).fields;
       });
       summaries[id] = summarizeFields(fields, mask, indices.output, product.layers);
       deriveMs += Date.now() - tDerive;

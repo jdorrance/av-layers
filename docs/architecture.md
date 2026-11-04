@@ -117,9 +117,12 @@ flowchart LR
   prepare --> inputs[Reusable arrays and coverage]
   inputs --> plan[Frozen build-plan inputs]
   plan --> workers[Local load once per shard]
-  native[Native lift ceiling] --> clearance[Terrain clearance]
+  weather[Normalized native columns] --> columns[Terrain columns]
+  workers --> columns
+  weather --> clearance[Terrain-clearance fallback]
   workers --> clearance
-  clearance --> agl[Fine MSL/AGL pack and composited tiles]
+  clearance --> columns
+  columns --> agl[Fine MSL/AGL pack and composited tiles]
 ```
 
 The [polygon configuration](../packages/contracts/config/refinement.json)
@@ -127,12 +130,12 @@ selects bounded 1 km grids. The prepare job freezes coverage and DEM references
 in the build plan and stages their files for workers to verify and load locally.
 
 [`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) derives
-terrain-referenced MSL and AGL from native convective depth, buoyancy, and
-prepared DEMs with `native-lift-terrain-clearance-v2`. Native column
-calculations remain in the source pipeline; see
-[science](science.md#terrain-clearance) for the method. The
-[build budget](../apps/batch/src/capacity.ts) includes every pack, terrain array,
-mapping and raster input.
+terrain-referenced MSL and AGL by reconstructing native columns over prepared
+DEMs. Same-frame terrain clearance supplies unsupported-valley fallback.
+[Method descriptors](../packages/contracts/src/methods.ts) bind each model's
+pressure coordinate and shared parameters; [science](science.md#terrain-columns)
+owns the equations. [Build admission](../apps/batch/src/capacity.ts) includes
+every pack, terrain array, mapping and raster input.
 
 ## Serving and clients
 

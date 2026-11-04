@@ -1,5 +1,5 @@
 import z from 'zod';
-import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, TERRAIN_CLEARANCE_METHOD, methodDescriptorSchema, methodIdSchema } from './methods.js';
+import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, methodDescriptorSchema, methodIdSchema } from './methods.js';
 import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
 import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
 import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
@@ -53,14 +53,15 @@ export function createProductDescriptors(product: ProductDefinition): z.infer<ty
 export function createRefinementDescriptors(product: ProductDefinition, bounds: GeographicBounds): z.infer<typeof descriptorSchema> {
   const base = createProductDescriptors(product);
   const msl = base.layers['usable-lift-msl'], agl = base.layers['usable-lift-agl'];
-  if (!msl || !agl) throw new Error('Terrain clearance requires native MSL and AGL layers');
+  if (!msl || !agl) throw new Error('Terrain refinement requires native MSL and AGL layers');
+  const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
   return descriptorSchema.parse({ ...base, bounds: [...bounds],
-    coverageDescription: 'Polygon-owned terrain clearance inside the model coverage, with interpolation halos excluded.',
+    coverageDescription: 'Polygon-owned terrain-column refinement inside the model coverage, with interpolation halos excluded.',
     layers: {
-      [msl.id]: { ...msl, verticalReference: 'MSL', methodId: TERRAIN_CLEARANCE_METHOD.id },
-      [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: TERRAIN_CLEARANCE_METHOD.id }
+      [msl.id]: { ...msl, verticalReference: 'MSL', methodId: method.id },
+      [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: method.id }
     },
-    methods: { [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD },
+    methods: { [method.id]: method },
     palettes: base.palettes.filter(palette => palette.id === agl.palette)
   });
 }
