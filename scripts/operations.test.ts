@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,6 +62,18 @@ it('checks API destinations and account identity before invoking Cloudflare', ()
   expect(() => validateCiEnvironment({ ...base, CLOUDFLARE_ACCOUNT_ID: 'short' }, config)).toThrow('ACCOUNT_ID');
   for (const API_BASE_URL of ['http://api.example', 'https://user:pass@api.example', 'https://api.example/path', 'https://api.example?token=x', 'https://wrong-worker.account.workers.dev']) expect(() => validateCiEnvironment({ ...base, API_BASE_URL }, config)).toThrow('API_BASE_URL');
   expect(() => validateCiEnvironment({ ...base, API_BASE_URL: 'https://windy-av-api-staging.account.workers.dev' }, config)).not.toThrow();
+});
+
+it('allows 10,000 sample requests per second in every Wrangler environment', () => {
+  const wrangler = JSON.parse(readFileSync(new URL('../apps/api/wrangler.json', import.meta.url), 'utf8'));
+  for (const environment of [wrangler, wrangler.env.staging, wrangler.env.production]) {
+    expect(environment.ratelimits).toEqual([{
+      name: 'SAMPLE_RATE_LIMITER',
+      namespace_id: expect.stringMatching(/^\d+$/),
+      simple: { limit: 100000, period: 10 }
+    }]);
+  }
+  expect(new Set([wrangler, wrangler.env.staging, wrangler.env.production].map(environment => environment.ratelimits[0].namespace_id)).size).toBe(3);
 });
 
 it('reads the named BUCKET binding rather than the first binding', () => {

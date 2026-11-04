@@ -13,8 +13,8 @@
       "name": "SAMPLE_RATE_LIMITER",
       "namespace_id": "78190301",
       "simple": {
-        "limit": 30,
-        "period": 60
+        "limit": 100000,
+        "period": 10
       }
     }
   ],
@@ -32,8 +32,8 @@
           "name": "SAMPLE_RATE_LIMITER",
           "namespace_id": "78190302",
           "simple": {
-            "limit": 30,
-            "period": 60
+            "limit": 100000,
+            "period": 10
           }
         }
       ],
@@ -60,8 +60,8 @@
           "name": "SAMPLE_RATE_LIMITER",
           "namespace_id": "78190303",
           "simple": {
-            "limit": 30,
-            "period": 60
+            "limit": 100000,
+            "period": 10
           }
         }
       ],
