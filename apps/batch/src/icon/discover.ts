@@ -1,4 +1,5 @@
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   ICON_EU_BASE_URL,
   ICON_EU_CYCLE_HOURS_UTC,
@@ -11,6 +12,8 @@ import {
 import { iconRegularFieldUrl, validateIconCycle } from './fields.js';
 
 const PROBE_CONCURRENCY = 4;
+const PROBE_ATTEMPTS = 3;
+const DISCOVERY_TIMEOUT_MS = ICON_EU_DISCOVERY_CANDIDATES * DEFAULT_PROBE_TIMEOUT_MS;
 
 export interface IconDiscoveryResult {
   readonly schemaVersion: 1;
@@ -74,6 +77,32 @@ export function iconRunSentinelUrls(
   ];
 }
 
+function probeFailure(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code = cause && typeof cause === 'object' && 'code' in cause ? ` (${String(cause.code)})` : '';
+  return `${error instanceof Error ? error.message : String(error)}${code}`.slice(0, 256);
+}
+
+async function probeSentinel(url: string, fetchFn: typeof fetch, signal: AbortSignal): Promise<string | undefined> {
+  let failure = '';
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt++) {
+    signal.throwIfAborted();
+    try {
+      const response = await fetchFn(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS)]) });
+      try {
+        if (response.ok) return;
+        failure = `HTTP ${response.status}`;
+        if (response.status !== 408 && response.status !== 429 && response.status < 500) return failure;
+      } finally { await response.body?.cancel(); }
+    } catch (error) {
+      signal.throwIfAborted();
+      failure = probeFailure(error);
+    }
+    if (attempt + 1 < PROBE_ATTEMPTS) await delay(250 * (attempt + 1), undefined, { signal });
+  }
+  return `${failure} after ${PROBE_ATTEMPTS} attempts`;
+}
+
 export async function discoverIconEuRun(
   options: {
     readonly now?: Date;
@@ -87,31 +116,39 @@ export async function discoverIconEuRun(
   const fetchFn = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl ?? ICON_EU_BASE_URL;
   const candidates = candidateIconCycles(options.now);
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(new Error('ICON-EU discovery deadline exceeded')), DISCOVERY_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, deadline.signal]) : deadline.signal;
+  const failures: string[] = [];
 
-  for (const cycle of candidates) {
-    options.signal?.throwIfAborted();
-    const sentinelUrls = iconRunSentinelUrls(cycle, { baseUrl });
-    let complete = true;
-    for (let offset = 0; offset < sentinelUrls.length; offset += PROBE_CONCURRENCY) {
+  try {
+    for (const cycle of candidates) {
       options.signal?.throwIfAborted();
-      const probes = await Promise.allSettled(sentinelUrls.slice(offset, offset + PROBE_CONCURRENCY).map(url => {
-        const timeout = AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS);
-        const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-        return fetchFn(url, { method: 'HEAD', signal });
-      }));
-      options.signal?.throwIfAborted();
-      if (!probes.every(probe => probe.status === 'fulfilled' && probe.value.ok)) { complete = false; break; }
+      if (deadline.signal.aborted) break;
+      const sentinelUrls = iconRunSentinelUrls(cycle, { baseUrl });
+      let complete = true;
+      for (let offset = 0; offset < sentinelUrls.length; offset += PROBE_CONCURRENCY) {
+        options.signal?.throwIfAborted();
+        const urls = sentinelUrls.slice(offset, offset + PROBE_CONCURRENCY);
+        const probes = await Promise.allSettled(urls.map(url => probeSentinel(url, fetchFn, signal)));
+        options.signal?.throwIfAborted();
+        const failed = probes.flatMap((probe, index) => {
+          const reason = probe.status === 'rejected' ? probeFailure(probe.reason) : probe.value;
+          return reason ? [`${urls[index]}: ${reason}`] : [];
+        });
+        if (failed.length || deadline.signal.aborted) { failures.push(`${cycle}: ${failed.join(', ') || 'discovery deadline exceeded'}`); complete = false; break; }
+      }
+      if (complete) {
+        return {
+          schemaVersion: 1,
+          model: 'icon-eu',
+          cycle,
+          forecastHours: ICON_EU_FORECAST_HOURS,
+          sentinelUrls
+        };
+      }
     }
-    if (complete) {
-      return {
-        schemaVersion: 1,
-        model: 'icon-eu',
-        cycle,
-        forecastHours: ICON_EU_FORECAST_HOURS,
-        sentinelUrls
-      };
-    }
-  }
 
-  throw new Error('No complete DWD ICON-EU regular-lat-lon main run found across candidate cycles');
+    throw new Error(`No complete DWD ICON-EU regular-lat-lon main run found across candidate cycles${deadline.signal.aborted ? '; discovery deadline exceeded' : ''}: ${failures.join('; ')}`);
+  } finally { clearTimeout(timer); }
 }

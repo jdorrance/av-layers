@@ -68,6 +68,9 @@ describe('bounded per-frame raster workers', () => {
       frames: 1, nativeLayers: product.layers.includes('precip-rate') ? 1 : 0, fineLayers: 2, terrainBytes: 0, maxLevels: 1, retainedGeometryFields: 0,
       columns: { byteLength: 0, workspaceBufferBytes: 0, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
     expect(capacity.rasterSharedInputBytes).toBe(expectedBytes);
+    expect(capacity.rasterWorkers).toBe(rasterWorkerCount());
+    expect(capacity.violations).toEqual([]);
+    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
     expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? expectedBytes : 0);
     expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
     await expect(createRasterPool(fine, fields, { workers: 1, geometryCacheBytes: 0, maxPending: 1 })).rejects.toThrow('shared input byte budget');
