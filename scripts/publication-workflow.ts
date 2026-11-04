@@ -125,7 +125,7 @@ export async function prepareForecastTerrain(store?: ObjectStorage): Promise<voi
     const plan = wholeDomainPlan(product);
     if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
     const fine = await loadBundledFineCoverage(product, plan);
-    const ref = await ensureWholeDomainTerrain({ ...wholeDomain, grid: plan.fine,
+    const ref = await ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
       coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal });
     console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
   }, store);

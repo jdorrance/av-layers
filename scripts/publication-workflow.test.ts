@@ -106,7 +106,7 @@ it.each(MODEL_IDS)('prepares reusable %s terrain before any forecast cycle is se
   const log = vi.spyOn(console, 'log').mockImplementation(() => {});
   await prepareForecastTerrain();
   expect(fake.fineCoverage).toHaveBeenCalledWith(getProduct(model), expect.objectContaining({ k: getProduct(model)!.terrainSubdivisionFactor }));
-  expect(fake.terrain).toHaveBeenCalledWith({ catalogRef, storage: {}, grid: expect.any(Object), coverage: { fixture: true }, coverageDescriptor: Uint8Array.of(1), signal: expect.any(AbortSignal) });
+  expect(fake.terrain).toHaveBeenCalledWith({ catalogRef, storage: {}, sourceCacheDir: `.cache/terrain-source/${model}`, grid: expect.any(Object), coverage: { fixture: true }, coverageDescriptor: Uint8Array.of(1), signal: expect.any(AbortSignal) });
   expect(log).toHaveBeenCalledWith(expect.stringContaining('terrain-ready'));
   for (const call of [fake.discover, fake.pointer, fake.plan, fake.publish]) expect(call).not.toHaveBeenCalled();
 });

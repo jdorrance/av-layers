@@ -49,6 +49,19 @@ validate their identities and load them before weather acquisition. Local
 forecast builds prepare a missing cache on first use.
 [Regional evaluation](../refinement/README.md) retains polygon-grid preparation.
 
+Prepare a configured model locally and upload its verified arrays to R2:
+
+```sh
+pnpm terrain prepare-model --model icon-eu --catalog-ref output/terrain-catalog-ref.json \
+  --source-cache-dir .cache/terrain-source/icon-eu --out output/terrain-icon-eu.json
+```
+
+Use `--model gfs` for GFS. Preparation retains up to 2 GiB of verified source
+files per model and fetches up to four files concurrently. Each completed
+65,536-cell window writes a verified checkpoint to R2. Retrying the command or
+failed workflow resumes those windows. Completed arrays and their manifest
+retain the existing terrain identity.
+
 [Operations](../../../../docs/operations.md#terrain-data) configures the hosted
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
 covers local builds with `--terrain-catalog-ref PATH`.

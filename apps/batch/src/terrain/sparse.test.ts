@@ -6,15 +6,23 @@ import { prepareSparseTerrain, type SparseTerrainProgress } from './sparse.js';
 import { verifyTerrainCatalogInventory } from './source.js';
 import { terrainCatalogFixture, TerrainTestStorage } from './test-fixtures.js';
 
-const hooks = vi.hoisted(() => ({ sourceBlocks: undefined as (() => void) | undefined, sampleBatch: undefined as (() => void) | undefined, closed: vi.fn() }));
+const hooks = vi.hoisted(() => ({
+  sourceBlocks: undefined as ((latitude: number, longitude: number) => string | void) | undefined,
+  sampleBatch: undefined as ((points: readonly { latitude: number; longitude: number }[]) => Array<{ elevationM: number; source: 'dem' | 'ocean' } | null> | void) | undefined,
+  closed: vi.fn()
+}));
 vi.mock('./source.js', async importOriginal => ({ ...await importOriginal<typeof import('./source.js')>(), verifyTerrainCatalogInventory: vi.fn(async () => {}) }));
 vi.mock('./reader.js', async importOriginal => ({
   ...await importOriginal<typeof import('./reader.js')>(),
   createTerrainReader: vi.fn(async () => {
     const stats: TerrainReadStats = { requests: 0, bytesRead: 0, readBytesBound: 0, decodedPixels: 0, outputPixels: 0, cacheHits: 0 };
     return {
-      sourceBlocks: () => { hooks.sourceBlocks?.(); return ''; },
-      sampleBatch: async (points: readonly unknown[]) => { hooks.sampleBatch?.(); stats.outputPixels += points.length; return points.map(() => ({ elevationM: 0, source: 'ocean' as const })); },
+      sourceBlocks: (latitude: number, longitude: number) => hooks.sourceBlocks?.(latitude, longitude) ?? '',
+      sampleBatch: async (points: readonly { latitude: number; longitude: number }[]) => {
+        const samples = hooks.sampleBatch?.(points);
+        stats.outputPixels += points.length;
+        return samples ?? points.map(() => ({ elevationM: 0, source: 'ocean' as const }));
+      },
       stats: () => ({ ...stats }), close: hooks.closed
     };
   })
@@ -23,8 +31,8 @@ vi.mock('./reader.js', async importOriginal => ({
 beforeEach(() => { vi.clearAllMocks(); hooks.sourceBlocks = undefined; hooks.sampleBatch = undefined; });
 afterEach(() => { vi.restoreAllMocks(); });
 
-function fixture(width = 3, height = 2) {
-  const grid = { kind: 'regular-latlon' as const, width, height, earthRadiusM: 6371229, lon0: 0, lat0: 0.75, dx: 1 / width, dy: -1 / height, wrapLongitude: false };
+function fixture(width = 3, height = 2, dy = -1 / height) {
+  const grid = { kind: 'regular-latlon' as const, width, height, earthRadiusM: 6371229, lon0: 0, lat0: 0.75, dx: 1 / width, dy, wrapLongitude: false };
   const cells = width * height, output = new Uint8Array(Math.ceil(cells / 8)).fill(255);
   if (cells % 8) output[output.length - 1] = (1 << (cells % 8)) - 1;
   const gridHash = sha256(canonicalGridJson(grid));
@@ -97,5 +105,112 @@ describe('sparse terrain cache admission and progress', () => {
     } })).rejects.toBe(reason);
     expect(hooks.closed).toHaveBeenCalledTimes(phase === 'planning' ? 1 : 2);
     expect(input.storage.objects.size).toBe(0);
+  });
+});
+
+describe('sparse terrain window checkpoints', () => {
+  const checkpointKeys = (storage: TerrainTestStorage) => [...storage.objects.keys()].filter(key => /^terrain\/checkpoints\/[a-f0-9]{64}\/w\d+\.bin$/.test(key)).sort();
+  const preparedObjects = (storage: TerrainTestStorage) => [...storage.objects].filter(([key]) => key.startsWith('terrain/prepared/')).sort(([a], [b]) => a.localeCompare(b));
+  const samples = (points: readonly { latitude: number; longitude: number }[]) => points.map(point =>
+    Math.round(point.longitude * 1024) % 23 === 0 ? null : { elevationM: point.latitude * 123.456789 + point.longitude * 31.234567, source: 'dem' as const });
+
+  it('resumes after a later source timeout and preserves the uninterrupted prepared bytes', async () => {
+    const baseline = fixture(1024, 130);
+    hooks.sampleBatch = samples;
+    const expected = await prepareSparseTerrain(baseline);
+    expect(checkpointKeys(baseline.storage)).toHaveLength(0);
+    const input = fixture(1024, 130), timeout = Object.assign(new Error('R2 source read timed out'), { name: 'TimeoutError' });
+    hooks.sampleBatch = points => {
+      if (checkpointKeys(input.storage).length) throw timeout;
+      return samples(points);
+    };
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true })).rejects.toBe(timeout);
+    expect(checkpointKeys(input.storage)).toHaveLength(1);
+    expect(preparedObjects(input.storage)).toHaveLength(0);
+    const completed = input.storage.objects.get(checkpointKeys(input.storage)[0])!.slice();
+    let sampled = 0;
+    hooks.sampleBatch = points => { sampled += points.length; return samples(points); };
+    expect(await prepareSparseTerrain({ ...input, checkpoints: true })).toEqual(expected);
+    expect(sampled).toBe(1024 * 130 - 65_536);
+    expect(checkpointKeys(input.storage)).toHaveLength(3);
+    expect(input.storage.objects.get(checkpointKeys(input.storage)[0])).toEqual(completed);
+    expect(preparedObjects(input.storage)).toEqual(preparedObjects(baseline.storage));
+  });
+
+  it('retains a completed checkpoint when cancellation follows its immutable write', async () => {
+    const input = fixture(1024, 128), controller = new AbortController(), reason = new Error('cancel after checkpoint');
+    const put = input.storage.put.bind(input.storage);
+    vi.spyOn(input.storage, 'put').mockImplementation(async (key, bytes, condition) => {
+      await put(key, bytes, condition);
+      if (key.endsWith('/w0.bin')) controller.abort(reason);
+    });
+    hooks.sampleBatch = samples;
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true, signal: controller.signal })).rejects.toBe(reason);
+    expect(checkpointKeys(input.storage)).toHaveLength(1);
+    expect(preparedObjects(input.storage)).toHaveLength(0);
+    let sampled = 0;
+    hooks.sampleBatch = points => { sampled += points.length; return samples(points); };
+    await prepareSparseTerrain({ ...input, checkpoints: true });
+    expect(sampled).toBe(65_536);
+  });
+
+  it('keeps canonical window offsets when the grid contains unmappable cells', async () => {
+    const baseline = fixture(1024, 130, -2);
+    hooks.sampleBatch = samples;
+    const expected = await prepareSparseTerrain(baseline);
+    const input = fixture(1024, 130, -2), controller = new AbortController(), reason = new Error('first mixed window complete');
+    const put = input.storage.put.bind(input.storage);
+    vi.spyOn(input.storage, 'put').mockImplementation(async (key, bytes, condition) => {
+      await put(key, bytes, condition);
+      if (key.endsWith('/w0.bin')) controller.abort(reason);
+    });
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true, signal: controller.signal })).rejects.toBe(reason);
+    expect(checkpointKeys(input.storage)).toHaveLength(1);
+    const sampled = vi.fn(samples);
+    hooks.sampleBatch = sampled;
+    expect(await prepareSparseTerrain({ ...input, checkpoints: true })).toEqual(expected);
+    expect(sampled).not.toHaveBeenCalled();
+    expect(checkpointKeys(input.storage)).toHaveLength(3);
+    expect(preparedObjects(input.storage)).toEqual(preparedObjects(baseline.storage));
+  });
+
+  it('rejects a corrupt checkpoint before sampling or publishing prepared objects', async () => {
+    const input = fixture(1024, 128), timeout = new Error('stop after first window');
+    hooks.sampleBatch = points => {
+      if (checkpointKeys(input.storage).length) throw timeout;
+      return samples(points);
+    };
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true })).rejects.toBe(timeout);
+    const key = checkpointKeys(input.storage)[0], bytes = input.storage.objects.get(key)!;
+    bytes[bytes.length - 1] ^= 1;
+    const sampled = vi.fn(samples);
+    hooks.sampleBatch = sampled;
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true })).rejects.toThrow(/checkpoint|digest|integrity/i);
+    expect(sampled).not.toHaveBeenCalled();
+    expect(preparedObjects(input.storage)).toHaveLength(0);
+  });
+
+  it('prefetches distinct cold-window assets and releases them after completion or failure', async () => {
+    const input = fixture(1024, 128), timeout = new Error('second window failed'), tile = input.catalog.tiles[0];
+    hooks.sourceBlocks = () => `${tile.id}/0/0|${tile.id}/1/0`;
+    let pinned = false;
+    const release = vi.fn(() => { pinned = false; });
+    const prefetchSources = vi.fn(async (_keys: readonly string[], _signal?: AbortSignal) => { pinned = true; return release; });
+    hooks.sampleBatch = points => {
+      expect(pinned).toBe(true);
+      if (checkpointKeys(input.storage).length) throw timeout;
+      return samples(points);
+    };
+    await expect(prepareSparseTerrain({ ...input, checkpoints: true, prefetchSources })).rejects.toBe(timeout);
+    expect(prefetchSources).toHaveBeenCalledTimes(2);
+    for (const call of prefetchSources.mock.calls) expect(call[0]).toEqual([tile.asset.key]);
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(pinned).toBe(false);
+    prefetchSources.mockClear(); release.mockClear();
+    hooks.sampleBatch = points => { expect(pinned).toBe(true); return samples(points); };
+    await prepareSparseTerrain({ ...input, checkpoints: true, prefetchSources });
+    expect(prefetchSources).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(pinned).toBe(false);
   });
 });
