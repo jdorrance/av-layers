@@ -144,7 +144,8 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
       const shardBytes = surface.samples.storedCells * surface.samples.channelCount * CELL_BYTES;
       if (!Number.isSafeInteger(shardBytes) || !Number.isSafeInteger(surface.samples.storedCells) || !Number.isSafeInteger(surface.samples.channelCount)) failures.push('unsafe v5 sample size');
       for (const shard of surface.samples.shards) {
-        const bytes = shard.storedCells * surface.samples.channelCount * CELL_BYTES;
+        const channels = 'frameCount' in shard ? shard.frameCount * surface.layers.length : surface.samples.channelCount;
+        const bytes = shard.storedCells * channels * CELL_BYTES;
         if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(shard.bytes) || shard.bytes <= 0 || bytes !== shard.bytes) { failures.push('invalid v5 shard size'); continue; }
         samplePackBytes = Math.max(samplePackBytes, shard.bytes);
         emittedSampleBytes += shard.bytes;

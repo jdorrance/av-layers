@@ -85,7 +85,9 @@ interface ColumnTraversal {
   readonly donorIndices: Uint32Array;
   readonly donorCount: number;
   readonly coverage?: SparseCoverage;
-  createCursor(): (position: number) => { index: number; outputIndex: number; count: number; offset: number };
+  createCursor(): (position: number) => { index: number; outputIndex: number; count: number; offset: number; group?: number } | undefined;
+  readonly initializeOutput?: boolean;
+  readonly outsideCount?: number;
 }
 
 export interface PreparedPackedTerrainColumns {
@@ -95,12 +97,13 @@ export interface PreparedPackedTerrainColumns {
   readonly outputBufferBytes: number;
   derive(frame: NormalizedFrame, terrain: { elevationM: Float32Array; valid: Uint8Array },
     time: { intervalStart: string; validTime: string }, options?: { daylightOnly?: boolean; probeIndices?: readonly number[];
-      nativeClearance?: TerrainColumnNativeClearance }): TerrainColumnDerivation & {
+      nativeClearance?: TerrainColumnNativeClearance; output?: { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField } }): TerrainColumnDerivation & {
         fields: { 'usable-lift-msl': GridField & { coverage: SparseCoverage }; 'usable-lift-agl': GridField & { coverage: SparseCoverage } }
       };
   deriveAsync(frame: NormalizedFrame, terrain: { elevationM: Float32Array; valid: Uint8Array },
     time: { intervalStart: string; validTime: string }, options: { daylightOnly?: boolean; probeIndices?: readonly number[];
-      nativeClearance?: TerrainColumnNativeClearance; signal?: AbortSignal; deadlineAt?: number; yieldControl: () => Promise<void> }):
+      nativeClearance?: TerrainColumnNativeClearance; signal?: AbortSignal; deadlineAt?: number; yieldControl: () => Promise<void>;
+      output?: { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField } }):
     Promise<ReturnType<PreparedPackedTerrainColumns['derive']>>;
 }
 
@@ -216,7 +219,7 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
 }
 
 export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: SparseCoverage, sourceActiveIndices: Uint32Array,
-  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string }): PreparedPackedTerrainColumns {
+  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string; partition?: { index: number; count: number } }): PreparedPackedTerrainColumns {
   const expected = planWholeDomainGrid(plan.native, plan.k);
   if (!sameGrid(expected.fine, plan.fine)) throw new RangeError('Invalid whole-domain terrain column grid');
   const source = expected.native, target = expected.fine;
@@ -240,9 +243,11 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
     throw new RangeError('Invalid terrain column options');
   }
   const targetCount = coverage.offsets[coverage.blockIds.length]!;
+  const partition = options.partition;
+  if (partition && (!Number.isSafeInteger(partition.index) || !Number.isSafeInteger(partition.count) || partition.count < 1 || partition.index < 0 || partition.index >= partition.count)) throw new RangeError('Invalid terrain column partition');
   const byteLength = sourceActiveIndices.length * 4 + (target.width + target.height) * 12 +
     (source.width + source.height) * 8 + Math.ceil(source.width * source.height / 8) + 64;
-  const workspaceBufferBytes = sourceActiveIndices.length * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
+  const workspaceBufferBytes = (partition ? Math.min(4, sourceActiveIndices.length) : sourceActiveIndices.length) * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
   const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
   const outputBufferBytes = targetCount * 10;
   const admittedBytes = byteLength + workspaceBufferBytes + workspaceObjectBudgetBytes + outputBufferBytes;
@@ -291,17 +296,21 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
     }
   }
   const slots = new Uint32Array(4), weights = new Float64Array(4), quadSlots = new Uint32Array(4);
+  const localSlots = partition ? new Uint32Array(4) : null, localIndices = partition ? new Uint32Array(4) : activeIndices;
   const traversal: ColumnTraversal = {
-    targetCount, outputCells: targetCount, slots, weights, compactSlots: null, donorIndices: activeIndices,
-    donorCount: activeIndices.length, coverage,
+    targetCount, outputCells: targetCount, slots, weights, compactSlots: localSlots, donorIndices: localIndices,
+    donorCount: partition ? Math.min(4, activeIndices.length) : activeIndices.length, coverage,
+    initializeOutput: !partition,
+    outsideCount: !partition || partition.index === 0 ? target.width * target.height - targetCount : 0,
     createCursor() {
-      const cell = { index: 0, outputIndex: 0, count: 0, offset: 0 };
+      const cell = { index: 0, outputIndex: 0, count: 0, offset: 0, group: -1 };
       function* cells() {
         for (let byte = 0; byte < quads.length; byte++) {
           let bits = quads[byte]!;
           while (bits) {
             const bit = 31 - Math.clz32(bits & -bits), quad = byte * 8 + bit;
             bits &= bits - 1;
+            if (partition && (quad < Math.floor(source.width * source.height * partition.index / partition.count) || quad >= Math.floor(source.width * source.height * (partition.index + 1) / partition.count))) continue;
             const x0 = quad % source.width, y0 = Math.floor(quad / source.width);
             for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
               const x = x0 + dx, y = y0 + dy, position = dy * 2 + dx;
@@ -311,6 +320,17 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
               while (lo < hi) { const mid = (lo + hi) >>> 1; if (activeIndices[mid]! < global) lo = mid + 1; else hi = mid; }
               quadSlots[position] = activeIndices[lo] === global ? lo : 0xffffffff;
             }
+            if (localSlots) {
+              let next = 0;
+              for (let position = 0; position < 4; position++) {
+                const compact = quadSlots[position]!;
+                if (compact === 0xffffffff) continue;
+                let slot = 0;
+                while (slot < next && localSlots[slot] !== compact) slot++;
+                if (slot === next) { localSlots[next] = compact; localIndices[next] = activeIndices[compact]!; next++; }
+                quadSlots[position] = slot;
+              }
+            }
             for (let subset = 3; subset >= 0; subset--) {
               for (let yp = yHeads[y0 * 2 + (subset >> 1)]!; yp; yp = yNext[yp - 1]!) {
                 const y = yp - 1, fy = yCoordinates[y]! - y0;
@@ -318,7 +338,7 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
                   const x = xp - 1, packed = sparseCoverageLookup(coverage, x, y);
                   if (!packed) continue;
                   const fx = xCoordinates[x]! - x0;
-                  cell.index = y * target.width + x; cell.outputIndex = packed.offset; cell.count = 0;
+                  cell.index = y * target.width + x; cell.outputIndex = packed.offset; cell.count = 0; cell.group = quad;
                   for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
                     if ((dx && fx === 0) || (dy && fy === 0)) continue;
                     const weight = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
@@ -333,7 +353,7 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
             }
           }
         }
-        if (hasInvalid) for (let block = 0; block < coverage.blockIds.length; block++) {
+        if (hasInvalid && (!partition || partition.index === 0)) for (let block = 0; block < coverage.blockIds.length; block++) {
           const id = coverage.blockIds[block]!;
           let offset = coverage.offsets[block]!;
           for (let bit = 0; bit < 256; bit++) {
@@ -342,7 +362,7 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
             const x = (id % columns) * 16 + bit % 16, y = Math.floor(id / columns) * 16 + Math.floor(bit / 16);
             const outputIndex = offset++;
             if (Number.isFinite(xCoordinates[x]!) && Number.isFinite(yCoordinates[y]!)) continue;
-            cell.index = y * target.width + x; cell.outputIndex = outputIndex; cell.count = 0;
+            cell.index = y * target.width + x; cell.outputIndex = outputIndex; cell.count = 0; cell.group = -1;
             yield cell;
           }
         }
@@ -350,23 +370,28 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
       const iterator = cells();
       return () => {
         const next = iterator.next();
-        if (next.done) throw new RangeError('Packed terrain column coverage changed');
+        if (next.done) return undefined;
         return next.value;
       };
     }
   };
   const validate = traversal.createCursor();
-  for (let i = 0; i < targetCount; i++) validate(i);
+  let partitionCount = 0;
+  while (validate(partitionCount)) partitionCount++;
+  if (!partition && partitionCount !== targetCount) throw new RangeError('Packed terrain column coverage changed');
+  Object.assign(traversal, { targetCount: partitionCount });
   const deriver = columnDeriver(source, target, activeIndices, maxLevels, bridgeM, bridgeMode, fallbackMode, traversal);
   let busy = false;
   return { byteLength, workspaceBufferBytes, workspaceObjectBudgetBytes, outputBufferBytes,
     derive: (frame, terrain, time, deriveOptions) => {
       if (deriveOptions && 'clearance' in deriveOptions) throw new RangeError('Packed terrain columns do not accept dense clearance');
+      if (partition && !deriveOptions?.output) throw new RangeError('Partitioned terrain columns require output');
       if (busy) throw new Error('Packed terrain column derivation is already running');
       return deriver.derive(frame, terrain, time, deriveOptions) as ReturnType<PreparedPackedTerrainColumns['derive']>;
     },
     deriveAsync: async (frame, terrain, time, deriveOptions) => {
       if (deriveOptions && 'clearance' in deriveOptions) throw new RangeError('Packed terrain columns do not accept dense clearance');
+      if (partition && !deriveOptions.output) throw new RangeError('Partitioned terrain columns require output');
       if (busy) throw new Error('Packed terrain column derivation is already running');
       busy = true;
       try {
@@ -379,8 +404,10 @@ function columnDeriver(source: Grid, target: Grid, activeIndices: Uint32Array, m
   bridgeMode: 'neutral' | 'lowest-layer', fallbackMode: 'unsupported' | 'none', traversal: ColumnTraversal) {
   const { targetCount, outputCells, slots, weights, compactSlots, donorIndices, donorCount } = traversal;
   const sourceCells = source.width * source.height, targetCells = target.width * target.height;
+  let workspace: ReconstructedProfileWorkspace | undefined;
+  let donorState: Uint8Array | undefined, donorSpecificHumidity: Float64Array | undefined, donorRelativeHumidity: Float64Array | undefined;
   function* run(frame: Parameters<PreparedTerrainColumns['derive']>[0], terrain: Parameters<PreparedTerrainColumns['derive']>[1],
-    time: Parameters<PreparedTerrainColumns['derive']>[2], options: NonNullable<Parameters<PreparedTerrainColumns['derive']>[3]> = {}):
+    time: Parameters<PreparedTerrainColumns['derive']>[2], options: NonNullable<Parameters<PreparedTerrainColumns['derive']>[3]> & { output?: { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField } } = {}):
     Generator<void, TerrainColumnDerivation> {
       if (!sameGrid(frame.grid, source) || frame.activeIndices.length !== activeIndices.length ||
           frame.activeIndices.some((value, i) => value !== activeIndices[i])) throw new Error('Normalized input grid or active-index identity mismatch');
@@ -420,20 +447,32 @@ function columnDeriver(source: Grid, target: Grid, activeIndices: Uint32Array, m
       const timestamps = options.daylightOnly === false ? [] : buildIntervalDaylightTimestampsMs(start, end);
       const actualDaylightBufferBytes = daylightBytes(target, timestamps.length);
       const daylight = createMaskDaylightTester(target, timestamps);
-      const msl: GridField = { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells).fill(STATUS_OUTSIDE) };
-      const agl: GridField = { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells).fill(STATUS_OUTSIDE) };
-      const metrics: TerrainColumnMetrics = { outside: targetCells - targetCount, dark: 0, invalidDem: 0, missingDonor: 0,
+      const msl: GridField = options.output?.['usable-lift-msl'] ?? { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells) };
+      const agl: GridField = options.output?.['usable-lift-agl'] ?? { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells) };
+      for (const field of [msl, agl]) {
+        if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array) || field.values.length !== outputCells || field.flags.length !== outputCells) throw new RangeError('Invalid terrain column output');
+        if (traversal.initializeOutput !== false) field.flags.fill(STATUS_OUTSIDE);
+      }
+      const metrics: TerrainColumnMetrics = { outside: traversal.outsideCount ?? targetCells - targetCount, dark: 0, invalidDem: 0, missingDonor: 0,
         invalidDonorInput: 0, unsupportedHeight: 0, belowGroundBridgeExceeded: 0, invalidSurfaceState: 0,
         solverRejected: 0, valid: 0, noLift: 0, belowGroundBridge: 0, profileTop: 0,
         filledBelowGroundBridgeExceeded: 0, belowGroundBridgeExceededObserved: 0, column: 0, clearance: 0 };
-      const workspace = new ReconstructedProfileWorkspace(donorCount, maxLevels);
-      const donorState = new Uint8Array(donorCount), scratch = createNativeColumnScratch(maxLevels);
-      const donorSpecificHumidity = new Float64Array(donorCount), donorRelativeHumidity = new Float64Array(donorCount);
+      workspace ??= new ReconstructedProfileWorkspace(donorCount, maxLevels);
+      workspace.reset();
+      donorState ??= new Uint8Array(donorCount); donorState.fill(0);
+      donorSpecificHumidity ??= new Float64Array(donorCount); donorRelativeHumidity ??= new Float64Array(donorCount);
+      const scratch = createNativeColumnScratch(maxLevels);
       const clearanceResult = { msl: 0, agl: 0, flags: 0 };
       const cursor = traversal.createCursor();
+      let group = -1;
       for (let t = 0; t < targetCount; t++) {
         if (t > 0 && t % 1024 === 0) yield;
-        const cell = cursor(t), index = cell.index, outputIndex = cell.outputIndex, h = terrain.elevationM[outputIndex]!, count = cell.count, offset = cell.offset;
+        const cell = cursor(t);
+        if (!cell) throw new RangeError('Packed terrain column coverage changed');
+        if (traversal.compactSlots && traversal.coverage && cell.group !== group) {
+          group = cell.group!; workspace.reset(); donorState.fill(0);
+        }
+        const index = cell.index, outputIndex = cell.outputIndex, h = terrain.elevationM[outputIndex]!, count = cell.count, offset = cell.offset;
         msl.values[outputIndex] = NaN; agl.values[outputIndex] = NaN;
         msl.flags[outputIndex] = STATUS_UNAVAILABLE; agl.flags[outputIndex] = STATUS_UNAVAILABLE;
         const probe: TerrainColumnProbe | undefined = probeSet.has(index) ? {

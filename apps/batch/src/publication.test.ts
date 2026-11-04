@@ -22,6 +22,8 @@ vi.mock('./validate.js', async importOriginal => {
 import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
 import { localPath, sha256 } from './validate.js';
 import { fixturePatch } from '../../../tests/forecast-fixture.js';
+import { buildForecast } from './build.js';
+import { fixtureProvider, mask as fixtureMask, product as fixtureProduct } from '../parallel-fixtures.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date; metadata?: Record<string, string> }>();
@@ -94,6 +96,48 @@ async function addPatch(root: string, manifest: Manifest) {
 }
 
 describe('immutable publication', () => {
+  it('validates a built v3 payload, publishes it, samples single and all frames, and rolls it back', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'av-publish-chain-')); temp.push(root);
+    const product = { ...fixtureProduct, modelId: 'gfs', frameHours: [12, 24] };
+    const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString(), store = new MemoryStore();
+    const actual = await vi.importActual<typeof import('./validate.js')>('./validate.js');
+    const mocked = vi.mocked((await import('./validate.js')).validateBuild);
+    mocked.mockImplementationOnce(actual.validateBuild);
+    const path = await buildForecast({ out: root, cycle, product, mask: fixtureMask, provider: fixtureProvider().provider,
+      onValidated: async validated => publish(store, root, validated.manifest, { authority, validated }) });
+    const manifest = JSON.parse(await readFile(path, 'utf8')) as Manifest;
+    expect(manifest.version).toBe(3);
+    const bucket = { async get(key: string, options?: { range?: { offset: number; length: number } }) {
+      const object = store.objects.get(key);
+      if (!object) return null;
+      const bytes = options?.range ? object.bytes.slice(options.range.offset, options.range.offset + options.range.length) : object.bytes;
+      return { size: object.bytes.length, ...(options?.range ? { range: options.range } : {}), customMetadata: object.metadata,
+        body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) };
+    } };
+    const apiPath = '../../api/src/index.js';
+    const { createApp } = await import(apiPath) as { createApp(options: unknown): { fetch(request: Request, env: unknown, context: unknown): Promise<Response> } };
+    const app = createApp({ products: { gfs: product } });
+    const sample = async (frame: string) => {
+      const response = await app.fetch(new Request(`https://api.test/v1/models/gfs/runs/${manifest.buildId}/sample?lat=71&lon=0&frame=${frame}`, { headers: { 'cf-connecting-ip': '192.0.2.1' } }),
+        { BUCKET: bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<{ buildId: string; frames: Array<{ id: string; layers: Record<string, unknown> }> }>;
+    };
+    const single = await sample(manifest.frames[1].id), all = await sample('all');
+    expect(single.buildId).toBe(manifest.buildId);
+    expect(single.frames).toEqual([all.frames[1]]);
+    expect(all.frames.map(frame => frame.id)).toEqual(manifest.frames.map(frame => frame.id));
+    expect(Object.keys(all.frames[0].layers).sort()).toEqual([...manifest.layers].sort());
+    const key = 'catalog/gfs/latest.json', previous = (await store.get(key))!;
+    const pointer = JSON.parse(Buffer.from(previous.bytes).toString()) as ModelPointer;
+    pointer.retained.push({ ...pointer.retained[0], buildId: 'replacement', manifestKey: 'replacement' });
+    pointer.latestBuildId = 'replacement';
+    await store.put(key, Buffer.from(JSON.stringify(pointer)), { ifMatch: previous.etag });
+    await rollback(store, 'gfs', manifest.buildId, authority);
+    expect(JSON.parse(Buffer.from((await store.get(key))!.bytes).toString()).latestBuildId).toBe(manifest.buildId);
+    expect((await sample('all')).frames).toEqual(all.frames);
+  }, 60_000);
+
   it('pins the fully computed digest as required immutable metadata', async () => {
     const store = new MemoryStore(), bytes = Uint8Array.of(1, 2, 3);
     await putImmutable(store, 'shard', bytes, 'application/octet-stream', undefined, true);
@@ -461,6 +505,43 @@ describe('immutable publication', () => {
     expect(await store.get('catalog/gfs/latest.json')).toBeNull();
     await expect(publish(store, root, manifest, { authority, now: () => now + 7 * 3600000 })).rejects.toThrow('lifetime');
     expect(buildIdTime(id)).toBe(now - 60000);
+  });
+  it('rejects an idempotent publish after another retained build becomes latest', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    await publish(store, root, manifest, { authority, now: () => now });
+    const key = 'catalog/gfs/latest.json', object = await store.get(key);
+    const pointer = JSON.parse(Buffer.from(object!.bytes).toString()) as ModelPointer;
+    pointer.retained.push({ ...pointer.retained[0], buildId: 'replacement', manifestKey: 'replacement' });
+    pointer.latestBuildId = 'replacement';
+    await store.put(key, Buffer.from(JSON.stringify(pointer)), { ifMatch: object!.etag });
+    await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow('no longer latest');
+    expect(JSON.parse(Buffer.from((await store.get(key))!.bytes).toString()).latestBuildId).toBe('replacement');
+  });
+  it('rejects idempotent recovery when latest changes during validation', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    await publish(store, root, manifest, { authority, now: () => now });
+    const key = 'catalog/gfs/latest.json';
+    let replaced = false;
+    store.headOverride = (_objectKey, result) => {
+      if (!replaced) {
+        replaced = true;
+        const object = store.objects.get(key)!;
+        const pointer = JSON.parse(Buffer.from(object.bytes).toString()) as ModelPointer;
+        pointer.retained.push({ ...pointer.retained[0], buildId: 'replacement', manifestKey: 'replacement' });
+        pointer.latestBuildId = 'replacement';
+        object.bytes = Buffer.from(JSON.stringify(pointer));
+      }
+      return result;
+    };
+    await expect(publish(store, root, manifest, { authority, now: () => now, committedOnly: true })).rejects.toThrow('changed during validation');
+  });
+  it('recovers an expired-deadline committed build without permitting a new CAS', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    await publish(store, root, manifest, { authority, now: () => now });
+    const options = { authority, now: () => now + 51 * 60_000, deadlineAt: new Date(Date.parse(manifest.createdAt) + 50 * 60_000).toISOString(), committedOnly: true };
+    await expect(publish(store, root, manifest, options)).resolves.toBeUndefined();
+    store.objects.delete('catalog/gfs/latest.json');
+    await expect(publish(store, root, manifest, options)).rejects.toThrow('Recovery requires');
   });
   it('does not admit a losing create-only CAS after a competing first publication', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();

@@ -30,6 +30,20 @@ export interface WholeDomainFrozenPlan {
   terrain: SparseTerrainRef;
 }
 
+function sharedFineCoverage(fine: WholeDomainCoverage): WholeDomainCoverage {
+  const bytes = (source: Uint8Array) => {
+    if (source.buffer instanceof SharedArrayBuffer) return source;
+    const result = new Uint8Array(new SharedArrayBuffer(source.byteLength)); result.set(source); return result;
+  };
+  const words = (source: Uint32Array) => {
+    if (source.buffer instanceof SharedArrayBuffer) return source;
+    const result = new Uint32Array(new SharedArrayBuffer(source.byteLength)); result.set(source); return result;
+  };
+  const coverage = fine.mask.coverage;
+  return { ...fine, mask: { ...fine.mask, tiles: bytes(fine.mask.tiles), coverage: { ...coverage,
+    blockIds: words(coverage.blockIds), offsets: words(coverage.offsets), output: bytes(coverage.output), halo: bytes(coverage.halo) } } };
+}
+
 export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: LayerId[]; fine: LayerId[] } {
   return { native: product.layers.filter(layer => layer === 'precip-rate'), fine: product.layers.filter(layer => layer !== 'precip-rate') };
 }
@@ -55,8 +69,9 @@ export async function prepareWholeDomain(options: {
   const { required, active } = acquisitionSupport(plan, fine.mask.coverage, options.mask);
   const layers = wholeDomainSurfaceLayers(options.product);
   if (!layers.fine.length) throw new Error('Whole-domain product requires fine lift layers');
-  const columns = preparePackedTerrainColumns(plan, fine.mask.coverage, active, options.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
-  return { plan, nativeMask: options.mask, native, fine, terrain, requiredDonors: required, acquisitionActive: active,
+  const sharedFine = sharedFineCoverage(fine);
+  const columns = preparePackedTerrainColumns(plan, sharedFine.mask.coverage, active, options.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
+  return { plan, nativeMask: options.mask, native, fine: sharedFine, terrain, requiredDonors: required, acquisitionActive: active,
     columns, nativeSurfaceLayers: layers.native, fineSurfaceLayers: layers.fine };
 }
 
@@ -77,8 +92,9 @@ export async function loadFrozenWholeDomain(options: {
   const nativeMask = denseMask(native.mask);
   const { required, active } = acquisitionSupport(plan, fine.mask.coverage, nativeMask);
   const layers = wholeDomainSurfaceLayers(product);
-  const columns = preparePackedTerrainColumns(plan, fine.mask.coverage, active, options.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
-  return { plan, nativeMask, native, fine, terrain: frozen.terrain, requiredDonors: required, acquisitionActive: active,
+  const sharedFine = sharedFineCoverage(fine);
+  const columns = preparePackedTerrainColumns(plan, sharedFine.mask.coverage, active, options.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
+  return { plan, nativeMask, native, fine: sharedFine, terrain: frozen.terrain, requiredDonors: required, acquisitionActive: active,
     columns, nativeSurfaceLayers: layers.native, fineSurfaceLayers: layers.fine };
 }
 

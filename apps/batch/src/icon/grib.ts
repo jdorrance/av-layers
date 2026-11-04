@@ -173,7 +173,8 @@ function parseSection4Metadata(
  */
 export function decodeIconGribField(
   inputBytes: Uint8Array,
-  activeIndices: Uint32Array
+  activeIndices: Uint32Array,
+  target?: { values: Float32Array; missing: Uint8Array }
 ): DecodedIconGribField {
   const gribBytes = isBzip2Compressed(inputBytes) ? decompressBzip2(inputBytes, MAX_ICON_OBJECT_BYTES) : inputBytes;
   if (gribBytes.byteLength > MAX_ICON_OBJECT_BYTES) throw new Error('ICON expanded object byte length out of bounds');
@@ -321,8 +322,9 @@ export function decodeIconGribField(
     fullValues = decodeFieldValues(field, { missingValue: NaN }).values;
   }
 
-  const outValues = new Float32Array(activeIndices.length);
-  const outMissing = new Uint8Array(activeIndices.length);
+  const outValues = target?.values ?? new Float32Array(activeIndices.length);
+  const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
+  if (outValues.length !== activeIndices.length || outMissing.length !== activeIndices.length) throw new RangeError('ICON target length mismatch');
 
   for (let i = 0; i < activeIndices.length; i += 1) {
     const targetIdx = activeIndices[i]!;

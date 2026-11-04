@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { CoverageError } from './coverage';
-import { countCacheHit, reserveAllocation, boundResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, waitFor, type WaitContext } from './resources';
+import { countCacheHit, reserveAllocation, boundCachedResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, waitFor, type WaitContext } from './resources';
 
 const IMMUTABLE_TTL = 86400;
 
@@ -107,7 +107,7 @@ export async function cached(request: Request, expiresAt: string, ctx: WaitConte
   const key = new Request(cacheUrl, { method: 'GET' });
   const hit = cache ? await waitFor(cache.match(key), request.signal, value => { void value?.body?.cancel().catch(() => {}); }) : undefined;
   if (ctx.metrics) ctx.metrics.responseCache = hit ? 'hit' : 'miss';
-  if (hit) { countCacheHit(ctx); return finish(request, boundResponse(hit), expiresAt); }
+  if (hit) { countCacheHit(ctx); return finish(request, boundCachedResponse(hit), expiresAt); }
   let result = await build();
   try { ensureLive(expiresAt); }
   catch (error) { void result.body?.cancel().catch(() => {}); throw error; }

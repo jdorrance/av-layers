@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { canonicalGridJson, sampleResponseV5Schema } from '@av/contracts';
-import { coverageMemory } from '../src/coverage';
+import { prepareShardedSamplePackLayout } from '@av/forecast';
+import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createV5Fixture, finePoint } from './v5-fixture';
 
@@ -10,6 +11,43 @@ type V5Body = {
   surfaces: { id: string; kind: 'native' | 'fine'; layers: string[]; coverage: { id: string; maxZoom: number } }[];
   frames: { id: string; layers: Record<string, { value: number | null; status: string; support: number; interpolated: boolean; surfaceId: string }> }[];
 };
+
+function groupedFixture() {
+  const fixture = createV5Fixture(), { manifest, objects, shardSha, buildId } = fixture;
+  const counts = [1, 2, 1, 1, 1];
+  manifest.frames = Array.from({ length: 6 }, (_, i) => ({
+    id: `h${String(i + 1).padStart(3, '0')}`, validTime: new Date(NOW + (i + 1) * 3_600_000).toISOString(),
+    intervalStart: new Date(NOW + i * 3_600_000).toISOString(), intervalEnd: new Date(NOW + (i + 1) * 3_600_000).toISOString()
+  }));
+  const prefix = `builds/gfs/${buildId}`;
+  manifest.artifacts = manifest.frames.flatMap(frame => manifest.layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })));
+  for (const source of [fixture.fine, fixture.native]) {
+    const surface = manifest.surfaces.find(item => item.id === source.surface.id)!;
+    const blockIds = Uint32Array.from({ length: source.layout.blockCount }, (_, i) => source.layout.block(i).slot);
+    const shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+    let firstFrame = 0;
+    for (const [group, frameCount] of counts.entries()) {
+      const channels = frameCount * surface.layers.length;
+      const layout = prepareShardedSamplePackLayout(surface.grid, blockIds, channels);
+      const data = new Uint8Array(layout.byteLength);
+      for (let block = 0; block < layout.blockCount; block++) {
+        const target = layout.block(block), original = source.layout.block(block);
+        for (let cell = 0; cell < target.width * target.height; cell++) for (let channel = 0; channel < channels; channel++) {
+          const originalChannel = ((firstFrame + Math.floor(channel / surface.layers.length)) % 2) * surface.layers.length + channel % surface.layers.length;
+          const from = original.byteOffset + (cell * source.layout.channelCount + originalChannel) * 5;
+          data.set(source.bytes.subarray(from, from + 5), target.byteOffset + (cell * channels + channel) * 5);
+        }
+      }
+      const key = `${prefix}/surfaces/${surface.id}/samples/g${group}-b0.bin`, sha256 = createHash('sha256').update(data).digest('hex');
+      objects.set(key, data); shardSha.set(key, sha256);
+      shards.push({ group, firstFrame, frameCount, blockShard: 0, firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: data.length, key, sha256 });
+      firstFrame += frameCount;
+    }
+    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', channelCount: manifest.frames.length * surface.layers.length, shards };
+  }
+  objects.set(`${prefix}/manifest.json`, new TextEncoder().encode(JSON.stringify(manifest)));
+  return fixture;
+}
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -23,7 +61,7 @@ describe('API v5 metadata', () => {
     let bodyReads = 0;
     fixture.get.mockImplementation(async (key, options) => {
       const object = await original(key, options);
-      if (!object || !options?.range) return object;
+      if (!object || !options?.range || !object.range) return object;
       const reader = object.body.getReader();
       return { ...object, body: new ReadableStream<Uint8Array>({ async pull(controller) {
         bodyReads++; started(); await pending;
@@ -183,7 +221,7 @@ describe('API v5 metadata', () => {
     const latest = await request('/v1/models/gfs/latest?expand=manifest');
     expect(latest.status).toBe(200);
     expect(await latest.json()).toMatchObject({ manifest: { version: 5, surfaces: [{ id: 'fine', kind: 'fine', layers: ['usable-lift-msl', 'usable-lift-agl'] }, { id: 'native', kind: 'native', layers: ['precip-rate'] }] } });
-    const tilejson = await request('/v1/models/gfs/runs/v5-fixture-1/layers/precip-rate/h001/tilejson.json');
+    const tilejson = await request(`/v1/models/gfs/runs/${manifest.buildId}/layers/precip-rate/h001/tilejson.json`);
     expect(tilejson.status).toBe(200);
     expect(await tilejson.json()).toMatchObject({ maxzoom: 1, bounds: manifest.descriptors.bounds });
     const catalog = await request('/v1/catalog');
@@ -222,6 +260,43 @@ describe('API v5 metadata', () => {
 });
 
 describe('API v5 sampling', () => {
+  it('charges new group layouts added to a shared cached and leased mask', async () => {
+    const fixture = groupedFixture(), legacy = await resolveSparseCoverage(fixture.bucket, fixture.fine.surface);
+    const before = coverageMemory(fixture.bucket);
+    const grouped = await resolveSparseCoverage(fixture.bucket, fixture.manifest.surfaces[0]);
+    const after = coverageMemory(fixture.bucket);
+    expect(grouped.coverage.mask).toBe(legacy.coverage.mask);
+    expect(grouped.coverage.layouts.size).toBe(2);
+    expect(after.leasedBytes).toBeGreaterThan(before.leasedBytes);
+    expect(after.cachedBytes).toBeGreaterThan(before.cachedBytes);
+    expect(inFlightAllocationBytes()).toBeGreaterThanOrEqual(after.leasedBytes);
+    legacy.release(); grouped.release();
+    expect(coverageMemory(fixture.bucket).leasedBytes).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
+  it('plans varying frame groups locally for single and all frames with four reads per request', async () => {
+    const fixture = groupedFixture(), original = fixture.get.getMockImplementation()!;
+    let active = 0, peak = 0, started!: () => void, release!: () => void;
+    const four = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    fixture.get.mockImplementation(async (key, options) => {
+      if (options?.range) { active++; peak = Math.max(peak, active); if (active === 4) started(); await gate; active--; }
+      return original(key, options);
+    });
+    const all = fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=all');
+    await four; expect(peak).toBe(4); release();
+    const response = await all;
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await response.json() as V5Body;
+    expect(body.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 8, 7, 8, 7, 8]);
+    expect(body.frames.map(frame => frame.layers['usable-lift-msl'].value)).toEqual([310.25, 320.25, 310.25, 320.25, 310.25, 320.25]);
+    expect(peak).toBe(4);
+    const single = await fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=h003&layers=precip-rate');
+    expect(single.status).toBe(200);
+    expect((await single.json() as V5Body).frames[0].layers['precip-rate'].value).toBe(7);
+    expect(fixture.get.mock.calls.filter(([key, options]) => options?.range && key.includes('/samples/g'))).toHaveLength(11);
+  });
+
   it('serves all frames from both surfaces with Float32 values, support and ownership', async () => {
     const { sample } = createV5Fixture();
     const response = await sample(commonPoint.lat, commonPoint.lon, '&frame=all');
@@ -301,6 +376,21 @@ describe('API v5 sampling', () => {
 });
 
 describe('API v5 corruption and lifecycle', () => {
+  it.each(['missing', 'wrong', 'size', 'range'] as const)('rejects %s grouped shard metadata', async variant => {
+    const fixture = groupedFixture(), original = fixture.get.getMockImplementation()!;
+    fixture.get.mockImplementation(async (key, options) => {
+      const object = await original(key, options);
+      if (!object || !options?.range || !object.range) return object;
+      if (variant === 'missing') return { ...object, customMetadata: undefined };
+      if (variant === 'wrong') return { ...object, customMetadata: { sha256: 'f'.repeat(64) } };
+      if (variant === 'size') return { ...object, size: object.size + 1 };
+      return { ...object, range: { ...options.range, length: options.range.length + 1 } };
+    });
+    const response = await fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=h003&layers=precip-rate');
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ title: 'publication-incomplete' });
+  });
+
   it('rejects missing and corrupt sparse coverage', async () => {
     const missing = createV5Fixture();
     missing.objects.delete(`coverage/${missing.fine.surface.coverage.hash}/manifest.json`);

@@ -8,7 +8,7 @@ import { deriveFrame, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
 import { describeSparseCoverage } from './coverage.js';
-import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, type BuildPlan } from './parallel.js';
+import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
 import { admitWholeDomain } from './whole-domain/capacity.js';
@@ -90,6 +90,28 @@ class PublicationStore implements ObjectStorage {
   }
   async list(prefix: string) { return [...this.objects].filter(([key]) => key.startsWith(prefix)).map(([key, item]) => ({ key, size: item.bytes.length, lastModified: new Date(0) })); }
   async delete(keys: string[]) { for (const key of keys) this.objects.delete(key); }
+}
+
+async function verifySampleServing(store: PublicationStore, manifest: Awaited<ReturnType<typeof readV5>>, configured: ProductDefinition) {
+  const bucket = { async get(key: string, options?: { range?: { offset: number; length: number } }) {
+    const object = store.objects.get(key);
+    if (!object) return null;
+    const range = options?.range, bytes = range ? object.bytes.slice(range.offset, range.offset + range.length) : object.bytes;
+    return { key, size: object.bytes.length, httpEtag: object.etag, customMetadata: object.metadata, range,
+      body: new Response(Uint8Array.from(bytes).buffer).body, arrayBuffer: async () => Uint8Array.from(bytes).buffer };
+  } };
+  const entry = { buildId: manifest.buildId, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt };
+  if (!store.objects.has('catalog/gfs/latest.json')) store.objects.set('catalog/gfs/latest.json', { bytes: Buffer.from(JSON.stringify({ version: 1, model: 'gfs', latestBuildId: manifest.buildId, retained: [entry] })), etag: 'pointer' });
+  const apiPath = '../../api/src/index.js';
+  const { createApp } = await import(apiPath) as { createApp(options: { products: Record<string, ProductDefinition> }): { fetch(request: Request, env: unknown, context: unknown): Promise<Response> } };
+  const app = createApp({ products: { gfs: configured } });
+  for (const frame of [manifest.frames[0].id, 'all']) {
+    const url = new URL(`https://example.com/v1/models/gfs/runs/${manifest.buildId}/sample?lat=71&lon=10&frame=${frame}&layers=usable-lift-msl`);
+    const response = await app.fetch(new Request(url, { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' }, { waitUntil() {}, passThroughOnException() {} });
+    expect(response.status, await response.clone().text()).toBe(200);
+    const body = await response.json() as { frames: unknown[] };
+    expect(body.frames.length).toBe(frame === 'all' ? manifest.frames.length : 1);
+  }
 }
 
 const product: ProductDefinition = {
@@ -268,6 +290,7 @@ describe('whole-domain v5 production', () => {
     const proof = sealed;
     expect(() => assertValidatedBuild(out, proof.manifest, { ...proof })).toThrow('missing or changed');
     const manifest = await readV5(path), pointerKey = 'catalog/gfs/latest.json', pointer = store.objects.get(pointerKey)!.bytes.slice();
+    await verifySampleServing(store, manifest, publishedProduct);
     await rollback(store, 'gfs', manifest.buildId, authority);
     const fine = surface(manifest, 'fine'), terrain = fine.terrain!;
     const terrainManifest = JSON.parse(Buffer.from(store.objects.get(terrain.key)!.bytes).toString()) as { files: { elevationM: Array<{ key: string }> } };
@@ -441,8 +464,18 @@ describe('whole-domain v5 production', () => {
     expect(parallel.artifacts.map(artifact => [artifact.layer, artifact.frame])).toEqual(serial.artifacts.map(artifact => [artifact.layer, artifact.frame]));
     for (const id of ['native', 'fine'] as const) {
       const a = await surfaceBytes(serialRoot, serial, id), b = await surfaceBytes(parallelRoot, parallel, id);
-      expect(b).toEqual(a);
       const bytes = a[0]!;
+      const layers = surface(serial, id).layers.length, channels = surface(serial, id).samples.channelCount;
+      expect(b).toHaveLength(plan.groups.length);
+      for (let cell = 0; cell < surface(serial, id).samples.storedCells; cell++) {
+        let frame = 0;
+        for (let group = 0; group < b.length; group++) {
+          const groupChannels = plan.groups[group].length * layers;
+          expect(b[group].subarray(cell * groupChannels * 5, (cell + 1) * groupChannels * 5))
+            .toEqual(bytes.subarray((cell * channels + frame * layers) * 5, (cell * channels + frame * layers + groupChannels) * 5));
+          frame += plan.groups[group].length;
+        }
+      }
       expect(bytes.byteLength).toBe(surface(serial, id).samples.storedCells * surface(serial, id).samples.channelCount * 5);
       let validFlags = 0, positive = 0;
       for (let index = 0; index < bytes.length; index += 5) { if ((bytes[index + 4]! & ~(STATUS_MASK | SUPPORT_MASK)) === 0) validFlags++; if (bytes.readFloatLE(index) > 0) positive++; }
@@ -457,6 +490,44 @@ describe('whole-domain v5 production', () => {
     }
     expect(coverageIndices(nativeMask).output.length).toBe(cells - 1);
     expect(plan.wholeDomain).toBeDefined();
+  }, 60_000);
+
+  it.each([true, false])('finalizes frame groups and serves samples with receipt-only mode %s', async receiptsOnly => {
+    const setup = await fixture(), out = await root('wd-remote'), store = new PublicationStore(), source = fixtureProvider();
+    const configured = { ...product, modelId: 'gfs', frameHours: [12, 24] };
+    const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
+    const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
+    expect(plan.dependencies?.length).toBeGreaterThan(6);
+    for (let shard = 0; shard < plan.groups.length; shard++) {
+      await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+      const receipt = JSON.parse(await readFile(join(out, 'shards', String(shard), 'receipt.json'), 'utf8')) as { objects: Array<{ key: string }> };
+      expect(receipt.objects.length).toBeGreaterThan(0);
+      if (receiptsOnly) for (const object of receipt.objects) await rm(join(out, object.key));
+    }
+    if (receiptsOnly) await rm(join(out, 'terrain'), { recursive: true, force: true });
+    const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store: receiptsOnly ? store : undefined });
+    const manifest = await readV5(path);
+    expect(manifest.surfaces.every(surface => surface.samples.format === 'frame-group-block-shards-v1')).toBe(true);
+    const manifestBytes = await readFile(path);
+    store.objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, { bytes: manifestBytes, etag: 'manifest' });
+    await verifySampleServing(store, manifest, configured);
+    const inputs = { product: configured, mask: nativeMask, provider: source.provider };
+    const getObject = store.get.bind(store);
+    const get = vi.spyOn(store, 'get').mockImplementation(async (key, range) => {
+      if (key.startsWith('builds/')) throw new Error(`Receipt verification read forecast payload ${key}`);
+      return getObject(key, range);
+    });
+    try { await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0); }
+    finally { get.mockRestore(); }
+    const forged = structuredClone(manifest);
+    forged.artifacts[0].tilesSha256 = '0'.repeat(64);
+    await expect(verifyBuildReceipts(out, forged, store, undefined, inputs)).rejects.toThrow('Manifest forecast receipt mismatch');
+    const shard = manifest.surfaces[0].samples.shards[0], object = store.objects.get(shard.key)!;
+    object.metadata = {};
+    await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).rejects.toThrow('Remote object receipt mismatch');
+    await expect(validateBuild(out, manifest, nativeMask, undefined, configured, {
+      store, objects: (await Promise.all(plan.groups.map(async (_, index) => JSON.parse(await readFile(join(out, 'shards', String(index), 'receipt.json'), 'utf8'))))).flatMap(receipt => receipt.objects)
+    })).rejects.toThrow('Remote object receipt mismatch');
   }, 60_000);
 
 
@@ -631,7 +702,71 @@ describe('whole-domain v5 production', () => {
     expect(await readFile(join(directory, '0.bin'), 'utf8')).toBe('existing');
     expect(await readdir(directory)).toEqual(['0.bin']);
     const fineDirectory = join(out, 'builds', product.modelId, common.buildId, 'surfaces', 'fine', 'samples');
-    expect(await readdir(fineDirectory)).toEqual([]);
+    expect(await readdir(fineDirectory).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return []; })).toEqual([]);
+  }, 60_000);
+
+  it('aborts the provider and preserves the original fine derivation error', async () => {
+    const setup = await fixture(), out = await root('wd-derive-failure'), source = fixtureProvider();
+    const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
+    const failure = new Error('fine derivation failed');
+    const columns = { ...prepared.columns, deriveAsync: async () => { throw failure; } };
+    await expect(buildWholeDomainFrames({ out, cycle: CYCLE, product, mask: nativeMask, provider: source.provider,
+      prepared: { ...prepared, columns }, buildId: 'derive-error', createdAt: new Date().toISOString(), journalPrefix: 'derive-error-journal', hours: [2] })).rejects.toBe(failure);
+    const signal = source.open.mock.calls[0]![0].signal!;
+    expect(signal.aborted).toBe(true);
+    expect(signal.reason).toBe(failure);
+    expect(source.close).toHaveBeenCalledTimes(1);
+  }, 60_000);
+
+  it('aborts and drains a blocked next acquisition before returning a derive failure', async () => {
+    const setup = await fixture(), out = await root('wd-prefetch-failure'), source = fixtureProvider();
+    const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
+    const failure = new Error('fine derivation failed'), events: string[] = [];
+    let release!: () => void;
+    const drained = new Promise<void>(resolve => { release = resolve; });
+    const originalOpen = source.provider.open;
+    const provider: ForecastProvider = { ...source.provider, async open(options) {
+      const session = await originalOpen(options);
+      return { ...session, async acquire(hour, target) {
+        if (hour === 2) return session.acquire(hour, target);
+        events.push('prefetch');
+        return await new Promise<never>((_resolve, reject) => options.signal!.addEventListener('abort', () => {
+          events.push('abort'); void drained.then(() => { events.push('drained'); reject(options.signal!.reason); });
+        }, { once: true }));
+      }, async close() { events.push('close'); await session.close(); } };
+    } };
+    const columns = { ...prepared.columns, deriveAsync: async () => { expect(events).toEqual(['prefetch']); throw failure; } };
+    let settled = false;
+    const pending = buildWholeDomainFrames({ out, cycle: CYCLE, product, mask: nativeMask, provider, prepared: { ...prepared, columns },
+      buildId: 'prefetch-error', createdAt: new Date().toISOString(), journalPrefix: 'prefetch-error-journal', hours: [2, 4] })
+      .catch(error => { settled = true; return error; });
+    await vi.waitFor(() => expect(events).toContain('abort'));
+    expect(settled).toBe(false); release();
+    expect(await pending).toBe(failure);
+    expect(events).toContain('drained'); expect(events).toContain('close');
+  }, 60_000);
+
+  it('aborts current derivation when the next acquisition fails', async () => {
+    const setup = await fixture(), out = await root('wd-prefetch-error'), source = fixtureProvider();
+    const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
+    const failure = new Error('next frame unavailable'), controller = new AbortController();
+    const originalOpen = source.provider.open;
+    const provider: ForecastProvider = { ...source.provider, async open(options) {
+      const session = await originalOpen(options);
+      return { ...session, async acquire(hour, target) { if (hour !== 2) throw failure; return session.acquire(hour, target); } };
+    } };
+    const columns = { ...prepared.columns, deriveAsync: vi.fn<typeof prepared.columns.deriveAsync>(async (_frame, _terrain, _time, options) => {
+      const signal = options.signal!;
+      signal.throwIfAborted();
+      return new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }) };
+    const timer = setTimeout(() => controller.abort(new Error('prefetch failure did not cancel derivation')), 1_000);
+    try {
+      await expect(buildWholeDomainFrames({ out, cycle: CYCLE, product, mask: nativeMask, provider, prepared: { ...prepared, columns },
+        buildId: 'prefetch-error', createdAt: new Date().toISOString(), journalPrefix: 'prefetch-error-journal', hours: [2, 4], signal: controller.signal })).rejects.toBe(failure);
+      expect(columns.deriveAsync).toHaveBeenCalledTimes(1);
+      expect(source.close).toHaveBeenCalledTimes(1);
+    } finally { clearTimeout(timer); }
   }, 60_000);
 
   it.each(['abort', 'deadline'] as const)('cleans up after %s during an asynchronous fine chunk', async mode => {

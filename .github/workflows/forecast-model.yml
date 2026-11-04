@@ -89,6 +89,9 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Admit cycle and plan forecast from cached terrain
         id: plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_CREDENTIAL_ISSUER_TOKEN: ${{ secrets.GH_CREDENTIAL_ISSUER_TOKEN }}
         run: pnpm operations forecast-plan
       - name: Share immutable build plan
         uses: actions/upload-artifact@v4
@@ -97,8 +100,10 @@ jobs:
           name: ${{ steps.plan.outputs.artifact }}
           path: |
             output/plan.json
+            output/shard-credentials.json
+            output/plan-metrics.json
             output/coverage/
-            output/terrain/
+            output/terrain/prepared/*/manifest.json
           if-no-files-found: error
           retention-days: 1
       - name: Upload planning failure
@@ -118,6 +123,9 @@ jobs:
     if: needs.prepare.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -125,6 +133,7 @@ jobs:
         shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
     env:
       SHARD_ID: ${{ matrix.shard.id }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,6 +145,8 @@ jobs:
           name: ${{ needs.prepare.outputs.artifact }}
           path: output
       - name: Build forecast shard
+        env:
+          FORECAST_SHARD_CREDENTIAL_KEY: ${{ inputs.model == 'gfs' && secrets.FORECAST_GFS_SHARD_CREDENTIAL_KEY || secrets.FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY }}
         run: pnpm operations forecast-shard
       - name: Upload completed shard
         uses: actions/upload-artifact@v4
@@ -143,8 +154,15 @@ jobs:
           name: ${{ needs.prepare.outputs.artifact }}-shard-${{ matrix.shard.id }}
           overwrite: true
           path: |
-            output/builds/
             output/shards/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload full shard payload on request
+        uses: actions/upload-artifact@v4
+        if: ${{ inputs['retain-full-artifacts'] }}
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}-payload-${{ matrix.shard.id }}
+          path: output/builds/
           if-no-files-found: error
           retention-days: 1
       - name: Upload shard diagnostics
@@ -176,6 +194,9 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - name: Start artifact download timing
+        id: downloads
+        run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'started=' + Date.now() + '\n')"
       - name: Download build plan
         uses: actions/download-artifact@v4
         if: ${{ !inputs['resume-run-id'] }}
@@ -188,9 +209,18 @@ jobs:
         with:
           pattern: ${{ needs.prepare.outputs.artifact }}-shard-*
           merge-multiple: true
-          path: output
+          path: output/shards
       - name: Publish forecast
+        env:
+          FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT: ${{ steps.downloads.outputs.started }}
         run: pnpm operations forecast
+      - name: Download retained shard payloads
+        uses: actions/download-artifact@v4
+        if: ${{ always() && !inputs['resume-run-id'] && inputs['retain-full-artifacts'] && needs.shard.result == 'success' }}
+        with:
+          pattern: ${{ needs.prepare.outputs.artifact }}-payload-*
+          merge-multiple: true
+          path: output/builds
       - name: Upload build records
         uses: actions/upload-artifact@v4
         if: always()
@@ -209,16 +239,33 @@ jobs:
             output/builds/*/*/failure.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Upload full build artifacts on failure or explicit request
+      - name: Upload resumable build records
         uses: actions/upload-artifact@v4
-        if: ${{ failure() || cancelled() || env.RETAIN_FULL_ARTIFACTS == 'true' }}
+        if: always()
         with:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
           overwrite: true
           path: |
             output/plan.json
+            output/plan-metrics.json
+            output/workflow.json
+            output/shards/*/*.json
+            output/builds/*/*/*.json
+            output/coverage/
+            output/terrain/prepared/*/manifest.json
+            output/failure.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload full build artifacts on request
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && env.RETAIN_FULL_ARTIFACTS == 'true' }}
+        with:
+          name: forecast-full-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            output/plan.json
             output/builds/
             output/coverage/
             output/terrain/
+            output/shards/
           if-no-files-found: warn
           retention-days: 7

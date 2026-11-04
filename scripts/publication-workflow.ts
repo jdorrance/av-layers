@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -27,15 +27,20 @@ export async function downloadForecastArtifact(runId: string, root = 'output'): 
   const { repository } = workflowContext();
   if (!/^[1-9]\d{0,19}$/.test(runId)) throw new Error('Invalid source artifact run ID');
   const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/actions/runs/${runId}`], { timeout: 15_000, maxBuffer: 1024 * 1024 });
-  const revision = forecastArtifactRevision(JSON.parse(stdout), repository, runId);
+  const run = JSON.parse(stdout) as { run_attempt?: unknown };
+  const revision = forecastArtifactRevision(run, repository, runId);
   await promisify(execFile)('gh', ['run', 'download', runId, '--repo', repository, '--name', `forecast-${workflowAuthority().model}-${runId}`, '--dir', root], { timeout: 5 * 60_000, maxBuffer: 1024 * 1024 });
+  const identity = record(parseBoundedJson(await readLocalFile(join(root, 'workflow.json'), 4096)), 'Source workflow identity');
+  const authority = workflowAuthority();
+  if (identity.runId !== runId || identity.attempt !== run.run_attempt || identity.model !== authority.model
+      || identity.environment !== authority.environment || identity.revision !== revision) throw new Error('Resume artifact workflow identity differs from the authorized run attempt');
   return revision;
 }
 
 /** Build and artifact-resume use the same writer, cancellation and durable outcome protocol. */
 export async function publicationWorkflow<T>(work: (run: {
   root: string; signal: AbortSignal; store: ObjectStorage; model: string;
-  commit(manifest: PublishedManifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild): Promise<void>;
+  commit(manifest: PublishedManifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean }): Promise<void>;
 }) => Promise<T>, store?: ObjectStorage): Promise<T> {
   const { revision } = workflowContext();
   const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
@@ -43,41 +48,47 @@ export async function publicationWorkflow<T>(work: (run: {
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
   let publicationPath: string | undefined, committed = false, publicationAttempted = false;
   try {
-    return await work({ root, signal: controller.signal, store: storage, model: authority.model, async commit(manifest, path, resumedFromRun, validated) {
-      controller.signal.throwIfAborted();
+    return await work({ root, signal: controller.signal, store: storage, model: authority.model, async commit(manifest, path, resumedFromRun, validated, options) {
+      if (options?.deadlineAt && Date.now() >= Date.parse(options.deadlineAt)) throw new Error('Forecast publication deadline exceeded');
+      const signal = options?.deadlineAt ? AbortSignal.any([controller.signal, AbortSignal.timeout(Math.max(1, Date.parse(options.deadlineAt) - Date.now()))]) : controller.signal;
+      signal.throwIfAborted();
       const apiUrl = validateApiBaseUrl(process.env.API_BASE_URL);
       const budget = checkPerformance(manifest);
       await writeFile(join(dirname(path), 'performance.json'), JSON.stringify(budget, null, 2));
       if (!budget.passed) throw new Error(`Performance budget failed: ${budget.failures.join('; ')}`);
-      await assertCurrentMain(controller.signal);
+      await assertCurrentMain(signal);
       const started = Date.now(), validationReused = validated !== undefined;
       publicationPath = join(dirname(path), 'publication.json');
       publicationAttempted = true;
-      await publish(storage, root, manifest, { authority, signal: controller.signal, allowSameCycle: process.env.ALLOW_SAME_CYCLE === 'true', validated });
+      await writeFile(publicationPath, JSON.stringify({ version: 1, status: 'publishing', publication: 'unconfirmed', buildId: manifest.buildId, resumedFromRun, startedAt: new Date(started).toISOString() }, null, 2));
+      const timings: { r2UploadWallMs?: number; casCommitWallMs?: number } = {};
+      await publish(storage, root, manifest, { authority, signal, allowSameCycle: process.env.ALLOW_SAME_CYCLE === 'true', validated, ...options, timings });
       committed = true;
-      await writeFile(publicationPath, JSON.stringify({ version: 1, status: 'committed', buildId: manifest.buildId, resumedFromRun, elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024, validationReused }, null, 2));
+      await writeFile(publicationPath, JSON.stringify({ version: 1, status: 'committed', publication: 'committed', buildId: manifest.buildId, resumedFromRun, elapsedMs: Date.now() - started, publicationWallMs: Date.now() - started, ...timings, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024, validationReused }, null, 2));
       console.log(`Published ${manifest.buildId}`);
       // Record commit first; cancellation or maintenance failure must never masquerade as failed publication.
-      if (controller.signal.aborted) {
+      if (signal.aborted) {
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'deferred', publication: 'committed', reason: 'cancelled-after-commit', summary: null, authority }, null, 2));
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
       }
       let summary: CleanupSummary | undefined;
+      const maintenanceStarted = Date.now();
       try {
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'running', publication: 'committed', summary: null, authority }, null, 2));
-        const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, controller.signal);
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', deletedObjects, summary: summary ?? null, authority }, null, 2));
+        const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, signal);
+        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, deletedObjects, summary: summary ?? null, authority }, null, 2));
       } catch (error) {
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', error: String(error), summary: summary ?? null, authority }, null, 2));
+        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, error: String(error), summary: summary ?? null, authority }, null, 2));
         throw new Error(`Publication committed; maintenance failed: ${String(error)}`);
       }
-      controller.signal.throwIfAborted();
       const servingPath = join(dirname(path), 'serving.json');
+      const smokeStarted = Date.now();
       try {
-        await verifyPublishedForecast({ baseUrl: apiUrl.origin, manifest, signal: controller.signal });
-        await writeFile(servingPath, JSON.stringify({ status: 'verified', model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers, apiBaseUrl: apiUrl.origin }, null, 2));
+        signal.throwIfAborted();
+        await verifyPublishedForecast({ baseUrl: apiUrl.origin, manifest, signal });
+        await writeFile(servingPath, JSON.stringify({ status: 'verified', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers, apiBaseUrl: apiUrl.origin }, null, 2));
       } catch (error) {
-        await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2));
+        await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2));
         throw new Error(`Publication committed; serving verification failed: ${String(error)}`);
       }
     } });
@@ -146,9 +157,11 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       ? { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store }
       : undefined;
     const terrain = process.env.TERRAIN_INPUTS ? terrainInputForModel(process.env.TERRAIN_INPUTS, model) : undefined;
-    const options = { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
+    const options = { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, store, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
       ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain: { ...wholeDomain, cacheOnly: true } } : {}) };
-    return createForecastPlan(model, options);
+    const plan = await createForecastPlan(model, options);
+    await writeFile(join(root, 'plan-metrics.json'), JSON.stringify({ planWallMs: Date.now() - Date.parse(plan.createdAt), rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
+    return plan;
   }, store);
 }
 
@@ -157,16 +170,34 @@ async function assertPlannedModel(model: string): Promise<void> {
   if (!raw || typeof raw !== 'object' || !('model' in raw) || raw.model !== model) throw new Error('Forecast plan differs from the workflow model');
 }
 
-/** Shard workers have no publication storage or credentials. */
-export async function runForecastShard(shard: number): Promise<void> {
+export async function runForecastShard(shard: number, store?: ObjectStorage): Promise<void> {
+  const started = Date.now();
   const authority = workflowAuthority();
   const controller = new AbortController();
   const abort = (): void => controller.abort(new Error('Forecast shard interrupted'));
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
   try {
     await assertPlannedModel(authority.model);
-    const { buildForecastShard } = await import('../apps/batch/src/parallel.js');
-    await buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal });
+    const { buildForecastShard, readBuildPlan } = await import('../apps/batch/src/parallel.js');
+    const plan = await readBuildPlan('output/plan.json');
+    const prefix = `builds/${authority.model}/${plan.buildId}/`;
+    const assertReadable = (key: string): void => {
+      if (!key.startsWith(prefix) && !/^coverage\/[a-f0-9]{64}\/(manifest\.json|sparse\.bin|tiles\.bin)$/.test(key)
+          && !/^terrain\/prepared\/[a-f0-9]{64}\/[a-z0-9.-]+$/.test(key)) throw new Error('Shard storage cannot read this key');
+    };
+    const scopedStore: ObjectStorage | undefined = store && {
+      get: (key, ...args) => { assertReadable(key); return store.get(key, ...args); },
+      head: (key, ...args) => { assertReadable(key); return store.head(key, ...args); },
+      put: async (key, bytes, condition, ...args) => {
+        if (!key.startsWith(prefix) || condition.ifNoneMatch !== '*' || condition.ifMatch) throw new Error('Shard writes require an immutable build key');
+        return store.put(key, bytes, condition, ...args);
+      },
+      list: async () => { throw new Error('Shard storage cannot list objects'); },
+      delete: async () => { throw new Error('Shard storage cannot delete objects'); }
+    };
+    const shardSetupWallMs = Date.now() - started;
+    await buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal, store: scopedStore });
+    await writeFile(join('output', 'shards', String(shard), 'workflow-metrics.json'), JSON.stringify({ shardSetupWallMs, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
   } finally {
     process.off('SIGINT', abort); process.off('SIGTERM', abort);
   }
@@ -174,10 +205,11 @@ export async function runForecastShard(shard: number): Promise<void> {
 
 /** Only the complete, validated shard set can enter the existing publication protocol. */
 export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
-  await publicationWorkflow(async ({ root, signal, model, commit }) => {
+  await publicationWorkflow(async ({ root, signal, store, model, commit }) => {
     await assertPlannedModel(model);
-    const { finalizeForecastBuild } = await import('../apps/batch/src/parallel.js');
-    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated) });
+    const { finalizeForecastBuild, readBuildPlan } = await import('../apps/batch/src/parallel.js');
+    const plan = await readBuildPlan(join(root, 'plan.json'));
+    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: plan.deadlineAt, receiptsOnly: Boolean(plan.wholeDomain) }) });
   }, store);
 }
 
@@ -186,7 +218,7 @@ function record(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPlan, root: string, signal?: AbortSignal): Promise<void> {
+export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPlan, root: string, signal?: AbortSignal, receiptsOnly = false): Promise<void> {
   validateArtifactRecordsV5(manifest);
   const frozen = plan.wholeDomain;
   if (!frozen) throw new Error('Resume whole-domain plan lacks frozen inputs');
@@ -221,7 +253,7 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
     if (coverage.width !== current.grid.width || coverage.height !== current.grid.height || coverage.blockIds.length !== current.samples.blockCount) throw new Error('Resume sparse coverage layout mismatch');
     const tiles = await readLocalFile(localPath(root, `${prefix}/tiles.bin`), MAX_COVERAGE_BITSET_BYTES, tilesFile.bytes as number);
     if (sha256(tiles) !== tilesFile.sha256) throw new Error('Resume tile coverage hash mismatch');
-    for (const shard of current.samples.shards) {
+    for (const shard of receiptsOnly ? [] : current.samples.shards) {
       signal?.throwIfAborted();
       const bytes = await readLocalFile(localPath(root, shard.key), shard.bytes, shard.bytes);
       if (sha256(bytes) !== shard.sha256) throw new Error(`Resume sample shard hash mismatch: ${shard.key}`);
@@ -238,7 +270,7 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
 
 /** Revalidate an existing artifact under the same authority, without repeating acquisition or science. */
 export async function resumePublication(sourceRevision: string, store?: ObjectStorage): Promise<void> {
-  await publicationWorkflow(async ({ root, signal, model, commit }) => {
+  await publicationWorkflow(async ({ root, signal, store, model, commit }) => {
     const runId = process.env.RESUME_RUN_ID;
     if (!/^\d+$/.test(runId ?? '')) throw new Error('Invalid resume workflow identity');
     const builds = await readdir(join(root, 'builds', model), { withFileTypes: true });
@@ -266,9 +298,28 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
           || plan.createdAt !== manifest.createdAt || !same(plan.recipe, manifest.recipe)) {
         throw new Error('Resume plan differs from the retained whole-domain manifest');
       }
-      await assertV5ResumeIdentity(manifest, plan, root, signal);
-      signal.throwIfAborted();
-      await commit(manifest, path, runId);
+      const committedOnly = Boolean(plan.deadlineAt && Date.now() >= Date.parse(plan.deadlineAt));
+      if (committedOnly) {
+        const pointer = (await readPointer(store, model, signal)).pointer;
+        const retained = pointer?.retained.find(item => item.buildId === manifest.buildId);
+        if (pointer?.latestBuildId !== manifest.buildId || retained?.manifestKey !== `builds/${model}/${manifest.buildId}/manifest.json` || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Forecast publication deadline exceeded');
+      }
+      const deadlineAt = committedOnly ? new Date(Date.now() + 5 * 60_000).toISOString() : plan.deadlineAt;
+      const deadlineSignal = deadlineAt ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Date.parse(deadlineAt) - Date.now()))]) : signal;
+      const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
+      let receiptsOnly = false;
+      if (grouped) for (const object of forecastObjectsV5(manifest)) {
+        try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
+        if (receiptsOnly) break;
+      }
+      await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
+      if (receiptsOnly) {
+        const { verifyBuildReceipts } = await import('../apps/batch/src/parallel.js');
+        await verifyBuildReceipts(root, manifest, store, deadlineSignal);
+      }
+      deadlineSignal.throwIfAborted();
+      await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
       return;
     }
     let terrain;
@@ -309,7 +360,7 @@ export function forecastArtifactRevision(raw: unknown, repository: string, runId
   const run = object(raw);
   if (!run || !Number.isSafeInteger(run.id) || String(run.id) !== runId || !/^[1-9]\d*$/.test(runId)
       || run.path !== '.github/workflows/forecast.yml' || run.head_branch !== 'main' || typeof run.head_sha !== 'string' || !/^[a-f0-9]{40}$/.test(run.head_sha)
-      || (run.event !== 'schedule' && run.event !== 'workflow_dispatch') || run.status !== 'completed'
+      || (run.event !== 'schedule' && run.event !== 'workflow_dispatch') || run.status !== 'completed' || !Number.isSafeInteger(run.run_attempt) || (run.run_attempt as number) < 1
       || object(run.repository)?.full_name !== repository || object(run.head_repository)?.full_name !== repository) throw new Error('Source run is not a completed authorized main forecast');
   return run.head_sha;
 }

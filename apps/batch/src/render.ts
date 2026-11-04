@@ -43,6 +43,7 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
   const stats = {
     geometryBytes: 0, peakGeometryBytes: 0, geometryHits: 0, geometryMisses: 0,
     prepareMs: 0, rasterMs: 0, encodeWorkMs: 0, sqliteMs: 0, convertMs: 0, verifyMs: 0,
+    mbtilesWriteWallMs: 0, pmtilesConvertWallMs: 0, pmtilesVerifyWallMs: 0, sqliteWorkMs: 0,
     tiles: 0, blankTiles: 0, peakPendingTiles: 0, peakPendingTileBytes: 0,
     rasterWorkers, workerStarts: 0, workerStartupMs: 0, peakSharedInputBytes: 0
   };
@@ -136,7 +137,8 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
         if ('error' in result) throw result.error;
         const tile = tiles[Math.floor(job / targets.length)], started = performance.now();
         inserts[job % targets.length].run(tile.z, tile.x, 2 ** tile.z - 1 - tile.y, result.bytes);
-        stats.sqliteMs += performance.now() - started;
+        const elapsed = performance.now() - started;
+        stats.sqliteMs += elapsed; stats.sqliteWorkMs += elapsed;
       }
       for (const db of databases) db.exec('COMMIT');
     } finally {
@@ -163,17 +165,21 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
       }
       dir = await mkdtemp(join(tmpdir(), 'av-mbtiles-'));
       const paths = targets.map((_, index) => join(dir!, `${index}.mbtiles`));
-      await writeMbtiles(paths, targets);
+      const mbtilesStarted = performance.now();
+      try { await writeMbtiles(paths, targets); }
+      finally { stats.mbtilesWriteWallMs += performance.now() - mbtilesStarted; }
       for (let i = 0; i < targets.length; i++) {
         options.signal?.throwIfAborted();
         const path = targets[i].path;
         await mkdir(dirname(path), { recursive: true });
         let started = performance.now();
         await execFileAsync(binary, ['convert', '--no-deduplication', paths[i], path], { signal: options.signal });
-        stats.convertMs += performance.now() - started;
+        const converted = performance.now() - started;
+        stats.convertMs += converted; stats.pmtilesConvertWallMs += converted;
         started = performance.now();
         await execFileAsync(binary, ['verify', path], { signal: options.signal });
-        stats.verifyMs += performance.now() - started;
+        const verified = performance.now() - started;
+        stats.verifyMs += verified; stats.pmtilesVerifyWallMs += verified;
       }
     } finally {
       try { if (dir) await rm(dir, { recursive: true, force: true }); }

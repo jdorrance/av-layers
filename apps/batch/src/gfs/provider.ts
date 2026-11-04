@@ -5,6 +5,7 @@ export const gfsProvider: ResolvableForecastProvider = {
   id: GFS_PRODUCT.source.configurationId,
   provider: 'NOAA',
   maxLevels: GFS_PRODUCT.capabilities.maxVerticalLevels,
+  directTargets: true,
   async resolveCycle(options) {
     options.signal?.throwIfAborted();
     const { validateCycle } = await import('./fields.js');
@@ -24,7 +25,7 @@ export const gfsProvider: ResolvableForecastProvider = {
       get stats() {
         return { ...session.stats };
       },
-      acquire: hour => session.acquire(hour),
+      acquire: (hour, target) => session.acquire(hour, target),
       close: () => session.close()
     };
   }

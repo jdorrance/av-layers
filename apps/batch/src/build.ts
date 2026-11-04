@@ -7,7 +7,7 @@ import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
 import { WEBP_ENCODER } from './webp.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
-import { estimateCapacity, prepareBuild, type PreparedBuild } from './capacity.js';
+import { BUILD_BUDGETS, estimateCapacity, prepareBuild, type PreparedBuild } from './capacity.js';
 import { failureReason } from './failure.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 
@@ -37,6 +37,9 @@ export async function buildProduct(modelId: string, options: BuildOptions): Prom
 /** Local sequential execution and distributed workers share the same frame implementation. */
 export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
   const stamp = createBuildStamp();
+  const deadlineAt = Date.parse(stamp.createdAt) + BUILD_BUDGETS.elapsedMs;
+  const timeout = AbortSignal.timeout(Math.max(1, deadlineAt - Date.now()));
+  options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout };
   if (options.product.terrainSubdivisionFactor !== undefined) return buildWholeDomainForecast(options, stamp);
   const inputs = options.refinement ? await prepareRefinements({ ...options.refinement, product: options.product, mask: options.mask, out: options.out, signal: options.signal }) : [];
   const refinements = await loadRefinements({ inputs, out: options.out, baseMask: options.mask, signal: options.signal });

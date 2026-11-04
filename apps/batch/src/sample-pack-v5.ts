@@ -23,6 +23,7 @@ export interface ShardedSamplePackTarget {
   readonly model: string;
   readonly buildId: string;
   readonly surfaceId: string;
+  readonly group?: number;
 }
 
 export interface ShardedSamplePackInput {
@@ -36,12 +37,13 @@ function component(value: unknown, name: string): string {
   return value;
 }
 
-export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number): string {
+export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number): string {
   component(model, 'model');
   component(buildId, 'build ID');
   component(surfaceId, 'surface ID');
   if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('Invalid sample shard index');
-  return `builds/${model}/${buildId}/surfaces/${surfaceId}/samples/${index}.bin`;
+  if (group !== undefined && (!Number.isSafeInteger(group) || group < 0)) throw new RangeError('Invalid sample frame group');
+  return `builds/${model}/${buildId}/surfaces/${surfaceId}/samples/${group === undefined ? index : `g${group}-b${index}`}.bin`;
 }
 
 function assertChannels(channelCount: number): void {
@@ -110,7 +112,7 @@ export function createShardedSamplePackWriter(
   assertLayout(layout);
   assertCoverage(layout, coverage);
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index));
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group));
   const finalPaths = finalKeys.map(key => localPath(target.root, key));
   const tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.channels`));
   const finalTempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
@@ -273,6 +275,7 @@ export function createShardedSamplePackWriter(
               cells += block.width * block.height;
             }
             const sectionBytes = shardBytes / layout.channelCount;
+            if (!Number.isSafeInteger(sectionBytes) || sectionBytes % CELL_BYTES !== 0) throw new Error('Invalid sample shard channel alignment');
             const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, WRITE_CHUNK_BYTES));
             for (let channel = 0; channel < layout.channelCount; channel++) {
               check();
@@ -281,6 +284,7 @@ export function createShardedSamplePackWriter(
               while (remaining > 0) {
                 check();
                 const length = Math.min(chunk.length, remaining);
+                if (length % CELL_BYTES !== 0) throw new Error('Invalid sample shard chunk alignment');
                 await readAll(handle, chunk, 0, length, position, check);
                 for (let offset = 0; offset < length; offset += CELL_BYTES) {
                   while (blockIndex + 1 < blocks.length && within === blocks[blockIndex].cells) { blockIndex++; within = 0; }
@@ -361,7 +365,7 @@ export async function mergeShardedSamplePacks(
   options.signal?.throwIfAborted();
 
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index));
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group));
   const finalPaths = finalKeys.map(key => localPath(target.root, key)), tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
   const linked = new Set<string>(), created = new Set<string>(), finalStride = layout.channelCount * CELL_BYTES;
   const shardStates = layout.shards.map(() => ({ handle: undefined as FileHandle | undefined, hash: undefined as ReturnType<typeof createHash> | undefined, bytes: 0 }));

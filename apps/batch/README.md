@@ -54,11 +54,13 @@ The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
 [model workflow](../../.github/workflows/forecast-model.yml) per model.
 `forecast-terrain` prepares or validates each model's reusable terrain cache in
 R2. Planning then resolves the cycle and daylight-filtered hours, loads cached
-terrain, and freezes coverage, terrain and recipe identities in the plan artifact.
-Up to four `forecast-shard` workers load these inputs locally. Each acquired native
-frame supplies its native layers and packed fine lift fields. Assembly writes
-bounded numeric shards and validates the complete build before publication to R2.
-Local forecast builds prepare terrain on the first use and reuse it thereafter.
+terrain, and freezes coverage, terrain and recipe identities in the plan. Up to four
+`forecast-shard` workers stage verified terrain from R2 and upload validated
+archives and frame-group sample shards directly. Each acquired native frame
+supplies its native layers and packed fine lift fields. Assembly verifies the
+complete receipt partition before publication. Workflow artifacts retain the
+plan, coverage and receipts; full payload retention is opt-in.
+Local forecast builds prepare terrain on first use and reuse it thereafter.
 
 ```mermaid
 flowchart TB

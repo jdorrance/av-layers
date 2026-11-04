@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_UNAVAILABLE, SUPPORT_PROFILE_TOP, type CoverageMask } from '@av/contracts';
+import { setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP, type CoverageMask } from '@av/contracts';
 import { prepareGridSampling, preparePointSampling, sampleGrid, type PackedGridField, type SparseSamplingMask } from './sampler.js';
 
 function fixture() {
@@ -44,12 +44,49 @@ describe('packed sampling', () => {
     }
   });
 
+  it('matches dense prepared and scalar sampling exactly across status and support flags', () => {
+    const { grid, mask, sparse, dense, packed } = fixture();
+    dense.flags.fill(0);
+    dense.flags[0 + 20] = STATUS_NO_LIFT | SUPPORT_PROFILE_TOP;
+    dense.flags[19 + 20] = STATUS_UNAVAILABLE | SUPPORT_PBL_CLOSURE;
+    dense.flags[16 + 40] = STATUS_OUTSIDE;
+    dense.flags[17 + 40] = SUPPORT_PARCEL_CROSSING;
+    for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) {
+      const cell = sparseCoverageLookup(packed.coverage, x, y);
+      if (cell) packed.flags[cell.offset] = dense.flags[y * grid.width + x];
+    }
+    const lats = Float64Array.of(2, 2, 2, 1, 2.25, 1.5, 2, 1);
+    const lons = Float64Array.of(-90, -180, 162, 108, 171, 126, 0, -175.5);
+    const a = preparePointSampling(mask, lats, lons).bind(dense, 'usable-lift-msl'), b = preparePointSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl');
+    for (let i = 0; i < lats.length; i++) {
+      const expected = sampleGrid(grid, dense, lats[i], lons[i], 'usable-lift-msl', mask);
+      const actual = { value: null as number | null, status: 3, support: 0, interpolated: false }, baseline = { ...actual };
+      a(i, 0, baseline); b(i, 0, actual);
+      expect(actual).toEqual(baseline);
+      expect(actual).toEqual(expected);
+      expect(sampleGrid(grid, packed, lats[i], lons[i], 'usable-lift-msl', sparse)).toEqual(expected);
+    }
+    const regular = prepareGridSampling(mask, lats, lons).bind(dense, 'usable-lift-msl'), sparseRegular = prepareGridSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl');
+    for (let y = 0; y < lats.length; y++) for (let x = 0; x < lons.length; x++) {
+      const expected = { value: null as number | null, status: 3, support: 0, interpolated: false }, actual = { ...expected };
+      regular(x, y, expected); sparseRegular(x, y, actual);
+      expect(actual).toEqual(expected);
+      expect(sampleGrid(grid, packed, lats[y], lons[x], 'usable-lift-msl', sparse)).toEqual(sampleGrid(grid, dense, lats[y], lons[x], 'usable-lift-msl', mask));
+    }
+  });
+
   it('rejects mismatched packed layouts and inactive positive contributors', () => {
     const { grid, sparse, packed } = fixture();
     expect(() => sampleGrid(grid, { ...packed, flags: new Uint8Array(1) }, 2, -180, 'usable-lift-msl', sparse)).toThrow('Packed field');
     expect(() => sampleGrid(grid, { ...packed, coverage: { ...packed.coverage } }, 2, -180, 'usable-lift-msl', sparse)).toThrow('Packed field');
     const uncovered = { ...packed.coverage, halo: new Uint8Array(packed.coverage.halo.length) };
     const incompatible = { ...packed, coverage: uncovered };
-    expect(() => sampleGrid(grid, incompatible, 2.25, -175.5, 'usable-lift-msl', { ...sparse, coverage: uncovered })).toThrow('outside active coverage');
+    const mask = { ...sparse, coverage: uncovered };
+    expect(() => sampleGrid(grid, incompatible, 2.25, -175.5, 'usable-lift-msl', mask)).toThrow('outside active coverage');
+    const latitudes = Float64Array.of(2.25), longitudes = Float64Array.of(-175.5);
+    for (const prepare of [prepareGridSampling, preparePointSampling]) {
+      const sample = prepare(mask, latitudes, longitudes).bind(incompatible, 'usable-lift-msl');
+      expect(() => sample(0, 0, { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false })).toThrow('outside active coverage');
+    }
   });
 });

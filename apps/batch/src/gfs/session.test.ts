@@ -6,6 +6,8 @@ import { validAt } from './intervals.ts';
 import { compactNoaaSamples, NoaaFieldSampler } from './sampling.ts';
 import { NoaaTransport } from './transport.ts';
 import type { GfsFrameAcquisition } from './types.ts';
+import { createNormalizedFrameTarget } from '../provider.js';
+import { GFS_PRESSURE_LEVELS_HPA } from './constants.ts';
 
 const cycle = '2026-10-30T00:00:00Z';
 afterEach(() => vi.restoreAllMocks());
@@ -36,12 +38,12 @@ function source() {
       interval, grid, identification: {}, productMetadata: { typeOfGeneratingProcess: 2 }, unit: spec.statistic === 'mean' ? 'W/m2' : 'kg/m2',
     } } as unknown as admission.InspectedGfsField;
   });
-  const sample = vi.spyOn(NoaaFieldSampler.prototype, 'sample').mockImplementation(async (inspected, indices, destination) => {
+  const sample = vi.spyOn(NoaaFieldSampler.prototype, 'sample').mockImplementation(async (inspected, indices, destination, targetMissing) => {
     const previous = inspected.receipt.interval.end === validAt(cycle, 1);
     const value = inspected.receipt.key === 'precipitation' ? previous ? 99999.999 : 100000 : inspected.receipt.kind === 'sensible-flux' || inspected.receipt.kind === 'latent-flux' ? previous ? 100.0000001 : 150.00000005 : 1.23456789123;
     const values = new Float64Array(indices.length).fill(value);
     const missing = new Uint8Array(indices.length); if (indices.length > 1) missing[1] = 1;
-    return compactNoaaSamples(values, missing, indices.length, destination);
+    return compactNoaaSamples(values, missing, indices.length, destination, targetMissing);
   });
   return { fetchImpl, sample };
 }
@@ -67,6 +69,25 @@ it('overlaps independent instantaneous decodes while preserving output and recei
     expect(parallel.stats.peakPrefetchBytes).toBe(2 * estimateDecodeWorkingBytes(32, 2));
   } finally { await parallel.close(); }
   expect(active).toBe(0);
+});
+
+it('writes every normalized GFS field into the supplied shared slot with identical values', async () => {
+  const { fetchImpl } = source(), options = { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl };
+  const expected = await acquireGfsFrame({ ...options, hour: 2 });
+  const slot = createNormalizedFrameTarget(2, GFS_PRESSURE_LEVELS_HPA.length, false, true);
+  const session = await createGfsAcquisitionSession(options);
+  try {
+    const frame = await session.acquire(2, slot);
+    expect(withoutClock(frame)).toEqual(withoutClock(expected));
+    expect(frame.terrainM).toBe(slot.terrainM);
+    expect(frame.precipitationMmPerHour).toBe(slot.precipitationMmPerHour);
+    expect(frame.missing.precipitation).toBe(slot.missing.precipitation);
+    for (let i = 0; i < frame.hgtM.length; i++) {
+      expect(frame.hgtM[i]).toBe(slot.hgtM[i]); expect(frame.tempK[i]).toBe(slot.tempK[i]);
+      expect(frame.missing.hgt[i]).toBe(slot.missing.hgt[i]); expect(frame.missing.temp[i]).toBe(slot.missing.temp[i]);
+    }
+    expect(frame.terrainM.buffer).toBeInstanceOf(SharedArrayBuffer);
+  } finally { await session.close(); }
 });
 
 it('rejects a job whose decoded working set cannot fit before fetching its field', async () => {

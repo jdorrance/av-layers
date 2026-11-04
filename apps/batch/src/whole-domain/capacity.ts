@@ -32,7 +32,7 @@ export function wholeDomainSampleLayouts(input: WholeDomainCapacityInput): { nat
 export interface WholeDomainCapacity {
   frames: number; nativeLayers: number; fineLayers: number;
   nativeStoredCells: number; fineStoredCells: number; nativeSampleBytes: number; fineSampleBytes: number;
-  rasterWorkers: number; rasterSharedInputBytes: number; workingSet: Record<string, number>; estimatedPeakBytes: number; violations: string[];
+  rasterWorkers: number; deriveWorkers: number; deriveFrameCopyBytes: number; rasterSharedInputBytes: number; workingSet: Record<string, number>; estimatedPeakBytes: number; violations: string[];
 }
 
 export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCapacity {
@@ -55,6 +55,7 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   const largestShardBlocks = shards.reduce((max, shard) => Math.max(max, shard.blockCount), 0);
   const workingSet = {
     nativeFrame: nativeActive * (7 + (input.product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2) * maxLevels) * CELL_BYTES,
+    prefetchFrame: nativeActive * (7 + (input.product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2) * maxLevels) * CELL_BYTES,
     nativeFields,
     diagnostics: nativeCells * 9,
     retainedGeometry: nativeActive * retainedGeometryFields * CELL_BYTES,
@@ -68,19 +69,35 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
     rasterInline: 2 * 24 * 1024 * 1024 + 8 * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES),
     rasterSharedInputs: 0,
     rasterWorkerRuntimes: 0,
+    deriveWorkerRuntimes: 0,
+    deriveWorkerColumns: 0,
+    deriveSharedInputs: 0,
     shardAssembly: largestShard + 1024 * 1024 + largestShardBlocks * 64,
     archivesAndValidation: largestShard + 64 * 1024 * 1024,
     runtimeAndNativeReserve: 256 * 1024 * 1024
   };
   const inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
-  let rasterWorkers = rasterWorkerCount();
-  while (rasterWorkers > 0 && inlinePeakBytes + sharedInputBytes + rasterWorkers * RASTER_WORKER_RESERVE_BYTES > BUILD_BUDGETS.peakRssBytes) rasterWorkers--;
+  let rasterWorkers = rasterWorkerCount(), deriveWorkers = rasterWorkerCount();
+  const deriveSharedInputs = terrainBytes + nativeCells * 10 + fineMaskBytes + nativeActive * 4;
+  const workerWorkspace = columns.workspaceBufferBytes - nativeActive * (maxLevels * 16 + 45) + Math.min(4, nativeActive) * (maxLevels * 16 + 45);
+  const workerColumns = columns.byteLength + workerWorkspace + columns.workspaceObjectBudgetBytes + 32;
+  const peak = () => inlinePeakBytes + (rasterWorkers ? sharedInputBytes + rasterWorkers * RASTER_WORKER_RESERVE_BYTES : 0) +
+    (deriveWorkers ? deriveSharedInputs + deriveWorkers * (RASTER_WORKER_RESERVE_BYTES + workerColumns) : 0);
+  while (peak() > BUILD_BUDGETS.peakRssBytes && (deriveWorkers || rasterWorkers)) {
+    if (rasterWorkers > 1) rasterWorkers--;
+    else if (deriveWorkers > 1) deriveWorkers--;
+    else if (rasterWorkers) rasterWorkers--;
+    else deriveWorkers--;
+  }
   workingSet.rasterSharedInputs = rasterWorkers ? sharedInputBytes : 0;
   workingSet.rasterWorkerRuntimes = rasterWorkers * RASTER_WORKER_RESERVE_BYTES;
-  const estimatedPeakBytes = inlinePeakBytes + workingSet.rasterSharedInputs + workingSet.rasterWorkerRuntimes;
+  workingSet.deriveSharedInputs = deriveWorkers ? deriveSharedInputs : 0;
+  workingSet.deriveWorkerColumns = deriveWorkers * workerColumns;
+  workingSet.deriveWorkerRuntimes = deriveWorkers * RASTER_WORKER_RESERVE_BYTES;
+  const estimatedPeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   const violations: string[] = [];
   if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) violations.push('whole-domain working set exceeds the 2 GiB process budget');
   if (fineFields > 512 * 1024 * 1024) violations.push('live fine packed fields exceed the inline budget');
   return { frames, nativeLayers, fineLayers, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine.storedCells,
-    nativeSampleBytes, fineSampleBytes, rasterWorkers, rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
+    nativeSampleBytes, fineSampleBytes, rasterWorkers, deriveWorkers, deriveFrameCopyBytes: Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes), rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
 }

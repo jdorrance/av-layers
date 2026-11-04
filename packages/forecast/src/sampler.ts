@@ -247,7 +247,16 @@ export interface PreparedGridSampling {
   bind(field: GridField, layer: LayerId | LayerSpec): (x: number, y: number, out: Sample) => void;
 }
 
-function prepareAxis(coordinates: Float64Array, origin: number, step: number, size: number, wrap: boolean, column: boolean) {
+export interface PreparedGridAxis {
+  readonly lower: Float64Array;
+  readonly upper: Float64Array;
+  readonly fraction: Float64Array;
+  readonly byteLength: number;
+}
+
+export interface GridSamplingAxes { readonly rows: PreparedGridAxis; readonly columns: PreparedGridAxis }
+
+function prepareAxis(coordinates: Float64Array, origin: number, step: number, size: number, wrap: boolean, column: boolean): PreparedGridAxis {
   const lower = new Float64Array(coordinates.length), upper = new Float64Array(coordinates.length), fraction = new Float64Array(coordinates.length);
   for (let i = 0; i < coordinates.length; i++) {
     let coordinate = snap((coordinates[i] - origin) / step);
@@ -257,20 +266,39 @@ function prepareAxis(coordinates: Float64Array, origin: number, step: number, si
     upper[i] = column ? (lower[i] + 1) % size : lower[i] + 1;
     fraction[i] = coordinate - lower[i];
   }
-  return { lower, upper, fraction };
+  return { lower, upper, fraction, byteLength: coordinates.length * 3 * Float64Array.BYTES_PER_ELEMENT };
 }
 
-export function prepareGridSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
-  const grid = mask.grid, width = longitudes.length, height = latitudes.length, total = width * height;
+export function prepareGridAxis(mask: SamplingMask, coordinates: Float64Array, axis: 'row' | 'column'): PreparedGridAxis {
+  const grid = mask.grid;
+  if (grid.kind !== 'regular-latlon') throw new RangeError('Separable axes require a regular grid');
+  const column = axis === 'column';
+  const prepared = prepareAxis(coordinates, column ? grid.lon0 : grid.lat0, column ? grid.dx : grid.dy, column ? grid.width : grid.height, column && grid.wrapLongitude, column);
+  if (column) {
+    for (let x = 0; x < coordinates.length; x++) if (!withinGeographicBounds(mask.bounds?.[1] ?? 0, coordinates[x], mask.bounds)) prepared.lower[x] = NaN;
+  } else {
+    for (let y = 0; y < coordinates.length; y++) if (!withinGeographicBounds(coordinates[y], mask.bounds?.[0] ?? 0, mask.bounds)) prepared.lower[y] = NaN;
+  }
+  return prepared;
+}
+
+export function prepareGridSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array, axes?: GridSamplingAxes): PreparedGridSampling {
+  const grid = mask.grid;
+  if (axes) {
+    if (grid.kind !== 'regular-latlon') throw new RangeError('Separable axes require a regular grid');
+    return prepareSeparableSampling(mask, axes.rows, axes.columns);
+  }
+  const width = longitudes.length, height = latitudes.length, total = width * height;
   if (!Number.isSafeInteger(total) || width < 1 || height < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
   validateSamplingMask(mask);
   if (grid.kind === 'lambert-conformal') return prepareProjectedSampling(mask, latitudes, longitudes);
-  const rows = prepareAxis(latitudes, grid.lat0, grid.dy, grid.height, false, false);
-  const columns = prepareAxis(longitudes, grid.lon0, grid.dx, grid.width, grid.wrapLongitude, true);
-  // The regular grid and geographic policy are separable; apply each axis once,
-  // rather than repeating policy checks for every quarter-pixel combination.
-  for (let y = 0; y < height; y++) if (!withinGeographicBounds(latitudes[y], mask.bounds?.[0] ?? 0, mask.bounds)) rows.lower[y] = NaN;
-  for (let x = 0; x < width; x++) if (!withinGeographicBounds(mask.bounds?.[1] ?? 0, longitudes[x], mask.bounds)) columns.lower[x] = NaN;
+  return prepareSeparableSampling(mask, prepareGridAxis(mask, latitudes, 'row'), prepareGridAxis(mask, longitudes, 'column'));
+}
+
+function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, columns: PreparedGridAxis): PreparedGridSampling {
+  const grid = mask.grid, width = columns.lower.length, height = rows.lower.length, total = width * height;
+  if (!Number.isSafeInteger(total) || width < 1 || height < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
+  validateSamplingMask(mask);
   const covered = new Uint8Array(Math.ceil(total / 8));
   const contributorSet = new Set<number>();
   let hasCoverage = false;
@@ -296,13 +324,26 @@ export function prepareGridSampling(mask: SamplingMask, latitudes: Float64Array,
     bind(field, layer) {
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
+      const packed = 'coverage' in field;
+      let quadKey = -1, quadA = 0, quadB = 0, quadC = 0, quadD = 0;
       return (x, y, out) => {
         const coverageIndex = y * width + x;
         if (!(covered[coverageIndex >> 3] & (1 << (coverageIndex & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = columns.fraction[x], fy = rows.fraction[y];
-        if (!('coverage' in field) && fx !== 0 && fy !== 0) {
+        if (fx !== 0 && fy !== 0) {
           const r0 = rows.lower[y] * grid.width, r1 = rows.upper[y] * grid.width, c0 = columns.lower[x], c1 = columns.upper[x];
-          if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, out)) return;
+          if (!packed) {
+            if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, out)) return;
+          } else {
+            const key = r0 + c0;
+            if (key !== quadKey) {
+              try {
+                quadA = fieldOffset(field, r0 + c0, grid.width); quadB = fieldOffset(field, r0 + c1, grid.width);
+                quadC = fieldOffset(field, r1 + c0, grid.width); quadD = fieldOffset(field, r1 + c1, grid.width); quadKey = key;
+              } catch { quadKey = -1; }
+            }
+            if (quadKey === key && reduceKnownQuad(field, quadA, quadB, quadC, quadD, fx, fy, spec, out)) return;
+          }
         }
         let count = 0;
         for (const [dx, dy] of QUAD_OFFSETS) {
@@ -387,15 +428,28 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Float64Arr
     bind(field, layer) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
+      const packed = 'coverage' in field;
+      let quadKey = -1, quadA = 0, quadB = 0, quadC = 0, quadD = 0;
       return (x, y, out) => {
         const index = y * width + x;
         if (!(covered[index >> 3] & (1 << (index & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = fractionX[index], fy = fractionY[index];
         const column = lowerX[index], row = lowerY[index];
         const nextColumn = wrap && column + 1 === grid.width ? 0 : column + 1, nextRow = row + 1;
-        if (!('coverage' in field) && fx !== 0 && fy !== 0) {
+        if (fx !== 0 && fy !== 0) {
           const r0 = row * grid.width, r1 = nextRow * grid.width;
-          if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out)) return;
+          if (!packed) {
+            if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out)) return;
+          } else {
+            const key = r0 + column;
+            if (key !== quadKey) {
+              try {
+                quadA = fieldOffset(field, r0 + column, grid.width); quadB = fieldOffset(field, r0 + nextColumn, grid.width);
+                quadC = fieldOffset(field, r1 + column, grid.width); quadD = fieldOffset(field, r1 + nextColumn, grid.width); quadKey = key;
+              } catch { quadKey = -1; }
+            }
+            if (quadKey === key && reduceKnownQuad(field, quadA, quadB, quadC, quadD, fx, fy, spec, out)) return;
+          }
         }
         let count = 0;
         for (const [dx, dy] of QUAD_OFFSETS) {

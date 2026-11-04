@@ -2,7 +2,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { assertWholeDomainDonorsActive, type LayerId, type Manifest } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
-import type { ForecastProvider } from '../provider.js';
+import { createNormalizedFrameTarget, type ForecastProvider } from '../provider.js';
+import type { NormalizedFrame } from '@av/forecast/inputs';
 import { BUILD_BUDGETS } from '../capacity.js';
 import { failureReason } from '../failure.js';
 import { createRenderer } from '../render.js';
@@ -14,6 +15,7 @@ import { createShardedSamplePackWriter } from '../sample-pack-v5.js';
 import type { ShardedSamplePackShard } from '../sample-pack-v5.js';
 import { loadWholeDomainTerrain } from './prepare.js';
 import type { WholeDomainPrepared } from './prepare.js';
+import { createWholeDomainDerivePool } from './derive-pool.js';
 
 export interface WholeDomainSurfaceResult {
   id: 'native' | 'fine';
@@ -48,10 +50,13 @@ export interface WholeDomainFrameOptions extends FrameBuildOptions, ForecastInpu
   hours?: readonly number[];
   journalPrefix: string;
   surfaceTarget?: (surface: 'native' | 'fine') => string;
+  sampleGroup?: number;
 }
 
 export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): Promise<WholeDomainFrameResult> {
   options.signal?.throwIfAborted();
+  const localController = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, localController.signal]) : localController.signal;
   const { product, mask, provider, prepared, buildId } = options;
   const root = resolve(options.out), started = Date.now(), cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);
   const deriveOptions = { daylightOnly: options.deriveOptions?.daylightOnly };
@@ -62,6 +67,9 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   let acquisition: Awaited<ReturnType<ForecastProvider['open']>> | undefined;
   let nativeWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let fineWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
+  let prefetch: Promise<{ frame: NormalizedFrame; workMs: number }> | undefined;
+  let derivePool: Awaited<ReturnType<typeof createWholeDomainDerivePool>> | undefined;
+  let packing: Promise<void> | undefined;
   let failed = false;
   let completedFrames = 0, frameHour: number | null = null, phase = 'open-provider';
   try {
@@ -76,9 +84,9 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     if (admission.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${admission.violations.join('; ')}`);
     phase = 'load-terrain';
     const terrainData = await loadWholeDomainTerrain({ ref: prepared.terrain, out: root, grid: prepared.plan.fine,
-      coverage: prepared.fine.mask.coverage, coverageDescriptor: prepared.fine.bytes, signal: options.signal });
+      coverage: prepared.fine.mask.coverage, coverageDescriptor: prepared.fine.bytes, signal });
     phase = 'open-provider';
-    acquisition = await provider.open({ cycle: options.cycle, activeIndices: prepared.acquisitionActive, cacheDir, signal: options.signal });
+    acquisition = await provider.open({ cycle: options.cycle, activeIndices: prepared.acquisitionActive, cacheDir, signal });
     const cycle = new Date(acquisition.cycle).toISOString();
     if (options.cycle && Date.parse(cycle) !== Date.parse(options.cycle)) throw new Error('Provider cycle differs from requested cycle');
     const outputIndices = indicesOf(mask);
@@ -88,50 +96,84 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const layouts = wholeDomainSampleLayouts({ ...capacityInput, frames: hours.length });
     const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
       createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
-        surfaceId: options.surfaceTarget?.(surface) ?? surface }, { signal: options.signal });
+        surfaceId: options.surfaceTarget?.(surface) ?? surface, ...(options.sampleGroup === undefined ? {} : { group: options.sampleGroup }) }, { signal });
     nativeWriter = layouts.native ? writer('native', layouts.native, prepared.native.mask.coverage) : undefined;
     fineWriter = writer('fine', layouts.fine, prepared.fine.mask.coverage);
     const workingHalo = mask.halo.slice();
     for (let i = 0; i < workingHalo.length; i++) workingHalo[i] |= prepared.requiredDonors[i]!;
     const workingMask = { ...mask, halo: workingHalo };
-    const diagnostics = { ceilingMslM: new Float32Array(mask.grid.width * mask.grid.height), buoyancyM2S3: new Float32Array(mask.grid.width * mask.grid.height), branch: new Uint8Array(mask.grid.width * mask.grid.height) };
-    const rendererOptions = { signal: options.signal, rasterWorkers: capacity.rasterWorkers, rasterSharedInputBytes: capacity.rasterSharedInputBytes };
+    const diagnosticCells = mask.grid.width * mask.grid.height;
+    const diagnostics = { ceilingMslM: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), buoyancyM2S3: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), branch: new Uint8Array(new SharedArrayBuffer(diagnosticCells)) };
+    const rendererOptions = { signal, rasterWorkers: capacity.rasterWorkers, rasterSharedInputBytes: capacity.rasterSharedInputBytes };
     const nativeRenderer = createRenderer(mask, rendererOptions);
     const fineRenderer = createRenderer(prepared.fine.mask, rendererOptions);
     const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: WholeDomainFrameResult['receipts'] = [], summaries: Record<string, Record<string, unknown>> = {};
+    const fineCells = prepared.fine.mask.coverage.offsets[prepared.fine.mask.coverage.blockIds.length]!;
+    const fineOutput = Object.fromEntries((['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => [layer, {
+      values: new Float32Array(new SharedArrayBuffer(fineCells * Float32Array.BYTES_PER_ELEMENT)),
+      flags: new Uint8Array(new SharedArrayBuffer(fineCells))
+    }])) as { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField };
+    if (provider.directTargets && capacity.deriveWorkers > 0) derivePool = await createWholeDomainDerivePool({
+      plan: prepared.plan, coverage: prepared.fine.mask.coverage, activeIndices: prepared.acquisitionActive, maxLevels: provider.maxLevels,
+      terrain: terrainData, output: fineOutput, workers: capacity.deriveWorkers, maxFrameCopyBytes: capacity.deriveFrameCopyBytes, signal
+    });
     let acquireMs = 0, deriveMs = 0, packMs = 0, renderMs = 0;
-    for (const hour of hours) {
-      frameHour = hour; phase = 'acquire'; options.signal?.throwIfAborted();
+    const ring = provider.directTargets ? Array.from({ length: 2 }, () => createNormalizedFrameTarget(prepared.acquisitionActive.length, provider.maxLevels,
+      product.capabilities.verticalCoordinate === 'model-levels', product.layers.includes('precip-rate'))) : undefined;
+    const session = acquisition;
+    const acquire = async (hour: number, ordinal: number) => {
+      const start = Date.now();
+      const frame = await session.acquire(hour, ring?.[ordinal & 1]);
+      return { frame, workMs: Date.now() - start };
+    };
+    for (let ordinal = 0; ordinal < hours.length; ordinal++) {
+      const hour = hours[ordinal]!;
+      frameHour = hour; phase = 'acquire'; signal.throwIfAborted();
       if (Date.now() - Date.parse(options.createdAt) > BUILD_BUDGETS.elapsedMs) throw new Error('Build exceeded elapsedMs budget');
       const tAcquire = Date.now();
-      const frame = await acquisition.acquire(hour);
+      const { frame, workMs: acquireTotalWorkMs } = await (prefetch ?? acquire(hour, ordinal));
+      prefetch = undefined;
+      const acquireWaitWallMs = Date.now() - tAcquire;
       validateNormalizedFrame(frame, prepared.acquisitionActive, mask.grid, provider.maxLevels, product.layers, product.capabilities.verticalCoordinate);
       assertWholeDomainDonorsActive(prepared.plan, prepared.requiredDonors, frame.activeIndices);
-      acquireMs += Date.now() - tAcquire;
+      acquireMs += acquireWaitWallMs;
       const descriptor = forecastFrame(cycle, hour, product.intervalHours), { id } = descriptor;
       if (!frame.cycle || !sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, descriptor.validTime) || !matchesFrameIntervals(frame.intervals, descriptor, product.layers.includes('precip-rate'))) throw new Error(`Acquisition interval mismatch f${hour}`);
       frames.push(descriptor); receipts.push({ hour, intervals: frame.intervals, receipt: frame.receipt });
+      if (ordinal + 1 < hours.length) {
+        prefetch = acquire(hours[ordinal + 1]!, ordinal + 1).catch(error => { localController.abort(error); throw error; });
+        void prefetch.catch(() => {});
+      }
       const tDerive = Date.now(); phase = 'derive';
       const nativeFields = deriveFrame(frame, workingMask, { ...deriveOptions, layers: product.layers, diagnostics });
       if (!nativeFields['usable-lift-msl']) throw new Error('Whole-domain terrain derivation requires native MSL flags');
-      const fineFields = (await prepared.columns.deriveAsync(frame, terrainData, descriptor, { daylightOnly: deriveOptions.daylightOnly,
-        nativeClearance: { validTime: descriptor.validTime, grid: mask.grid, diagnostics, flags: nativeFields['usable-lift-msl'].flags },
-        signal: options.signal, deadlineAt: Date.parse(options.createdAt) + BUILD_BUDGETS.elapsedMs,
-        yieldControl: () => new Promise<void>(resolve => setImmediate(resolve)) })).fields;
+      const deriveNativeWallMs = Date.now() - tDerive, tFine = Date.now();
+      const nativeClearance = { validTime: descriptor.validTime, grid: mask.grid, diagnostics, flags: nativeFields['usable-lift-msl'].flags };
+      const deadlineAt = Date.parse(options.createdAt) + BUILD_BUDGETS.elapsedMs;
+      const fineFields = (derivePool
+        ? await derivePool.derive({ generation: completedFrames, frame, time: descriptor, daylightOnly: deriveOptions.daylightOnly, nativeClearance, deadlineAt })
+        : await prepared.columns.deriveAsync(frame, terrainData, descriptor, { daylightOnly: deriveOptions.daylightOnly,
+          nativeClearance, signal, output: fineOutput, deadlineAt, yieldControl: () => new Promise<void>(resolve => setImmediate(resolve)) })).fields;
+      const deriveFineWallMs = Date.now() - tFine;
       summaries[id] = summarizeFields(nativeFields, mask, outputIndices, product.layers);
       deriveMs += Date.now() - tDerive;
       const tPack = Date.now(); phase = 'pack';
-      for (let index = 0; index < prepared.nativeSurfaceLayers.length; index++) {
-        const layer = prepared.nativeSurfaceLayers[index]!, field = nativeFields[layer];
-        if (!field) throw new Error(`Missing native field ${layer}`);
-        await nativeWriter!.writeChannel(completedFrames * nativeLayers + index, field);
-      }
-      for (let index = 0; index < prepared.fineSurfaceLayers.length; index++) {
-        const layer = prepared.fineSurfaceLayers[index]!, field = fineFields[layer as keyof typeof fineFields];
-        if (!field) throw new Error(`Missing fine field ${layer}`);
-        await fineWriter.writeChannel(completedFrames * fineLayers + index, field);
-      }
-      packMs += Date.now() - tPack;
+      let packWriteWallMs = 0;
+      packing = (async () => {
+        for (let index = 0; index < prepared.nativeSurfaceLayers.length; index++) {
+          const layer = prepared.nativeSurfaceLayers[index]!, field = nativeFields[layer];
+          if (!field) throw new Error(`Missing native field ${layer}`);
+          await nativeWriter!.writeChannel(completedFrames * nativeLayers + index, field);
+        }
+        for (let index = 0; index < prepared.fineSurfaceLayers.length; index++) {
+          const layer = prepared.fineSurfaceLayers[index]!, field = fineFields[layer as keyof typeof fineFields];
+          if (!field) throw new Error(`Missing fine field ${layer}`);
+          await fineWriter!.writeChannel(completedFrames * fineLayers + index, field);
+        }
+        packWriteWallMs = Date.now() - tPack;
+        packMs += packWriteWallMs;
+      })().catch(error => { localController.abort(error); throw error; });
+      void packing.catch(() => {});
       const tRender = Date.now(); phase = 'render';
       const nativeTargets: { path: string; field: GridField; layer: LayerId }[] = [];
       const fineTargets: { path: string; field: PackedGridField; layer: LayerId }[] = [];
@@ -141,8 +183,13 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
         else fineTargets.push({ path, field: fineFields[layer as keyof typeof fineFields]!, layer });
       }
       if (nativeTargets.length) await nativeRenderer.renderArchives(nativeTargets);
+      const renderNativeWallMs = Date.now() - tRender, tFineRender = Date.now();
       if (fineTargets.length) await fineRenderer.renderArchives(fineTargets);
+      const renderFineWallMs = Date.now() - tFineRender;
       renderMs += Date.now() - tRender;
+      await packing;
+      packing = undefined;
+      summaries[id].timings = { acquireWaitWallMs, acquireTotalWorkMs, deriveNativeWallMs, deriveFineWallMs, packWriteWallMs, renderNativeWallMs, renderFineWallMs };
       phase = 'hash-artifacts';
       for (const target of [...nativeTargets, ...fineTargets]) {
         const layer = target.layer;
@@ -156,6 +203,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     frameHour = null; phase = 'finalize-pack';
     const tPack = Date.now();
     const shards = { native: await nativeWriter?.finish(), fine: await fineWriter.finish() };
+    const packFinishWallMs = Date.now() - tPack;
     const surfaces: WholeDomainSurfaceResult[] = [];
     const coverageFor = (surface: 'native' | 'fine') => {
       const info = surface === 'native' ? prepared.native : prepared.fine;
@@ -174,16 +222,19 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     packMs += Date.now() - tPack;
     return { cycle, frames, artifacts, receipts, surfaces, capacity, metrics: {
       frames: summaries, phasesMs: { acquireMs, deriveMs, packMs, renderMs },
-      renderer: { native: nativeRenderer.metrics(), fine: fineRenderer.metrics() }, acquisition: acquisition.stats,
+      renderer: { native: nativeRenderer.metrics(), fine: fineRenderer.metrics(), packFinishWallMs }, acquisition: acquisition.stats,
       elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024
     } };
-  } catch (error) {
+  } catch (caught) {
+    const error = localController.signal.aborted ? localController.signal.reason : caught;
+    localController.abort(error);
     failed = true;
     await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle,
-      phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) });
+      phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }).catch(() => {});
     throw error;
   } finally {
-    const results = await Promise.allSettled([nativeWriter?.close(), fineWriter?.close(), acquisition?.close()]);
+    await Promise.allSettled([prefetch, packing]);
+    const results = await Promise.allSettled([nativeWriter?.close(), fineWriter?.close(), derivePool?.close(), acquisition?.close()]);
     if (!failed) for (const result of results) if (result.status === 'rejected') throw result.reason;
   }
 }

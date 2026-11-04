@@ -1,13 +1,165 @@
-import { createHash } from 'node:crypto';
+import { createCipheriv, createHash, createHmac } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { DeleteObjectsCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
-import { r2ClientOptions, r2Storage } from './storage';
+import { assertBuildBucketLock, r2ClientOptions, r2ShardStorage, r2Storage, sealShardCredentials } from './storage';
+import { putImmutable } from './immutable-upload';
 
 const env = { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
+const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: '2026-11-04T19:00:00.000Z', deadlineAt: '2026-11-04T19:50:00.000Z' };
+const issuer = { ...env, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
+const shard = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: issuer.FORECAST_SHARD_CREDENTIAL_KEY };
+const makeStore = (value: typeof plan | (Omit<typeof plan, 'deadlineAt'> & { deadlineAt: string | undefined })) => r2ShardStorage(shard, value, Buffer.from(sealShardCredentials(issuer, value)));
+
+describe('R2 bucket lock preflight', () => {
+  const lockEnv = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: issuer.R2_BUCKET, CLOUDFLARE_API_TOKEN: 'api-token' };
+  const rule = { enabled: true, prefix: 'builds/', condition: { type: 'Age', maxAgeSeconds: 3600 } };
+  const response = (rules: unknown, success = true) => Response.json({ success, result: { rules } });
+  const futurePlan = () => ({ ...plan, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
+  it('accepts covering age, indefinite and sufficiently distant date rules', async () => {
+    const current = futurePlan();
+    for (const value of [rule, { ...rule, prefix: '', condition: { type: 'Indefinite' } },
+      { ...rule, prefix: `builds/${current.model}/${current.buildId}/`, condition: { type: 'Date', date: new Date(Date.parse(current.deadlineAt)).toISOString() } }]) {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response([value]));
+      await assertBuildBucketLock(lockEnv, current, fetchImpl);
+      expect(fetchImpl).toHaveBeenCalledWith(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/r2/buckets/bucket/lock`, expect.objectContaining({ headers: { authorization: 'Bearer api-token' }, signal: expect.any(AbortSignal) }));
+    }
+  });
+  it('caps the lock request deadline at fifteen seconds', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await assertBuildBucketLock(lockEnv, futurePlan(), vi.fn<typeof fetch>().mockResolvedValue(response([rule])));
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    } finally { timeout.mockRestore(); }
+  });
+  it('rejects absent, disabled, incomplete, narrow, short and failed rules', async () => {
+    const current = futurePlan();
+    for (const result of [response([]), response(undefined), response([{ ...rule, enabled: false }]),
+      response([{ ...rule, prefix: `builds/${current.model}/${current.buildId}/tiles/` }]),
+      response([{ ...rule, prefix: 'builds/icon-eu/' }]), response([{ ...rule, condition: { type: 'Age', maxAgeSeconds: 3599 } }]),
+      response([{ ...rule, condition: { type: 'Date', date: new Date(Date.parse(current.deadlineAt) - 1).toISOString() } }]),
+      response([rule], false), new Response('', { status: 403 }), new Response('{')]) {
+      await expect(assertBuildBucketLock(lockEnv, current, vi.fn<typeof fetch>().mockResolvedValue(result))).rejects.toThrow();
+    }
+    await expect(assertBuildBucketLock({ ...lockEnv, CLOUDFLARE_API_TOKEN: '' }, current)).rejects.toThrow('API token');
+  });
+  it.each(['declared', 'streamed'])('bounds %s response bytes', async kind => {
+    const result = kind === 'declared' ? new Response('', { headers: { 'content-length': '262145' } }) : new Response(new Uint8Array(262145));
+    await expect(assertBuildBucketLock(lockEnv, futurePlan(), vi.fn<typeof fetch>().mockResolvedValue(result))).rejects.toThrow('byte budget');
+  });
+  it.each(['headers', 'body'])('aborts stalled %s at the plan deadline', async stage => {
+    const current = { ...plan, deadlineAt: new Date(Date.now() + 50).toISOString() };
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const signal = init!.signal!;
+      if (stage === 'headers') return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+      return new Response(new ReadableStream({ start() {} }));
+    });
+    await expect(assertBuildBucketLock(lockEnv, current, fetchImpl)).rejects.toThrow();
+  });
+});
+
+describe('R2 shard credentials', () => {
+  it('signs separate action and path scoped credentials used by the SDK', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async command => {
+      if (command.constructor.name === 'GetObjectCommand') return { ContentLength: 1, ETag: 'etag', Body: Readable.from([Uint8Array.of(1)]) } as never;
+      return { ContentLength: 1, ETag: 'etag' } as never;
+    });
+    try {
+      const store = makeStore(plan);
+      await store.get('coverage/test');
+      await store.head('coverage/test');
+      await store.put('builds/test', Uint8Array.of(1), {});
+      await expect(store.list('')).rejects.toThrow('cannot list');
+      await expect(store.delete(['key'])).rejects.toThrow('cannot delete');
+      expect(send).toHaveBeenCalledTimes(3);
+      const credentials = await Promise.all(send.mock.contexts.map(client => (client as S3Client).config.credentials()));
+      expect(credentials[0]).toEqual(credentials[1]);
+      expect(credentials[0]).not.toEqual(credentials[2]);
+      const prefix = `builds/${plan.model}/${plan.buildId}/`;
+      for (const [index, actions, prefixPaths] of [[0, ['GetObject', 'HeadObject'], [prefix, 'coverage/', 'terrain/prepared/']], [2, ['PutObject'], [prefix]]] as const) {
+        const credential = credentials[index]!;
+        expect(credential.accessKeyId).toBe(env.R2_ACCESS_KEY_ID);
+        const token = Buffer.from(credential.sessionToken!, 'base64').toString();
+        expect(token.startsWith('jwt/')).toBe(true);
+        const jwt = token.slice(4), [header, payload, signature] = jwt.split('.');
+        expect(JSON.parse(Buffer.from(header!, 'base64url').toString())).toEqual({ alg: 'HS256', typ: 'JWT' });
+        expect(JSON.parse(Buffer.from(payload!, 'base64url').toString())).toEqual({
+          bucket: 'bucket', actions, paths: { prefixPaths, objectPaths: [] },
+          sub: env.CLOUDFLARE_ACCOUNT_ID, iss: env.R2_ACCESS_KEY_ID, aud: `${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+          iat: Date.parse('2026-11-04T19:10:00.000Z') / 1000, exp: Date.parse(plan.deadlineAt) / 1000
+        });
+        expect(signature).toBe(createHmac('sha256', env.R2_SECRET_ACCESS_KEY).update(`${header}.${payload}`).digest('base64url'));
+        expect(credential.secretAccessKey).toBe(createHash('sha256').update(jwt).digest('hex'));
+      }
+    } finally { send.mockRestore(); clock.mockRestore(); }
+  });
+
+  it('caps expiry at one hour and rejects expired or invalid deadlines', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 1, ETag: 'etag' } as never);
+    try {
+      await makeStore({ ...plan, deadlineAt: '2026-11-04T22:00:00.000Z' }).head('key');
+      const credentials = await (send.mock.contexts[0] as S3Client).config.credentials();
+      const jwt = Buffer.from(credentials.sessionToken!, 'base64').toString().slice(4);
+      expect(JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString()).exp).toBe(Date.parse('2026-11-04T20:10:00.000Z') / 1000);
+      await makeStore({ ...plan, deadlineAt: undefined }).head('key');
+      const fallback = await (send.mock.contexts[1] as S3Client).config.credentials();
+      const fallbackJwt = Buffer.from(fallback.sessionToken!, 'base64').toString().slice(4);
+      expect(JSON.parse(Buffer.from(fallbackJwt.split('.')[1]!, 'base64url').toString()).exp).toBe(Date.parse(plan.deadlineAt) / 1000);
+      for (const deadlineAt of ['2026-11-04T19:10:00.000Z', 'invalid']) expect(() => makeStore({ ...plan, deadlineAt })).toThrow('deadline');
+      expect(() => makeStore({ ...plan, buildId: '../other' })).toThrow('identity');
+    } finally { send.mockRestore(); clock.mockRestore(); }
+  });
+
+  it('authenticates the envelope, key and every plan identity field', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
+    try {
+      const envelope = sealShardCredentials(issuer, plan), parsed = JSON.parse(envelope);
+      expect(envelope).not.toContain(env.R2_SECRET_ACCESS_KEY);
+      expect(envelope).not.toContain('sessionToken');
+      expect(sealShardCredentials(issuer, plan)).not.toBe(envelope);
+      const open = (environment = shard, identity = plan, data = envelope) => r2ShardStorage(environment, identity, Buffer.from(data));
+      expect(() => open()).not.toThrow();
+      expect(() => open({ ...shard, FORECAST_SHARD_CREDENTIAL_KEY: 'cd'.repeat(32) })).toThrow('unauthenticated');
+      expect(() => open({ ...shard, R2_BUCKET: 'other' })).toThrow('unauthenticated');
+      expect(() => open(shard, { ...plan, model: 'icon-eu' as 'gfs' })).toThrow('unauthenticated');
+      expect(() => open(shard, { ...plan, buildId: plan.buildId.replace(/0$/, '1') })).toThrow('unauthenticated');
+      expect(() => open(shard, { ...plan, deadlineAt: '2026-11-04T19:51:00.000Z' })).toThrow('unauthenticated');
+      const ciphertext = Buffer.from(parsed.ciphertext, 'base64'); ciphertext[0] ^= 1;
+      expect(() => open(shard, plan, JSON.stringify({ ...parsed, ciphertext: ciphertext.toString('base64') }))).toThrow('unauthenticated');
+      expect(() => open(shard, plan, '{}')).toThrow('unauthenticated');
+      const iv = Buffer.alloc(12), cipher = createCipheriv('aes-256-gcm', Buffer.from(shard.FORECAST_SHARD_CREDENTIAL_KEY, 'hex'), iv);
+      cipher.setAAD(Buffer.from(JSON.stringify([shard.R2_BUCKET, plan.model, plan.buildId, plan.deadlineAt])));
+      const malformed = Buffer.concat([cipher.update(JSON.stringify({ read: {}, write: {} })), cipher.final()]);
+      expect(() => open(shard, plan, JSON.stringify({ iv: iv.toString('base64'), ciphertext: malformed.toString('base64'), tag: cipher.getAuthTag().toString('base64') }))).toThrow('unauthenticated');
+      expect(() => open({ ...shard, FORECAST_SHARD_CREDENTIAL_KEY: '' })).toThrow('FORECAST_SHARD_CREDENTIAL_KEY');
+      expect(() => open(shard, plan, 'x'.repeat(16 * 1024 + 1))).toThrow('byte budget');
+      expect(() => sealShardCredentials({ ...issuer, R2_ACCESS_KEY_ID: 'a'.repeat(20_000) }, plan)).toThrow('byte budget');
+    } finally { clock.mockRestore(); }
+  });
+});
 
 describe('R2 S3 client configuration', () => {
+  it('reconciles a lock 409 by proving the raced object byte-for-byte', async () => {
+    const bytes = Buffer.from('immutable'), digest = createHash('sha256').update(bytes).digest('hex');
+    const head = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ size: bytes.length, etag: 'existing', metadata: { sha256: digest } });
+    const get = vi.fn().mockResolvedValue({ bytes, etag: 'existing' });
+    const put = vi.fn().mockRejectedValue(Object.assign(new Error('ObjectLockedByBucketPolicy'), { $metadata: { httpStatusCode: 409 } }));
+    await expect(putImmutable({ head, get, put }, 'key', bytes, 'application/octet-stream', undefined, true)).resolves.toBeUndefined();
+    expect(put).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
+    head.mockReset().mockResolvedValueOnce(null).mockResolvedValue({ size: bytes.length, etag: 'existing', metadata: { sha256: digest } });
+    get.mockResolvedValue({ bytes: Buffer.from('different'), etag: 'existing' });
+    await expect(putImmutable({ head, get, put }, 'key', bytes, 'application/octet-stream', undefined, true)).rejects.toThrow('hash mismatch');
+  });
+
+  it('fails a successful multi-delete response containing locked object errors', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ Errors: [{ Key: 'key', Code: 'ObjectLockedByBucketPolicy' }] } as never);
+    try { await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).delete(['key'])).rejects.toThrow('ObjectLockedByBucketPolicy'); }
+    finally { send.mockRestore(); }
+  });
   it('preserves listed object sizes and distinguishes missing metadata from zero bytes', async () => {
     const lastModified = new Date('2026-11-01T00:00:00Z');
     const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ Contents: [
@@ -280,6 +432,7 @@ describe('R2 S3 client configuration', () => {
     expect(options.endpoint).toBe(`https://${env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`);
     expect(options.requestChecksumCalculation).toBe('WHEN_REQUIRED');
     expect(options.responseChecksumValidation).toBe('WHEN_REQUIRED');
+    expect(r2ClientOptions({ ...env, R2_SESSION_TOKEN: 'session' }).credentials).toEqual({ accessKeyId: 'access', secretAccessKey: 'secret', sessionToken: 'session' });
   });
 
   it('sends only Content-MD5 on PUT while preserving the required DeleteObjects checksum', async () => {

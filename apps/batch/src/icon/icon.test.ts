@@ -22,6 +22,7 @@ import {
 import { loadCoverage } from '../coverage.js';
 import { prepareBuild } from '../capacity.js';
 import { iconEuProvider } from './provider.js';
+import { createNormalizedFrameTarget } from '../provider.js';
 import { createIconEuAcquisitionSession, deaverageIconHourlyUpwardFlux } from './acquire.js';
 import { decodeIconGribField } from './grib.js';
 import { ICON_EU_HALF_LEVELS, ICON_EU_MODEL_LEVELS } from './constants.js';
@@ -418,6 +419,15 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
 
     // Acquire hour 4 first (simulating first daylight hour of the run -> must fetch f003 flux companions)
     const frame4 = await session.acquire(4);
+    const target = createNormalizedFrameTarget(active.length, ICON_EU_MODEL_LEVELS.length, true, false);
+    const direct = await session.acquire(4, target);
+    for (const field of ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2'] as const) {
+      expect(direct[field]).toBe(target[field]); expect(direct[field]).toEqual(frame4[field]);
+    }
+    for (const field of ['hgtM', 'tempK', 'pressurePa'] as const) for (let i = 0; i < ICON_EU_MODEL_LEVELS.length; i++) {
+      expect(direct[field][i]).toBe(target[field]![i]); expect(direct[field][i]).toEqual(frame4[field][i]);
+    }
+    expect(direct.missing).toEqual(frame4.missing);
     validateNormalizedFrame(
       frame4,
       active,

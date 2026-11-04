@@ -22,6 +22,7 @@ import {
   verifyIconFieldMetadata
 } from './fields.js';
 import { decodeIconGribField, type DecodedIconGribField } from './grib.js';
+import type { NormalizedFrameTarget } from '../provider.js';
 
 const DEFAULT_CONCURRENCY = 8;
 
@@ -322,7 +323,8 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
   const loadDecodedField = async (
     field: string,
     hour: number,
-    level: number | null = null
+    level: number | null = null,
+    target?: { values: Float32Array; missing: Uint8Array }
   ): Promise<{ readonly decoded: DecodedIconGribField; readonly receipt: IconObjectReceipt }> => {
     const url = iconRegularFieldUrl(field, cycle, { hour, level, baseUrl });
     const { decoded, compressedBytes, sha256, cacheHit } = await loadIconField(
@@ -331,7 +333,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       stats,
       { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },
       bytes => {
-        const decoded = decodeIconGribField(bytes, activeIndices);
+        const decoded = decodeIconGribField(bytes, activeIndices, target);
         verifyIconFieldMetadata(decoded, field, cycle, { hour, level });
         return decoded;
       }
@@ -401,7 +403,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
     return staticGeometryPromise;
   };
 
-  const acquireFrame = async (hour: number): Promise<ModelLevelFrame> => {
+  const acquireFrame = async (hour: number, target?: NormalizedFrameTarget): Promise<ModelLevelFrame> => {
     for (const key of fluxCache.keys()) if (!key.endsWith(`:${hour - 1}`)) fluxCache.delete(key);
     const staticGeom = await getStaticGeometry();
 
@@ -414,7 +416,14 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
     const fields = await mapConcurrent(requests, concurrency, request =>
       request.field === 'ASHFL_S' || request.field === 'ALHFL_S'
         ? getFluxField(request.field, request.hour)
-        : loadDecodedField(request.field, request.hour, request.level)
+        : loadDecodedField(request.field, request.hour, request.level, target ? (() => {
+          if (request.field === 'PS') return { values: target.surfacePressurePa, missing: target.missing.surfacePressure };
+          if (request.field === 'T_2M') return { values: target.temp2mK, missing: target.missing.temp2m };
+          if (request.field === 'QV_2M') return { values: target.specificHumidity2mKgKg, missing: target.missing.humidity2m };
+          const index = ICON_EU_MODEL_LEVELS.indexOf(request.level!);
+          return request.field === 'T' ? { values: target.tempK[index]!, missing: target.missing.temp[index]! }
+            : { values: target.pressurePa![index]!, missing: target.missing.pressure![index]! };
+        })() : undefined)
     );
     const [psRes, t2mRes, qv2mRes, ashflCurr, alhflCurr] = fields;
     const ashflPrev = hour > 1 ? fields[surfaceFields.length] : null;
@@ -433,6 +442,12 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       alhflPrev?.decoded ?? null,
       hour
     );
+    if (target) {
+      target.terrainM.set(staticGeom.terrainM); target.missing.terrain.set(staticGeom.missingTerrain);
+      for (let i = 0; i < staticGeom.hgtM.length; i++) { target.hgtM[i]!.set(staticGeom.hgtM[i]!); target.missing.hgt[i]!.set(staticGeom.missingHgt[i]!); }
+      target.sensibleHeatFluxWm2.set(sensible.values); target.missing.sensibleHeatFlux.set(sensible.missing);
+      target.latentHeatFluxWm2.set(latent.values); target.missing.latentHeatFlux.set(latent.missing);
+    }
 
     const cycleMs = Date.parse(cycle);
     const startIso = new Date(cycleMs + (hour - ICON_EU_INTERVAL_HOURS) * 3_600_000).toISOString();
@@ -460,24 +475,24 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       capturedAt,
       grid: ICON_EU_GRID,
       activeIndices: new Uint32Array(activeIndices),
-      terrainM: new Float32Array(staticGeom.terrainM),
+      terrainM: target?.terrainM ?? new Float32Array(staticGeom.terrainM),
       surfacePressurePa: psRes.decoded.values,
       temp2mK: t2mRes.decoded.values,
       specificHumidity2mKgKg: qv2mRes.decoded.values,
-      sensibleHeatFluxWm2: sensible.values,
-      latentHeatFluxWm2: latent.values,
+      sensibleHeatFluxWm2: target?.sensibleHeatFluxWm2 ?? sensible.values,
+      latentHeatFluxWm2: target?.latentHeatFluxWm2 ?? latent.values,
       pressurePa: modelPResults.map(r => r.decoded.values),
-      hgtM: staticGeom.hgtM.map(arr => new Float32Array(arr)),
+      hgtM: target?.hgtM ?? staticGeom.hgtM.map(arr => new Float32Array(arr)),
       tempK: modelTResults.map(r => r.decoded.values),
       missing: {
-        terrain: new Uint8Array(staticGeom.missingTerrain),
+        terrain: target?.missing.terrain ?? new Uint8Array(staticGeom.missingTerrain),
         surfacePressure: psRes.decoded.missing,
         temp2m: t2mRes.decoded.missing,
         humidity2m: qv2mRes.decoded.missing,
-        sensibleHeatFlux: sensible.missing,
-        latentHeatFlux: latent.missing,
+        sensibleHeatFlux: target?.missing.sensibleHeatFlux ?? sensible.missing,
+        latentHeatFlux: target?.missing.latentHeatFlux ?? latent.missing,
         pressure: modelPResults.map(r => r.decoded.missing),
-        hgt: staticGeom.missingHgt.map(arr => new Uint8Array(arr)),
+        hgt: target?.missing.hgt ?? staticGeom.missingHgt.map(arr => new Uint8Array(arr)),
         temp: modelTResults.map(r => r.decoded.missing)
       },
       intervals: {
@@ -509,13 +524,13 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
     get stats(): Readonly<IconTransportStats> {
       return { ...stats };
     },
-    async acquire(hour: number): Promise<ModelLevelFrame> {
+    async acquire(hour: number, target?: NormalizedFrameTarget): Promise<ModelLevelFrame> {
       signal.throwIfAborted();
       if (!ICON_EU_FORECAST_HOURS.includes(hour)) {
         throw new Error(`Unsupported ICON-EU forecast hour ${hour}`);
       }
       if (active) throw new Error('ICON acquisition session already has an active frame');
-      active = acquireFrame(hour);
+      active = acquireFrame(hour, target);
       try {
         const frame = await active;
         signal.throwIfAborted();

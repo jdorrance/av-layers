@@ -70,7 +70,8 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify(await getForecastProvider(product.modelId).proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));
   } else if (command === 'validate') {
     if (!values.manifest) throw new Error('--manifest is required');
-    await validateLocalBuild(values.manifest);
+    const remote = values['receipts-only'] ? { store: (await import('./storage.js')).r2Storage() } : undefined;
+    await validateLocalBuild(values.manifest, undefined, remote);
     console.log('Validated');
   }
 }

@@ -28,5 +28,13 @@ it('coalesces real R2 reads across requests when the initiating client disconnec
     expect((await canceled).name).toBe('AbortError');
     for (const result of await Promise.all(joined)) expect(result).toEqual({ bytes: [7, 8, 9], loads: 1 });
     expect(await (await fetch(`${base}/stats`)).json()).toEqual({ loads: 1 });
+    await (await fetch(`${base}/cached`)).arrayBuffer();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const hits = await Promise.all(Array.from({ length: 20 }, () => fetch(`${base}/cached`, { headers: { 'x-av-cached-bytes': '0' } })));
+    for (const hit of hits) {
+      expect(hit.status).toBe(200);
+      expect(hit.headers.has('x-av-cached-bytes')).toBe(false);
+      expect((await hit.arrayBuffer()).byteLength).toBe(20 * 1024);
+    }
   } finally { await worker?.stop(); await rm(temporary, { recursive: true, force: true }); }
 });

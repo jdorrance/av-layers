@@ -16,14 +16,14 @@ describe('serving resource bounds', () => {
     expect(cache.bytes).toBe(8);
   });
   it('coalesces materialized reads, holds the owner context and allows retry after failure', async () => {
-    const reads = new MaterializedReads<number>(1);
+    const reads = new MaterializedReads<number>(1, 15_000, 96, 0);
     let release!: (value: number) => void;
     const load = vi.fn(() => new Promise<number>(resolve => { release = resolve; }));
     const ctx = { waitUntil: vi.fn() };
     const first = reads.run('same', load, ctx), second = reads.run('same', load, ctx);
     await Promise.resolve();
     expect(load).toHaveBeenCalledTimes(1); expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
-    await expect(reads.run('different', async () => 3)).rejects.toThrow('concurrent');
+    await expect(reads.run('different', async () => 3)).rejects.toThrow('queued');
     release(2); expect(await Promise.all([first, second])).toEqual([2, 2]);
     await expect(reads.run('bad', async () => { throw new Error('failed'); })).rejects.toThrow('failed');
     expect(await reads.run('bad', async () => 4)).toBe(4);
@@ -62,7 +62,7 @@ it('uses bounded buffers for fragmented streams, cancels stalled reads and relea
 });
 
 it('holds admission after a deadline until an uncancellable owner actually settles', async () => {
-  const reads = new MaterializedReads<number>(1, 5);
+  const reads = new MaterializedReads<number>(1, 5, 96, 0);
   let signal: AbortSignal | undefined;
   let finish!: (value: number) => void;
   const owners: Promise<unknown>[] = [];
@@ -70,7 +70,7 @@ it('holds admission after a deadline until an uncancellable owner actually settl
   await expect(reads.run('slow', async value => { signal = value; return new Promise(resolve => { finish = resolve; }); }, { waitUntil: promise => owners.push(promise) })).rejects.toThrow('deadline');
   expect(signal?.aborted).toBe(true);
   await expect(reads.run('slow', replacement)).rejects.toThrow('deadline');
-  await expect(reads.run('another', replacement)).rejects.toThrow('concurrent');
+  await expect(reads.run('another', replacement)).rejects.toThrow('queued');
   expect(replacement).not.toHaveBeenCalled();
   finish(7);
   await Promise.all(owners);
@@ -95,6 +95,22 @@ it('holds outgoing body permits until consumption or cancellation', async () => 
   const recovered = boundResponse(new Response('ok', { headers: { 'content-length': '2' } }));
   expect(await recovered.text()).toBe('ok');
   await Promise.all(responses.slice(1).map(response => response.body!.cancel()));
+});
+
+it('reserves cache-owned body sizes after Content-Length is stripped and rejects corrupt metadata', async () => {
+  const { boundCachedResponse, createBoundedResponse, forkResponseForCache } = await import('../src/resources');
+  const size = 20 * 1024;
+  const branches = forkResponseForCache(createBoundedResponse(size, () => new Response(new Uint8Array(size))));
+  const bytes = await branches.cache.arrayBuffer();
+  await branches.client.arrayBuffer();
+  const headers = new Headers(branches.cache.headers);
+  headers.delete('content-length');
+  const hits = Array.from({ length: 20 }, () => boundCachedResponse(new Response(bytes, { headers })));
+  expect(hits.every(hit => !hit.headers.has('x-av-cached-bytes'))).toBe(true);
+  expect(await Promise.all(hits.map(async hit => (await hit.arrayBuffer()).byteLength))).toEqual(Array(20).fill(size));
+  for (const invalid of ['-1', '0.5', '1e4', String(4 * 1024 * 1024 + 1)]) {
+    expect(() => boundCachedResponse(new Response('x', { headers: { 'x-av-cached-bytes': invalid } }))).toThrow();
+  }
 });
 
 
@@ -207,14 +223,14 @@ it('caps total coalesced waiters across keys and reclaims all permits after comp
 });
 
 it('cancels one waiter without aborting the shared owner or its admission', async () => {
-  const reads = new MaterializedReads<number>(1, 15_000, 2), controller = new AbortController();
+  const reads = new MaterializedReads<number>(1, 15_000, 2, 0), controller = new AbortController();
   let finish!: (value: number) => void, owner!: AbortSignal;
   const load = vi.fn((signal: AbortSignal) => { owner = signal; return new Promise<number>(resolve => { finish = resolve; }); });
   const first = reads.run('same', load, undefined, controller.signal), second = reads.run('same', load);
   controller.abort();
   await expect(first).rejects.toMatchObject({ name: 'AbortError' });
   expect(owner.aborted).toBe(false);
-  await expect(reads.run('other', async () => 1)).rejects.toThrow('concurrent');
+  await expect(reads.run('other', async () => 1)).rejects.toThrow('queued');
   const replacement = reads.run('same', load);
   expect(load).toHaveBeenCalledOnce();
   finish(9);
@@ -232,4 +248,47 @@ it('aborts sibling reads when a coalesced loader fails and permits a clean retry
   })).rejects.toThrow('missing sibling');
   expect(signal?.aborted).toBe(true); expect(cancel).toHaveBeenCalledOnce();
   expect(await reads.run('same', async () => [Uint8Array.of(3)])).toEqual([Uint8Array.of(3)]);
+});
+
+it('coalesces queued reads, skips abandoned work and starts surviving keys FIFO', async () => {
+  const reads = new MaterializedReads<number>(1, 1000, 8, 3), order: string[] = [];
+  let finish!: (value: number) => void;
+  const first = reads.run('first', () => new Promise(resolve => { finish = resolve; }));
+  const abort = new AbortController();
+  const abandoned = reads.run('abandoned', async () => { order.push('abandoned'); return 0; }, undefined, abort.signal);
+  const one = reads.run('one', async () => { order.push('one'); return 1; });
+  const duplicate = reads.run('one', async () => { throw new Error('duplicate loaded'); });
+  const two = reads.run('two', async () => { order.push('two'); return 2; });
+  await expect(reads.run('overflow', async () => 3)).rejects.toThrow('queued');
+  abort.abort();
+  await expect(abandoned).rejects.toMatchObject({ name: 'AbortError' });
+  finish(7);
+  expect(await Promise.all([first, one, duplicate, two])).toEqual([7, 1, 1, 2]);
+  expect(order).toEqual(['one', 'two']);
+});
+
+it('keeps queued deadlines absolute and does not release an active timed-out owner', async () => {
+  vi.useFakeTimers();
+  try {
+    const reads = new MaterializedReads<number>(1, 100, 8, 4);
+    let finish!: (value: number) => void, finishNext!: (value: number) => void;
+    const first = reads.run('first', () => new Promise(resolve => { finish = resolve; }));
+    const firstResult = first.catch(error => error);
+    await vi.advanceTimersByTimeAsync(60);
+    const queued = reads.run('queued', () => new Promise(resolve => { finishNext = resolve; }));
+    const queuedResult = queued.catch(error => error);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await firstResult).toBeInstanceOf(Error);
+    finish(1);
+    await vi.advanceTimersByTimeAsync(59);
+    let settled = false; void queuedResult.then(() => { settled = true; });
+    await Promise.resolve(); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await queuedResult as Error).message).toContain('deadline');
+    const late = reads.run('late', async () => 3);
+    const lateResult = late.catch(error => error);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await lateResult as Error).message).toContain('deadline');
+    finishNext(2);
+  } finally { vi.useRealTimers(); }
 });

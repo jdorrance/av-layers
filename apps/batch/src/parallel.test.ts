@@ -296,7 +296,7 @@ describe('forecast hour-group builds', () => {
   it('rejects an otherwise consistent plan older than the measured build budget', async () => {
     const out = await temporaryRoot(), provider = fixtureProvider();
     const createdAt = new Date(Date.now() - BUILD_BUDGETS.elapsedMs - 1000).toISOString();
-    const changed = { ...plan, createdAt, buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${plan.buildId.split('Z-')[1]}` };
+    const changed = { ...plan, createdAt, deadlineAt: new Date(Date.parse(createdAt) + BUILD_BUDGETS.elapsedMs).toISOString(), buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${plan.buildId.split('Z-')[1]}` };
     await expect(buildShard({ plan: changed, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow(/elapsed-time budget/);
     expect(provider.open).not.toHaveBeenCalled();
     expect(await readdir(out)).toEqual([]);

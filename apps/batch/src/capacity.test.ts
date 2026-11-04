@@ -1,6 +1,6 @@
 import { loadCoverage } from './coverage.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, type Manifest } from '@av/contracts';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, type Manifest, type ManifestV5 } from '@av/contracts';
 import { getForecastProvider } from './providers.js';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
 import { GFS_PRESSURE_LEVELS_HPA } from './gfs/constants.js';
@@ -42,6 +42,23 @@ describe('build capacity admission and performance budgets', () => {
     expect(result.stderr).toContain('scenario overrides are unsupported');
     expect(result.stdout).not.toContain('currentProductAdmission');
   });
+  it.each(['gfs', 'icon-eu'])('admits raster workers for the real %s whole-domain configuration', model => {
+    const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--model', model], { encoding: 'utf8', timeout: 60_000 });
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.capacity.violations).toEqual([]);
+    expect(report.capacity.rasterWorkers).toBeLessThanOrEqual(rasterWorkerCount());
+    expect(report.capacity.deriveWorkers).toBeLessThanOrEqual(rasterWorkerCount());
+    if (rasterWorkerCount() > 0) {
+      expect(report.capacity.rasterWorkers).toBeGreaterThan(0);
+      expect(report.capacity.deriveWorkers).toBeGreaterThan(0);
+    }
+    const levels = model === 'gfs' ? 21 : 30, fieldsPerLevel = model === 'gfs' ? 2 : 3;
+    const nativeActive = report.capacity.workingSet.nativeFrame / ((7 + fieldsPerLevel * levels) * 5);
+    expect(nativeActive).toBeGreaterThan(4);
+    expect(report.capacity.workingSet.deriveWorkerColumns).toBeGreaterThanOrEqual(report.capacity.deriveWorkers * 4 * (levels * 16 + 45));
+    expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+  }, 70_000);
   it('rejects empty public coverage before opening a provider', async () => {
     const mask = await loadCoverage(GFS_PRODUCT);
     expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('before acquisition');
@@ -130,6 +147,19 @@ describe('build capacity admission and performance budgets', () => {
     manifest.metrics.tiles = [...Z7_TILES_BY_ZOOM];
     manifest.samples.bytes = BUILD_BUDGETS.samplePackBytes + 1;
     expect(checkPerformance(manifest).passed).toBe(false);
+  });
+  it('checks v5 frame-group shard bytes using each group channel count', () => {
+    const manifest = { version: 5, buildId: 'fixture', cycle: '2026-10-30T00:00:00Z',
+      metrics: { elapsedMs: 1000, peakRssBytes: 1000, tiles: [1] }, artifacts: [{}],
+      surfaces: [{ kind: 'fine', grid: { width: 10, height: 10 }, coverage: { maxZoom: 0 }, layers: ['usable-lift-msl', 'usable-lift-agl'],
+        samples: { format: 'frame-group-block-shards-v1', storedCells: 10, channelCount: 6,
+          shards: [{ group: 0, firstFrame: 0, frameCount: 2, storedCells: 10, bytes: 200 },
+            { group: 1, firstFrame: 2, frameCount: 1, storedCells: 10, bytes: 100 }] } }] } as unknown as ManifestV5;
+    const result = checkPerformance(manifest);
+    expect(result.passed).toBe(true);
+    expect(result.observed.emittedSampleBytes).toBe(300);
+    manifest.surfaces[0]!.samples.shards[1]!.bytes++;
+    expect(checkPerformance(manifest).failures).toContain('invalid v5 shard size');
   });
   it('applies one aggregate grid and numeric byte budget to base plus refinements', () => {
     const manifest = receipt(), patch = fixturePatch(fixtureManifest());

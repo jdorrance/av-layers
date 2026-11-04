@@ -1,10 +1,33 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import { open, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 import { MODEL_IDS } from '@av/contracts';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
-import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, verifyPagesProduction, type WranglerConfig } from './operations';
+import { readBuildPlan } from '../apps/batch/src/parallel.js';
+import { assertBuildBucketLock, r2ShardStorage, sealShardCredentials } from '../apps/batch/src/storage.js';
+import { planForecast, runForecastShard } from './publication-workflow.js';
+import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, validateShardEnvironment, verifyPagesProduction, runOperation, type WranglerConfig } from './operations';
+
+vi.mock('../apps/batch/src/parallel.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/parallel.js')>(), readBuildPlan: vi.fn() }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...original, open: vi.fn(), writeFile: vi.fn(original.writeFile) };
+});
+vi.mock('../apps/batch/src/storage.js', async importOriginal => {
+  const original = await importOriginal<typeof import('../apps/batch/src/storage.js')>();
+  return { ...original, r2ShardStorage: vi.fn(original.r2ShardStorage), sealShardCredentials: vi.fn(original.sealShardCredentials), assertBuildBucketLock: vi.fn() };
+});
+vi.mock('./publication-workflow.js', async importOriginal => ({ ...await importOriginal<typeof import('./publication-workflow.js')>(), assertCurrentMain: vi.fn(), planForecast: vi.fn(), runForecastShard: vi.fn() }));
+vi.mock('node:child_process', async importOriginal => ({ ...await importOriginal<typeof import('node:child_process')>(), spawn: vi.fn(() => {
+  const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+  process.nextTick(() => child.emit('close', 0));
+  return child;
+}) }));
 
 const account = '0123456789abcdef0123456789abcdef', pages = 'windy-av-preview-staging';
 const config: WranglerConfig = {
@@ -55,6 +78,129 @@ it('derives publication bucket from the selected Wrangler environment and needs 
   expect(validatePublicationEnvironment({ ...env, TARGET_ENV: 'production' }, config).r2Bucket).toBe(config.production.bucket);
   for (const name of ['CLOUDFLARE_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) expect(() => validatePublicationEnvironment({ ...env, [name]: '' }, config)).toThrow(name);
   expect(() => validatePublicationEnvironment({ ...env, TARGET_ENV: 'preview' }, config)).toThrow('TARGET_ENV');
+});
+
+it('requires an encryption key and excludes parent credentials from shards', () => {
+  expect(() => validateShardEnvironment(base, config)).toThrow('FORECAST_SHARD_CREDENTIAL_KEY');
+  const env = { ...base, CLOUDFLARE_API_TOKEN: undefined, FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
+  expect(validateShardEnvironment(env, config)).toMatchObject({ r2Bucket: config.staging.bucket, credentialKey: env.FORECAST_SHARD_CREDENTIAL_KEY });
+  expect(() => validateShardEnvironment({ ...env, FORECAST_SHARD_CREDENTIAL_KEY: 'short' }, config)).toThrow('FORECAST_SHARD_CREDENTIAL_KEY');
+  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) expect(() => validateShardEnvironment({ ...env, [key]: 'publisher' }, config)).toThrow(key);
+});
+
+it('opens scoped shard storage from the validated plan and encrypted artifact', async () => {
+  const deadlineAt = new Date(Date.now() + 30 * 60_000).toISOString();
+  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt };
+  vi.mocked(readBuildPlan).mockResolvedValue(plan as Awaited<ReturnType<typeof readBuildPlan>>);
+  const shardEnv = { CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
+  const envelope = Buffer.from(sealShardCredentials({ ...shardEnv, R2_ACCESS_KEY_ID: 'publisher', R2_SECRET_ACCESS_KEY: 'publisher-secret' }, plan as Parameters<typeof sealShardCredentials>[1]));
+  vi.mocked(open).mockResolvedValue({ read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+    const bytesRead = Math.min(length, Math.max(0, envelope.length - position), 50);
+    envelope.copy(buffer, offset, position, position + bytesRead);
+    return { bytesRead, buffer };
+  }, close: async () => {} } as never);
+  for (const [key, value] of Object.entries({ ...base, SHARD_ID: '1', FORECAST_SHARD_CREDENTIAL_KEY: shardEnv.FORECAST_SHARD_CREDENTIAL_KEY })) vi.stubEnv(key, value);
+  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) vi.stubEnv(key, undefined);
+  try {
+    await runOperation('forecast-shard');
+    expect(readBuildPlan).toHaveBeenCalledWith('output/plan.json');
+    expect(runForecastShard).toHaveBeenCalledOnce();
+    const [shard, store] = vi.mocked(runForecastShard).mock.calls[0]!;
+    expect(shard).toBe(1);
+    expect(r2ShardStorage).toHaveBeenCalledWith(shardEnv, plan, envelope);
+    expect(store).toBe(vi.mocked(r2ShardStorage).mock.results[0]!.value);
+    await expect(store!.list('')).rejects.toThrow('cannot list');
+    vi.mocked(readBuildPlan).mockResolvedValueOnce({ ...plan, model: 'icon-eu' } as Awaited<ReturnType<typeof readBuildPlan>>);
+    await expect(runOperation('forecast-shard')).rejects.toThrow('differs from the workflow model');
+    expect(runForecastShard).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllEnvs(); vi.mocked(open).mockReset(); vi.mocked(runForecastShard).mockReset(); vi.mocked(readBuildPlan).mockReset(); vi.mocked(r2ShardStorage).mockClear(); }
+});
+
+it('rotates model keys after the bucket lock and seals them only for new plans', async () => {
+  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
+  const asPlan = (value: unknown) => value as Awaited<ReturnType<typeof planForecast>>;
+  vi.mocked(planForecast).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan({ ...plan, model: 'icon-eu' })).mockResolvedValueOnce(null);
+  vi.mocked(writeFile).mockResolvedValue(undefined);
+  const root = mkdtempSync(join(tmpdir(), 'av-key-'));
+  const output = join(root, 'output'), summary = join(root, 'summary');
+  const log = vi.spyOn(console, 'log'), error = vi.spyOn(console, 'error');
+  for (const [key, value] of Object.entries({ ...base, R2_ACCESS_KEY_ID: 'publisher', R2_SECRET_ACCESS_KEY: 'publisher-secret', GH_CREDENTIAL_ISSUER_TOKEN: 'issuer-secret', GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '1', GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary })) vi.stubEnv(key, value);
+  try {
+    vi.mocked(sealShardCredentials).mockClear(); vi.mocked(spawn).mockClear(); vi.mocked(writeFile).mockClear(); vi.mocked(assertBuildBucketLock).mockClear();
+    vi.mocked(assertBuildBucketLock).mockRejectedValueOnce(new Error('lock missing'));
+    await expect(runOperation('forecast-plan')).rejects.toThrow('lock missing');
+    expect(spawn).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(sealShardCredentials).not.toHaveBeenCalled();
+    await runOperation('forecast-plan');
+    await runOperation('forecast-plan');
+    vi.stubEnv('MODEL', 'icon-eu');
+    await runOperation('forecast-plan');
+    const keys = vi.mocked(sealShardCredentials).mock.calls.map(([env]) => env.FORECAST_SHARD_CREDENTIAL_KEY!);
+    expect(keys).toHaveLength(3);
+    expect(new Set(keys).size).toBe(3);
+    for (const key of keys) expect(key).toMatch(/^[a-f0-9]{64}$/);
+    expect(vi.mocked(assertBuildBucketLock).mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(spawn).mock.invocationCallOrder[0]!);
+    expect(vi.mocked(spawn).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(sealShardCredentials).mock.invocationCallOrder[0]!);
+    expect(vi.mocked(sealShardCredentials).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(writeFile).mock.invocationCallOrder[0]!);
+    for (let i = 0; i < 3; i++) {
+      const [command, args, options] = vi.mocked(spawn).mock.calls[i]!;
+      expect(command).toBe('gh');
+      expect(args).toEqual(['secret', 'set', i === 2 ? 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY' : 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', '--env', 'staging', '--repo', 'owner/repo']);
+      expect(options).toMatchObject({ env: { GH_TOKEN: 'issuer-secret' }, stdio: ['pipe', 'ignore', 'pipe'] });
+      const child = vi.mocked(spawn).mock.results[i]!.value;
+      expect(child.stdin!.read().toString()).toBe(keys[i]);
+    }
+    expect(writeFile).toHaveBeenCalledTimes(3);
+    const [path, envelope, options] = vi.mocked(writeFile).mock.calls[0]!;
+    expect(path).toBe('output/shard-credentials.json');
+    expect(options).toEqual({ mode: 0o600 });
+    expect(String(envelope)).not.toContain('publisher-secret');
+    expect(() => r2ShardStorage({ CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: keys[0] }, plan as Parameters<typeof r2ShardStorage>[1], Buffer.from(String(envelope)))).not.toThrow();
+    expect(() => r2ShardStorage({ CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: keys[0] }, plan as Parameters<typeof r2ShardStorage>[1], Buffer.from(String(vi.mocked(writeFile).mock.calls[1]![1])))).toThrow();
+    const visible = [readFileSync(output, 'utf8'), readFileSync(summary, 'utf8'), ...vi.mocked(writeFile).mock.calls.map(call => String(call[1])), JSON.stringify(log.mock.calls), JSON.stringify(error.mock.calls)].join('\n');
+    for (const key of [...keys, 'issuer-secret', 'publisher-secret']) expect(visible).not.toContain(key);
+    await runOperation('forecast-plan');
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(writeFile).toHaveBeenCalledTimes(3);
+  } finally { rmSync(root, { recursive: true, force: true }); log.mockRestore(); error.mockRestore(); vi.unstubAllEnvs(); vi.mocked(writeFile).mockReset(); vi.mocked(planForecast).mockReset(); vi.mocked(assertBuildBucketLock).mockReset(); vi.mocked(sealShardCredentials).mockClear(); vi.mocked(spawn).mockClear(); }
+});
+
+it('fails closed and sanitizes issuer failures and timeouts', async () => {
+  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
+  const root = mkdtempSync(join(tmpdir(), 'av-issuer-')), output = join(root, 'output');
+  writeFileSync(output, '');
+  vi.mocked(planForecast).mockResolvedValue(plan as Awaited<ReturnType<typeof planForecast>>);
+  vi.mocked(writeFile).mockClear(); vi.mocked(sealShardCredentials).mockClear(); vi.mocked(spawn).mockClear();
+  for (const [key, value] of Object.entries({ ...base, R2_ACCESS_KEY_ID: 'publisher', R2_SECRET_ACCESS_KEY: 'publisher-secret', GH_CREDENTIAL_ISSUER_TOKEN: 'issuer-secret', GITHUB_REPOSITORY: 'owner/repo' })) vi.stubEnv(key, value);
+  vi.stubEnv('GITHUB_OUTPUT', output); vi.stubEnv('GITHUB_STEP_SUMMARY', undefined);
+  try {
+    vi.mocked(spawn).mockImplementationOnce(() => {
+      const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+      process.nextTick(() => { child.stderr.write(Buffer.from(`issuer-secret ${'x'.repeat(20_000)}`)); child.emit('close', 1); });
+      return child as never;
+    });
+    await expect(runOperation('forecast-plan')).rejects.toThrow(/^Shard key issuance failed$/);
+    expect(sealShardCredentials).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    vi.stubEnv('GH_CREDENTIAL_ISSUER_TOKEN', undefined);
+    await expect(runOperation('forecast-plan')).rejects.toThrow('GH_CREDENTIAL_ISSUER_TOKEN is required');
+    expect(spawn).toHaveBeenCalledTimes(1);
+    vi.stubEnv('GH_CREDENTIAL_ISSUER_TOKEN', 'issuer-secret');
+    let started!: () => void;
+    const spawned = new Promise<void>(resolve => { started = resolve; });
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
+    vi.mocked(spawn).mockImplementationOnce(() => { vi.useFakeTimers(); started(); return child as never; });
+    const result = runOperation('forecast-plan');
+    const failure = expect(result).rejects.toThrow('Shard key issuance timed out');
+    await spawned;
+    await vi.advanceTimersByTimeAsync(15_000);
+    await failure;
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(sealShardCredentials).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(readFileSync(output, 'utf8')).toBe('');
+  } finally { rmSync(root, { recursive: true, force: true }); vi.useRealTimers(); vi.unstubAllEnvs(); vi.mocked(planForecast).mockReset(); vi.mocked(assertBuildBucketLock).mockReset(); vi.mocked(spawn).mockClear(); }
 });
 
 it('checks API destinations and account identity before invoking Cloudflare', () => {
