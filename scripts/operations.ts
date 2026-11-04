@@ -5,7 +5,7 @@ import { getProduct, MODEL_IDS } from '@av/contracts';
 import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { r2Storage } from '../apps/batch/src/storage.js';
-import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, resumePublication, runForecastShard } from './publication-workflow.js';
+import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, prepareForecastTerrain, resumePublication, runForecastShard } from './publication-workflow.js';
 import { probeApi, readResponseBytes, retryProbe, validateApiBaseUrl, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
@@ -111,7 +111,7 @@ export function forecastPlanReport(plan: Pick<BuildPlan, 'model' | 'cycle' | 'gr
   return { shards, summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
 }
 
-const OPERATIONS = ['deploy', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
+const OPERATIONS = ['deploy', 'forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
 type Operation = typeof OPERATIONS[number];
 const OPERATION_USAGE = `Usage: pnpm operations ${OPERATIONS.join('|')}`;
 export function validateOperationInputs(command: string, env: NodeJS.ProcessEnv = process.env): asserts command is Operation {
@@ -162,7 +162,9 @@ export async function runOperation(command: string): Promise<void> {
     const model = required(process.env, 'MODEL');
     const config = validatePublicationEnvironment(process.env);
     const store = r2Storage({ ...process.env, R2_BUCKET: config.r2Bucket });
-    if (command === 'forecast-plan') {
+    if (command === 'forecast-terrain') {
+      await prepareForecastTerrain(store);
+    } else if (command === 'forecast-plan') {
       validateApiBaseUrl(process.env.API_BASE_URL);
       const plan = await planForecast(store);
       const { shards, summary } = forecastPlanReport(plan, model);

@@ -101,11 +101,32 @@ export function configuredWholeDomain(model: string, env: NodeJS.ProcessEnv, sto
   return { catalogRef: terrainCatalogInput(catalog), storage: store };
 }
 
+/** Populate immutable terrain before the forecast build clock starts. */
+export async function prepareForecastTerrain(store?: ObjectStorage): Promise<void> {
+  await publicationWorkflow(async ({ signal, store, model }) => {
+    const product = getProduct(model);
+    if (!product) throw new Error(`No forecast product for ${model}`);
+    const wholeDomain = configuredWholeDomain(model, process.env, store);
+    if (!wholeDomain) return;
+    const [{ wholeDomainPlan, loadBundledFineCoverage }, { ensureWholeDomainTerrain }] = await Promise.all([
+      import('../apps/batch/src/whole-domain/coverage.js'), import('../apps/batch/src/whole-domain/terrain.js')
+    ]);
+    const plan = wholeDomainPlan(product);
+    if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
+    const fine = await loadBundledFineCoverage(product, plan);
+    const ref = await ensureWholeDomainTerrain({ ...wholeDomain, grid: plan.fine,
+      coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal });
+    console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
+  }, store);
+}
+
 /** Resolve the cycle once before independent workers receive the immutable plan. */
 export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | null> {
   return publicationWorkflow(async ({ root, signal, store, model }) => {
     const cacheDir = `.cache/${model}`;
+    console.error(JSON.stringify({ phase: 'cycle-discovery', model, state: 'started' }));
     const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });
+    console.error(JSON.stringify({ phase: 'cycle-discovery', model, state: 'complete', cycle }));
     const { pointer } = await readPointer(store, model, signal);
     signal.throwIfAborted();
     if (pointer) {
@@ -126,7 +147,7 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       : undefined;
     const terrain = process.env.TERRAIN_INPUTS ? terrainInputForModel(process.env.TERRAIN_INPUTS, model) : undefined;
     const options = { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
-      ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain } : {}) };
+      ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain: { ...wholeDomain, cacheOnly: true } } : {}) };
     return createForecastPlan(model, options);
   }, store);
 }

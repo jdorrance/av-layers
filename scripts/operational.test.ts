@@ -88,11 +88,11 @@ describe('declarative workflows', () => {
     expect(verification.some(step => typeof step.run === 'string' && step.run.includes('--with rasterio==1.4.3 --with numpy==2.2.6'))).toBe(true);
   });
 
-  it('scopes planning, publication and maintenance credentials to the selected environment', () => {
+  it('scopes terrain, planning, publication and maintenance credentials to the selected environment', () => {
     expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}");
     expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}");
     const forecastJobs = record(workflow('forecast-model.yml').jobs);
-    for (const name of ['prepare', 'build-publish']) {
+    for (const name of ['terrain', 'prepare', 'build-publish']) {
       const job = record(forecastJobs[name]);
       expect(job.environment).toBe('${{ inputs.environment }}');
       expect(record(job.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
@@ -137,7 +137,7 @@ describe('declarative workflows', () => {
     const starts = hours!.split(',').map(hour => Number(hour) * 60 + Number(minute)).sort((a, b) => a - b);
     const jobs = record(workflow('forecast-model.yml').jobs);
     const selectionMinutes = Number(record(record(forecast.jobs).select)['timeout-minutes']);
-    const budget = ['prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), selectionMinutes);
+    const budget = ['terrain', 'prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), selectionMinutes);
     for (let i = 0; i < starts.length; i++) {
       const cycle = Math.floor((starts[i]! - GFS_DISCOVERY_LAG_HOURS * 60) / 360) * 360;
       const nextStart = starts[(i + 1) % starts.length]! + (i + 1 === starts.length ? 1440 : 0);

@@ -46,17 +46,20 @@ cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
 
-Each selected model runs `forecast-plan` (15m timeout), up to four parallel
-`forecast-shard` jobs (60m timeout), and `forecast` (`build-publish`, 60m
-timeout) to merge, validate, publish to R2, clean up expired builds, and verify
-live API serving. If a shard fails, `gh run rerun <run_id> --failed` reuses
-completed shard artifacts while the plan remains within the 50-minute build
-elapsed-time budget.
+Each selected model runs `forecast-terrain` (60m job timeout), `forecast-plan`
+(15m timeout), up to four parallel `forecast-shard` jobs (60m timeout), and
+`forecast` (`build-publish`, 60m timeout) to merge, validate, publish to R2,
+clean up expired builds, and verify live API serving. Terrain preparation has its
+own 50-minute operation budget; forecast elapsed time starts with planning. If a
+shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
+the plan remains within the 50-minute build elapsed-time budget.
 
-Planning stages each configured grid's coverage and terrain arrays in the frozen
-plan artifact. Workers load them locally and derive patches from the same native
-weather frames. Assembly requires every grid's complete shard set before
-validating and publishing the build.
+`forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
+reporting progress in the job log. Planning requires that cache and stages each
+configured grid's coverage and terrain arrays in the frozen plan artifact. A
+missing cache fails planning immediately. Workers load the arrays locally and
+derive fine fields from the same native weather frames. Assembly requires every
+grid's complete shard set before validating and publishing the build.
 
 Admission requires a source cycle at most **18 hours old**, at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
@@ -127,10 +130,10 @@ The Forecast workflow's `terrain-catalog-ref` input overrides the environment's
 `TERRAIN_CATALOG_REF`, which overrides the production pin. For staging, set the
 variable to the complete JSON reference in that environment's import artifact,
 `terrain-catalog-ref.json`. The catalog and tiles must exist in the selected
-environment's bucket. Catalog selection reaches only the preparation job;
-workers use the frozen plan. Staging forecasts without a catalog use native
-grids. A supplied missing or corrupt catalog fails preparation. Empty or
-out-of-domain zone configurations keep native output.
+environment's bucket. Configured whole-domain products require a catalog.
+Catalog selection binds terrain preparation and cache validation; workers use
+the frozen plan. Changes to source data, grid, coverage or preparation method
+select a new terrain cache. Missing or corrupt assets fail the terrain job.
 
 The existing `terrain-inputs` model map remains available for staging prepared
 native-grid arrays alongside configured refinements.

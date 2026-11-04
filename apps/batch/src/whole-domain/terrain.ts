@@ -4,17 +4,28 @@ import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, readSparsePreparedTerra
 import { loadTerrainCatalog, stageSparsePreparedTerrain, loadSparsePreparedTerrain } from '../terrain/staging.js';
 import { BUILD_BUDGETS } from '../capacity.js';
 
-export interface WholeDomainTerrainOptions { catalogRef: TerrainAsset; storage: TerrainStorage }
+export interface WholeDomainTerrainOptions { catalogRef: TerrainAsset; storage: TerrainStorage; cacheOnly?: boolean }
 export interface WholeDomainTerrainInput { ref: SparseTerrainRef; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array }
 export interface PrepareWholeDomainTerrainInput { grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; out: string; signal?: AbortSignal }
+
+/** Prepare or verify the reusable R2 terrain independently of a forecast cycle. */
+export async function ensureWholeDomainTerrain(options: WholeDomainTerrainOptions & Omit<PrepareWholeDomainTerrainInput, 'out'>): Promise<SparseTerrainRef> {
+  const deadline = AbortSignal.timeout(BUILD_BUDGETS.elapsedMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+  console.error(JSON.stringify({ phase: 'terrain-preparation', stage: 'catalog' }));
+  const catalog = await loadTerrainCatalog(options.catalogRef, options.storage, signal);
+  return prepareSparseTerrain({ catalog, storage: options.storage, grid: options.grid, coverage: options.coverage,
+    coverageDescriptor: options.coverageDescriptor, signal, limits: { maxArrayBytes: Math.min(MAX_SPARSE_TERRAIN_BYTES, BUILD_BUDGETS.peakRssBytes), maxDurationMs: BUILD_BUDGETS.elapsedMs },
+    cacheOnly: options.cacheOnly,
+    onProgress: ({ phase: stage, ...progress }) => console.error(JSON.stringify({ phase: 'terrain-preparation', stage, ...progress })),
+    onReport: report => console.error(JSON.stringify({ phase: 'terrain-preparation', ...report })) });
+}
 
 export async function prepareWholeDomainTerrain(options: WholeDomainTerrainOptions & PrepareWholeDomainTerrainInput): Promise<SparseTerrainRef> {
   const deadline = AbortSignal.timeout(BUILD_BUDGETS.elapsedMs);
   const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
-  const catalog = await loadTerrainCatalog(options.catalogRef, options.storage, signal);
-  const ref = await prepareSparseTerrain({ catalog, storage: options.storage, grid: options.grid, coverage: options.coverage,
-    coverageDescriptor: options.coverageDescriptor, signal, limits: { maxArrayBytes: Math.min(MAX_SPARSE_TERRAIN_BYTES, BUILD_BUDGETS.peakRssBytes), maxDurationMs: BUILD_BUDGETS.elapsedMs },
-    onReport: report => console.error(JSON.stringify({ phase: 'terrain-preparation', ...report })) });
+  const ref = await ensureWholeDomainTerrain({ ...options, signal });
+  console.error(JSON.stringify({ phase: 'terrain-preparation', stage: 'staging', key: ref.key }));
   await stageSparsePreparedTerrain({ ref, storage: options.storage, out: options.out, grid: options.grid,
     coverage: options.coverage, coverageDescriptor: options.coverageDescriptor, signal });
   return ref;

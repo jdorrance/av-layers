@@ -51,18 +51,22 @@ Run batch tests with `pnpm test apps/batch`.
 
 The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
 `gfs`, or `icon-eu` and calls the reusable
-[model workflow](../../.github/workflows/forecast-model.yml) per model. Each
-model resolves its cycle and daylight-filtered hours, prepares configured grids,
-and freezes coverage, terrain and recipe identities in the plan artifact. Up to
-four `forecast-shard` workers load these inputs locally. Each acquired native
+[model workflow](../../.github/workflows/forecast-model.yml) per model.
+`forecast-terrain` prepares or validates each model's reusable terrain cache in
+R2. Planning then resolves the cycle and daylight-filtered hours, loads cached
+terrain, and freezes coverage, terrain and recipe identities in the plan artifact.
+Up to four `forecast-shard` workers load these inputs locally. Each acquired native
 frame supplies its native layers and packed fine lift fields. Assembly writes
 bounded numeric shards and validates the complete build before publication to R2.
+Local forecast builds prepare terrain on the first use and reuse it thereafter.
 
 ```mermaid
 flowchart TB
   selection["Select one model or all registered models"]
-  selection --> gfs["GFS: resolve cycle and hours"]
-  selection --> icon["ICON-EU: resolve cycle and daylight hours"]
+  selection --> gfsTerrain["GFS: prepare or validate terrain cache"]
+  selection --> iconTerrain["ICON-EU: prepare or validate terrain cache"]
+  gfsTerrain --> gfs["GFS: resolve cycle and hours"]
+  iconTerrain --> icon["ICON-EU: resolve cycle and daylight hours"]
   gfs --> gfsBatches["Parallel GFS hour batches"]
   icon --> iconBatches["Parallel ICON-EU hour batches"]
   gfsBatches --> gfsPublish["Assemble, validate, and publish GFS"]

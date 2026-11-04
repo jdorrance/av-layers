@@ -38,17 +38,13 @@ env:
   RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
   RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
 jobs:
-  prepare:
-    name: Plan ${{ inputs.model }}
+  terrain:
+    name: Terrain ${{ inputs.model }}
     if: ${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 60
     environment: ${{ inputs.environment }}
-    outputs:
-      ready: ${{ steps.plan.outputs.ready }}
-      shards: ${{ steps.plan.outputs.shards }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-    env:
+    env: &plan-env
       TERRAIN_INPUTS: ${{ inputs['terrain-inputs'] || '' }}
       TERRAIN_CATALOG_REF: >-
         ${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF ||
@@ -63,7 +59,35 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Admit cycle and plan forecast
+      - name: Prepare reusable terrain in R2
+        run: pnpm operations forecast-terrain
+      - name: Upload terrain preparation failure
+        uses: actions/upload-artifact@v4
+        if: failure() || cancelled()
+        with:
+          name: forecast-terrain-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/failure.json
+          if-no-files-found: warn
+          retention-days: 7
+  prepare:
+    name: Plan ${{ inputs.model }}
+    needs: terrain
+    if: ${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.environment }}
+    outputs:
+      ready: ${{ steps.plan.outputs.ready }}
+      shards: ${{ steps.plan.outputs.shards }}
+      artifact: ${{ steps.plan.outputs.artifact }}
+    env: *plan-env
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Admit cycle and plan forecast from cached terrain
         id: plan
         run: pnpm operations forecast-plan
       - name: Share immutable build plan
