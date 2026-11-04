@@ -40,11 +40,14 @@ mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
 
 ## Use in forecasts
 
-The [whole-domain producer](../whole-domain/prepare.ts) prepares packed DEM
-values in sparse coverage offset order from a pinned global catalog. The plan
-stages coverage and terrain files; shards validate their identities and load them
-before weather acquisition. [Regional evaluation](../refinement/README.md)
-retains polygon-grid preparation.
+The `forecast-terrain` operation prepares or validates packed DEM values in R2
+from the pinned global catalog. Its cache identity binds source data, fine grid,
+coverage and preparation method. Progress reports expose preparation and reuse.
+The [whole-domain producer](../whole-domain/prepare.ts) stages cached values in
+sparse coverage offset order with coverage files in the frozen plan. Shards
+validate their identities and load them before weather acquisition. Local
+forecast builds prepare a missing cache on first use.
+[Regional evaluation](../refinement/README.md) retains polygon-grid preparation.
 
 [Operations](../../../../docs/operations.md#terrain-data) configures the hosted
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
@@ -59,9 +62,9 @@ flowchart LR
   source[Native GLO-90] --> ingest[Verify and repack once]
   ingest --> catalog[Immutable global catalog and COGs]
   catalog --> reader[Bounded native reader]
-  reader --> prepare[Prepare requested grid]
-  prepare --> artifact[Reusable elevation and validity arrays]
-  artifact --> plan[Existing build-plan artifact]
+  reader --> prepare[forecast-terrain: prepare requested grid]
+  prepare --> artifact[Reusable R2 elevation and validity arrays]
+  artifact --> plan[Forecast plan: validate and stage cached arrays]
   plan --> shards[Local load once per shard]
 ```
 

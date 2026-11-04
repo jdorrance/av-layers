@@ -113,10 +113,10 @@ target grid.
 flowchart LR
   dem[Native DEM] --> ingest[One-time verified import]
   ingest --> terrain[Immutable terrain namespace]
-  terrain --> prepare[Bounded grid preparation]
+  terrain --> prepare[forecast-terrain: bounded grid preparation]
   domain[Model grid and sparse coverage] --> prepare
-  prepare --> inputs[Reusable arrays and coverage]
-  inputs --> plan[Frozen build-plan inputs]
+  prepare --> inputs[Reusable R2 arrays and coverage]
+  inputs --> plan[Validate cache and freeze build-plan inputs]
   plan --> workers[Local load once per shard]
   weather[Normalized native columns] --> columns[Terrain columns]
   workers --> columns
@@ -127,9 +127,11 @@ flowchart LR
 ```
 
 The model configuration selects native-grid subdivision factors.
-[Whole-domain preparation](../apps/batch/src/whole-domain/prepare.ts) freezes
-sparse coverage and packed DEM identities in the build plan, staging their files
-for workers. GFS precipitation retains its native surface. The
+The hosted `forecast-terrain` job prepares or validates reusable packed DEMs
+before forecast planning. [Whole-domain preparation](../apps/batch/src/whole-domain/prepare.ts)
+loads the cache, freezes sparse coverage and packed DEM identities in the build
+plan, and stages their files for workers. Local builds prepare missing terrain
+on demand. GFS precipitation retains its native surface. The
 [polygon configuration](../packages/contracts/config/refinement.json) supports
 regional evaluation grids.
 

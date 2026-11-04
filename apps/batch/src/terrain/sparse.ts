@@ -35,9 +35,16 @@ const descriptorSchema = z.strictObject({
 });
 
 export type SparsePreparedTerrain = { descriptor: z.infer<typeof descriptorSchema>; elevationM: Float32Array; valid: Uint8Array };
+export interface SparseTerrainProgress {
+  phase: 'cache-check' | 'cache-validation' | 'planning' | 'sampling' | 'upload' | 'complete';
+  cells: number; completedCells: number; elapsedMs: number;
+  cacheHit?: boolean; sourceBlocks?: number; sourceAssets?: number; reader?: TerrainReadStats;
+}
 export interface SparseTerrainOptions {
   catalog: TerrainCatalog; storage: TerrainStorage; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal;
+  cacheOnly?: boolean;
   limits?: { maxArrayBytes?: number; maxDurationMs?: number; reader?: Parameters<typeof createTerrainReader>[0]['limits']; total?: Partial<Parameters<typeof createTerrainReadBudget>[0]> };
+  onProgress?: (progress: SparseTerrainProgress) => void;
   onReport?: (report: { cacheHit: boolean; cells: number; arrayBytes: number; elapsedMs: number; inventoryReadBytesBound: number; reader?: TerrainReadStats; sourceBlocks?: number; sourceAssets?: number; totalLimits?: Parameters<typeof createTerrainReadBudget>[0]; planning?: { windowPoints: number; windows: number; maxWindowGroups: number; blockBitmapBytes: number; sampledPeakRssBytes: number; sampledPeakHeapUsedBytes: number; decodedBlocks: number; readBatches: number } }) => void;
 }
 
@@ -106,13 +113,26 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
   const catalog = terrainCatalogSchema.parse(options.catalog), target = identity(options.grid, options.coverage, options.coverageDescriptor);
   const arrayBytes = target.cells * PREPARED_TERRAIN_CELL_BYTES, maximum = options.limits?.maxArrayBytes ?? MAX_ARRAY_BYTES;
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_ARRAY_BYTES || !target.cells || arrayBytes > maximum) throw new Error('Sparse terrain array budget exceeded');
-  let inventoryReadBytesBound = TERRAIN_INVENTORY_BYTES;
-  await verifyTerrainCatalogInventory(catalog, options.storage, signal, () => { inventoryReadBytesBound += TERRAIN_INVENTORY_BYTES; });
-  checkDeadline();
+  let lastProgressAt = started, lastPhase: SparseTerrainProgress['phase'] | undefined;
+  function progress(phase: SparseTerrainProgress['phase'], completedCells: number, details?: () => Pick<SparseTerrainProgress, 'cacheHit' | 'sourceBlocks' | 'sourceAssets' | 'reader'>): void {
+    if (!options.onProgress) return;
+    const now = Date.now();
+    if (phase === lastPhase && now - lastProgressAt < 10_000) return;
+    checkDeadline();
+    lastProgressAt = now; lastPhase = phase;
+    options.onProgress({ phase, cells: target.cells, completedCells, elapsedMs: now - started, ...details?.() });
+    checkDeadline();
+  }
+  progress('cache-check', 0);
   const prefix = sparsePrefix(catalog.dataId, target.gridHash, target.coverageHash), manifestKey = `${prefix}/manifest.json`;
   const existing = await options.storage.get(manifestKey, undefined, PREPARED_DESCRIPTOR_MAX_BYTES, signal);
   checkDeadline();
+  if (!existing && options.cacheOnly) throw new Error(`Prepared terrain cache is missing: ${manifestKey}; run pnpm operations forecast-terrain before forecast planning`);
+  let inventoryReadBytesBound = TERRAIN_INVENTORY_BYTES;
+  await verifyTerrainCatalogInventory(catalog, options.storage, signal, () => { inventoryReadBytesBound += TERRAIN_INVENTORY_BYTES; });
+  checkDeadline();
   if (existing) {
+    progress('cache-validation', 0, () => ({ cacheHit: true }));
     const ref = sparseTerrainRefSchema.parse({ key: manifestKey, bytes: existing.bytes.length, sha256: sha256(existing.bytes), arrayBytes });
     const loaded = await validateSparsePreparedTerrain(ref, async asset => {
       if (asset.key === manifestKey) return existing.bytes;
@@ -123,8 +143,10 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     if (loaded.descriptor.dataId !== catalog.dataId) throw new Error('Sparse terrain source identity mismatch');
     checkDeadline();
     options.onReport?.({ cacheHit: true, cells: target.cells, arrayBytes, inventoryReadBytesBound, elapsedMs: Date.now() - started });
+    progress('complete', target.cells, () => ({ cacheHit: true }));
     return ref;
   }
+  progress('planning', 0, () => ({ cacheHit: false, sourceBlocks: 0, sourceAssets: 0 }));
   const geometry = prepareGridGeometry(target.grid), limits = { ...TERRAIN_READ_LIMITS, ...options.limits?.reader };
   const planner = await createTerrainReader({ catalog, storage: options.storage, signal, limits: options.limits?.reader });
   let bitmapBits = 0;
@@ -157,7 +179,7 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
       checkDeadline();
     }
   }
-  let groups = new Map<string, number>(), windowPoints = 0;
+  let groups = new Map<string, number>(), windowPoints = 0, plannedCells = 0;
   function planWindow(): void {
     if (!windowPoints) return;
     windows++;
@@ -184,7 +206,8 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
           if (!usedAssets[asset.index]) { usedAssets[asset.index] = 1; sourceAssets++; }
         }
       }
-      if (++windowPoints === WINDOW_POINTS) { planWindow(); await checkpoint(); }
+      plannedCells++;
+      if (++windowPoints === WINDOW_POINTS) { planWindow(); progress('planning', plannedCells, () => ({ sourceBlocks, sourceAssets })); await checkpoint(); }
     }
     if (windowPoints) { planWindow(); await checkpoint(); }
   } finally { planner.close(); }
@@ -192,7 +215,9 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
   const budget = createTerrainReadBudget(totalLimits, { signal, ...(duration === undefined ? {} : { deadlineAt: started + duration }) });
   const heights = new Uint8Array(target.cells * 4), valid = new Uint8Array(target.cells), view = new DataView(heights.buffer);
   const reader = await createTerrainReader({ catalog, storage: options.storage, signal, limits: options.limits?.reader, budget });
+  let sampledCells = 0;
   try {
+    progress('sampling', 0, () => ({ sourceBlocks, sourceAssets, reader: reader.stats() }));
     let points: Array<{ latitude: number; longitude: number; offset: number; blocks: string }> = [];
     const flush = async () => {
       if (!points.length) return;
@@ -212,6 +237,8 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
           if (!Number.isFinite(view.getFloat32(offset * 4, true))) throw new Error('Terrain elevation exceeds float32 storage');
           valid[offset] = 1;
         }
+        sampledCells += batch.length;
+        progress('sampling', sampledCells, () => ({ sourceBlocks, sourceAssets, reader: reader.stats() }));
         start = end;
       }
       points = [];
@@ -219,6 +246,7 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     let scanned = 0;
     for (const point of targets()) {
       if (point) points.push({ ...point, blocks: reader.sourceBlocks(point.latitude, point.longitude) });
+      else sampledCells++;
       if (++scanned === WINDOW_POINTS) { await flush(); await checkpoint(); scanned = 0; }
     }
     if (scanned) { await flush(); await checkpoint(); }
@@ -227,6 +255,7 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     reader.close();
     options.onReport?.({ cacheHit: false, cells: target.cells, arrayBytes, inventoryReadBytesBound, elapsedMs: Date.now() - started, reader: readerStats, sourceBlocks, sourceAssets, totalLimits, planning: { windowPoints: WINDOW_POINTS, windows, maxWindowGroups, blockBitmapBytes: blockBitmap.byteLength, sampledPeakRssBytes, sampledPeakHeapUsedBytes, decodedBlocks, readBatches } });
   }
+  progress('upload', target.cells, () => ({ sourceBlocks, sourceAssets }));
   const files: { elevationM: TerrainAsset[]; valid: TerrainAsset[] } = { elevationM: [], valid: [] };
   for (let start = 0, i = 0; start < target.cells; start += CHUNK_CELLS, i++) {
     const end = Math.min(start + CHUNK_CELLS, target.cells);
@@ -242,5 +271,6 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
   checkDeadline();
   await putImmutable(options.storage, manifestKey, bytes, 'application/json', signal);
   checkDeadline();
+  progress('complete', target.cells, () => ({ cacheHit: false, sourceBlocks, sourceAssets }));
   return sparseTerrainRefSchema.parse({ key: manifestKey, bytes: bytes.length, sha256: sha256(bytes), arrayBytes });
 }

@@ -16,13 +16,13 @@ const base = { TARGET_ENV: 'staging', MODEL: 'gfs', CLOUDFLARE_ACCOUNT_ID: accou
 it('requires an explicit registered model for forecast writes and maintenance', () => {
   const context = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging' };
   for (const MODEL of MODEL_IDS) {
-    for (const command of ['forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
+    for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
       expect(() => validateOperationInputs(command, { ...base, MODEL, SHARD_ID: '0', ACTION: 'cleanup' })).not.toThrow();
     }
     expect(workflowAuthority({ ...context, MODEL })).toMatchObject({ model: MODEL, group: `forecast-staging-${MODEL}` });
   }
   for (const MODEL of [undefined, '', 'all', 'unknown', 'constructor']) {
-    for (const command of ['forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
+    for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
       expect(() => validateOperationInputs(command, { ...base, MODEL, SHARD_ID: '0', ACTION: 'cleanup' })).toThrow(/MODEL|model/);
     }
     expect(() => workflowAuthority({ ...context, MODEL })).toThrow('serialized');
@@ -43,10 +43,10 @@ it('accepts explicit operations without ceremonial confirmation and rejects ambi
 });
 
 it('admits explicit forecast commands and bounded worker identities', () => {
-  for (const command of ['forecast-plan', 'forecast']) expect(() => validateOperationInputs(command, base)).not.toThrow();
+  for (const command of ['forecast-terrain', 'forecast-plan', 'forecast']) expect(() => validateOperationInputs(command, base)).not.toThrow();
   for (const SHARD_ID of ['0', '1', '2', '3']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).not.toThrow();
   for (const SHARD_ID of ['', '-1', '4', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).toThrow('SHARD_ID');
-  for (const command of ['forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
+  for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
 });
 
 it('derives publication bucket from the selected Wrangler environment and needs one account ID', () => {

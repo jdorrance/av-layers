@@ -52,7 +52,7 @@ describe('workflow model selection', () => {
 });
 
 describe('multi-model workflow isolation', () => {
-  it('resolves catalog overrides before the production pin only in the preparation job', () => {
+  it('shares catalog overrides and the production pin across terrain preparation and planning', () => {
     const forecast = workflow('forecast'), model = workflow('forecast-model'), modelJobs = jobs('forecast-model');
     const input = record(record(record(record(forecast.on).workflow_dispatch).inputs)['terrain-catalog-ref']);
     expect(input).toMatchObject({ type: 'string', default: '' });
@@ -64,6 +64,7 @@ describe('multi-model workflow isolation', () => {
     const catalog = terrainCatalogInput(catalogJson!);
     expect(catalog.key).toBe(`terrain/catalogs/${catalog.sha256}.json`);
     expect(catalogExpression).toBe(`\${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF || (inputs.environment == 'production' && '${catalogJson}') || '' }}`);
+    expect(record(record(modelJobs.terrain).env)).toEqual(record(record(modelJobs.prepare).env));
     for (const env of [record(model.env), record(record(modelJobs.shard).env), record(record(modelJobs['build-publish']).env)]) {
       expect(env.TERRAIN_CATALOG_REF).toBeUndefined();
       expect(env.TERRAIN_INPUTS).toBeUndefined();
@@ -79,6 +80,26 @@ describe('multi-model workflow isolation', () => {
     expect(fullPath).toContain('output/coverage/');
     expect(fullPath).toContain('output/terrain/');
     expect(fullPath).toContain('output/builds/');
+  });
+
+  it('prepares reusable terrain before admitting the forecast cycle and preserves resume skips', () => {
+    const modelJobs = jobs('forecast-model'), terrain = record(modelJobs.terrain), prepare = record(modelJobs.prepare);
+    const mainFreshRun = "${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}";
+    expect(terrain.name).toBe('Terrain ${{ inputs.model }}');
+    expect(terrain.if).toBe(mainFreshRun);
+    expect(prepare.if).toBe(mainFreshRun);
+    expect(prepare.needs).toBe('terrain');
+    expect(terrain['timeout-minutes']).toBe(60);
+    expect(prepare['timeout-minutes']).toBe(15);
+    const steps = terrain.steps as Record<string, unknown>[];
+    expect(steps.some(step => step.run === 'pnpm operations forecast-terrain')).toBe(true);
+    const uploads = steps.filter(step => step.uses === 'actions/upload-artifact@v4');
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].if).toBe('failure() || cancelled()');
+    expect(record(uploads[0].with).path).toBe('output/failure.json');
+    expect(terrain.outputs).toBeUndefined();
+    expect(steps.find(step => step.uses === 'actions/checkout@v4')?.with).toEqual({ ref: '${{ github.sha }}', 'persist-credentials': false });
+    expect(steps.some(step => step.uses === './.github/actions/setup')).toBe(true);
   });
 
   it('expands models before calling one independently serialized forecast per model', () => {

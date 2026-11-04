@@ -8,7 +8,7 @@ import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { refinementInputSchema } from '../apps/batch/src/refinement/prepare.js';
 import { localPath } from '../apps/batch/src/validate.js';
-const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn() }));
+const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn() }));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
 vi.mock('../apps/batch/src/providers.js', async () => {
@@ -19,12 +19,14 @@ vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, clea
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
 vi.mock('../apps/batch/src/storage.js', () => ({ r2Storage: fake.storage }));
+vi.mock('../apps/batch/src/whole-domain/coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/whole-domain/coverage.js')>(), loadBundledFineCoverage: fake.fineCoverage }));
+vi.mock('../apps/batch/src/whole-domain/terrain.js', () => ({ ensureWholeDomainTerrain: fake.terrain }));
 vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
 vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
-import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
+import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, prepareForecastTerrain, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 const catalogRef = { key: `terrain/catalogs/${'c'.repeat(64)}.json`, sha256: 'c'.repeat(64), bytes: 100 };
 let manifest: Manifest;
@@ -35,6 +37,8 @@ beforeEach(() => {
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
   fake.storage.mockReturnValue({});
+  fake.fineCoverage.mockResolvedValue({ mask: { coverage: { fixture: true } }, bytes: Uint8Array.of(1) });
+  fake.terrain.mockResolvedValue({ key: 'terrain/prepared/fixture/manifest.json' });
   fake.plan.mockResolvedValue({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
   fake.verifyServing.mockResolvedValue(undefined);
   fake.shard.mockResolvedValue('output/shards/0/receipt.json');
@@ -87,13 +91,28 @@ it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered n
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
-  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), wholeDomain: { catalogRef, storage: {} } });
+  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), wholeDomain: { catalogRef, storage: {}, cacheOnly: true } });
 });
 
 it.each(MODEL_IDS)('passes the same global catalog pin for configured %s zones', async model => {
   vi.stubEnv('MODEL', model);
   await planForecast();
-  expect(fake.plan).toHaveBeenCalledWith(model, expect.objectContaining({ wholeDomain: { catalogRef, storage: {} } }));
+  expect(fake.plan).toHaveBeenCalledWith(model, expect.objectContaining({ wholeDomain: { catalogRef, storage: {}, cacheOnly: true } }));
+});
+it.each(MODEL_IDS)('prepares reusable %s terrain before any forecast cycle is selected', async model => {
+  vi.stubEnv('MODEL', model);
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  await prepareForecastTerrain();
+  expect(fake.fineCoverage).toHaveBeenCalledWith(getProduct(model), expect.objectContaining({ k: getProduct(model)!.terrainSubdivisionFactor }));
+  expect(fake.terrain).toHaveBeenCalledWith({ catalogRef, storage: {}, grid: expect.any(Object), coverage: { fixture: true }, coverageDescriptor: Uint8Array.of(1), signal: expect.any(AbortSignal) });
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('terrain-ready'));
+  for (const call of [fake.discover, fake.pointer, fake.plan, fake.publish]) expect(call).not.toHaveBeenCalled();
+});
+it('preserves terrain preparation failures for workflow diagnostics', async () => {
+  fake.terrain.mockRejectedValueOnce(new Error('terrain unavailable'));
+  await expect(prepareForecastTerrain()).rejects.toThrow('terrain unavailable');
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('terrain unavailable'));
+  for (const call of [fake.discover, fake.plan, fake.publish]) expect(call).not.toHaveBeenCalled();
 });
 it.each(MODEL_IDS)('requires a pinned catalog for configured %s scheduled and manual builds', async model => {
   vi.stubEnv('MODEL', model);
@@ -118,7 +137,7 @@ it('preserves the optional native-grid terrain reference alongside whole-domain 
   const ref = { key: `terrain/prepared/${'a'.repeat(64)}/manifest.json`, sha256: 'b'.repeat(64), bytes: 100, arrayBytes: 20 };
   vi.stubEnv('TERRAIN_INPUTS', JSON.stringify({ gfs: ref }));
   await planForecast();
-  expect(fake.plan).toHaveBeenCalledWith('gfs', expect.objectContaining({ terrain: { ref, storage: {} }, wholeDomain: { catalogRef, storage: {} } }));
+  expect(fake.plan).toHaveBeenCalledWith('gfs', expect.objectContaining({ terrain: { ref, storage: {} }, wholeDomain: { catalogRef, storage: {}, cacheOnly: true } }));
 });
 it('uses all retained cycles after rollback, including expired entries', async () => {
   fake.pointer.mockResolvedValue({ pointer: retainedPointer(['2026-10-29T18:00:00Z', manifest.cycle]) });
