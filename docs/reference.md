@@ -61,7 +61,7 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Terrain subdivision factor: `10`; fine grid: 14400 columns × 7201 rows.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
-- Native tile zoom: 0–7.
+- Native tile zoom: 0–8.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
 - Vertical coordinate: `isobaric`; maximum levels: 21.
 - Calculation methods: `supported-terrain-column-1p2-v1`, `trailing-precipitation-rate-v1`.
@@ -77,7 +77,7 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Terrain subdivision factor: `5`; fine grid: 6881 columns × 3281 rows.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
 - Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
-- Native tile zoom: 0–8.
+- Native tile zoom: 0–9.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v1`.
@@ -398,7 +398,7 @@ Complete-build limits:
 - `gridCells`: `4000000`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.
-- `tiles`: `300000`.
+- `tiles`: `800000`.
 
 Shared limits and storage constants:
 

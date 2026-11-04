@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { canonicalGridJson, GFS_PRODUCT, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type ProductDefinition, type RegularLatLonGrid } from '@av/contracts';
+import { canonicalGridJson, encodeSparseCoverage, GFS_PRODUCT, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type ProductDefinition, type RegularLatLonGrid } from '@av/contracts';
 import { describeSparseCoverage } from '../coverage.js';
 import { sha256 } from '../terrain/contract.js';
 import { createTerrainReader } from '../terrain/reader.js';
@@ -87,5 +87,34 @@ describe('whole-domain terrain cache integration', () => {
     expect(createTerrainReader).not.toHaveBeenCalled();
     expect(writes).not.toHaveBeenCalled();
     await expect(readFile(join(input.out, ref.key))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reuses published arrays for a higher tile zoom and stages them through unchanged cache-only planning', async () => {
+    const input = await fixture(), source = await ensureWholeDomainTerrain(input);
+    input.storage.objects.set(`coverage/${input.fine.hash}/manifest.json`, input.fine.bytes);
+    input.storage.objects.set(`coverage/${input.fine.hash}/sparse.bin`, encodeSparseCoverage(input.coverage));
+    const product = { ...input.product, maxNativeZoom: 1 }, mask = { ...input.mask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    const fineMask = { ...input.fine.mask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    const fine = { mask: fineMask, ...describeSparseCoverage(fineMask, product) };
+    vi.mocked(createTerrainReader).mockClear();
+    const reuseFrom = vi.fn(async () => source);
+    const ref = await ensureWholeDomainTerrain({ ...input, coverageDescriptor: fine.bytes, reuseFrom });
+    expect(ref.key).not.toEqual(source.key);
+    expect(ref.arrayBytes).toEqual(source.arrayBytes);
+    expect(createTerrainReader).not.toHaveBeenCalled();
+    expect(reuseFrom).toHaveBeenCalledOnce();
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('"stage":"cache-reuse"'));
+    reuseFrom.mockClear();
+    const writes = vi.spyOn(input.storage, 'put');
+    const prepared = await prepareWholeDomain({ ...input, product, mask, maxLevels: 3,
+      wholeDomain: { catalogRef: input.catalogRef, storage: input.storage, fine, cacheOnly: true, reuseFrom } });
+    expect(prepared.terrain).toEqual(ref);
+    expect(reuseFrom).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+    expect(createTerrainReader).not.toHaveBeenCalled();
+    const loaded = await loadWholeDomainTerrain({ ...input, coverageDescriptor: fine.bytes, ref });
+    expect([...loaded.valid]).toEqual(new Array(15).fill(1));
+    expect([...loaded.elevationM]).toEqual(Array.from({ length: 15 }, (_, index) =>
+      2 * (input.grid.lon0 + index % input.grid.width * input.grid.dx) + 3 * (input.grid.lat0 + Math.floor(index / input.grid.width) * input.grid.dy) - 10));
   });
 });

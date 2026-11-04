@@ -23,6 +23,35 @@ function fixture() {
 }
 
 describe('packed sampling', () => {
+  it.each([false, true])('rechecks colliding quads after a missing contributor (%s) and reads live fields', missing => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 514, height: 2, lon0: -180, lat0: 1, dx: 0.5, dy: -1, wrapLongitude: false };
+    const mask: CoverageMask = { grid, output: new Uint8Array(129), halo: new Uint8Array(129), tiles: Uint8Array.of(1), maxZoom: 0 };
+    for (const index of [0, 512]) setBit(mask.output, index);
+    for (const index of [1, 514, 515, 1026, 1027, ...(missing ? [] : [513])]) setBit(mask.halo, index);
+    const coverage = sparseCoverageFromDense({ ...grid, gridHash: 'b'.repeat(64), output: mask.output, halo: mask.halo });
+    const sparse: SparseSamplingMask = { grid, tiles: mask.tiles, maxZoom: 0, coverage };
+    const latitudes = Float64Array.of(0.75, 0.75), longitudes = Float64Array.of(-179.875, 76.125);
+    for (const prepare of [prepareGridSampling, preparePointSampling]) {
+      const packed: PackedGridField = { coverage, values: new Float32Array(coverage.offsets.at(-1)!), flags: new Uint8Array(coverage.offsets.at(-1)!) };
+      for (let y = 0; y < 2; y++) for (let x = 0; x < 514; x++) {
+        const cell = sparseCoverageLookup(coverage, x, y);
+        if (cell) packed.values[cell.offset] = y * 514 + x + 100;
+      }
+      const sample = prepare(sparse, latitudes, longitudes).bind(packed, 'usable-lift-msl');
+      const out = { value: null as number | null, status: 3, support: 0, interpolated: false };
+      sample(0, 0, out);
+      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse));
+      if (missing) expect(() => sample(1, 0, out)).toThrow('outside active coverage');
+      else {
+        sample(1, 0, out);
+        expect(out).toEqual(sampleGrid(grid, packed, latitudes[1], longitudes[1], 'usable-lift-msl', sparse));
+      }
+      packed.values[0] = 999; packed.flags[1] = STATUS_NO_LIFT;
+      sample(0, 0, out);
+      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse));
+    }
+  });
+
   it('matches dense scalar and prepared sampling at wrap, block and output/halo boundaries', () => {
     const { grid, mask, sparse, dense, packed } = fixture();
     const lats = Float64Array.of(2, 2, 2.25, 1.5, 1, 1.5, 3, 2);

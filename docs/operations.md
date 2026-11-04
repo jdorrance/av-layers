@@ -57,7 +57,7 @@ cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 successful run.
 
 Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
-(15m timeout), up to four parallel `forecast-shard` jobs (60m timeout), and
+(15m timeout), up to eight parallel `forecast-shard` jobs (60m timeout), and
 `forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. Terrain preparation has its
 own 50-minute operation budget per attempt; forecast elapsed time starts with

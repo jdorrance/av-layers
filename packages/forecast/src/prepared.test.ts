@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LAYERS, LAYER_IDS, setBit, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
-import { prepareGridSampling, sampleCells, sampleGrid, type GridField, type Sample } from './sampler.js';
+import { planSample, prepareGridSampling, sampleCells, sampleGrid, samplingCovered, type GridField, type Sample } from './sampler.js';
 
 function outcome<T>(fn: () => T): T | { error: string } {
   try { return fn(); } catch (error) { return { error: (error as Error).message }; }
@@ -10,6 +10,27 @@ function maskFor(grid: Grid, output = 255): CoverageMask {
 }
 
 describe('prepared grid sampling parity', () => {
+  it.each([false, true])('retains ordered positive contributors across repeated cells and coverage transitions (wrap %s)', wrapLongitude => {
+    const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 4, height: 4, lon0: -180, lat0: 3, dx: 90, dy: -1, wrapLongitude };
+    const mask = maskFor(grid, 0);
+    for (const index of [0, 1, 4, 6, 9, 14, 15]) setBit(mask.output, index);
+    const latitudes = Float64Array.from([3, 3, 2.9, 2.75, 2.5, 2.1, 2, 2.25, 1.5, 0, NaN, -1, 3]);
+    const longitudes = Float64Array.from([0, 0, 0.1, 0.25, 0.5, 0.9, 1, 1.1, 1.5, 1.9, 2, 2.8, 3, 4, NaN, -1], x => grid.lon0 + x * grid.dx);
+    const prepared = prepareGridSampling(mask, latitudes, longitudes), expected = new Set<number>();
+    for (const lat of latitudes) for (const lon of longitudes) {
+      if (samplingCovered(mask, lat, lon)) for (const contributor of planSample(grid, lat, lon)!.contributors) expected.add(contributor.index);
+    }
+    expect([...prepared.contributors]).toEqual([...expected]);
+    const field = { values: Float32Array.from({ length: 16 }, (_, index) => index * 137.25), flags: new Uint8Array(16) };
+    for (const layer of LAYER_IDS) {
+      const sample = prepared.bind(field, layer), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+      for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
+        sample(x, y, out);
+        expect({ ...out }).toEqual(sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask));
+      }
+    }
+  });
+
   it('preserves exact four-valid-cell arithmetic across float32 exponents and support flags', () => {
     const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
     const mask = maskFor(grid), latitudes = Float64Array.of(0.125, 0.3000000001, 0.5, 0.999999), longitudes = Float64Array.of(0.000001, 0.2712345613, 0.5, 0.999999);

@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { canonicalGridJson, sampleResponseV5Schema } from '@av/contracts';
-import { prepareShardedSamplePackLayout } from '@av/forecast';
 import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
-import { NOW, commonPoint, createV5Fixture, finePoint } from './v5-fixture';
+import { NOW, commonPoint, createV5Fixture, createGroupedV5Fixture, finePoint } from './v5-fixture';
 
 type V5Body = {
   version: 5;
@@ -13,40 +12,7 @@ type V5Body = {
 };
 
 function groupedFixture() {
-  const fixture = createV5Fixture(), { manifest, objects, shardSha, buildId } = fixture;
-  const counts = [1, 2, 1, 1, 1];
-  manifest.frames = Array.from({ length: 6 }, (_, i) => ({
-    id: `h${String(i + 1).padStart(3, '0')}`, validTime: new Date(NOW + (i + 1) * 3_600_000).toISOString(),
-    intervalStart: new Date(NOW + i * 3_600_000).toISOString(), intervalEnd: new Date(NOW + (i + 1) * 3_600_000).toISOString()
-  }));
-  const prefix = `builds/gfs/${buildId}`;
-  manifest.artifacts = manifest.frames.flatMap(frame => manifest.layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) })));
-  for (const source of [fixture.fine, fixture.native]) {
-    const surface = manifest.surfaces.find(item => item.id === source.surface.id)!;
-    const blockIds = Uint32Array.from({ length: source.layout.blockCount }, (_, i) => source.layout.block(i).slot);
-    const shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
-    let firstFrame = 0;
-    for (const [group, frameCount] of counts.entries()) {
-      const channels = frameCount * surface.layers.length;
-      const layout = prepareShardedSamplePackLayout(surface.grid, blockIds, channels);
-      const data = new Uint8Array(layout.byteLength);
-      for (let block = 0; block < layout.blockCount; block++) {
-        const target = layout.block(block), original = source.layout.block(block);
-        for (let cell = 0; cell < target.width * target.height; cell++) for (let channel = 0; channel < channels; channel++) {
-          const originalChannel = ((firstFrame + Math.floor(channel / surface.layers.length)) % 2) * surface.layers.length + channel % surface.layers.length;
-          const from = original.byteOffset + (cell * source.layout.channelCount + originalChannel) * 5;
-          data.set(source.bytes.subarray(from, from + 5), target.byteOffset + (cell * channels + channel) * 5);
-        }
-      }
-      const key = `${prefix}/surfaces/${surface.id}/samples/g${group}-b0.bin`, sha256 = createHash('sha256').update(data).digest('hex');
-      objects.set(key, data); shardSha.set(key, sha256);
-      shards.push({ group, firstFrame, frameCount, blockShard: 0, firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: data.length, key, sha256 });
-      firstFrame += frameCount;
-    }
-    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', channelCount: manifest.frames.length * surface.layers.length, shards };
-  }
-  objects.set(`${prefix}/manifest.json`, new TextEncoder().encode(JSON.stringify(manifest)));
-  return fixture;
+  return createGroupedV5Fixture({ groups: [[1], [2, 3], [4], [5], [6]] });
 }
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
@@ -237,7 +203,7 @@ describe('API v5 metadata', () => {
         const hash = createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
         surface.gridHash = hash; surface.coverage.gridHash = hash; surface.terrain!.gridHash = hash;
       },
-      (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.surfaces[1]!.coverage.maxZoom = 0; },
+      (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.surfaces[1]!.coverage.maxZoom = 2; },
       (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.descriptors.layers['usable-lift-agl'].verticalReference = 'model-AGL'; }
     ]) {
       const fixture = createV5Fixture();
@@ -266,7 +232,7 @@ describe('API v5 sampling', () => {
     const grouped = await resolveSparseCoverage(fixture.bucket, fixture.manifest.surfaces[0]);
     const after = coverageMemory(fixture.bucket);
     expect(grouped.coverage.mask).toBe(legacy.coverage.mask);
-    expect(grouped.coverage.layouts.size).toBe(2);
+    expect(grouped.coverage.layouts.size).toBe(3);
     expect(after.leasedBytes).toBeGreaterThan(before.leasedBytes);
     expect(after.cachedBytes).toBeGreaterThan(before.cachedBytes);
     expect(inFlightAllocationBytes()).toBeGreaterThanOrEqual(after.leasedBytes);
@@ -288,12 +254,12 @@ describe('API v5 sampling', () => {
     const response = await all;
     expect(response.status, await response.clone().text()).toBe(200);
     const body = await response.json() as V5Body;
-    expect(body.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 8, 7, 8, 7, 8]);
-    expect(body.frames.map(frame => frame.layers['usable-lift-msl'].value)).toEqual([310.25, 320.25, 310.25, 320.25, 310.25, 320.25]);
+    expect(body.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 8, 9, 10, 11, 12]);
+    expect(body.frames.map(frame => frame.layers['usable-lift-msl'].value)).toEqual([310.25, 320.25, 330.25, 340.25, 350.25, 360.25]);
     expect(peak).toBe(4);
     const single = await fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=h003&layers=precip-rate');
     expect(single.status).toBe(200);
-    expect((await single.json() as V5Body).frames[0].layers['precip-rate'].value).toBe(7);
+    expect((await single.json() as V5Body).frames[0].layers['precip-rate'].value).toBe(9);
     expect(fixture.get.mock.calls.filter(([key, options]) => options?.range && key.includes('/samples/g'))).toHaveLength(11);
   });
 

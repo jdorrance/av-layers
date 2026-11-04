@@ -13,18 +13,18 @@ import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverag
 import { fileURLToPath } from 'node:url';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
-const Z7_TILES_BY_ZOOM = [1, 4, 8, 29, 84, 233, 708, 2235];
-const Z7_TOTAL_TILES = 237744;
+const TILES_BY_ZOOM = [1, 4, 8, 29, 84, 233, 708, 2235, 7680];
+const TOTAL_TILES = 790704;
 
 function receipt(): Manifest {
   return {
     buildId: 'fixture',
     cycle: '2026-10-30T00:00:00Z',
     grid: { width: 1440, height: 721 },
-    coverage: { maxZoom: 7 },
+    coverage: { maxZoom: GFS_PRODUCT.maxNativeZoom },
     artifacts: new Array(72).fill({}),
     samples: { bytes: 132_000_000 },
-    metrics: { elapsedMs: 90_000, peakRssBytes: 1_300_000_000, tiles: [...Z7_TILES_BY_ZOOM] }
+    metrics: { elapsedMs: 90_000, peakRssBytes: 1_300_000_000, tiles: [...TILES_BY_ZOOM] }
   } as unknown as Manifest;
 }
 
@@ -47,12 +47,9 @@ describe('build capacity admission and performance budgets', () => {
     expect(result.status, result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.capacity.violations).toEqual([]);
-    expect(report.capacity.rasterWorkers).toBeLessThanOrEqual(rasterWorkerCount());
-    expect(report.capacity.deriveWorkers).toBeLessThanOrEqual(rasterWorkerCount());
-    if (rasterWorkerCount() > 0) {
-      expect(report.capacity.rasterWorkers).toBeGreaterThan(0);
-      expect(report.capacity.deriveWorkers).toBeGreaterThan(0);
-    }
+    const expectedWorkers = model === 'icon-eu' ? Math.min(2, rasterWorkerCount()) : rasterWorkerCount();
+    expect(report.capacity.rasterWorkers).toBe(expectedWorkers);
+    expect(report.capacity.deriveWorkers).toBe(expectedWorkers);
     const levels = model === 'gfs' ? 21 : 30, fieldsPerLevel = model === 'gfs' ? 2 : 3;
     const nativeActive = report.capacity.workingSet.nativeFrame / ((7 + fieldsPerLevel * levels) * 5);
     expect(nativeActive).toBeGreaterThan(4);
@@ -63,13 +60,13 @@ describe('build capacity admission and performance budgets', () => {
     const mask = await loadCoverage(GFS_PRODUCT);
     expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('before acquisition');
   });
-  it('counts the real z0-z7 product before acquisition and leaves hourly retention headroom', async () => {
+  it('counts the real z0-z8 product before acquisition and leaves hourly retention headroom', async () => {
     const mask = await loadCoverage(GFS_PRODUCT), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     expect(indices.active.length).toBe(164788);
     expect(capacity).toMatchObject({
-      tilesByZoom: Z7_TILES_BY_ZOOM,
-      tiles: Z7_TOTAL_TILES,
-      quarterSamples: Z7_TOTAL_TILES * 256 * 256 * 4,
+      tilesByZoom: TILES_BY_ZOOM,
+      tiles: TOTAL_TILES,
+      quarterSamples: TOTAL_TILES * 256 * 256 * 4,
       samplePackBytes: 105392520,
       point: { reads: 1, worstCaseRangeBytes: 6840, values: 72 },
       violations: []
@@ -84,9 +81,9 @@ describe('build capacity admission and performance budgets', () => {
   it('projects native tile growth and rejects it until a trusted product and budget support it', async () => {
     const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
-    expect(doubled.tiles).toBe(Z7_TOTAL_TILES * 8);
+    expect(doubled.tiles).toBe(TOTAL_TILES * 8);
     expect(doubled.totalSamplePackBytes).toBe(105392520 * 8);
-    const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 8 });
+    const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 9 });
     expect(deeper.violations).toContain('tile budget exceeded');
     expect(deeper.violations.join()).toContain('trusted product');
     expect(() => prepareBuild({ ...mask, maxZoom: 24 }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('trusted product');
@@ -128,7 +125,7 @@ describe('build capacity admission and performance budgets', () => {
   it('gates post-build performance metrics against build admission budgets', () => {
     const result = checkPerformance(receipt());
     expect(result.passed).toBe(true);
-    expect(result.observed.tiles).toBe(Z7_TOTAL_TILES);
+    expect(result.observed.tiles).toBe(TOTAL_TILES);
     expect(result.budgets).toEqual(BUILD_BUDGETS);
     for (const key of ['elapsedMs', 'peakRssBytes'] as const) {
       for (const value of [undefined, NaN, -1, BUILD_BUDGETS[key] + 1]) {
@@ -142,9 +139,9 @@ describe('build capacity admission and performance budgets', () => {
     expect(checkPerformance(manifest).passed).toBe(true);
     delete manifest.metrics.tiles;
     expect(checkPerformance(manifest).passed).toBe(false);
-    manifest.metrics.tiles = [...Z7_TILES_BY_ZOOM.slice(0, -1), 5000];
+    manifest.metrics.tiles = [...TILES_BY_ZOOM.slice(0, -1), Math.ceil(BUILD_BUDGETS.tiles / manifest.artifacts.length)];
     expect(checkPerformance(manifest).passed).toBe(false);
-    manifest.metrics.tiles = [...Z7_TILES_BY_ZOOM];
+    manifest.metrics.tiles = [...TILES_BY_ZOOM];
     manifest.samples.bytes = BUILD_BUDGETS.samplePackBytes + 1;
     expect(checkPerformance(manifest).passed).toBe(false);
   });

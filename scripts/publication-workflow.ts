@@ -114,6 +114,21 @@ export function configuredWholeDomain(model: string, env: NodeJS.ProcessEnv, sto
   return { catalogRef: terrainCatalogInput(catalog), storage: store };
 }
 
+async function publishedTerrainRef(store: ObjectStorage, model: string, signal?: AbortSignal) {
+  const { pointer } = await readPointer(store, model, signal);
+  if (!pointer) return;
+  const latest = pointer.retained.find(item => item.buildId === pointer.latestBuildId);
+  if (!latest) throw new Error('Published terrain pointer lacks its latest build');
+  const object = await store.get(latest.manifestKey, undefined, MAX_MANIFEST_BYTES, signal);
+  signal?.throwIfAborted();
+  if (!object) throw new Error('Published terrain manifest is missing');
+  const manifest = publishedManifestSchema.parse(parseBoundedJson(object.bytes));
+  if (manifest.model !== model || manifest.buildId !== latest.buildId || manifest.cycle !== latest.cycle || manifest.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
+  if (manifest.version !== 5) return;
+  const terrain = manifest.surfaces.find(surface => surface.id === 'fine')?.terrain;
+  return terrain ? { key: terrain.key, sha256: terrain.sha256 } : undefined;
+}
+
 /** Populate immutable terrain before the forecast build clock starts. */
 export async function prepareForecastTerrain(store?: ObjectStorage): Promise<void> {
   await publicationWorkflow(async ({ signal, store, model }) => {
@@ -127,11 +142,12 @@ export async function prepareForecastTerrain(store?: ObjectStorage): Promise<voi
     const plan = wholeDomainPlan(product);
     if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
     const fine = await loadBundledFineCoverage(product, plan);
+    const reuseFrom = (reuseSignal?: AbortSignal) => publishedTerrainRef(store, model, reuseSignal);
     for (let attempt = 1; attempt <= TERRAIN_ATTEMPTS; attempt++) {
       signal.throwIfAborted();
       try {
         const ref = await ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
-          coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal });
+          coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal, reuseFrom });
         console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
         return;
       } catch (error) {

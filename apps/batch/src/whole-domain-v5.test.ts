@@ -492,11 +492,15 @@ describe('whole-domain v5 production', () => {
     expect(plan.wholeDomain).toBeDefined();
   }, 60_000);
 
-  it.each([true, false])('finalizes frame groups and serves samples with receipt-only mode %s', async receiptsOnly => {
+  it.each([
+    { receiptsOnly: true, hours: [3, 6, 9, 12, 15, 18, 21, 24] },
+    { receiptsOnly: false, hours: [12, 24] }
+  ])('finalizes $hours.length frame groups and serves samples with receipt-only mode $receiptsOnly', async ({ receiptsOnly, hours }) => {
     const setup = await fixture(), out = await root('wd-remote'), store = new PublicationStore(), source = fixtureProvider();
-    const configured = { ...product, modelId: 'gfs', frameHours: [12, 24] };
+    const configured = { ...product, modelId: 'gfs', frameHours: hours };
     const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
-    const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
+    const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: hours.length, store });
+    expect(plan.groups).toEqual(hours.map(hour => [hour]));
     expect(plan.dependencies?.length).toBeGreaterThan(6);
     for (let shard = 0; shard < plan.groups.length; shard++) {
       await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });

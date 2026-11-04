@@ -36,13 +36,14 @@ const descriptorSchema = z.strictObject({
 
 export type SparsePreparedTerrain = { descriptor: z.infer<typeof descriptorSchema>; elevationM: Float32Array; valid: Uint8Array };
 export interface SparseTerrainProgress {
-  phase: 'cache-check' | 'cache-validation' | 'planning' | 'sampling' | 'upload' | 'complete';
+  phase: 'cache-check' | 'cache-validation' | 'cache-reuse' | 'planning' | 'sampling' | 'upload' | 'complete';
   cells: number; completedCells: number; elapsedMs: number;
   cacheHit?: boolean; sourceBlocks?: number; sourceAssets?: number; reader?: TerrainReadStats;
 }
 export interface SparseTerrainOptions {
   catalog: TerrainCatalog; storage: TerrainStorage; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal;
   cacheOnly?: boolean;
+  reuseFrom?: (signal?: AbortSignal) => Promise<Pick<SparseTerrainRef, 'key' | 'sha256'> | undefined>;
   checkpoints?: boolean;
   prefetchSources?: (keys: readonly string[], signal?: AbortSignal) => Promise<() => void>;
   limits?: { maxArrayBytes?: number; maxDurationMs?: number; reader?: Parameters<typeof createTerrainReader>[0]['limits']; total?: Partial<Parameters<typeof createTerrainReadBudget>[0]> };
@@ -59,7 +60,7 @@ function identity(gridInput: Grid, coverageInput: SparseCoverage, descriptorByte
   const descriptor = parseJson(descriptorBytes, sparseCoverageDescriptorSchema, MAX_COVERAGE_DESCRIPTOR_BYTES), encoded = encodeSparseCoverage(coverage);
   if (coverage.width !== grid.width || coverage.height !== grid.height || coverage.wrapLongitude !== grid.wrapLongitude || coverage.gridHash !== hash
       || !sameGrid(descriptor.grid, grid) || descriptor.gridHash !== hash || descriptor.files.sparse.bytes !== encoded.length || descriptor.files.sparse.sha256 !== sha256(encoded)) throw new Error('Sparse terrain coverage grid mismatch');
-  return { grid, coverage, gridHash: hash, coverageHash: sha256(descriptorBytes), cells: coverage.offsets[coverage.blockIds.length] };
+  return { grid, coverage, gridHash: hash, coverageHash: sha256(descriptorBytes), sparseBytes: encoded, sparseSha256: descriptor.files.sparse.sha256, cells: coverage.offsets[coverage.blockIds.length] };
 }
 function check(asset: TerrainAsset, bytes: Uint8Array): void {
   if (bytes.length !== asset.bytes || sha256(bytes) !== asset.sha256) throw new Error(`Sparse terrain asset integrity mismatch: ${asset.key}`);
@@ -105,6 +106,49 @@ export async function readSparsePreparedTerrain(ref: SparseTerrainRef, read: (as
   return { descriptor: result.descriptor, elevationM: result.elevationM!, valid: result.valid! };
 }
 
+async function reuseSparseTerrain(options: SparseTerrainOptions, target: ReturnType<typeof identity>, catalog: TerrainCatalog, prefix: string, signal?: AbortSignal): Promise<SparseTerrainRef | undefined> {
+  const candidate = await options.reuseFrom?.(signal);
+  signal?.throwIfAborted();
+  if (!candidate) return;
+  const source = sparseTerrainRefSchema.pick({ key: true, sha256: true }).parse({ key: candidate.key, sha256: candidate.sha256 });
+  const manifest = await options.storage.get(source.key, undefined, PREPARED_DESCRIPTOR_MAX_BYTES, signal);
+  if (!manifest) throw new Error(`Sparse terrain reuse manifest missing: ${source.key}`);
+  const ref = sparseTerrainRefSchema.parse({ ...source, bytes: manifest.bytes.length, arrayBytes: target.cells * PREPARED_TERRAIN_CELL_BYTES });
+  check(ref, manifest.bytes);
+  const descriptor = parseJson(manifest.bytes, descriptorSchema, PREPARED_DESCRIPTOR_MAX_BYTES);
+  if (descriptor.dataId !== catalog.dataId || !sameGrid(descriptor.grid, target.grid) || descriptor.gridHash !== target.gridHash) return;
+  const coverageKey = `coverage/${descriptor.coverageHash}/manifest.json`;
+  const coverage = await options.storage.get(coverageKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, signal);
+  if (!coverage || sha256(coverage.bytes) !== descriptor.coverageHash) throw new Error('Sparse terrain reuse coverage integrity mismatch');
+  const previous = parseJson(coverage.bytes, sparseCoverageDescriptorSchema, MAX_COVERAGE_DESCRIPTOR_BYTES);
+  if (!sameGrid(previous.grid, descriptor.grid) || previous.gridHash !== descriptor.gridHash) throw new Error('Sparse terrain reuse coverage grid mismatch');
+  if (previous.files.sparse.bytes !== target.sparseBytes.length || previous.files.sparse.sha256 !== target.sparseSha256) return;
+  const sparse = await options.storage.get(`coverage/${descriptor.coverageHash}/sparse.bin`, undefined, previous.files.sparse.bytes, signal);
+  if (!sparse || sparse.bytes.length !== previous.files.sparse.bytes || sha256(sparse.bytes) !== previous.files.sparse.sha256) throw new Error('Sparse terrain reuse packed coverage integrity mismatch');
+  if (!Buffer.from(sparse.bytes.buffer, sparse.bytes.byteOffset, sparse.bytes.byteLength).equals(target.sparseBytes)) return;
+  const read = async (asset: TerrainAsset) => {
+    if (asset.key === source.key) return manifest.bytes;
+    const object = await options.storage.get(asset.key, undefined, asset.bytes, signal);
+    if (!object) throw new Error(`Sparse terrain asset missing: ${asset.key}`);
+    return object.bytes;
+  };
+  await validateSparsePreparedTerrain(ref, read, target.grid, target.coverage, coverage.bytes, signal);
+  const files: SparsePreparedTerrain['descriptor']['files'] = { elevationM: [], valid: [] };
+  for (const name of ['elevationM', 'valid'] as const) for (const asset of descriptor.files[name]) {
+    signal?.throwIfAborted();
+    const bytes = await read(asset);
+    check(asset, bytes);
+    const rebound = { ...asset, key: `${prefix}/${asset.key.slice(asset.key.lastIndexOf('/') + 1)}` };
+    await putImmutable(options.storage, rebound.key, bytes, 'application/octet-stream', signal);
+    files[name].push(rebound);
+  }
+  const rebound = descriptorSchema.parse({ ...descriptor, coverageHash: target.coverageHash, files });
+  const bytes = encodeJson(rebound, PREPARED_DESCRIPTOR_MAX_BYTES), key = `${prefix}/manifest.json`;
+  await putImmutable(options.storage, key, bytes, 'application/json', signal);
+  signal?.throwIfAborted();
+  return sparseTerrainRefSchema.parse({ key, bytes: bytes.length, sha256: sha256(bytes), arrayBytes: ref.arrayBytes });
+}
+
 export async function prepareSparseTerrain(options: SparseTerrainOptions): Promise<SparseTerrainRef> {
   const started = Date.now(), duration = options.limits?.maxDurationMs;
   if (duration !== undefined && (!Number.isSafeInteger(duration) || duration < 1 || duration > 2_147_483_647)) throw new Error('Invalid terrain preparation deadline');
@@ -147,6 +191,14 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     options.onReport?.({ cacheHit: true, cells: target.cells, arrayBytes, inventoryReadBytesBound, elapsedMs: Date.now() - started });
     progress('complete', target.cells, () => ({ cacheHit: true }));
     return ref;
+  }
+  const reused = await reuseSparseTerrain(options, target, catalog, prefix, signal);
+  checkDeadline();
+  if (reused) {
+    progress('cache-reuse', target.cells, () => ({ cacheHit: true }));
+    options.onReport?.({ cacheHit: true, cells: target.cells, arrayBytes, inventoryReadBytesBound, elapsedMs: Date.now() - started });
+    progress('complete', target.cells, () => ({ cacheHit: true }));
+    return reused;
   }
   progress('planning', 0, () => ({ cacheHit: false, sourceBlocks: 0, sourceAssets: 0 }));
   const geometry = prepareGridGeometry(target.grid), limits = { ...TERRAIN_READ_LIMITS, ...options.limits?.reader };

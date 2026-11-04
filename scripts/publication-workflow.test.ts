@@ -106,9 +106,37 @@ it.each(MODEL_IDS)('prepares reusable %s terrain before any forecast cycle is se
   const log = vi.spyOn(console, 'log').mockImplementation(() => {});
   await prepareForecastTerrain();
   expect(fake.fineCoverage).toHaveBeenCalledWith(getProduct(model), expect.objectContaining({ k: getProduct(model)!.terrainSubdivisionFactor }));
-  expect(fake.terrain).toHaveBeenCalledWith({ catalogRef, storage: {}, sourceCacheDir: `.cache/terrain-source/${model}`, grid: expect.any(Object), coverage: { fixture: true }, coverageDescriptor: Uint8Array.of(1), signal: expect.any(AbortSignal) });
+  expect(fake.terrain).toHaveBeenCalledWith({ catalogRef, storage: {}, sourceCacheDir: `.cache/terrain-source/${model}`, grid: expect.any(Object), coverage: { fixture: true }, coverageDescriptor: Uint8Array.of(1), signal: expect.any(AbortSignal), reuseFrom: expect.any(Function) });
   expect(log).toHaveBeenCalledWith(expect.stringContaining('terrain-ready'));
   for (const call of [fake.discover, fake.pointer, fake.plan, fake.publish]) expect(call).not.toHaveBeenCalled();
+});
+it('reads the published fine terrain reference only when a missing cache requests reuse', async () => {
+  const { manifest } = v5ResumeFixture(), terrain = manifest.surfaces.find(surface => surface.id === 'fine')!.terrain!;
+  const key = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
+  const get = vi.fn(async () => ({ bytes: Buffer.from(JSON.stringify(manifest)), etag: 'published' })), storage = { get };
+  fake.storage.mockReturnValue(storage);
+  fake.pointer.mockResolvedValue({ pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
+    retained: [{ buildId: manifest.buildId, cycle: manifest.cycle, expiresAt: manifest.expiresAt, manifestKey: key }] } });
+  fake.terrain.mockImplementationOnce(async ({ reuseFrom, signal }) => {
+    expect(fake.pointer).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    expect(await reuseFrom(signal)).toEqual({ key: terrain.key, sha256: terrain.sha256 });
+    return { key: terrain.key };
+  });
+  await prepareForecastTerrain();
+  expect(fake.pointer).toHaveBeenCalledWith(storage, 'gfs', expect.any(AbortSignal));
+  expect(get).toHaveBeenCalledWith(key, undefined, 512 * 1024, expect.any(AbortSignal));
+  expect(fake.discover).not.toHaveBeenCalled();
+});
+it.each(['missing', 'different cycle'] as const)('fails terrain reuse discovery for a %s published manifest', async defect => {
+  const { manifest } = v5ResumeFixture(), cycle = manifest.cycle;
+  if (defect === 'different cycle') manifest.cycle = '2020-01-01T00:00:00Z';
+  fake.storage.mockReturnValue({ get: vi.fn(async () => defect === 'missing' ? null : { bytes: Buffer.from(JSON.stringify(manifest)), etag: 'published' }) });
+  fake.pointer.mockResolvedValue({ pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
+    retained: [{ buildId: manifest.buildId, cycle, expiresAt: manifest.expiresAt, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json` }] } });
+  fake.terrain.mockImplementationOnce(async ({ reuseFrom, signal }) => reuseFrom(signal));
+  await expect(prepareForecastTerrain()).rejects.toThrow(defect === 'missing' ? 'Published terrain manifest is missing' : 'Published terrain manifest identity mismatch');
+  expect(fake.terrain).toHaveBeenCalledOnce();
 });
 it('preserves terrain preparation failures for workflow diagnostics', async () => {
   fake.terrain.mockRejectedValueOnce(new Error('terrain unavailable'));

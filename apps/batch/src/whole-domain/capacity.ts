@@ -77,18 +77,20 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
     runtimeAndNativeReserve: 256 * 1024 * 1024
   };
   const inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
-  let rasterWorkers = rasterWorkerCount(), deriveWorkers = rasterWorkerCount();
+  const maximumWorkers = rasterWorkerCount();
+  let rasterWorkers = 0, deriveWorkers = 0, selectedTotal = -1, selectedImbalance = Number.POSITIVE_INFINITY;
   const deriveSharedInputs = terrainBytes + nativeCells * 10 + fineMaskBytes + nativeActive * 4;
   const workerWorkspace = columns.workspaceBufferBytes - nativeActive * (maxLevels * 16 + 45) + Math.min(4, nativeActive) * (maxLevels * 16 + 45);
   const workerColumns = columns.byteLength + workerWorkspace + columns.workspaceObjectBudgetBytes + 32;
-  const peak = () => inlinePeakBytes + (rasterWorkers ? sharedInputBytes + rasterWorkers * RASTER_WORKER_RESERVE_BYTES : 0) +
-    (deriveWorkers ? deriveSharedInputs + deriveWorkers * (RASTER_WORKER_RESERVE_BYTES + workerColumns) : 0);
-  while (peak() > BUILD_BUDGETS.peakRssBytes && (deriveWorkers || rasterWorkers)) {
-    if (rasterWorkers > 1) rasterWorkers--;
-    else if (deriveWorkers > 1) deriveWorkers--;
-    else if (rasterWorkers) rasterWorkers--;
-    else deriveWorkers--;
+  for (let raster = 0; raster <= maximumWorkers; raster++) for (let derive = 0; derive <= maximumWorkers; derive++) {
+    const peak = inlinePeakBytes + (raster ? sharedInputBytes + raster * RASTER_WORKER_RESERVE_BYTES - workingSet.rasterInline : 0) +
+      (derive ? deriveSharedInputs + derive * (RASTER_WORKER_RESERVE_BYTES + workerColumns) : 0);
+    const total = raster + derive, imbalance = Math.abs(raster - derive);
+    if (peak > BUILD_BUDGETS.peakRssBytes || total < selectedTotal || (total === selectedTotal &&
+        (imbalance > selectedImbalance || (imbalance === selectedImbalance && raster <= rasterWorkers)))) continue;
+    rasterWorkers = raster; deriveWorkers = derive; selectedTotal = total; selectedImbalance = imbalance;
   }
+  if (rasterWorkers) workingSet.rasterInline = 0;
   workingSet.rasterSharedInputs = rasterWorkers ? sharedInputBytes : 0;
   workingSet.rasterWorkerRuntimes = rasterWorkers * RASTER_WORKER_RESERVE_BYTES;
   workingSet.deriveSharedInputs = deriveWorkers ? deriveSharedInputs : 0;

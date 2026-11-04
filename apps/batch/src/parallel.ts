@@ -26,7 +26,7 @@ import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepa
 import { sampleShardKey } from './sample-pack-v5.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 
-export const MAX_FORECAST_SHARDS = 4;
+export const MAX_FORECAST_SHARDS = 8;
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
 const objectReceiptSchema = z.strictObject({ key: z.string().min(1), bytes: z.number().int().positive().max(BUILD_BUDGETS.samplePackBytes), sha256: digestSchema, etag: z.string().min(1) });
 const timestampSchema = manifestSchema.shape.createdAt.refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);

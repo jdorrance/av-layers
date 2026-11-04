@@ -1,13 +1,13 @@
 import type { Grid, SparseCoverage } from '@av/contracts';
 import type { TerrainAsset, TerrainStorage } from '../terrain/contract.js';
-import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, readSparsePreparedTerrain, type SparseTerrainRef } from '../terrain/sparse.js';
+import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, readSparsePreparedTerrain, type SparseTerrainOptions, type SparseTerrainRef } from '../terrain/sparse.js';
 import { loadTerrainCatalog, stageSparsePreparedTerrain, loadSparsePreparedTerrain } from '../terrain/staging.js';
 import { BUILD_BUDGETS } from '../capacity.js';
 import { openTerrainSourceCache } from '../terrain/source-cache.js';
 
 const SOURCE_CACHE_BYTES = 2 * 1024 ** 3;
 
-export interface WholeDomainTerrainOptions { catalogRef: TerrainAsset; storage: TerrainStorage; cacheOnly?: boolean; sourceCacheDir?: string }
+export interface WholeDomainTerrainOptions { catalogRef: TerrainAsset; storage: TerrainStorage; cacheOnly?: boolean; sourceCacheDir?: string; reuseFrom?: SparseTerrainOptions['reuseFrom'] }
 export interface WholeDomainTerrainInput { ref: SparseTerrainRef; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array }
 export interface PrepareWholeDomainTerrainInput { grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; out: string; signal?: AbortSignal }
 
@@ -23,7 +23,7 @@ export async function ensureWholeDomainTerrain(options: WholeDomainTerrainOption
   try {
     return await prepareSparseTerrain({ catalog, storage: sourceCache?.storage ?? options.storage, grid: options.grid, coverage: options.coverage,
       coverageDescriptor: options.coverageDescriptor, signal, limits: { maxArrayBytes: Math.min(MAX_SPARSE_TERRAIN_BYTES, BUILD_BUDGETS.peakRssBytes), maxDurationMs: BUILD_BUDGETS.elapsedMs },
-      cacheOnly: options.cacheOnly, checkpoints: true,
+      cacheOnly: options.cacheOnly, checkpoints: true, reuseFrom: options.reuseFrom,
       ...(sourceCache ? { prefetchSources: (keys: readonly string[]) => sourceCache.prefetch(keys, signal) } : {}),
       onProgress: ({ phase: stage, ...progress }) => console.error(JSON.stringify({ phase: 'terrain-preparation', stage, ...progress })),
       onReport: report => console.error(JSON.stringify({ phase: 'terrain-preparation', ...report })) });
