@@ -55,4 +55,20 @@ describe('normalized provider admission', () => {
     } as unknown as NormalizedFrame;
     expect(() => validate(malformed)).toThrow('vertical axis');
   });
+
+  it('clamps mild GRIB quantization supersaturation up to 105% RH while preserving corrupt humidity for rejection', async () => {
+    const { createNativeColumnScratch, readNativeColumn } = await import('./column-input.js');
+    const input = frame();
+    input.terrainM[0] = 2588.5;
+    input.surfacePressurePa[0] = 74459.8;
+    input.temp2mK[0] = 274.7757;
+    input.specificHumidity2mKgKg[0] = 0.0058656; // ~101.82% RH from GRIB2 CCSDS quantization
+    const scratch = createNativeColumnScratch(2);
+    readNativeColumn(input, 0, scratch);
+    expect(scratch.humidity.specificHumidityKgKg).toBeLessThan(0.0058656);
+    expect(scratch.humidity.specificHumidityKgKg).toBeCloseTo(0.005761, 5);
+    input.specificHumidity2mKgKg[0] = 0.0065; // >112% RH -> untouched so column solver rejects it
+    readNativeColumn(input, 0, scratch);
+    expect(scratch.humidity.specificHumidityKgKg).toBeCloseTo(0.0065, 6);
+  });
 });

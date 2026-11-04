@@ -28,9 +28,9 @@ it('shows an encoded channel gradient with separate no-lift and endpoint units',
   expect(model.gradient!.background.length).toBeLessThan(1024);
 });
 
-it('serializes continuous interpolation without changing retained palette compatibility', () => {
-  expect(paletteSchema.parse(JSON.parse(JSON.stringify(PALETTES.lift))).interpolation).toBe('linear-rgb');
-  expect(paletteLegend(paletteSchema.parse(PALETTES.lift)).rows).toHaveLength(1);
+it('serializes stepped interpolation without changing retained palette compatibility', () => {
+  expect(paletteSchema.parse(JSON.parse(JSON.stringify(PALETTES.lift))).interpolation).toBe('step');
+  expect(paletteLegend(paletteSchema.parse(PALETTES.lift)).rows).toHaveLength(PALETTES.lift.colors.length + 1);
   expect(paletteSchema.safeParse({ ...PALETTES.lift, interpolation: 'spline' }).success).toBe(false);
 });
 

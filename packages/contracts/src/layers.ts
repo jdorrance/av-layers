@@ -25,7 +25,7 @@ export function paletteInterpolation(palette: object | null | undefined): Palett
 export function liftRenderStyle(interpolation: PaletteInterpolation | undefined): typeof LIFT_RENDER_STYLE | typeof LIFT_STEP_RENDER_STYLE {
   return interpolation === 'linear-rgb' ? LIFT_RENDER_STYLE : LIFT_STEP_RENDER_STYLE;
 }
-export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_COLORS, units: 'm', noLiftColor: '#00000000', interpolation: 'linear-rgb' }, rain: { id: 'rain', edges: RAIN_EDGES, colors: RAIN_COLORS, units: 'mm/h', transparentBelow: 0.1, provisional: true } } as const;
+export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_COLORS, units: 'm', noLiftColor: '#00000000', interpolation: 'step' }, rain: { id: 'rain', edges: RAIN_EDGES, colors: RAIN_COLORS, units: 'mm/h', transparentBelow: 0.1, provisional: true } } as const;
 
 
 export const PALETTE_IDS = Object.keys(PALETTES) as (keyof typeof PALETTES)[];

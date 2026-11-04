@@ -9,8 +9,8 @@ function sampled(palette: typeof PALETTES.lift, value: number): string {
 }
 
 describe('palette SVG legends', () => {
-  it('renders the current lift palette as an encoded channel gradient sampled through shared palette knots', () => {
-    const svg = paletteSvg(PALETTES.lift);
+  it('renders a linear-rgb lift palette as an encoded channel gradient sampled through shared palette knots', () => {
+    const svg = paletteSvg({ ...PALETTES.lift, interpolation: 'linear-rgb' });
     expect(svg).toContain('<linearGradient id="palette-gradient"');
     expect(svg).toContain(`offset="0%" ${sampled(PALETTES.lift, 0)}`);
     expect(svg).toContain(`offset="2.34375%" ${sampled(PALETTES.lift, 150)}`);
@@ -24,13 +24,15 @@ describe('palette SVG legends', () => {
     expect(svg).not.toContain(LIFT_COLORS[0]!);
   });
 
-  it('keeps palettes without interpolation in the legacy step legend', () => {
+  it('renders the default stepped lift palette and palettes without interpolation in the step legend', () => {
     const legacy = { edges: PALETTES.lift.edges, colors: PALETTES.lift.colors, units: PALETTES.lift.units, noLiftColor: PALETTES.lift.noLiftColor };
-    const svg = paletteSvg(legacy);
-    expect(svg).not.toContain('<linearGradient');
-    expect((svg.match(/<rect /g) ?? []).length).toBe(23);
-    expect(svg).toContain(`fill="${LIFT_COLORS[0]}"/><text x="32" y="17">0–300 m</text>`);
-    expect(svg).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
+    for (const palette of [PALETTES.lift, legacy]) {
+      const svg = paletteSvg(palette);
+      expect(svg).not.toContain('<linearGradient');
+      expect((svg.match(/<rect /g) ?? []).length).toBe(23);
+      expect(svg).toContain(`fill="${LIFT_COLORS[0]}"/><text x="32" y="17">0–300 m</text>`);
+      expect(svg).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
+    }
   });
 
   it('keeps the precipitation step legend and transparent threshold unchanged', () => {

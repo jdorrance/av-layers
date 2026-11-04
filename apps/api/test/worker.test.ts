@@ -332,17 +332,15 @@ describe('read-only worker', () => {
       const text = await result.text(), etag = `"${createHash('sha256').update(text).digest('hex')}"`;
       expect(result.headers.get('etag')).toBe(etag);
       if (extension === 'json') {
-        expect(JSON.parse(text)).toMatchObject({ noLiftColor: '#00000000', interpolation: 'linear-rgb' });
+        expect(JSON.parse(text)).toMatchObject({ noLiftColor: '#00000000', interpolation: 'step' });
         const legacy = JSON.parse(text) as Record<string, unknown>;
         delete legacy.interpolation;
         const legacyEtag = `"${createHash('sha256').update(JSON.stringify(legacy)).digest('hex')}"`;
         expect(result.headers.get('etag')).not.toBe(legacyEtag);
       } else {
         expect(text).toContain('font-size="12"');
-        expect(text).toContain('<linearGradient id="palette-gradient"');
-        expect(text).toContain('stop-color="rgb(135,42,107)"');
-        expect(text).toContain('>0 m</text>');
-        expect(text).toContain('>≥ 6400 m</text>');
+        expect(text).toContain('>0–300 m</text>');
+        expect(text).toContain('>6400–6700+ m</text>');
         expect(text).toContain('no usable lift (transparent)');
       }
       expect((await call(path, { headers: { 'if-none-match': etag } })).status).toBe(304);
