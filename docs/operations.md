@@ -103,10 +103,8 @@ complete shard set before validating and publishing the build.
 Admission requires a source cycle at most **18 hours old**, at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
 Published builds are retained for 7 days.
-Bucket locks retain each object for at least seven days from its upload, so
-cleanup may encounter protected objects for up to the 50-minute build budget
-after build expiry. A locked multi-object delete reports an error and cleanup
-can have partial progress; retry cleanup after the affected objects unlock.
+Cleanup waits until every object in an unreferenced build has aged seven days,
+matching the `builds/` bucket lock.
 
 ## Resume a build
 
@@ -151,7 +149,7 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
-Delete unreferenced build objects older than the 24-hour grace period:
+Delete unreferenced build prefixes whose newest object is at least seven days old:
 
 ```sh
 gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \

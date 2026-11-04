@@ -336,6 +336,16 @@ describe('forecast hour-group builds', () => {
     expect(provider.open).not.toHaveBeenCalled();
   });
 
+  it('assigns the extra hour to the early group and preserves forecast order', async () => {
+    const hours = [1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
+    const configured = { ...product, frameHours: hours, intervalHours: 1 };
+    const out = await temporaryRoot(), source = fixtureProvider();
+    const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider, shards: 4 });
+    expect(planned.groups).toEqual([[1, 2, 3, 4, 5], [6, 7, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]);
+    expect(planned.groups.flat()).toEqual(hours);
+    expect(source.open).not.toHaveBeenCalled();
+  });
+
   it.each([0, -1, 1.5, 5])('rejects an unbounded or invalid shard count %s before acquisition', async shards => {
     const out = await temporaryRoot(), provider = fixtureProvider();
     await expect(createBuildPlan({ out, cycle: CYCLE, product, mask, provider: provider.provider, shards })).rejects.toThrow();
