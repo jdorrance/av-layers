@@ -49,6 +49,26 @@ function reductionBuffer(length: number) {
   return { values: new Float64Array(length), flags: new Uint8Array(length), weights: new Float64Array(length), rows: new Float64Array(length), columns: new Float64Array(length) };
 }
 
+/** Bound repeated packed-offset lookup to 12 KiB per sampler; weather values remain live. */
+function quadOffsets(field: GridField, width: number) {
+  const keys = new Float64Array(512).fill(-1), offsets = new Uint32Array(512 * 4);
+  return {
+    offsets,
+    locate(r0: number, c0: number, r1: number, c1: number): number {
+      const key = r0 + c0, slot = key & 511, start = slot * 4;
+      if (keys[slot] !== key) {
+        keys[slot] = -1;
+        try {
+          offsets[start] = fieldOffset(field, r0 + c0, width); offsets[start + 1] = fieldOffset(field, r0 + c1, width);
+          offsets[start + 2] = fieldOffset(field, r1 + c0, width); offsets[start + 3] = fieldOffset(field, r1 + c1, width);
+          keys[slot] = key;
+        } catch { return -1; }
+      }
+      return start;
+    }
+  };
+}
+
 /** The common four-known-cell case avoids scratch-array writes and three loops.
  * Keep both the weight products and the accumulation order identical to reduceCells.
  * Missing contributors, invalid flags and non-finite values use that reference path.
@@ -301,21 +321,41 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   validateSamplingMask(mask);
   const covered = new Uint8Array(Math.ceil(total / 8));
   const contributorSet = new Set<number>();
+  const columnGroups = new Uint32Array(width), coveredColumns = new Uint8Array(width), contributed = new Uint8Array(width);
+  for (let x = 1; x < width; x++) {
+    columnGroups[x] = columns.lower[x] === columns.lower[x - 1] && columns.upper[x] === columns.upper[x - 1] ? columnGroups[x - 1] : x;
+  }
+  let coveredRow = -1, contributorRow = -1;
   let hasCoverage = false;
-  for (let index = 0; index < total; index++) {
-    const x = index % width, y = (index - x) / width;
-    if (!Number.isFinite(rows.lower[y]) || !Number.isFinite(columns.lower[x])) continue;
-    const fy = rows.fraction[y], fx = columns.fraction[x];
-    const row = fy <= 0.5 ? rows.lower[y] : Math.min(grid.height - 1, rows.upper[y]);
-    const c0 = columns.lower[x], c1 = columns.upper[x];
-    const col = fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
-    if (outputAt(mask, col, row)) {
+  for (let y = 0; y < height; y++) {
+    const r0 = rows.lower[y], r1 = rows.upper[y], fy = rows.fraction[y];
+    if (!Number.isFinite(r0)) continue;
+    const row = fy <= 0.5 ? r0 : Math.min(grid.height - 1, r1);
+    if (row !== coveredRow) {
+      let previousColumn = -1, output = false;
+      for (let x = 0; x < width; x++) {
+        const c0 = columns.lower[x], c1 = columns.upper[x], fx = columns.fraction[x];
+        if (!Number.isFinite(c0)) { coveredColumns[x] = 0; continue; }
+        const col = fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
+        if (col !== previousColumn) { output = outputAt(mask, col, row); previousColumn = col; }
+        coveredColumns[x] = Number(output);
+      }
+      coveredRow = row;
+    }
+    if (r0 !== contributorRow) { contributed.fill(0); contributorRow = r0; }
+    for (let x = 0, index = y * width; x < width; x++, index++) {
+      if (!coveredColumns[x]) continue;
       covered[index >> 3] |= 1 << (index & 7);
       hasCoverage = true;
-      for (const [dx, dy] of QUAD_OFFSETS) {
-        if ((dx && fx === 0) || (dy && fy === 0)) continue;
-        contributorSet.add((dy === 0 ? rows.lower[y] : rows.upper[y]) * grid.width + (dx === 0 ? c0 : c1));
-      }
+      const fx = columns.fraction[x], group = columnGroups[x], needed = (fx === 0 ? 5 : 15) & (fy === 0 ? 3 : 15);
+      const added = needed & ~contributed[group];
+      if (!added) continue;
+      const c0 = columns.lower[x], c1 = columns.upper[x];
+      if (added & 1) contributorSet.add(r0 * grid.width + c0);
+      if (added & 2) contributorSet.add(r0 * grid.width + c1);
+      if (added & 4) contributorSet.add(r1 * grid.width + c0);
+      if (added & 8) contributorSet.add(r1 * grid.width + c1);
+      contributed[group] |= needed;
     }
   }
   const contributors = Uint32Array.from(contributorSet);
@@ -325,31 +365,27 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const packed = 'coverage' in field;
-      let quadKey = -1, quadA = 0, quadB = 0, quadC = 0, quadD = 0;
+      const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
         const coverageIndex = y * width + x;
         if (!(covered[coverageIndex >> 3] & (1 << (coverageIndex & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = columns.fraction[x], fy = rows.fraction[y];
+        let cachedQuad = -1;
         if (fx !== 0 && fy !== 0) {
           const r0 = rows.lower[y] * grid.width, r1 = rows.upper[y] * grid.width, c0 = columns.lower[x], c1 = columns.upper[x];
           if (!packed) {
             if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, out)) return;
           } else {
-            const key = r0 + c0;
-            if (key !== quadKey) {
-              try {
-                quadA = fieldOffset(field, r0 + c0, grid.width); quadB = fieldOffset(field, r0 + c1, grid.width);
-                quadC = fieldOffset(field, r1 + c0, grid.width); quadD = fieldOffset(field, r1 + c1, grid.width); quadKey = key;
-              } catch { quadKey = -1; }
-            }
-            if (quadKey === key && reduceKnownQuad(field, quadA, quadB, quadC, quadD, fx, fy, spec, out)) return;
+            const start = quads!.locate(r0, c0, r1, c1), offsets = quads!.offsets;
+            cachedQuad = start;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, out)) return;
           }
         }
         let count = 0;
         for (const [dx, dy] of QUAD_OFFSETS) {
           if ((dx && fx === 0) || (dy && fy === 0)) continue;
           const row = dy === 0 ? rows.lower[y] : rows.upper[y], column = dx === 0 ? columns.lower[x] : columns.upper[x], index = row * grid.width + column;
-          const offset = fieldOffset(field, index, grid.width);
+          const offset = cachedQuad >= 0 ? quads!.offsets[cachedQuad + count] : fieldOffset(field, index, grid.width);
           scratch.values[count] = field.values[offset]; scratch.flags[count] = field.flags[offset];
           scratch.weights[count] = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
           scratch.rows[count] = row; scratch.columns[count] = column; count++;
@@ -429,33 +465,29 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Float64Arr
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const packed = 'coverage' in field;
-      let quadKey = -1, quadA = 0, quadB = 0, quadC = 0, quadD = 0;
+      const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
         const index = y * width + x;
         if (!(covered[index >> 3] & (1 << (index & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = fractionX[index], fy = fractionY[index];
         const column = lowerX[index], row = lowerY[index];
         const nextColumn = wrap && column + 1 === grid.width ? 0 : column + 1, nextRow = row + 1;
+        let cachedQuad = -1;
         if (fx !== 0 && fy !== 0) {
           const r0 = row * grid.width, r1 = nextRow * grid.width;
           if (!packed) {
             if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out)) return;
           } else {
-            const key = r0 + column;
-            if (key !== quadKey) {
-              try {
-                quadA = fieldOffset(field, r0 + column, grid.width); quadB = fieldOffset(field, r0 + nextColumn, grid.width);
-                quadC = fieldOffset(field, r1 + column, grid.width); quadD = fieldOffset(field, r1 + nextColumn, grid.width); quadKey = key;
-              } catch { quadKey = -1; }
-            }
-            if (quadKey === key && reduceKnownQuad(field, quadA, quadB, quadC, quadD, fx, fy, spec, out)) return;
+            const start = quads!.locate(r0, column, r1, nextColumn), offsets = quads!.offsets;
+            cachedQuad = start;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, out)) return;
           }
         }
         let count = 0;
         for (const [dx, dy] of QUAD_OFFSETS) {
           if ((dx && fx === 0) || (dy && fy === 0)) continue;
           const sourceRow = dy === 0 ? row : nextRow, sourceColumn = dx === 0 ? column : nextColumn, source = sourceRow * grid.width + sourceColumn;
-          const offset = fieldOffset(field, source, grid.width);
+          const offset = cachedQuad >= 0 ? quads!.offsets[cachedQuad + count] : fieldOffset(field, source, grid.width);
           scratch.values[count] = field.values[offset]; scratch.flags[count] = field.flags[offset];
           scratch.weights[count] = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
           scratch.rows[count] = sourceRow; scratch.columns[count] = sourceColumn; count++;

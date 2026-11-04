@@ -374,8 +374,8 @@
       "sha256": "bea9a151189fe07ca44ce65e84ff1dfd3579804dee0da3e392b360b17908e543"
     },
     "tiles": {
-      "bytes": 2731,
-      "sha256": "26df2f068e7389caf04382c5d328d046e2ba30fd17756f844bc6b4d826654704"
+      "bytes": 10923,
+      "sha256": "c88a75eba1e87f24db70060aaf55854899ef39525070186ae89b428c0ece6a9c"
     }
   },
   "generator": {

@@ -12,6 +12,7 @@ import { createSamplePackBuilder } from './sample-pack.js';
 import { validateArchive } from './validate.js';
 import { decodeWebp } from './webp.js';
 import * as codec from './webp.js';
+import * as rasterPools from './raster-pool.js';
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -346,6 +347,37 @@ describe('build-owned prepared renderer', () => {
       await expect(stat(join(dir, 'failed.pmtiles'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       clearTimeout(startupTimer); fail(); finish(); controller.abort(new Error('Test cleanup'));
+      try { await work; } finally { spy.mockRestore(); }
+    }
+  });
+
+  it('excludes inline geometry throughout worker initialization and draining', async () => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+    const mask = maskFor(grid, 0); mask.output.fill(15); mask.tiles[0] = 1;
+    const field = { values: new Float32Array(4).fill(100), flags: new Uint8Array(4) };
+    const renderer = createRenderer(mask, { rasterWorkers: 1 });
+    let initializing!: () => void, allowInit!: () => void, draining!: () => void, allowClose!: () => void;
+    const initialized = new Promise<void>(resolve => { initializing = resolve; }), init = new Promise<void>(resolve => { allowInit = resolve; });
+    const closing = new Promise<void>(resolve => { draining = resolve; }), closed = new Promise<void>(resolve => { allowClose = resolve; });
+    const spy = vi.spyOn(rasterPools, 'createRasterPool').mockImplementation(async () => {
+      initializing(); await init;
+      return { sharedInputBytes: 0, copiedInputBytes: 0, admittedPeakBytes: 0,
+        async render() { return { rgba: new Uint8Array(256 * 256 * 4), blank: true }; },
+        async close() { draining(); await closed; } };
+    });
+    const directory = await mkdtemp(join(tmpdir(), 'av-render-owner-')); temporary.push(directory);
+    const work = renderer.renderArchive(join(directory, 'blank.pmtiles'), field, 'usable-lift-msl');
+    try {
+      await initialized;
+      expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).toThrow('owns the renderer');
+      expect(renderer.metrics().geometryBytes).toBe(0);
+      allowInit(); await closing;
+      expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).toThrow('owns the renderer');
+      expect(renderer.metrics().geometryBytes).toBe(0);
+      allowClose(); await work;
+      expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).not.toThrow();
+    } finally {
+      allowInit(); allowClose();
       try { await work; } finally { spy.mockRestore(); }
     }
   });

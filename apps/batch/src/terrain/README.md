@@ -43,6 +43,8 @@ mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
 The `forecast-terrain` operation prepares or validates packed DEM values in R2
 from the pinned global catalog. Its cache identity binds source data, fine grid,
 coverage and preparation method. Progress reports expose preparation and reuse.
+When tile metadata changes, hosted preparation rekeys published arrays after
+verifying matching source data, grid, method and exact packed sparse coverage.
 The [whole-domain producer](../whole-domain/prepare.ts) stages cached values in
 sparse coverage offset order with coverage files in the frozen plan. Shards
 validate their identities and load them before weather acquisition. Local

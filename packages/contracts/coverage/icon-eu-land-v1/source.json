@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "icon-eu-land-v1",
   "kind": "coverage-mask",
-  "maxZoom": 8,
+  "maxZoom": 9,
   "crs": "EPSG:4326",
   "source": {
     "dataset": "Natural Earth 1:50m Admin 0 Countries",
@@ -372,7 +372,7 @@
     "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA, GRL or any country whose CONTINENT attribute is Africa, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
     "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.03125deg, latitude center +/-0.03125deg, clipped to bounds [-23.5, 29.5, 62.5, 70.5].",
-    "tileRule": "A z0-8 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
+    "tileRule": "A z0-9 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
     "outputDomain": "union of admitted nearest-cell footprints clipped to the coverage bounds"
   },
   "grid": {
@@ -432,7 +432,8 @@
       5,
       6,
       7,
-      8
+      8,
+      9
     ],
     "offsets": {
       "0": 0,
@@ -443,7 +444,8 @@
       "5": 341,
       "6": 1365,
       "7": 5461,
-      "8": 21845
+      "8": 21845,
+      "9": 87381
     },
     "tileCounts": {
       "0": 1,
@@ -454,10 +456,11 @@
       "5": 1024,
       "6": 4096,
       "7": 16384,
-      "8": 65536
+      "8": 65536,
+      "9": 262144
     },
-    "totalBits": 87381,
-    "bytes": 10923,
+    "totalBits": 349525,
+    "bytes": 43691,
     "countsByZoom": {
       "0": 1,
       "1": 2,
@@ -467,7 +470,8 @@
       "5": 42,
       "6": 134,
       "7": 434,
-      "8": 1514
+      "8": 1514,
+      "9": 5580
     },
     "activeZ5Tiles": [
       "5/13/7",
@@ -513,7 +517,7 @@
       "5/21/12",
       "5/21/13"
     ],
-    "sha256": "c2cb3b8ac3238bef202bc4302c362f29e6694bfafbe60e59c0efc478d92146a1"
+    "sha256": "c3233efd9c0ca7c23da10e7823d6447937545933bd4b53bedd458ccff6a86344"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.088388,

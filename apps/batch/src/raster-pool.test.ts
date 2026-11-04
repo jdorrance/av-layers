@@ -77,7 +77,7 @@ describe('bounded per-frame raster workers', () => {
     await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');
   });
 
-  it.each([[GFS_PRODUCT, 14_583_173, 150_260_449], [ICON_EU_PRODUCT, 9_981_126, 102_750_283]] as const)('admits the actual $0.modelId packed snapshot within a bounded whole-domain budget', async (product, active, expectedBytes) => {
+  it.each([[GFS_PRODUCT, 14_583_173, 150_268_641], [ICON_EU_PRODUCT, 9_981_126, 102_783_051]] as const)('admits the actual $0.modelId packed snapshot within a bounded whole-domain budget', async (product, active, expectedBytes) => {
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(active);
     const fields = (['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => ({ layer, field: { values: new Float32Array(active), flags: new Uint8Array(active), coverage: fine.coverage } }));
@@ -91,6 +91,8 @@ describe('bounded per-frame raster workers', () => {
     expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
     expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? expectedBytes : 0);
     expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
+    if (capacity.rasterWorkers) expect(capacity.workingSet.rasterInline).toBe(0);
+    else expect(capacity.workingSet.rasterInline).toBeGreaterThan(0);
     await expect(createRasterPool(fine, fields, { workers: 1, geometryCacheBytes: 0, maxPending: 1 })).rejects.toThrow('shared input byte budget');
     const pool = await createRasterPool(fine, fields, { workers: 1, geometryCacheBytes: 0, maxPending: 1, maxSharedInputBytes: capacity.rasterSharedInputBytes });
     try { expect(pool.sharedInputBytes).toBe(expectedBytes); expect(pool.admittedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes); }
@@ -104,7 +106,7 @@ describe('bounded per-frame raster workers', () => {
       const renderer = createRenderer(mask, { rasterWorkers: 3, rasterSharedInputBytes: 1000 });
       const path = join(directory, 'inline.pmtiles');
       await renderer.renderArchives([{ ...targets[0], path }]);
-      expect(renderer.metrics()).toMatchObject({ rasterWorkers: 0, workerStarts: 0, peakSharedInputBytes: 0 });
+      expect(renderer.metrics()).toMatchObject({ rasterWorkers: 0, workerStarts: 0, peakSharedInputBytes: 0, geometryBytes: 0 });
       const archive = await openArchive(path);
       try {
         const encoded = await archive.reader.getZxy(0, 0, 0);
@@ -112,6 +114,27 @@ describe('bounded per-frame raster workers', () => {
       } finally { await archive.close(); }
     } finally { rss.mockRestore(); }
   }, 20_000);
+
+  it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
+    const product = ICON_EU_PRODUCT, plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
+    const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
+    const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, fine,
+      nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,
+      nativeLayers: 0, fineLayers: 2, terrainBytes: 0,
+      columns: { byteLength: 0, workspaceBufferBytes: nativeActive * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
+    let low = 0, high = nativeCells;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2), capacity = admit(middle);
+      if (capacity.rasterWorkers + capacity.deriveWorkers > 0) low = middle;
+      else high = middle - 1;
+    }
+    const capacity = admit(low), inline = admit(low + 1);
+    expect(capacity).toMatchObject({ rasterWorkers: 0, deriveWorkers: 1, violations: [] });
+    expect(capacity.workingSet.rasterInline).toBeGreaterThan(0);
+    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+    expect(inline).toMatchObject({ rasterWorkers: 0, deriveWorkers: 0, violations: [] });
+    expect(inline.workingSet.rasterInline).toBeGreaterThan(0);
+  });
 
   it('matches inline archives exactly while sharing one total queue/cache budget', async () => {
     const { mask, targets } = fixture(), directory = await mkdtemp(join(tmpdir(), 'av-worker-proof-')); temporary.push(directory);

@@ -131,7 +131,7 @@ export async function manifest(
       const expected = surface.kind === 'native' ? plan.native : plan.fine;
       const gridHash = await sha256(new TextEncoder().encode(canonicalGridJson(expected)));
       if (!sameGrid(surface.grid, expected) || surface.gridHash !== gridHash || surface.coverage.gridHash !== gridHash
-          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom !== product.maxNativeZoom) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
+          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > product.maxNativeZoom) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
     }
   }
   const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;

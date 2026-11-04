@@ -8,7 +8,7 @@ import type { LoadedRefinement } from './refinement/prepare.js';
 /** Admission budgets, not predictions about an unknown runner or upstream service. */
 export const BUILD_BUDGETS = {
   gridCells: MAX_GRID_CELLS,
-  tiles: 300_000,
+  tiles: 800_000,
   samplePackBytes: 256 * 1024 * 1024,
   elapsedMs: 50 * 60_000,
   peakRssBytes: 2 * 1024 ** 3

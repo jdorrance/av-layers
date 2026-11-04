@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { canonicalGridJson, encodeSparseCoverage, sparseCoverageFromDense } from '@av/contracts';
-import { sha256 } from './contract.js';
+import { dataIdentity, sha256 } from './contract.js';
 import { createTerrainReader, type TerrainReadStats } from './reader.js';
 import { prepareSparseTerrain, type SparseTerrainProgress } from './sparse.js';
 import { verifyTerrainCatalogInventory } from './source.js';
@@ -45,14 +45,28 @@ function fixture(width = 3, height = 2, dy = -1 / height) {
   return { catalog: terrainCatalogFixture(), storage: new TerrainTestStorage(), grid, coverage, coverageDescriptor };
 }
 
+function changedMetadata(input: ReturnType<typeof fixture>, coverage = input.coverage) {
+  const descriptor = JSON.parse(input.coverageDescriptor.toString()), sparse = encodeSparseCoverage(coverage), tiles = Uint8Array.of(1, 0, 0);
+  return { ...input, coverage, coverageDescriptor: Buffer.from(JSON.stringify({ ...descriptor, maxZoom: 2, policy: 'updated tile coverage',
+    files: { sparse: { bytes: sparse.length, sha256: sha256(sparse) }, tiles: { bytes: tiles.length, sha256: sha256(tiles) } } })) };
+}
+
+function seedCoverage(input: ReturnType<typeof fixture>): string {
+  const prefix = `coverage/${sha256(input.coverageDescriptor)}`;
+  input.storage.objects.set(`${prefix}/manifest.json`, input.coverageDescriptor);
+  input.storage.objects.set(`${prefix}/sparse.bin`, encodeSparseCoverage(input.coverage));
+  return prefix;
+}
+
 describe('sparse terrain cache admission and progress', () => {
   it('rejects a missing cache before inventory checks, source reads or target traversal', async () => {
-    const input = fixture(), head = vi.spyOn(input.storage, 'head'), onProgress = vi.fn();
-    await expect(prepareSparseTerrain({ ...input, cacheOnly: true, onProgress })).rejects.toThrow('run pnpm operations forecast-terrain before forecast planning');
+    const input = fixture(), head = vi.spyOn(input.storage, 'head'), onProgress = vi.fn(), reuseFrom = vi.fn();
+    await expect(prepareSparseTerrain({ ...input, cacheOnly: true, onProgress, reuseFrom })).rejects.toThrow('run pnpm operations forecast-terrain before forecast planning');
     expect(input.storage.gets).toEqual([expect.stringMatching(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/)]);
     expect(verifyTerrainCatalogInventory).not.toHaveBeenCalled();
     expect(createTerrainReader).not.toHaveBeenCalled();
     expect(head).not.toHaveBeenCalled();
+    expect(reuseFrom).not.toHaveBeenCalled();
     expect(input.storage.objects.size).toBe(0);
     expect(onProgress).toHaveBeenCalledExactlyOnceWith({ phase: 'cache-check', cells: 6, completedCells: 0, elapsedMs: expect.any(Number) });
   });
@@ -105,6 +119,111 @@ describe('sparse terrain cache admission and progress', () => {
     } })).rejects.toBe(reason);
     expect(hooks.closed).toHaveBeenCalledTimes(phase === 'planning' ? 1 : 2);
     expect(input.storage.objects.size).toBe(0);
+  });
+});
+
+describe('sparse terrain metadata reuse', () => {
+  it('rekeys verified arrays without sampling and produces the exact cold-prepared bytes', async () => {
+    const input = fixture();
+    hooks.sampleBatch = points => points.map(point => ({ elevationM: point.latitude * 123.456789 + point.longitude, source: 'dem' as const }));
+    const source = await prepareSparseTerrain(input);
+    seedCoverage(input);
+    const updated = changedMetadata(input), baseline = new TerrainTestStorage();
+    const expected = await prepareSparseTerrain({ ...updated, storage: baseline });
+    const oldObjects = [...input.storage.objects].map(([key, bytes]) => [key, bytes.slice()] as const);
+    vi.clearAllMocks(); input.storage.gets = [];
+    const reuseFrom = vi.fn(async () => ({ key: source.key, sha256: source.sha256 })), onProgress = vi.fn(), prefetchSources = vi.fn();
+    const writes = vi.spyOn(input.storage, 'put');
+    const ref = await prepareSparseTerrain({ ...updated, reuseFrom, onProgress, prefetchSources });
+    expect(ref).toEqual(expected);
+    expect(ref.key).not.toEqual(source.key);
+    expect(reuseFrom).toHaveBeenCalledOnce();
+    expect(createTerrainReader).not.toHaveBeenCalled();
+    expect(prefetchSources).not.toHaveBeenCalled();
+    for (const [key, bytes] of baseline.objects) expect(input.storage.objects.get(key)).toEqual(bytes);
+    for (const [key, bytes] of oldObjects) expect(input.storage.objects.get(key)).toEqual(bytes);
+    expect(writes.mock.calls.map(([key]) => key)).toEqual([ref.key.replace('manifest.json', 'elevation-0.f32'), ref.key.replace('manifest.json', 'valid-0.u8'), ref.key]);
+    expect(writes).toHaveBeenLastCalledWith(ref.key, expect.any(Uint8Array), { ifNoneMatch: '*' }, 'application/json', expect.any(String), { sha256: ref.sha256 });
+    expect(onProgress.mock.calls.map(([event]) => event.phase)).toEqual(['cache-check', 'cache-reuse', 'complete']);
+    reuseFrom.mockClear(); writes.mockClear();
+    expect(await prepareSparseTerrain({ ...updated, reuseFrom, cacheOnly: true })).toEqual(ref);
+    expect(reuseFrom).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
+  });
+
+  it.each(['source', 'grid', 'packed coverage'] as const)('samples anew when the %s changes', async change => {
+    const input = fixture(), source = await prepareSparseTerrain(input);
+    seedCoverage(input);
+    let updated = changedMetadata(input);
+    if (change === 'source') {
+      const catalog = structuredClone(input.catalog);
+      catalog.tiles[0].sourceSha256 = 'd'.repeat(64); catalog.dataId = dataIdentity(catalog);
+      updated = { ...updated, catalog };
+    } else if (change === 'grid') updated = { ...changedMetadata(fixture(4)), storage: input.storage };
+    else {
+      const coverage = sparseCoverageFromDense({ width: input.grid.width, height: input.grid.height, wrapLongitude: false,
+        gridHash: sha256(canonicalGridJson(input.grid)), output: Uint8Array.of(62), halo: Uint8Array.of(1) });
+      expect(coverage.offsets.at(-1)).toBe(input.coverage.offsets.at(-1));
+      updated = changedMetadata(input, coverage);
+    }
+    vi.clearAllMocks();
+    const onProgress = vi.fn();
+    await prepareSparseTerrain({ ...updated, reuseFrom: async () => source, onProgress });
+    expect(createTerrainReader).toHaveBeenCalledTimes(2);
+    expect(onProgress.mock.calls.some(([event]) => event.phase === 'cache-reuse')).toBe(false);
+    expect(onProgress.mock.calls.at(-1)![0]).toMatchObject({ cacheHit: false });
+  });
+
+  it.each(['manifest', 'coverage', 'sparse', 'array'] as const)('fails closed on corrupt reused %s bytes before publishing a new manifest', async defect => {
+    const input = fixture(), source = await prepareSparseTerrain(input), coveragePrefix = seedCoverage(input), updated = changedMetadata(input);
+    const key = defect === 'manifest' ? source.key : defect === 'coverage' ? `${coveragePrefix}/manifest.json`
+      : defect === 'sparse' ? `${coveragePrefix}/sparse.bin` : source.key.replace('manifest.json', 'elevation-0.f32');
+    input.storage.objects.get(key)![0] ^= 1;
+    vi.clearAllMocks();
+    const writes = vi.spyOn(input.storage, 'put');
+    await expect(prepareSparseTerrain({ ...updated, reuseFrom: async () => source })).rejects.toThrow(/integrity/);
+    expect(writes).not.toHaveBeenCalled();
+    expect(createTerrainReader).not.toHaveBeenCalled();
+  });
+
+  it.each(['method', 'nonfinite elevation', 'invalid mask'] as const)('rejects checksummed reused terrain with an unsupported %s', async defect => {
+    const input = fixture(), source = await prepareSparseTerrain(input);
+    seedCoverage(input);
+    const descriptor = JSON.parse(Buffer.from(input.storage.objects.get(source.key)!).toString());
+    if (defect === 'method') descriptor.method = 'unsupported-method';
+    else {
+      const asset = defect === 'invalid mask' ? descriptor.files.valid[0] : descriptor.files.elevationM[0];
+      const bytes = input.storage.objects.get(asset.key)!;
+      if (defect === 'invalid mask') bytes[0] = 2;
+      else new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setFloat32(0, NaN, true);
+      asset.sha256 = sha256(bytes);
+    }
+    const bytes = Buffer.from(JSON.stringify(descriptor));
+    input.storage.objects.set(source.key, bytes);
+    vi.mocked(createTerrainReader).mockClear();
+    const writes = vi.spyOn(input.storage, 'put');
+    await expect(prepareSparseTerrain({ ...changedMetadata(input), reuseFrom: async () => ({ key: source.key, sha256: sha256(bytes) }) })).rejects.toThrow();
+    expect(writes).not.toHaveBeenCalled();
+    expect(createTerrainReader).not.toHaveBeenCalled();
+  });
+
+  it('retains copied chunks on cancellation and completes the same canonical preparation on retry', async () => {
+    const input = fixture(), source = await prepareSparseTerrain(input);
+    seedCoverage(input);
+    const updated = changedMetadata(input), baseline = new TerrainTestStorage();
+    const expected = await prepareSparseTerrain({ ...updated, storage: baseline });
+    const controller = new AbortController(), reason = new Error('stop after first copied chunk'), put = input.storage.put.bind(input.storage);
+    vi.spyOn(input.storage, 'put').mockImplementation(async (key, bytes, condition) => {
+      await put(key, bytes, condition);
+      if (key === expected.key.replace('manifest.json', 'elevation-0.f32')) controller.abort(reason);
+    });
+    vi.mocked(createTerrainReader).mockClear();
+    await expect(prepareSparseTerrain({ ...updated, reuseFrom: async () => source, signal: controller.signal })).rejects.toBe(reason);
+    expect(input.storage.objects.has(expected.key)).toBe(false);
+    expect(input.storage.objects.has(expected.key.replace('manifest.json', 'elevation-0.f32'))).toBe(true);
+    expect(await prepareSparseTerrain({ ...updated, reuseFrom: async () => source })).toEqual(expected);
+    for (const [key, bytes] of baseline.objects) expect(input.storage.objects.get(key)).toEqual(bytes);
+    expect(createTerrainReader).not.toHaveBeenCalled();
   });
 });
 

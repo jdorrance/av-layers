@@ -22,7 +22,7 @@ vi.mock('./render.js', async () => {
   return { renderArchive, createRenderer: vi.fn((mask: CoverageMask) => ({ renderArchive: (path: string, field: GridField, layer: Manifest['layers'][number]) => renderArchive(path, field, mask, layer), renderArchives: async (targets: { path: string; field: GridField; layer: Manifest['layers'][number] }[]) => { for (const { path, field, layer } of targets) await renderArchive(path, field, mask, layer); }, metrics: () => ({}) })) };
 });
 vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('./coverage.js')>(),
-  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }; }),
+  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; const maxZoom = GFS_PRODUCT.maxNativeZoom; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8)), maxZoom }; }),
   writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
 vi.mock('./gfs/discover.js', () => ({ discoverGfsRun: vi.fn() }));
@@ -246,13 +246,14 @@ describe('bounded end-to-end build pipeline integration', () => {
       grid: GFS_GRID,
       output: new Uint8Array(129780),
       halo: new Uint8Array(129780),
-      tiles: new Uint8Array(2731),
-      maxZoom: 7,
+      tiles: new Uint8Array(Math.ceil(((4 ** (GFS_PRODUCT.maxNativeZoom + 1) - 1) / 3) / 8)),
+      maxZoom: GFS_PRODUCT.maxNativeZoom,
     };
     setBit(boundedMask.output, index);
     setBit(boundedMask.halo, index + 1);
     setBit(boundedMask.tiles, 0);
-    setBit(boundedMask.tiles, (4 ** 7 - 1) / 3 + 64 * 128 + 64);
+    const side = 2 ** boundedMask.maxZoom;
+    setBit(boundedMask.tiles, (4 ** boundedMask.maxZoom - 1) / 3 + side / 2 * side + side / 2);
     const coverageHash = coverageModule.describeCoverage(boundedMask, GFS_PRODUCT).hash;
 
     vi.mocked(coverageModule.loadCoverage).mockResolvedValueOnce(boundedMask);

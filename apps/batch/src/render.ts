@@ -100,6 +100,7 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
     };
     try {
       if (rasterWorkers) {
+        workerArchiveActive = true;
         rasterizer.clearGeometry();
         const workerMetrics = new Map<number, RasterMetrics>(), started = performance.now();
         let count = rasterWorkers;
@@ -117,10 +118,9 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
         }
         stats.rasterWorkers = count;
         if (pool) {
-          workerArchiveActive = true;
           stats.workerStarts += count; stats.workerStartupMs += performance.now() - started;
           stats.peakSharedInputBytes = Math.max(stats.peakSharedInputBytes, pool.sharedInputBytes);
-        }
+        } else workerArchiveActive = false;
       }
       const bounds = (mask.bounds ?? [-180, -85.051129, 180, 85.051129]).join(',');
       const inserts = paths.map((path, index) => {
@@ -142,11 +142,17 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
       }
       for (const db of databases) db.exec('COMMIT');
     } finally {
-      workerArchiveActive = false;
       try { await pool?.close(); }
       finally {
         try { await Promise.all(pending); }
-        finally { for (const db of databases) db.close(); if (pool) stats.geometryBytes = 0; }
+        finally {
+          try { for (const db of databases) db.close(); }
+          finally {
+            if (rasterWorkers) rasterizer.clearGeometry();
+            if (pool) stats.geometryBytes = 0;
+            workerArchiveActive = false;
+          }
+        }
       }
     }
   }
