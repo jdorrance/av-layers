@@ -144,6 +144,7 @@ Parameters:
 - `dryAirHeatCapacityJkgK`: `1004`.
 - `dryLapseRateKperM`: `0.0098`.
 - `gravityMps2`: `9.80665`.
+- `gribQuantizationRelativeHumidityLimit`: `1.05`.
 - `kelvinOffset`: `273.15`.
 - `latentHeatVaporizationJkg`: `2501000`.
 - `lenschowPeakZeta`: `0.3125`.
@@ -170,6 +171,7 @@ Parameters:
 Caveats:
 
 - Dry parcel calculation; no moist parcel or cloud treatment.
+- Clamps normalized surface humidity up to gribQuantizationRelativeHumidityLimit times saturation vapor pressure to saturation.
 - Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
 - Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
 - A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.
@@ -190,6 +192,7 @@ Parameters:
 - `dryAirHeatCapacityJkgK`: `1004`.
 - `dryLapseRateKperM`: `0.0098`.
 - `gravityMps2`: `9.80665`.
+- `gribQuantizationRelativeHumidityLimit`: `1.05`.
 - `kelvinOffset`: `273.15`.
 - `latentHeatVaporizationJkg`: `2501000`.
 - `lenschowPeakZeta`: `0.3125`.
@@ -216,6 +219,7 @@ Parameters:
 Caveats:
 
 - Dry parcel calculation; no moist parcel or cloud treatment.
+- Clamps normalized surface humidity up to gribQuantizationRelativeHumidityLimit times saturation vapor pressure to saturation.
 - Evaluated only for cells in daylight across the trailing flux interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells emit no-lift without column evaluation.
 - Interval-mean surface fluxes are paired with the endpoint profile, and usable lift requires Lenschow updraft velocity to exceed sinkRateMps (and w* above minimumThermalVelocityMps).
 - A stable first resolved level uses a bounded lapse-rate extrapolation to ground; nonpositive surface excess gives zero depth.
@@ -255,6 +259,100 @@ Caveats:
 - Uses the parent frame daylight interval. Nighttime with valid terrain and native geometric support emits no lift; missing terrain remains unavailable.
 - Valley extrapolation is assumed and can produce usable valley lift from native no-lift columns; it is not empirically validated.
 - DEM vertical datum and surface type are recorded in each patch. No vertical-datum conversion is applied.
+
+### supported-terrain-column-1p2-model-levels-v1
+
+- Outputs: `usable-lift-msl`, `usable-lift-agl`.
+- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
+- Spatial support: `bilinear-neighborhood`.
+
+Parameters:
+
+- `crossingEpsilonMultiplier`: `8`.
+- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
+- `dryAirGasConstantJkgK`: `287.05`.
+- `dryAirHeatCapacityJkgK`: `1004`.
+- `dryLapseRateKperM`: `0.0098`.
+- `gravityMps2`: `9.80665`.
+- `gribQuantizationRelativeHumidityLimit`: `1.05`.
+- `kelvinOffset`: `273.15`.
+- `latentHeatVaporizationJkg`: `2501000`.
+- `lenschowPeakZeta`: `0.3125`.
+- `lenschowScale`: `4`.
+- `lenschowShape`: `0.8`.
+- `maximumBelowGroundExtrapolationM`: `1000`.
+- `maximumBisectionIterations`: `60`.
+- `maximumProfileGapM`: `1000`.
+- `maximumProfileTemperatureC`: `60`.
+- `maximumSurfacePressureHpa`: `1100`.
+- `maximumSurfaceTemperatureC`: `60`.
+- `minimumProfileTemperatureC`: `-120`.
+- `minimumSolarElevationDeg`: `-0.833`.
+- `minimumSurfacePressureHpa`: `100`.
+- `minimumSurfaceTemperatureC`: `-100`.
+- `minimumThermalVelocityMps`: `0`.
+- `pascalsPerHectopascal`: `100`.
+- `saturationExponent`: `17.67`.
+- `saturationRelativeTolerance`: `0.000001`.
+- `saturationTemperatureOffsetC`: `243.5`.
+- `saturationVaporPressureScaleHpa`: `6.112`.
+- `sinkRateMps`: `1.2`.
+- `waterDryAirMolarMassRatio`: `0.622`.
+
+Caveats:
+
+- Reconstructs environmental temperature profiles at each DEM cell over height-supported bilinear donor columns (up to maximumBelowGroundExtrapolationM below native ground) and transfers horizontal donor-ground surface anomalies.
+- Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.
+- Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.
+- When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.
+- Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
+
+### supported-terrain-column-1p2-v1
+
+- Outputs: `usable-lift-msl`, `usable-lift-agl`.
+- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
+- Spatial support: `bilinear-neighborhood`.
+
+Parameters:
+
+- `crossingEpsilonMultiplier`: `8`.
+- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
+- `dryAirGasConstantJkgK`: `287.05`.
+- `dryAirHeatCapacityJkgK`: `1004`.
+- `dryLapseRateKperM`: `0.0098`.
+- `gravityMps2`: `9.80665`.
+- `gribQuantizationRelativeHumidityLimit`: `1.05`.
+- `kelvinOffset`: `273.15`.
+- `latentHeatVaporizationJkg`: `2501000`.
+- `lenschowPeakZeta`: `0.3125`.
+- `lenschowScale`: `4`.
+- `lenschowShape`: `0.8`.
+- `maximumBelowGroundExtrapolationM`: `1000`.
+- `maximumBisectionIterations`: `60`.
+- `maximumProfileGapM`: `1000`.
+- `maximumProfileTemperatureC`: `60`.
+- `maximumSurfacePressureHpa`: `1100`.
+- `maximumSurfaceTemperatureC`: `60`.
+- `minimumProfileTemperatureC`: `-120`.
+- `minimumSolarElevationDeg`: `-0.833`.
+- `minimumSurfacePressureHpa`: `100`.
+- `minimumSurfaceTemperatureC`: `-100`.
+- `minimumThermalVelocityMps`: `0`.
+- `pascalsPerHectopascal`: `100`.
+- `saturationExponent`: `17.67`.
+- `saturationRelativeTolerance`: `0.000001`.
+- `saturationTemperatureOffsetC`: `243.5`.
+- `saturationVaporPressureScaleHpa`: `6.112`.
+- `sinkRateMps`: `1.2`.
+- `waterDryAirMolarMassRatio`: `0.622`.
+
+Caveats:
+
+- Reconstructs environmental temperature profiles at each DEM cell over height-supported bilinear donor columns (up to maximumBelowGroundExtrapolationM below native ground) and transfers horizontal donor-ground surface anomalies.
+- Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.
+- Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.
+- When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.
+- Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
 
 ### trailing-precipitation-rate-v1
 

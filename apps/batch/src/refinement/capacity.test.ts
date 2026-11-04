@@ -2,9 +2,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, setBit, STATUS_VALID, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { GFS_PRODUCT, setBit, STATUS_VALID, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import type { GridField } from '@av/forecast';
-import { prepareTerrainClearance } from '@av/forecast/refinement';
+import { prepareTerrainClearance, prepareTerrainColumns } from '@av/forecast/refinement';
+import * as refinement from '@av/forecast/refinement';
 import { buildForecast } from '../build.js';
 import { BUILD_BUDGETS, estimateCapacity, prepareBuild } from '../capacity.js';
 import type { ForecastProvider } from '../provider.js';
@@ -70,8 +71,11 @@ describe('refinement build admission', () => {
     const options = await fixture(), reads = terrainReads.opens;
     setBit(options.mask.output, 3 * 9 + 3, false);
     const planned = planRefinementCoverage({ ...options, zones });
+    const prepareColumns = vi.spyOn(refinement, 'prepareTerrainColumns');
     const inspected = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: planned });
     expect(planned).toHaveLength(2);
+    expect(prepareColumns).toHaveBeenCalledTimes(planned.length);
+    for (const [index, patch] of inspected.refinements.entries()) expect(patch.columns).toBe(prepareColumns.mock.results[index].value);
     expect(terrainReads.opens).toBe(reads);
     expect(options.storage.gets).toHaveLength(0);
     expect(inspected.capacity.workingSet.preparedTerrain).toBeGreaterThan(0);
@@ -108,21 +112,30 @@ describe('refinement build admission', () => {
     const prepared = prepareBuild(mask, product, { maxLevels: 2, refinements });
     const fields = product.layers.map((): GridField => ({ values: new Float32Array(63).fill(1000), flags: new Uint8Array(63).fill(STATUS_VALID) }));
     const mappings = refinements.map(patch => prepareTerrainClearance(mask, patch.mask));
+    const columns = refinements.map(patch => prepareTerrainColumns(mask, patch.mask, prepared.indices.active, 2, { clearanceFallback: 'unsupported' }));
     const diagnostics = { ceilingMslM: fields[0].values, buoyancyM2S3: new Float32Array(63).fill(1e10), branch: new Uint8Array(63).fill(2) };
     const fineFields = refinements.map((patch, index) => mappings[index].derive(diagnostics, fields[0].flags, patch.terrain, { intervalStart: '2026-06-21T11:00:00.000Z', validTime: '2026-06-21T12:00:00.000Z' }, false));
-    const packs = [createSamplePackBuilder(prepared.layout, product.frameHours.length * product.layers.length), ...prepared.refinements.map(patch => createSamplePackBuilder(patch.layout, product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length))];
+    const packs = [createSamplePackBuilder(prepared.layout, product.frameHours.length * product.layers.length), ...prepared.refinements.map(patch => createSamplePackBuilder(patch.layout, product.frameHours.length * TERRAIN_COLUMN_METHOD.outputs.length))];
     try {
       const encodedTerrain = await Promise.all(refinements.flatMap(patch => Object.values(patch.terrain.descriptor.files).map(file => readFile(join(out, file.key)))));
       const decodedTerrain = refinements.reduce((sum, patch) => sum + bytes(patch.terrain.elevationM, patch.terrain.valid), 0);
-      const allFields = [...fields, ...fineFields.flatMap(fields => Object.values(fields))].reduce((sum, field) => sum + fieldBytes(field), 0);
+      const baseAndFinalFields = [...fields, ...fineFields.flatMap(fields => Object.values(fields))].reduce((sum, field) => sum + fieldBytes(field), 0);
+      const overlappingFallbackFields = fineFields.flatMap(fields => Object.values(fields)).reduce((sum, field) => sum + fieldBytes(field), 0);
       const allMasks = [mask, ...refinements.map(patch => patch.mask)].reduce((sum, item) => sum + maskBytes(item), 0);
       const { workingSet } = prepared.capacity;
+      for (const [index, patch] of prepared.refinements.entries()) {
+        expect(patch.columns.byteLength).toBe(columns[index].byteLength);
+        expect(patch.columns.workspaceBytes).toBe(columns[index].workspaceBytes);
+      }
       expect(workingSet.samplePack).toBe(packs.reduce((sum, pack) => sum + pack.byteLength, 0));
       expect(workingSet.preparedTerrain).toBe(decodedTerrain + bytes(...encodedTerrain));
-      expect(workingSet.refinementMapping).toBe(mappings.reduce((sum, mapping) => sum + mapping.byteLength, 0));
-      expect(workingSet.derivedFields).toBe(allFields);
+      expect(workingSet.refinementMapping).toBe(
+        mappings.reduce((sum, mapping) => sum + mapping.byteLength, 0)
+        + columns.reduce((sum, column) => sum + column.byteLength + column.workspaceBytes, 0)
+      );
+      expect(workingSet.derivedFields).toBe(baseAndFinalFields + overlappingFallbackFields);
       expect(workingSet.diagnostics).toBe(63 * 9);
-      expect(workingSet.rasterSharedInputs).toBe(allFields + allMasks);
+      expect(workingSet.rasterSharedInputs).toBe(baseAndFinalFields + allMasks);
       expect(workingSet.indicesAndLayout).toBe(
         bytes(prepared.indices.active, prepared.indices.output) + prepared.layout.indexBytes
         + prepared.refinements.reduce((sum, patch) => sum + maskBytes(patch.mask) + patch.layout.indexBytes, 0)
@@ -146,7 +159,7 @@ describe('refinement build admission', () => {
     const limit = prepared.capacity.samplePackBytes - 1;
     expect(baseline.capacity.samplePackBytes).toBeLessThan(limit);
     for (const patch of prepared.refinements) {
-      const pack = createSamplePackBuilder(patch.layout, options.product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
+      const pack = createSamplePackBuilder(patch.layout, options.product.frameHours.length * TERRAIN_COLUMN_METHOD.outputs.length);
       expect(pack.byteLength).toBeLessThan(limit); pack.close();
     }
     const configure = config.configuredRefinements;

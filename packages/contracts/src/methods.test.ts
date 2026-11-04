@@ -1,18 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, createProductDescriptors, createProductMethodId, createRefinementDescriptors, descriptorSchema } from './index.js';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain clearance separately from its native atmospheric method', product => {
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain-column refinement separately from its native atmospheric method and legacy clearance', product => {
     const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
+    const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
+    const native = base.methods[base.layers['usable-lift-msl'].methodId];
+    const pressureInput = product.capabilities.verticalCoordinate === 'model-levels' ? 'pressurePa' : 'pressureLevelsHpa';
+    const otherPressureInput = pressureInput === 'pressurePa' ? 'pressureLevelsHpa' : 'pressurePa';
     expect(Object.keys(patch.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(patch.layers['usable-lift-msl']).toMatchObject({ methodId: TERRAIN_CLEARANCE_METHOD.id, verticalReference: 'MSL' });
-    expect(patch.layers['usable-lift-agl']).toMatchObject({ methodId: TERRAIN_CLEARANCE_METHOD.id, verticalReference: 'terrain-AGL' });
-    expect(patch.methods).toEqual({ [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD });
-    expect(patch.methods[TERRAIN_CLEARANCE_METHOD.id].spatialSupport).toBe('bilinear-neighborhood');
-    expect(patch.methods[TERRAIN_CLEARANCE_METHOD.id].outputs).toEqual(['usable-lift-msl', 'usable-lift-agl']);
+    expect(patch.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
+    expect(patch.layers['usable-lift-agl']).toMatchObject({ methodId: method.id, verticalReference: 'terrain-AGL' });
+    expect(patch.methods).toEqual({ [method.id]: method });
+    expect(method.spatialSupport).toBe('bilinear-neighborhood');
+    expect(method.outputs).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(patch.bounds).toEqual([1, 2, 3, 4]);
     expect(base.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
-    expect(base.layers['usable-lift-msl'].methodId).not.toBe(TERRAIN_CLEARANCE_METHOD.id);
+    expect(native.id).not.toBe(method.id);
+    expect(method.id).not.toBe(TERRAIN_CLEARANCE_METHOD.id);
+    expect(method.requiredInputs).toEqual([...native.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs]);
+    expect(method.requiredInputs).toContain(pressureInput);
+    expect(method.requiredInputs).not.toContain(otherPressureInput);
+    expect(method.inputs[pressureInput]).toEqual(native.inputs[pressureInput]);
+    expect(method.parameters).toBe(TERRAIN_COLUMN_PARAMETERS);
+    expect(method.parameters.gribQuantizationRelativeHumidityLimit).toBe(native.parameters.gribQuantizationRelativeHumidityLimit);
     expect(TERRAIN_CLEARANCE_METHOD.requiredInputs).toEqual(['convectiveDepthTopMslM', 'buoyancyM2S3', 'branch', 'terrainElevationM']);
     expect(TERRAIN_CLEARANCE_METHOD.inputs.branch).toMatchObject({ id: 'branch', quantity: 'convective-physical-support-branch', units: 'code' });
     expect(TERRAIN_CLEARANCE_METHOD.caveats[0]).toContain('both MSL and AGL outputs');

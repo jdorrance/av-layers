@@ -3,8 +3,7 @@ import { saturationVaporPressureHpa } from '@av/thermodynamics';
 import type { ColumnInput } from '@av/soaring';
 import type { NormalizedFrame } from './inputs.js';
 
-const { kelvinOffset, pascalsPerHectopascal, waterDryAirMolarMassRatio: epsilon } = LIFT_METHOD_PARAMETERS;
-const gribQuantizationRelativeHumidityLimit = 1.05;
+const { kelvinOffset, pascalsPerHectopascal, waterDryAirMolarMassRatio: epsilon, gribQuantizationRelativeHumidityLimit } = LIFT_METHOD_PARAMETERS;
 
 export interface NativeColumnScratch extends ColumnInput {
   humidity: { specificHumidityKgKg: number };
@@ -21,6 +20,25 @@ export function createNativeColumnScratch(maxLevels: number): NativeColumnScratc
     latentHeatFluxWm2: NaN,
     levels: Array.from({ length: maxLevels }, () => ({ heightM: NaN, temperatureC: NaN }))
   };
+}
+
+function readSurfaceSpecificHumidityKgKg(frame: NormalizedFrame, i: number): number {
+  if (frame.missing.humidity2m[i]) return NaN;
+  const specificHumidityKgKg = frame.specificHumidity2mKgKg[i]!;
+  if (!Number.isFinite(specificHumidityKgKg) || specificHumidityKgKg <= 0 || specificHumidityKgKg >= 1) return specificHumidityKgKg;
+  if (frame.missing.surfacePressure[i] || frame.missing.temp2m[i]) return specificHumidityKgKg;
+  const pressure = frame.surfacePressurePa[i]! / pascalsPerHectopascal;
+  const surfaceTemperatureC = frame.temp2mK[i]! - kelvinOffset;
+  if (!Number.isFinite(pressure) || pressure <= 0 || !Number.isFinite(surfaceTemperatureC)) return specificHumidityKgKg;
+  const es = saturationVaporPressureHpa(surfaceTemperatureC);
+  if (!Number.isFinite(es) || es <= 0 || es >= pressure) return specificHumidityKgKg;
+  const r = specificHumidityKgKg / (1 - specificHumidityKgKg);
+  const e = pressure * r / (epsilon + r);
+  if (e > es && e <= es * gribQuantizationRelativeHumidityLimit) {
+    const rSat = epsilon * es / (pressure - es);
+    return rSat / (1 + rSat);
+  }
+  return specificHumidityKgKg;
 }
 
 export function readNativeColumn(frame: NormalizedFrame, i: number, scratch: NativeColumnScratch): number {
@@ -41,23 +59,10 @@ export function readNativeColumn(frame: NormalizedFrame, i: number, scratch: Nat
     level.heightM = validPressure ? heightM : NaN;
     level.temperatureC = read(frame.tempK[j]!, frame.missing.temp[j]!) - kelvinOffset;
   }
-  const surfaceTemperatureC = read(frame.temp2mK, frame.missing.temp2m) - kelvinOffset;
-  let specificHumidityKgKg = read(frame.specificHumidity2mKgKg, frame.missing.humidity2m);
-  if (Number.isFinite(pressure) && pressure > 0 && Number.isFinite(surfaceTemperatureC) && Number.isFinite(specificHumidityKgKg) && specificHumidityKgKg > 0 && specificHumidityKgKg < 1) {
-    const es = saturationVaporPressureHpa(surfaceTemperatureC);
-    if (Number.isFinite(es) && es > 0 && es < pressure) {
-      const r = specificHumidityKgKg / (1 - specificHumidityKgKg);
-      const e = pressure * r / (epsilon + r);
-      if (e > es && e <= es * gribQuantizationRelativeHumidityLimit) {
-        const rSat = epsilon * es / (pressure - es);
-        specificHumidityKgKg = rSat / (1 + rSat);
-      }
-    }
-  }
   scratch.terrainM = terrain;
   scratch.surfacePressureHpa = pressure;
-  scratch.surfaceTemperatureC = surfaceTemperatureC;
-  scratch.humidity.specificHumidityKgKg = specificHumidityKgKg;
+  scratch.surfaceTemperatureC = read(frame.temp2mK, frame.missing.temp2m) - kelvinOffset;
+  scratch.humidity.specificHumidityKgKg = readSurfaceSpecificHumidityKgKg(frame, i);
   scratch.sensibleHeatFluxWm2 = read(frame.sensibleHeatFluxWm2, frame.missing.sensibleHeatFlux);
   scratch.latentHeatFluxWm2 = read(frame.latentHeatFluxWm2, frame.missing.latentHeatFlux);
   return count;

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
-import { prepareTerrainClearance, prepareTerrainColumns } from '@av/forecast/refinement';
+import { prepareTerrainClearance } from '@av/forecast/refinement';
 import type { ForecastProvider, ForecastSession } from './provider.js';
 import { createRenderer } from './render.js';
 import { summarizeFields } from './summary.js';
@@ -64,9 +64,6 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
   const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: FrameBuildResult['receipts'] = [], summaries: FrameBuildResult['metrics']['frames'] = {};
   const refinements = options.prepared.refinements.map(patch => ({ ...patch,
     clearance: prepareTerrainClearance(mask, patch.mask),
-    columns: prepareTerrainColumns(mask, patch.mask, active, provider.maxLevels, {
-      bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000, clearanceFallback: 'unsupported'
-    }),
     pack: undefined as ReturnType<typeof createSamplePackBuilder> | undefined,
     samplesKey: `${options.refinementPrefix ?? `${prefix}/refinements`}/${patch.input.id}/samples.bin`
   }));

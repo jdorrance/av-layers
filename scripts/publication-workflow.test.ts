@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createRefinementDescriptors, getProduct, MODEL_IDS, TERRAIN_CLEARANCE_METHOD, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { createRefinementDescriptors, getProduct, MODEL_IDS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
 import * as refinementConfiguration from '../apps/batch/src/refinement/config.js';
 import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
@@ -216,7 +216,7 @@ it('resumes matching artifacts through the same admission/journal without rebuil
 function refinedResumePlan(): BuildPlan {
   const patch = fixturePatch(manifest), product = getProduct(manifest.model)!;
   patch.descriptors = createRefinementDescriptors(product, patch.descriptors.bounds);
-  patch.method.id = TERRAIN_CLEARANCE_METHOD.id;
+  patch.method.id = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate].id;
   manifest.version = 4; manifest.patches = [patch];
   validateArtifactRecords(manifest);
   const input = refinementInputSchema.parse({ id: patch.id, grid: patch.grid, geometry: patch.geometry,

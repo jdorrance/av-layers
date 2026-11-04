@@ -28,8 +28,8 @@ fallback. Whole-zone and 15 km Aragats populations include numeric differences,
 status/support transitions, donor-ground anomalies, supported weights and matched
 images. Controls identify the legacy patch method separately from the native
 base method. Runtime and peak RSS are separate from deterministic comparisons.
-Scientific promotion uses multi-cycle paired observations, support and seam
-checks, and resource measurements.
+Validation uses multi-cycle paired observations, support and seam checks, and
+resource measurements.
 
 ## Preparation
 
@@ -43,5 +43,6 @@ and arrays with the build plan. Workers verify and read those files locally.
 [Build budgets](../capacity.ts) include the base and fine grids.
 
 [`@av/forecast/refinement`](../../../../packages/forecast/src/refinement.ts)
-calculates MSL and terrain-AGL lift from native convective-depth top and buoyancy. See
-[science](../../../../docs/science.md#terrain-clearance) for the method.
+reconstructs terrain columns for MSL and terrain-AGL lift, with same-frame
+terrain-clearance fallback for unsupported valleys. See
+[science](../../../../docs/science.md#terrain-columns) for the equations.

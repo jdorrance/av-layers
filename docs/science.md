@@ -81,8 +81,8 @@ crossing with `sinkRateMps` sets the usable thermal depth ([column.ts](../packag
 
 ## Terrain clearance
 
-Method `native-lift-terrain-clearance-v2` derives fine MSL and AGL in the
-configured polygons. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
+Method `native-lift-terrain-clearance-v2` supplies unsupported-valley fallback
+and evaluation controls. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
 compiles native neighbors and weights once per target grid. Each target cell
 requires complete native diagnostics. Every positive-weight neighbor must have
 positive convective depth for interpolation. The method interpolates convective-depth
@@ -96,21 +96,31 @@ support flags are ORed.
 Daylight follows the same interval as the parent frame. A dark cell with valid
 terrain and complete native geometric support emits no lift without evaluating
 the atmospheric values. Missing terrain or geometric support stays unavailable.
-The patch publishes MSL as DEM elevation plus usable clearance and AGL as that
+The method returns MSL as DEM elevation plus usable clearance and AGL as that
 clearance. Valleys inherit the parent model's convective top and buoyancy
 forcing over a deeper local layer. Each patch records the DEM datum and surface
 type. The calculation applies no vertical-datum transformation.
 
-## Terrain-column evaluation
+## Terrain columns
 
-[`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts) reconstructs
-an environmental profile at each DEM cell from native donor columns. Surface
+Production uses [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts)
+to reconstruct an environmental profile at each DEM cell from native donors.
+[Method descriptors](../packages/contracts/src/methods.ts) select the isobaric
+pressure axis for GFS or per-column model-level pressures for ICON-EU. Surface
 excess is evaluated at each native ground: $\delta_i=T_{2m,i}-E_i(h_i)$.
 The transferred excess is $\delta_0=\sum_i w_i\delta_i$ using the original
-horizontal weights, and the fine temperature is $T_f=E(h_f)+\delta_0$.
-Hydrostatic pressure uses mean virtual temperature; specific humidity preserves
-the interpolated native relative humidity. Surface forcing uses native sensible
-and latent heat fluxes.
+horizontal weights. The solver lifts a parcel from $E(h_f)+\delta_0$.
+Surface-state temperature is $T_f=E_\mathrm{surface}(h_f)+\delta_0$.
+The workspace's surface-ground diagnostic damps below-ground depth as
+$d_\mathrm{eff}=d/(1+2d/b)$ for bridge bound $b$. Hydrostatic pressure uses
+mean virtual temperature.
+
+For ground-supported weights $v_i$, relative humidity is interpolated as
+$RH_f=\sum_i v_i e_i/e_s(T_i)$. Native vapor pressure $e_i$ uses the corrected
+specific humidity from [column-input.ts](../packages/forecast/src/column-input.ts).
+Fine vapor pressure is $e_f=RH_f e_s(T_f)$, and specific humidity is
+$q_f=\epsilon e_f/[p_f-(1-\epsilon)e_f]$, with $p_f$ and $e_f$ in the same
+pressure units. Sensible and latent heat fluxes use the same supported weights.
 
 At height $z$, environmental weights are normalized among validated donors
 within their admitted below-ground support. The solver-owned
@@ -130,11 +140,10 @@ describes regime-dependent terrain relationships. The donor anomaly, support
 selection and clearance fallback here are project numerical rules requiring
 local validation.
 
-
 The [evaluation command](../apps/batch/src/refinement/README.md#evaluation)
-records paired fields, status/support changes and station comparisons. Production
-uses the terrain-clearance method above. Promotion requires preservation of known
-support inside Armenia, observational checks and full-build resource admission.
+records paired fields, status/support changes and station comparisons.
+[Build admission](../apps/batch/src/capacity.ts) accounts for the retained mappings,
+solver workspace and fallback fields.
 
 ## Reconstruction and storage
 
@@ -148,10 +157,9 @@ the value and status.
 
 Tile rendering evaluates four quarter-pixel subsamples in Web Mercator, applies
 the layer palette, and averages premultiplied RGBA before encoding lossless
-WebP. New lift palettes interpolate their encoded 8-bit sRGB channels; retained
-palettes without interpolation metadata use discrete bins. Rain keeps its
-thresholded palette. Render style changes the recipe identity while preserving
-numeric packs.
+WebP. [Palette descriptors](../packages/contracts/src/layers.ts) select discrete
+bins or interpolation of encoded 8-bit sRGB channels. Rain keeps its thresholded
+palette. Render style changes the recipe identity while preserving numeric packs.
 Point samples are stored in 5-byte records (`Float32` value + 1-byte
 status/support bitmask defined in [layers.ts](../packages/contracts/src/layers.ts))
 arranged in $16 \times 16$ cell blocks with a 1-cell halo ([architecture](architecture.md#build-and-storage)).

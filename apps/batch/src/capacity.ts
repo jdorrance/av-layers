@@ -1,6 +1,6 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
-import { terrainClearanceMappingBytes } from '@av/forecast/refinement';
+import { prepareTerrainColumns, terrainClearanceMappingBytes } from '@av/forecast/refinement';
 import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import type { LoadedRefinement } from './refinement/prepare.js';
@@ -38,7 +38,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
     ? expectedTiles(mask, z).length
     : expectedTiles(mask, mask.maxZoom).length * 4 ** (z - mask.maxZoom));
   const channels = frames * layers, tiles = tilesByZoom.reduce((sum, n) => sum + n, 0) * channels * models;
-  const refinementChannels = frames * TERRAIN_CLEARANCE_METHOD.outputs.length;
+  const refinementChannels = frames * TERRAIN_COLUMN_METHOD.outputs.length;
   const samplePackBytes = (storedCells * channels + refinement.storedCells * refinementChannels) * CELL_BYTES;
   const retainedPerModel = Math.ceil(retentionDays * 24 / cadenceHours);
   // A two-by-two neighborhood spans at most B + 3 cell records in a (B + 1)-wide block.
@@ -71,24 +71,25 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   if (mask.maxZoom !== product.maxNativeZoom || !sameGrid(mask.grid, product.grid)) throw new Error('Coverage does not match the trusted product');
   if (mask.grid.width * mask.grid.height > BUILD_BUDGETS.gridCells) throw new Error('Grid-cell budget exceeded');
   if ((resources.refinements ?? []).reduce((sum, item) => sum + item.mask.grid.width * item.mask.grid.height, mask.grid.width * mask.grid.height) > BUILD_BUDGETS.gridCells) throw new Error('Aggregate grid-cell budget exceeded');
+  if (!Number.isSafeInteger(resources.maxLevels) || resources.maxLevels < 1 || resources.maxLevels > 256) throw new Error('Invalid normalized level budget');
   const indices = coverageIndices(mask), layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
   if (!indices.output.length || !indices.active.length) throw new Error('Coverage must contain output and active cells before acquisition');
-  if (resources.refinements?.length && (!product.layers.includes('usable-lift-msl') || !product.layers.includes('usable-lift-agl'))) throw new Error('Terrain clearance requires native MSL and AGL layers');
+  if (resources.refinements?.length && (!product.layers.includes('usable-lift-msl') || !product.layers.includes('usable-lift-agl'))) throw new Error('Terrain refinement requires native MSL and AGL layers');
   let refinementMappingBytes = 0, refinementTerrainBytes = 0, refinementMaskBytes = 0;
   const refinementSize = { gridCells: 0, storedCells: 0 };
   const refinements = (resources.refinements ?? []).map(item => {
     const active = coverageIndices(item.mask), layout = prepareSamplePackLayout(item.mask.grid, item.mask.output, item.mask.halo);
     if (!active.output.length) throw new Error('Refinement coverage is empty');
     const cells = item.mask.grid.width * item.mask.grid.height;
+    const columns = prepareTerrainColumns(mask, item.mask, indices.active, resources.maxLevels, { clearanceFallback: 'unsupported' });
     refinementSize.gridCells += cells;
     refinementSize.storedCells += layout.storedCells;
-    refinementMappingBytes += terrainClearanceMappingBytes(active.active.length);
+    refinementMappingBytes += terrainClearanceMappingBytes(active.active.length) + columns.byteLength + columns.workspaceBytes;
     refinementTerrainBytes += cells * PREPARED_TERRAIN_CELL_BYTES;
     refinementMaskBytes += item.mask.output.byteLength + item.mask.halo.byteLength + item.mask.tiles.byteLength;
-    return { ...item, layout };
+    return { ...item, layout, columns };
   });
   const capacity = estimateCapacity(mask, product, layout.storedCells, resources.frameCount !== undefined ? { frames: resources.frameCount } : {}, refinementSize);
-  if (!Number.isSafeInteger(resources.maxLevels) || resources.maxLevels < 1 || resources.maxLevels > 256) throw new Error('Invalid normalized level budget');
   const retainedGeometryFields = resources.retainedGeometryFields ?? 0;
   if (!Number.isSafeInteger(retainedGeometryFields) || retainedGeometryFields < 0 || retainedGeometryFields > 257) throw new Error('Invalid retained geometry budget');
   const terrainBytes = resources.terrainBytes ?? 0;
@@ -98,7 +99,8 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   const fieldsPerLevel = product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2;
   const workingSet = {
     samplePack: capacity.samplePackBytes,
-    derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_CLEARANCE_METHOD.outputs.length) * CELL_BYTES,
+    // Each patch derives same-frame terrain-clearance fallback fields alongside the final terrain-column fields.
+    derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_COLUMN_METHOD.outputs.length * 2) * CELL_BYTES,
     normalizedFrame: activeCells * (7 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
     diagnostics: refinements.length ? cells * 9 : 0,
     retainedGeometry: activeCells * retainedGeometryFields * CELL_BYTES,
@@ -108,7 +110,7 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
     rawCompanions: activeCells * 6 * 9,
     decoderReservations: 128 * 1024 * 1024,
     rendererAndEncoder: 64 * 1024 * 1024,
-    rasterSharedInputs: rasterWorkers ? (cells * product.layers.length + refinementSize.gridCells * TERRAIN_CLEARANCE_METHOD.outputs.length) * CELL_BYTES + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength + refinementMaskBytes : 0,
+    rasterSharedInputs: rasterWorkers ? (cells * product.layers.length + refinementSize.gridCells * TERRAIN_COLUMN_METHOD.outputs.length) * CELL_BYTES + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength + refinementMaskBytes : 0,
     rasterWorkerRuntimes: rasterWorkers * RASTER_WORKER_RESERVE_BYTES,
     indicesAndLayout: indices.active.byteLength + indices.output.byteLength + layout.indexBytes + refinementMaskBytes + refinements.reduce((sum, patch) => sum + patch.layout.indexBytes, 0),
     archiveAndValidation: 2 * BUILD_BUDGETS.samplePackBytes + cells * 4,

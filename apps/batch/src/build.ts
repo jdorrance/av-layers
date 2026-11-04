@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, liftRenderStyle, manifestSchema, PALETTES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD } from '@av/contracts';
+import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, liftRenderStyle, manifestSchema, PALETTES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE } from '@av/contracts';
 import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
@@ -62,11 +62,12 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
   try {
     const refined = result.refinements ?? [];
     if (refined.length !== options.prepared.refinements.length || refined.some((item, index) => item.id !== options.prepared.refinements[index].input.id)) throw new Error('Incomplete or reordered refinement results');
+    const refinementMethod = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     const patches = options.prepared.refinements.map(({ input, layout, terrain }, index) => ({
       id: input.id, grid: input.grid, coverage: input.coverage, geometry: input.geometry,
-      descriptors: createRefinementDescriptors(product, input.bounds), layers: [...TERRAIN_CLEARANCE_METHOD.outputs],
+      descriptors: createRefinementDescriptors(product, input.bounds), layers: [...refinementMethod.outputs],
       samples: { format: 'cell-major-blocks-v1' as const, blockSize: SAMPLE_BLOCK_SIZE, storedCells: layout.storedCells, ...refined[index].samples },
-      method: { id: TERRAIN_CLEARANCE_METHOD.id, hash: identity.scienceHash },
+      method: { id: refinementMethod.id, hash: identity.scienceHash },
       terrain: { dataId: terrain.descriptor.dataId, key: input.terrain.key, sha256: input.terrain.sha256,
         verticalDatum: terrain.descriptor.source.verticalDatum, surface: terrain.descriptor.source.surface }
     }));
