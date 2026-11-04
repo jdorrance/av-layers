@@ -70,6 +70,11 @@ new build.
 reporting progress in the job log. Planning requires that cache; a missing cache
 fails planning immediately.
 
+Cold preparation stages verified source files in a bounded local cache and
+commits each completed window to R2. Retrying a failed terrain job reuses its
+verified windows. The [terrain CLI](../apps/batch/src/terrain/README.md#use-in-forecasts)
+can prepare and upload the same arrays locally.
+
 The prepare job signs [temporary R2 credentials](https://developers.cloudflare.com/r2/examples/authenticate-r2-temp-credentials/)
 and encrypts them with a fresh per-build AES-256-GCM key in the plan artifact,
 bound to the bucket, model, build ID and deadline. Shards receive only their

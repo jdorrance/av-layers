@@ -5,11 +5,11 @@ import { ASSET_MAX_BYTES, encodeJson, parseJson, sha256, TERRAIN_BATCH_POINTS, t
 import { createTerrainReadBudget, createTerrainReader, TERRAIN_READ_LIMITS, type TerrainReadStats } from './reader.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES, PREPARED_TERRAIN_METHOD } from './prepare.js';
 import { TERRAIN_INVENTORY_BYTES, verifyTerrainCatalogInventory } from './source.js';
+import { restoreTerrainCheckpoint, writeTerrainCheckpoint, TERRAIN_CHECKPOINT_CELLS as WINDOW_POINTS } from './checkpoint.js';
 
 export const MAX_SPARSE_TERRAIN_BYTES = 256 * 1024 * 1024;
 const MAX_ARRAY_BYTES = MAX_SPARSE_TERRAIN_BYTES;
 const CHUNK_CELLS = ASSET_MAX_BYTES / 4;
-const WINDOW_POINTS = TERRAIN_BATCH_POINTS * 16;
 const SOURCE_INTEGRITY = 'sha256-before-sampling-v1';
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const key = z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/);
@@ -43,6 +43,8 @@ export interface SparseTerrainProgress {
 export interface SparseTerrainOptions {
   catalog: TerrainCatalog; storage: TerrainStorage; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal;
   cacheOnly?: boolean;
+  checkpoints?: boolean;
+  prefetchSources?: (keys: readonly string[], signal?: AbortSignal) => Promise<() => void>;
   limits?: { maxArrayBytes?: number; maxDurationMs?: number; reader?: Parameters<typeof createTerrainReader>[0]['limits']; total?: Partial<Parameters<typeof createTerrainReadBudget>[0]> };
   onProgress?: (progress: SparseTerrainProgress) => void;
   onReport?: (report: { cacheHit: boolean; cells: number; arrayBytes: number; elapsedMs: number; inventoryReadBytesBound: number; reader?: TerrainReadStats; sourceBlocks?: number; sourceAssets?: number; totalLimits?: Parameters<typeof createTerrainReadBudget>[0]; planning?: { windowPoints: number; windows: number; maxWindowGroups: number; blockBitmapBytes: number; sampledPeakRssBytes: number; sampledPeakHeapUsedBytes: number; decodedBlocks: number; readBatches: number } }) => void;
@@ -156,6 +158,9 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     return [tile.id, { index, base, width }] as const;
   }));
   const blockBitmap = new Uint8Array(Math.ceil(bitmapBits / 8)), usedAssets = new Uint8Array(catalog.tiles.length);
+  const heights = new Uint8Array(target.cells * 4), valid = new Uint8Array(target.cells), view = new DataView(heights.buffer);
+  const restored = options.checkpoints ? new Uint8Array(Math.ceil(target.cells / WINDOW_POINTS)) : undefined;
+  const checkpointIdentity = prefix.slice(prefix.lastIndexOf('/') + 1);
   const blockPixels = catalog.packing.blockSize ** 2, cacheBlocks = Math.floor(limits.maxCachedPixels / blockPixels);
   let sourceBlocks = 0, sourceAssets = 0, decodedBlocks = 0, readBatches = 0, windows = 0, maxWindowGroups = 0;
   let sampledPeakRssBytes = 0, sampledPeakHeapUsedBytes = 0;
@@ -196,7 +201,11 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
   }
   try {
     for (const point of targets()) {
-      if (point) {
+      if (restored && !windowPoints) {
+        const window = { identity: checkpointIdentity, firstCell: plannedCells, count: Math.min(WINDOW_POINTS, target.cells - plannedCells) };
+        restored[windows] = Number(await restoreTerrainCheckpoint(options.storage, window, heights, valid, signal));
+      }
+      if (point && !restored?.[windows]) {
         const blocks = planner.sourceBlocks(point.latitude, point.longitude);
         groups.set(blocks, (groups.get(blocks) ?? 0) + 1);
         for (const block of blocks.split('|')) if (block) {
@@ -213,43 +222,60 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
   } finally { planner.close(); }
   const totalLimits = { maxReadBytes: Math.max(TERRAIN_INVENTORY_BYTES, readBatches * limits.maxReadBytes), maxDecodedPixels: Math.max(1, decodedBlocks * blockPixels), maxOutputPixels: target.cells, ...options.limits?.total };
   const budget = createTerrainReadBudget(totalLimits, { signal, ...(duration === undefined ? {} : { deadlineAt: started + duration }) });
-  const heights = new Uint8Array(target.cells * 4), valid = new Uint8Array(target.cells), view = new DataView(heights.buffer);
   const reader = await createTerrainReader({ catalog, storage: options.storage, signal, limits: options.limits?.reader, budget });
   let sampledCells = 0;
   try {
     progress('sampling', 0, () => ({ sourceBlocks, sourceAssets, reader: reader.stats() }));
     let points: Array<{ latitude: number; longitude: number; offset: number; blocks: string }> = [];
-    const flush = async () => {
-      if (!points.length) return;
+    const flush = async (firstCell: number, count: number) => {
       checkDeadline();
-      points.sort((a, b) => a.blocks < b.blocks ? -1 : a.blocks > b.blocks ? 1 : a.offset - b.offset);
-      for (let start = 0; start < points.length;) {
-        let end = start + 1;
-        const maximum = batchSize(points[start].blocks);
-        while (end < points.length && points[end].blocks === points[start].blocks && end - start < maximum) end++;
-        const batch = points.slice(start, end);
-        const samples = await reader.sampleBatch!(batch);
-        checkDeadline();
-        for (let i = 0; i < samples.length; i++) {
-          const sample = samples[i], offset = batch[i].offset;
-          if (!sample) continue;
-          view.setFloat32(offset * 4, sample.elevationM, true);
-          if (!Number.isFinite(view.getFloat32(offset * 4, true))) throw new Error('Terrain elevation exceeds float32 storage');
-          valid[offset] = 1;
-        }
-        sampledCells += batch.length;
+      if (restored?.[firstCell / WINDOW_POINTS]) {
+        sampledCells += count;
         progress('sampling', sampledCells, () => ({ sourceBlocks, sourceAssets, reader: reader.stats() }));
-        start = end;
+        return;
       }
-      points = [];
+      let release: (() => void) | undefined;
+      try {
+        if (options.prefetchSources && points.length) {
+          const keys = new Set<string>();
+          for (const point of points) for (const block of point.blocks.split('|')) if (block) {
+            const asset = assets.get(block.slice(0, block.indexOf('/')));
+            if (!asset) throw new Error('Terrain source block is absent from catalog');
+            keys.add(catalog.tiles[asset.index].asset.key);
+          }
+          if (keys.size) release = await options.prefetchSources([...keys], signal);
+        }
+        points.sort((a, b) => a.blocks < b.blocks ? -1 : a.blocks > b.blocks ? 1 : a.offset - b.offset);
+        for (let start = 0; start < points.length;) {
+          let end = start + 1;
+          const maximum = batchSize(points[start].blocks);
+          while (end < points.length && points[end].blocks === points[start].blocks && end - start < maximum) end++;
+          const batch = points.slice(start, end);
+          const samples = await reader.sampleBatch!(batch);
+          checkDeadline();
+          for (let i = 0; i < samples.length; i++) {
+            const sample = samples[i], offset = batch[i].offset;
+            if (!sample) continue;
+            view.setFloat32(offset * 4, sample.elevationM, true);
+            if (!Number.isFinite(view.getFloat32(offset * 4, true))) throw new Error('Terrain elevation exceeds float32 storage');
+            valid[offset] = 1;
+          }
+          sampledCells += batch.length;
+          progress('sampling', sampledCells, () => ({ sourceBlocks, sourceAssets, reader: reader.stats() }));
+          start = end;
+        }
+        if (options.checkpoints) await writeTerrainCheckpoint(options.storage, { identity: checkpointIdentity, firstCell, count }, heights, valid, signal);
+      } finally { release?.(); points = []; }
     };
-    let scanned = 0;
+    let scanned = 0, firstCell = 0;
     for (const point of targets()) {
-      if (point) points.push({ ...point, blocks: reader.sourceBlocks(point.latitude, point.longitude) });
-      else sampledCells++;
-      if (++scanned === WINDOW_POINTS) { await flush(); await checkpoint(); scanned = 0; }
+      if (!restored?.[firstCell / WINDOW_POINTS]) {
+        if (point) points.push({ ...point, blocks: reader.sourceBlocks(point.latitude, point.longitude) });
+        else sampledCells++;
+      }
+      if (++scanned === WINDOW_POINTS) { await flush(firstCell, scanned); await checkpoint(); firstCell += scanned; scanned = 0; }
     }
-    if (scanned) { await flush(); await checkpoint(); }
+    if (scanned) { await flush(firstCell, scanned); await checkpoint(); }
   } finally {
     const readerStats = reader.stats();
     reader.close();

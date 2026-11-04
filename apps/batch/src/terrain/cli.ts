@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { gridSchema, type Grid, type GeographicBounds } from '@av/contracts';
+import { getProduct, gridSchema, modelIdSchema, type Grid, type GeographicBounds } from '@av/contracts';
 import { putImmutable } from '../immutable-upload.js';
 import { readLocalFile } from '../local-file.js';
 import { r2Storage } from '../storage.js';
@@ -21,6 +21,7 @@ export const TERRAIN_COMMANDS: Readonly<Record<string, readonly string[]>> = {
   sync: [...COMMON, 'inventory', 'shard', 'shards', 'concurrency'],
   finalize: [...COMMON, 'inventory'],
   prepare: [...COMMON, 'catalog-ref', 'grid'],
+  'prepare-model': [...COMMON, 'catalog-ref', 'model', 'source-cache-dir'],
   stage: [...COMMON, 'prepared-ref', 'grid'],
   inspect: [...COMMON, 'catalog-ref', 'bounds']
 };
@@ -31,7 +32,8 @@ export function terrainArguments(args: string[]) {
     options: Object.fromEntries(allowed.map(option => [option, { type: 'string' as const }])) });
   if (positionals.length || typeof values.out !== 'string' || !values.out) throw new Error('--out is required');
   if (values['store-dir'] !== undefined && !values['store-dir'].trim()) throw new Error('--store-dir must be a nonempty directory');
-  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], prepare: ['catalog-ref', 'grid'], stage: ['prepared-ref', 'grid'], inspect: ['catalog-ref', 'bounds'] };
+  if (values['source-cache-dir'] !== undefined && !values['source-cache-dir'].trim()) throw new Error('--source-cache-dir must be a nonempty directory');
+  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], prepare: ['catalog-ref', 'grid'], 'prepare-model': ['catalog-ref', 'model'], stage: ['prepared-ref', 'grid'], inspect: ['catalog-ref', 'bounds'] };
   for (const option of required[command] ?? []) if (!values[option]) throw new Error(`--${option} is required`);
   return { command, values: values as Record<string, string> };
 }
@@ -83,6 +85,22 @@ export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
       return;
     }
     const catalogRef = parseJson(await readLocalFile(values['catalog-ref'], 16 * 1024), terrainAssetSchema, 16 * 1024);
+    if (command === 'prepare-model') {
+      const model = modelIdSchema.parse(values.model), product = getProduct(model);
+      if (!product) throw new Error(`No configured product for ${model}`);
+      const [{ wholeDomainPlan, loadBundledFineCoverage }, { ensureWholeDomainTerrain }] = await Promise.all([
+        import('../whole-domain/coverage.js'), import('../whole-domain/terrain.js')
+      ]);
+      const plan = wholeDomainPlan(product);
+      if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
+      const fine = await loadBundledFineCoverage(product, plan);
+      const ref = await ensureWholeDomainTerrain({ catalogRef, storage: store, grid: plan.fine,
+        coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal,
+        sourceCacheDir: values['source-cache-dir'] ?? `.cache/terrain-source/${model}` });
+      await writeJson(values.out, ref);
+      console.log(JSON.stringify({ model, ...ref }));
+      return;
+    }
     const catalog = await loadTerrainCatalog(catalogRef, store, signal);
     if (command === 'prepare') {
       const ref = await prepareTerrain({ catalog, storage: store, grid: await readGrid(values.grid), signal, onReport: report => console.error(JSON.stringify(report)) });

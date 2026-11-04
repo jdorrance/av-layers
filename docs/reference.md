@@ -29,6 +29,7 @@ Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
 - `sync`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`, `--shard <string>`, `--shards <string>`, `--concurrency <string>`.
 - `finalize`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`.
 - `prepare`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--grid <string>`.
+- `prepare-model`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--model <string>`, `--source-cache-dir <string>`.
 - `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
 - `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
 
