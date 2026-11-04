@@ -51,6 +51,8 @@ export interface IconAcquisitionOptions {
   readonly fetchImpl?: typeof fetch;
   readonly concurrency?: number;
   readonly signal?: AbortSignal;
+  readonly readOnlyCache?: boolean;
+  readonly offline?: boolean;
 }
 
 export interface IconStaticGeometryCache {
@@ -119,7 +121,7 @@ async function loadIconField(
   url: string,
   cacheDir: string,
   stats: IconTransportStats,
-  options: { readonly fetchImpl?: typeof fetch; readonly signal?: AbortSignal },
+  options: { readonly fetchImpl?: typeof fetch; readonly signal?: AbortSignal; readonly readOnlyCache?: boolean; readonly offline?: boolean },
   decode: (bytes: Uint8Array) => DecodedIconGribField
 ): Promise<{ readonly decoded: DecodedIconGribField; readonly compressedBytes: number; readonly sha256: string; readonly cacheHit: boolean }> {
   options.signal?.throwIfAborted();
@@ -132,10 +134,14 @@ async function loadIconField(
     const decoded = decode(cached);
     stats.cacheHits += 1;
     return { decoded, compressedBytes: cached.byteLength, sha256: sha256Hex(cached), cacheHit: true };
-  } catch {
+  } catch (error) {
+    if (options.readOnlyCache || options.offline) {
+      throw new Error(`ICON offline cache miss or invalid object ${url}: ${error instanceof Error ? error.message : String(error)}`);
+    }
     await rm(cachePath, { force: true });
   }
 
+  if (options.offline) throw new Error(`ICON offline cache miss for ${url}`);
   const fetchFn = options.fetchImpl ?? fetch;
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -323,7 +329,7 @@ export async function createIconEuAcquisitionSession(options: IconAcquisitionOpt
       url,
       options.cacheDir,
       stats,
-      { fetchImpl: options.fetchImpl, signal },
+      { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },
       bytes => {
         const decoded = decodeIconGribField(bytes, activeIndices);
         verifyIconFieldMetadata(decoded, field, cycle, { hour, level });

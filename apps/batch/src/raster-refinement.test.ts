@@ -62,7 +62,7 @@ function referenceZonesPixel(base: GridField, mask: CoverageMask, zones: { patch
 }
 
 it('composes exact polygon/holes/mask ownership before coloring and never falls back on missing or no-lift values', () => {
-  const { mask, patch, base, fine } = fixture(), renderer = createRenderer(mask, { patches: [patch], rasterWorkers: 0 });
+  const { mask, patch, base, fine } = fixture(), renderer = createRenderer(mask, { patches: [patch], rasterWorkers: 0, liftInterpolation: 'step' });
   // The patch mask also excludes an interior stripe independent of its polygon.
   for (let row = 0; row < patch.mask.grid.height; row++) for (let col = 0; col < 20; col++) setBit(patch.mask.output, row * patch.mask.grid.width + col, false);
   for (const status of [0, STATUS_NO_LIFT, STATUS_UNAVAILABLE]) {
@@ -75,7 +75,7 @@ it('composes exact polygon/holes/mask ownership before coloring and never falls 
   expect(renderer.metrics().geometryHits).toBe(2);
   expect(renderer.metrics().geometryMisses).toBe(1);
   const msl = renderer.renderTileRgba(base, 'usable-lift-msl', tile.z, tile.x, tile.y);
-  expect(Buffer.from(msl).equals(renderTileRgba(base, mask, 'usable-lift-msl', tile.z, tile.x, tile.y))).toBe(true);
+  expect(Buffer.from(msl).equals(renderTileRgba(base, mask, 'usable-lift-msl', tile.z, tile.x, tile.y, 'step'))).toBe(true);
   expect(() => renderer.renderTileRgba(base, layer, tile.z, tile.x, tile.y)).toThrow('patch field');
   expect(() => renderer.renderTileRgba(base, layer, tile.z, tile.x, tile.y, { extra: fine })).toThrow('patch field');
 });
@@ -138,7 +138,7 @@ it('prepares sparse owned samples when nested zone bounding rectangles exceed th
   };
   const boundingSamples = plans.reduce((sum, plan) => sum + span(lons, plan.bounds[0], plan.bounds[2]) * span(lats, plan.bounds[1], plan.bounds[3]), 0);
   expect(boundingSamples).toBeGreaterThan(MAX_PREPARED_SAMPLES);
-  const renderer = createRenderer(mask, { patches, rasterWorkers: 0 });
+  const renderer = createRenderer(mask, { patches, rasterWorkers: 0, liftInterpolation: 'step' });
   const actual = renderer.renderTileRgba(base, layer, tile.z, tile.x, tile.y, fields);
   let outer = 0, inner = 0, gap = 0;
   for (let y = 8; y < 248; y += 4) for (let x = 8; x < 248; x += 4) {

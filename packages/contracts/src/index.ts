@@ -3,6 +3,7 @@ export * from './methods.js';
 export * from './geometry.js';
 export * from './format.js';
 export * from './layers.js';
+export * from './palette-color.js';
 export * from './coverage.js';
 export * from './publication.js';
 export * from './json.js';

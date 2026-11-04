@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, LIFT_RENDER_STYLE, liftRenderStyle, PALETTES, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
 import type { GfsFrameAcquisition } from './gfs/types.js';
 import type { NormalizedFrame } from '@av/forecast';
@@ -134,7 +134,9 @@ describe('build sample acquisition intervals', () => {
   it.each([CYCLE, noMs(0)])('accepts UTC cycle %s, writes external provenance.json, and records phase timings', async cycle => {
     const manifest = await run(frame, cycle);
     expect(manifest.cycle).toBe(CYCLE);
-    expect(manifest.tool.liftRenderStyle).toBe('transparent-no-lift-v2');
+    expect(manifest.tool.liftRenderStyle).toBe('continuous-lift-rgb-v1');
+    expect(manifest.tool.liftRenderStyle).toBe(liftRenderStyle(PALETTES.lift.interpolation));
+    expect(manifest.tool.liftRenderStyle).toBe(LIFT_RENDER_STYLE);
     expect(manifest.frames.find(f => f.id === 'f001')).toEqual({ id: 'f001', validTime: ms(1), intervalStart: ms(0), intervalEnd: ms(1) });
     expect(manifest.frames.find(f => f.id === 'f006')).toEqual({ id: 'f006', validTime: ms(6), intervalStart: ms(5), intervalEnd: ms(6) });
     expect(manifest.source).toMatchObject({

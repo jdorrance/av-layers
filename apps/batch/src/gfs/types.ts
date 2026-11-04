@@ -5,6 +5,7 @@ import type { FieldSamplingStats } from './sampling.ts';
 
 export interface NoaaFetchOptions {
   fetchImpl?: typeof fetch;
+  offline?: boolean;
   signal?: AbortSignal;
   retry?: { maxAttempts?: number; deadlineMs?: number; attemptTimeoutMs?: number; baseDelayMs?: number; maxDelayMs?: number };
 }

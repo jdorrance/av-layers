@@ -1,4 +1,4 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { terrainClearanceMappingBytes } from '@av/forecast/refinement';
 import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
@@ -33,7 +33,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   const cadenceHours = scenario.cadenceHours ?? 12, retentionDays = scenario.retentionDays ?? RETENTION_DAYS;
   if ([frames, layers, models, nativeZoom].some(n => !Number.isSafeInteger(n)) || frames < 1 || layers < 1 || models < 1 || nativeZoom < 0 || nativeZoom > 24 || !Number.isFinite(cadenceHours) || cadenceHours <= 0 || !Number.isFinite(retentionDays) || retentionDays <= 0) throw new RangeError('Invalid capacity scenario');
   if (Object.values(refinement).some(value => !Number.isSafeInteger(value) || value < 0)) throw new RangeError('Invalid refinement capacity');
-  if (mask.maxZoom > product.maxNativeZoom || mask.maxZoom > 8) throw new Error('Coverage exceeds the admitted native zoom');
+  if (mask.maxZoom > product.maxNativeZoom || mask.maxZoom > MAX_NATIVE_ZOOM) throw new Error('Coverage exceeds the admitted native zoom');
   const tilesByZoom = Array.from({ length: nativeZoom + 1 }, (_, z) => z <= mask.maxZoom
     ? expectedTiles(mask, z).length
     : expectedTiles(mask, mask.maxZoom).length * 4 ** (z - mask.maxZoom));

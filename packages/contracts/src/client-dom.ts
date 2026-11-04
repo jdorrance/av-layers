@@ -26,6 +26,19 @@ export function renderPaletteLegend(container: HTMLElement, build: PinnedBuild, 
   container.replaceChildren(...activePalettes(palettes, layer, layers).map(palette => {
     const section = node('section'), model = paletteLegend(palette);
     section.append(node('h2', model.title));
+    if (model.gradient) {
+      const bar = node('div'), endpoints = node('div');
+      bar.className = 'av-legend-gradient';
+      bar.style.background = model.gradient.background;
+      bar.style.height = '16px';
+      bar.role = 'img';
+      bar.ariaLabel = `${model.gradient.minimum} to ${model.gradient.maximum}`;
+      endpoints.className = 'av-legend-endpoints';
+      endpoints.style.display = 'flex';
+      endpoints.style.justifyContent = 'space-between';
+      endpoints.append(node('span', model.gradient.minimum), node('span', model.gradient.maximum));
+      section.append(bar, endpoints);
+    }
     for (const { color, label } of model.rows) {
       const row = node('div'), swatch = node('span');
       row.className = 'av-legend-row';

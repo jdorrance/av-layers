@@ -3,7 +3,7 @@ import { createRasterizer } from './raster.js';
 import type { RasterJob, RasterResult, RasterWorkerData } from './raster-pool.js';
 
 const port = parentPort!;
-const data = workerData as RasterWorkerData, renderer = createRasterizer(data.mask, data.geometryCacheBytes, undefined, data.patches);
+const data = workerData as RasterWorkerData, renderer = createRasterizer(data.mask, data.geometryCacheBytes, undefined, data.patches, data.liftInterpolation);
 port.on('message', (job: RasterJob) => {
   try {
     const result = renderer.renderTilePixels(data.fields[job.field], data.layers[job.field], job.z, job.x, job.y, data.patchFields[job.field]);

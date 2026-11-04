@@ -1,5 +1,6 @@
 import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
+import { compilePaletteColor, samplePaletteValueInto } from './palette-color.ts';
 
 export function noLiftLabel(color: string): string {
   return color.toLowerCase() === '#00000000' ? 'no usable lift (transparent)' : 'no usable lift';
@@ -56,6 +57,13 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     }),
     ['Expires', manifest.expiresAt]
   ];
+  for (const patch of manifest.patches ?? []) {
+    rows.push([`Refinement ${patch.id}`, `${patch.grid.width} × ${patch.grid.height} · ${patch.method.id}`]);
+    for (const layer of patch.layers) {
+      const descriptor = patch.descriptors.layers[layer];
+      rows.push([`${patch.id} · ${descriptor.label}`, `${descriptor.units} · ${descriptor.verticalReference} · ${descriptor.methodId}`]);
+    }
+  }
   if (typeof source.provenanceUrl === 'string') {
     rows.push(['Source data', source.provenanceUrl]);
   } else if (typeof source.provenanceKey === 'string') {
@@ -91,10 +99,38 @@ export function formatSeriesSummary(
 }
 
 /** Pure presentation models shared by the two independent host controllers. */
-export function paletteLegend(palette: PaletteSummary): { title: string; rows: { color: string; label: string }[]; note: string | null } {
-  const rows = palette.colors.map((color, index) => ({ color, label: paletteBinLabel(palette.edges, palette.colors.length, index) }));
+export function paletteLegend(palette: PaletteSummary): {
+  title: string;
+  rows: { color: string; label: string }[];
+  gradient?: { background: string; minimum: string; maximum: string };
+  note: string | null;
+} {
+  const rows: { color: string; label: string }[] = [];
+  let gradient: { background: string; minimum: string; maximum: string } | undefined;
+  if (palette.interpolation === 'linear-rgb' && palette.colors.length > 1) {
+    const compiled = compilePaletteColor(palette, 'linear-rgb'), color = new Uint8Array(4);
+    const first = compiled.edges[0], last = compiled.edges[compiled.colorCount - 1];
+    const stops: string[] = [];
+    for (let interval = 0; interval < compiled.colorCount - 1; interval++) {
+      for (let step = 0; step < 16; step++) {
+        const fraction = step / 16;
+        const value = compiled.edges[interval] + fraction * (compiled.edges[interval + 1] - compiled.edges[interval]);
+        samplePaletteValueInto(compiled, value, color);
+        stops.push(`rgba(${color[0]},${color[1]},${color[2]},${color[3] / 255}) ${100 * (value - first) / (last - first)}%`);
+      }
+    }
+    samplePaletteValueInto(compiled, last, color);
+    stops.push(`rgba(${color[0]},${color[1]},${color[2]},${color[3] / 255}) 100%`);
+    gradient = {
+      background: `linear-gradient(90deg,${stops.join(',')})`,
+      minimum: `${first} ${palette.units}`,
+      maximum: `≥ ${last} ${palette.units}`
+    };
+  } else {
+    rows.push(...palette.colors.map((color, index) => ({ color, label: paletteBinLabel(palette.edges, palette.colors.length, index) })));
+  }
   if (palette.noLiftColor) rows.push({ color: palette.noLiftColor, label: noLiftLabel(palette.noLiftColor) });
-  return { title: `${palette.id} · ${palette.units}`, rows, note: paletteNoteText(palette) };
+  return { title: `${palette.id} · ${palette.units}`, rows, ...(gradient ? { gradient } : {}), note: paletteNoteText(palette) };
 }
 
 export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}, patches: Manifest['patches'] = []): { headings: string[]; rows: string[][] } {

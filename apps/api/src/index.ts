@@ -12,7 +12,6 @@ import {
   latestSchema,
   manifestSchema,
   modelPointerSchema,
-  paletteBinLabel,
   paletteSchema,
   provenanceSchema,
   sampleResponseSchema,
@@ -21,6 +20,7 @@ import {
 } from '@av/contracts';
 import { serveSample } from './sample';
 import { readTile } from './pmtiles';
+import { paletteSvg } from './palette-svg';
 import { resolveCoverage, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, type WaitContext } from './resources';
 import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
@@ -314,21 +314,8 @@ app.get('/v1/palettes/:asset', async c => {
   if (!isPaletteId(id)) fail(404, 'unknown-palette', 'Unknown palette');
   const palette = PALETTES[id];
   const expiry = new Date(Date.now() + 86400000).toISOString();
-  if (format === 'json') {
-    const bytes = new TextEncoder().encode(JSON.stringify(palette));
-    return response(bytes, 'application/json; charset=utf-8', expiry, await sha256(bytes));
-  }
-  const items: { color: string; text: string }[] = palette.colors.map((color, i) => ({
-    color,
-    text: `${paletteBinLabel(palette.edges, palette.colors.length, i)} ${palette.units}`
-  }));
-  if ('noLiftColor' in palette) items.push({ color: palette.noLiftColor, text: 'no usable lift (transparent)' });
-  if ('transparentBelow' in palette) items.push({ color: 'none', text: `&lt; ${palette.transparentBelow} ${palette.units} (transparent)` });
-  const rows = items
-    .map((item, i) => `<rect x="0" y="${i * 24}" width="24" height="24" fill="${item.color}"/><text x="32" y="${i * 24 + 17}">${item.text}</text>`)
-    .join('');
-  const bytes = new TextEncoder().encode(`<svg xmlns="http://www.w3.org/2000/svg" width="220" height="${items.length * 24}" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12" fill="#111">${rows}</svg>`);
-  return response(bytes, 'image/svg+xml', expiry, await sha256(bytes));
+  const bytes = new TextEncoder().encode(format === 'json' ? JSON.stringify(palette) : paletteSvg(palette));
+  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes));
 });
 
 const tileParamSchema = z.object({ model: param, buildId: param, layer: param, frame: param, z: param, x: param, y: param });

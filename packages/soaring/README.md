@@ -31,7 +31,15 @@ if (lift.status === 'valid') {
 
 Inputs use `°C` for temperature, `hPa` for surface pressure, upward-positive
 `W/m²` for fluxes, and ascending `m` MSL for `levels` (reading the first `count`
-elements of `levels`).
+elements of `levels`). Optional `surfaceEnvironmentTemperatureC` anchors the
+environment at `terrainM`; omission retains native lowest-layer extrapolation.
+
+`ReconstructedProfileWorkspace` snapshots and validates native donors before
+merging their temperature profiles. Its admitted synthetic extensions use the
+bridge mode and height bound supplied to `reconstruct`. `reset` invalidates the
+current reconstruction and donor cache; each successful reconstruction owns the
+profile consumed by `solve`. Native observation checks remain in
+[column.ts](src/column.ts).
 
 ## Return value
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, LIFT_RENDER_STYLE, manifestSchema, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD } from '@av/contracts';
+import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, liftRenderStyle, manifestSchema, PALETTES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD } from '@av/contracts';
 import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
@@ -99,7 +99,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
         provenanceSha256: sha256(provenanceBytes),
         ...(options.terrain ? { terrain: options.terrain } : {})
       },
-      tool: { components: identity.components, node: process.version, pmtiles: pmtiles.version, tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: LIFT_RENDER_STYLE },
+      tool: { components: identity.components, node: process.version, pmtiles: pmtiles.version, tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: liftRenderStyle(PALETTES.lift.interpolation) },
       palettes: descriptors.palettes.map(p => p.id)
     };
     const tValidate = Date.now();

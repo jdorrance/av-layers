@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { LAYERS, paletteBinIndex, PALETTES, prepareCoverageTester, type CoverageMask, type GeographicBounds, type LayerId } from '@av/contracts';
+import { compilePaletteColor, LAYERS, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
 import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
 import { MAX_PREPARED_SAMPLES, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, type GridField, type PreparedGridSampling, type Sample } from '@av/forecast';
 
@@ -27,20 +27,12 @@ export function validateRasterPatchFields(patches: readonly RasterPatch[], layer
   }
 }
 
-const palettes = Object.fromEntries(Object.entries(PALETTES).map(([id, palette]) => {
-  const colors = new Uint8Array(palette.colors.length * 4);
-  for (let i = 0; i < palette.colors.length; i++) {
-    const color: string = palette.colors[i];
-    if (!/^#[\da-f]{6}([\da-f]{2})?$/i.test(color)) throw new Error(`Unsupported palette color ${color}`);
-    colors.set([
-      parseInt(color.slice(1, 3), 16),
-      parseInt(color.slice(3, 5), 16),
-      parseInt(color.slice(5, 7), 16),
-      color.length === 9 ? parseInt(color.slice(7, 9), 16) : 255
-    ], i * 4);
-  }
-  return [id, colors];
-}));
+function compilePalettes(liftInterpolation?: PaletteColorMode): Record<string, PaletteColorTable> {
+  return Object.fromEntries(Object.entries(PALETTES).map(([id, palette]) => [
+    id, compilePaletteColor(palette, id === 'lift' ? liftInterpolation ?? paletteInterpolation(palette) : paletteInterpolation(palette))
+  ]));
+}
+const defaultPalettes = compilePalettes();
 
 export function mercatorPoint(z: number, x: number, y: number, px: number, py: number): { lat: number; lon: number } {
   const scale = 256 * 2 ** z;
@@ -116,20 +108,39 @@ function samplePixel(
   sampleInto: (x: number, y: number, out: Sample) => void,
   sample: Sample,
   layer: LayerId,
-  colors: Uint8Array,
+  palette: PaletteColorTable,
+  color: Uint8Array,
   px: number,
   py: number,
   data: Uint8Array,
   offset: number
 ): boolean {
+  if (palette.mode === 'linear-rgb' && palette.noLift?.[3] === 0) {
+    let valueSum = 0, validCount = 0;
+    for (const [dx, dy] of QUAD_OFFSETS) {
+      sampleInto(px * 2 + dx, py * 2 + dy, sample);
+      if (paletteBinIndex(layer, sample.value, sample.status, palette.colorCount) >= 0) {
+        valueSum += sample.value as number;
+        validCount++;
+      }
+    }
+    if (!validCount) return false;
+    samplePaletteValueInto(palette, valueSum / validCount, color, 0);
+    const opacity = color[3];
+    if (!opacity) return false;
+    data[offset] = color[0];
+    data[offset + 1] = color[1];
+    data[offset + 2] = color[2];
+    data[offset + 3] = Math.round((opacity * validCount) / 4);
+    return true;
+  }
   let r = 0, g = 0, b = 0, alpha = 0;
-  const colorCount = colors.length / 4;
   for (const [dx, dy] of QUAD_OFFSETS) {
     sampleInto(px * 2 + dx, py * 2 + dy, sample);
-    const bin = paletteBinIndex(layer, sample.value, sample.status, colorCount);
-    if (bin < 0) continue;
-    const c = bin * 4, opacity = colors[c + 3];
-    r += colors[c] * opacity; g += colors[c + 1] * opacity; b += colors[c + 2] * opacity; alpha += opacity;
+    samplePaletteColorInto(palette, layer, sample.value, sample.status, color, 0);
+    const opacity = color[3];
+    if (!opacity) continue;
+    r += color[0] * opacity; g += color[1] * opacity; b += color[2] * opacity; alpha += opacity;
   }
   if (!alpha) return false;
   data[offset] = Math.round(r / alpha);
@@ -139,10 +150,10 @@ function samplePixel(
   return true;
 }
 
-function raster(field: GridField, prepared: TileGeometry, layer: LayerId, patches: readonly RasterPatch[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
+function raster(field: GridField, prepared: TileGeometry, layer: LayerId, palette: PaletteColorTable, patches: readonly RasterPatch[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
   const rgba = new Uint8Array(256 * 256 * 4);
   const base = 'base' in prepared ? prepared.base : prepared;
-  const baseInto = base.bind(field, layer), colors = palettes[LAYERS[layer].palette];
+  const baseInto = base.bind(field, layer);
   let sampleInto = baseInto, composite = false;
   if ('base' in prepared) {
     const samplers: (undefined | ReturnType<PreparedGridSampling['bind']>)[] = [];
@@ -155,14 +166,15 @@ function raster(field: GridField, prepared: TileGeometry, layer: LayerId, patche
       if (owner) owner(prepared.offsets[index], 0, out); else baseInto(x, y, out);
     };
   }
-  const colorCount = colors.length / 4;
-  if (!composite && !base.contributors.some(idx => paletteBinIndex(layer, field.values[idx], field.flags[idx], colorCount) >= 0)) {
+  const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
+  if (!composite && !base.contributors.some(idx => paletteBinIndex(layer, field.values[idx], field.flags[idx], palette.colorCount) >= 0
+    || noLiftVisible && (field.flags[idx] & STATUS_MASK) === STATUS_NO_LIFT)) {
     return { rgba, blank: true };
   }
-  const sample: Sample = { value: null, status: 3, support: 0, interpolated: false };
+  const sample: Sample = { value: null, status: 3, support: 0, interpolated: false }, color = new Uint8Array(4);
   let blank = true;
   for (let i = 0; i < 256 * 256; i++) {
-    if (samplePixel(sampleInto, sample, layer, colors, i & 255, i >> 8, rgba, i * 4)) blank = false;
+    if (samplePixel(sampleInto, sample, layer, palette, color, i & 255, i >> 8, rgba, i * 4)) blank = false;
   }
   return { rgba, blank };
 }
@@ -171,8 +183,9 @@ function raster(field: GridField, prepared: TileGeometry, layer: LayerId, patche
 export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, stats: RasterMetrics = {
   geometryBytes: 0, peakGeometryBytes: 0, geometryHits: 0, geometryMisses: 0,
   prepareMs: 0, rasterMs: 0, tiles: 0, blankTiles: 0
-}, patches: readonly RasterPatch[] = []) {
+}, patches: readonly RasterPatch[] = [], liftInterpolation?: PaletteColorMode) {
   if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError('Invalid raster geometry budget');
+  const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
   if (patches.length) {
     parseRefinementConfig({ type: 'FeatureCollection', features: patches.map(patch => ({ type: 'Feature', id: patch.id, properties: {}, geometry: patch.geometry })) });
     for (const patch of patches) if (!patch.layers.length || new Set(patch.layers).size !== patch.layers.length || patch.layers.some(layer => !Object.hasOwn(LAYERS, layer)) || patch.mask.maxZoom !== mask.maxZoom) throw new RangeError('Invalid raster patch layers or zoom');
@@ -200,7 +213,7 @@ export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, 
 
   function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patchFields?: RasterPatchFields) {
     if (patches.length || patchFields) validateRasterPatchFields(patches, layer, patchFields);
-    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, plan, layer, patches, patchFields);
+    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, plan, layer, palettes[LAYERS[layer].palette], patches, patchFields);
     stats.rasterMs += performance.now() - started; stats.tiles++;
     if (result.blank) stats.blankTiles++;
     return result;
@@ -213,6 +226,7 @@ export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, 
   };
 }
 
-export function renderTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Uint8Array {
-  return raster(field, geometry(mask, z, x, y), layer).rgba;
+export function renderTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number, liftInterpolation?: PaletteColorMode): Uint8Array {
+  const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
+  return raster(field, geometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
 }

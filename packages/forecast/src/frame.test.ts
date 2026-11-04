@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
-import { STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
+import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
-import { deriveFrame, FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
+import { deriveFrame, deriveSelectedFrameDiagnostics, FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
 import { validateNormalizedFrame, type ModelLevelFrame, type NormalizedFrame } from './inputs.js';
 
 const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 1, height: 1, lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false };
@@ -235,4 +235,50 @@ it('rejects invalid diagnostics before modifying caller arrays or source data', 
   expect(() => deriveFrame(frame, mask, { layers, diagnostics: { ...shared, buoyancyM2S3: shared.ceilingMslM } })).toThrow('alias each other');
   expect(() => deriveFrame(frame, mask, { layers: ['precip-rate'], diagnostics: diagnostics() })).toThrow('require a usable-lift layer');
   expect(frame).toEqual(before);
+});
+
+it.each(['isobaric', 'model-levels'] as const)('derives selected %s diagnostics with full-frame byte parity', coordinate => {
+  const largerGrid = { ...grid, width: 4 };
+  const largerMask = { ...mask, grid: largerGrid, output: Uint8Array.of(11) };
+  const original = normalizedFixtureFrame(largerGrid, Uint32Array.of(0, 1, 3), '2026-06-21T00:00:00Z', 0, 1);
+  const pressurePa = original.pressureLevelsHpa.map(p => new Float32Array(3).fill(p * 100));
+  const frame: NormalizedFrame = coordinate === 'isobaric' ? original : {
+    ...original, pressureLevelsHpa: undefined, pressurePa,
+    missing: { ...original.missing, pressure: pressurePa.map(() => new Uint8Array(3)) }
+  };
+  frame.missing.temp[1]![2] = 1;
+  const before = structuredClone(frame), fullDiagnostics = diagnostics(4);
+  const full = deriveFrame(frame, largerMask, { layers, daylightOnly: false, diagnostics: fullDiagnostics });
+  const selected = deriveSelectedFrameDiagnostics(frame, Uint32Array.of(0, 3));
+  expect(selected.bufferBytes).toBe(40);
+  for (const index of [0, 3]) {
+    expect(selected.flags[index]).toBe(full['usable-lift-agl']!.flags[index]);
+    expect(selected.diagnostics.branch[index]).toBe(fullDiagnostics.branch[index]);
+    for (const key of ['ceilingMslM', 'buoyancyM2S3'] as const) {
+      expect(Buffer.from(selected.diagnostics[key].buffer, index * 4, 4)).toEqual(Buffer.from(fullDiagnostics[key].buffer, index * 4, 4));
+    }
+  }
+  expect(selected.flags[0]! & STATUS_MASK).toBe(STATUS_VALID);
+  expect(selected.flags[3]).toBe(STATUS_UNAVAILABLE);
+  for (const index of [1, 2]) {
+    expect(selected.flags[index]).toBe(STATUS_OUTSIDE);
+    expect(selected.diagnostics.branch[index]).toBe(FRAME_BRANCH.unavailable);
+    expect(selected.diagnostics.ceilingMslM[index]).toBeNaN();
+    expect(selected.diagnostics.buoyancyM2S3[index]).toBeNaN();
+  }
+  expect(frame).toEqual(before);
+});
+
+it('rejects invalid selected indices and malformed normalized frames', () => {
+  const largerGrid = { ...grid, width: 4 };
+  const frame = normalizedFixtureFrame(largerGrid, Uint32Array.of(0, 1, 3), '2026-06-21T00:00:00Z', 12, 1);
+  for (const selection of [Uint32Array.of(), Uint32Array.of(4), Uint32Array.of(0, 0), Uint32Array.of(3, 0), Uint32Array.of(2)]) {
+    expect(() => deriveSelectedFrameDiagnostics(frame, selection)).toThrow();
+  }
+  const unordered = { ...frame, activeIndices: Uint32Array.of(0, 3, 1) };
+  expect(() => deriveSelectedFrameDiagnostics(unordered, Uint32Array.of(0))).toThrow(/active indices/);
+  expect(() => deriveSelectedFrameDiagnostics({ ...frame, grid: { ...largerGrid, width: 4_000_001 } }, Uint32Array.of(0))).toThrow();
+  expect(() => deriveSelectedFrameDiagnostics({ ...frame, temp2mK: Float32Array.of(1) }, Uint32Array.of(0))).toThrow(/dimensions/);
+  frame.temp2mK[0] = NaN;
+  expect(() => deriveSelectedFrameDiagnostics(frame, Uint32Array.of(0))).toThrow(/nonfinite/);
 });

@@ -15,6 +15,8 @@ import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './d
 import { usableLiftDepthM } from '@av/soaring/velocity';
 import { FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
 import { planSample, type GridField } from './sampler.js';
+export { prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './terrain-column.js';
+export type { PreparedTerrainColumns, TerrainColumnDerivation, TerrainColumnMetrics, TerrainColumnProbe, TerrainColumnEvaluationOptions, TerrainColumnClearance } from './terrain-column.js';
 
 const CONTRIBUTORS_PER_CELL = 4;
 

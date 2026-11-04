@@ -11,6 +11,28 @@ pnpm refinement --model gfs --zones /path/to/zones.json
 Prints each intersecting zone's bounds, grid and terrain array size. `--zones`
 selects a local configuration file.
 
+## Evaluation
+
+```sh
+pnpm refinement:evaluate --control-manifest PATH --cache-dir PATH --out PATH --frames f021,f024
+```
+
+[evaluate.ts](evaluate.ts) verifies control hashes, source receipts, coverage,
+prepared terrain and numeric packs before replaying saved frames from cache.
+`--patch zone-001` selects a patch when several are published. Completed reports
+live at `OUT/CONTROL_BUILD_ID/report.json` and are immutable.
+
+Reports compare legacy terrain clearance, native columns, supported-donor
+surface-anomaly transfer, and the same transfer with unsupported-valley clearance
+fallback. Whole-zone and 15 km Aragats populations include numeric differences,
+status/support transitions, donor-ground anomalies, supported weights and matched
+images. Controls identify the legacy patch method separately from the native
+base method. Runtime and peak RSS are separate from deterministic comparisons.
+Scientific promotion uses multi-cycle paired observations, support and seam
+checks, and resource measurements.
+
+## Preparation
+
 [config.ts](config.ts) resolves the shared configuration for a product.
 [planRefinements](../../../../packages/contracts/src/refinement.ts) validates the
 polygons and builds grids within the source bounds, with halo cells.

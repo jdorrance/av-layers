@@ -89,6 +89,7 @@ export class NoaaTransport {
   private readonly fetchImpl: typeof fetch;
   private readonly cacheDir?: string;
   private readonly signal?: AbortSignal;
+  private readonly offline: boolean;
   private readonly indexes = new Map<string, IndexResult>();
   private readonly pendingIndexes = new Map<string, Promise<IndexResult>>();
   readonly stats: NoaaTransportStats;
@@ -98,6 +99,7 @@ export class NoaaTransport {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.cacheDir = options.cacheDir;
     this.signal = options.signal;
+    this.offline = options.offline === true;
     this.stats = options.stats ?? { networkRequests: 0, cacheReads: 0, memoryIndexHits: 0 };
     this.retry = { maxAttempts: 3, deadlineMs: 120_000, attemptTimeoutMs: 90_000, baseDelayMs: 250, maxDelayMs: 5_000, ...options.retry };
     const r = this.retry;
@@ -208,6 +210,7 @@ export class NoaaTransport {
         return cached;
       }
     }
+    if (this.offline) throw new NoaaError('transport', `NOAA offline cache miss for ${url}`);
     const deadline = Date.now() + this.retry.deadlineMs;
     let bytes: Buffer | undefined;
     for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt++) {

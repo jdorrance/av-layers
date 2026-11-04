@@ -101,6 +101,41 @@ clearance. Valleys inherit the parent model's convective top and buoyancy
 forcing over a deeper local layer. Each patch records the DEM datum and surface
 type. The calculation applies no vertical-datum transformation.
 
+## Terrain-column evaluation
+
+[`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts) reconstructs
+an environmental profile at each DEM cell from native donor columns. Surface
+excess is evaluated at each native ground: $\delta_i=T_{2m,i}-E_i(h_i)$.
+The transferred excess is $\delta_0=\sum_i w_i\delta_i$ using the original
+horizontal weights, and the fine temperature is $T_f=E(h_f)+\delta_0$.
+Hydrostatic pressure uses mean virtual temperature; specific humidity preserves
+the interpolated native relative humidity. Surface forcing uses native sensible
+and latent heat fluxes.
+
+At height $z$, environmental weights are normalized among validated donors
+within their admitted below-ground support. The solver-owned
+[workspace](../packages/soaring/src/column.ts) merges atmospheric heights,
+native grounds and support-entry heights, retaining one-sided temperatures at
+support changes. Raw observation and atmospheric-top checks bound this profile.
+The explicit ground anchor uses the native Float32 crossing tolerance. A
+one-donor, own-ground cell follows the native solve exactly.
+
+When no donor supports the fine ground, valid same-frame terrain clearance
+supplies a legacy height estimate. Its local thermodynamic state remains unknown.
+Native missing-data errors retain their availability checks.
+
+[TopoSCALE](https://doi.org/10.5194/gmd-7-387-2014) describes height interpolation
+of free-atmosphere fields. The [mountain CBL review](https://doi.org/10.3389/feart.2015.00077)
+describes regime-dependent terrain relationships. The donor anomaly, support
+selection and clearance fallback here are project numerical rules requiring
+local validation.
+
+
+The [evaluation command](../apps/batch/src/refinement/README.md#evaluation)
+records paired fields, status/support changes and station comparisons. Production
+uses the terrain-clearance method above. Promotion requires preservation of known
+support inside Armenia, observational checks and full-build resource admission.
+
 ## Reconstruction and storage
 
 [`@av/forecast/sampler`](../packages/forecast/src/sampler.ts) checks coverage
@@ -113,7 +148,11 @@ the value and status.
 
 Tile rendering evaluates four quarter-pixel subsamples in Web Mercator, applies
 the layer palette, and averages premultiplied RGBA before encoding lossless
-WebP. Point samples are stored in 5-byte records (`Float32` value + 1-byte
+WebP. New lift palettes interpolate their encoded 8-bit sRGB channels; retained
+palettes without interpolation metadata use discrete bins. Rain keeps its
+thresholded palette. Render style changes the recipe identity while preserving
+numeric packs.
+Point samples are stored in 5-byte records (`Float32` value + 1-byte
 status/support bitmask defined in [layers.ts](../packages/contracts/src/layers.ts))
 arranged in $16 \times 16$ cell blocks with a 1-cell halo ([architecture](architecture.md#build-and-storage)).
 
