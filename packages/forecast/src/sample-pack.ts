@@ -1,4 +1,4 @@
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
+import { CELL_BYTES, MAX_SAMPLE_VALUES, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
 import type { Cell, SamplePlan } from './sampler.js';
 
 export interface SamplePackBlock {
@@ -105,4 +105,126 @@ export function packedCellsFromRange(plan: PackedSamplePlan, bytes: Uint8Array, 
     if (offset < 0 || offset + CELL_BYTES > bytes.byteLength) throw new RangeError('Cell outside packed range');
     return { value: view.getFloat32(offset, true), flags: view.getUint8(offset + 4) };
   });
+}
+
+export const SAMPLE_SHARD_TARGET_BYTES = 64 * 1024 * 1024;
+
+export interface ShardedSampleBlock {
+  readonly slot: number;
+  readonly row: number;
+  readonly column: number;
+  readonly width: number;
+  readonly height: number;
+  readonly shard: number;
+  readonly byteOffset: number;
+  readonly byteLength: number;
+}
+
+export interface SampleShard {
+  readonly firstBlock: number;
+  readonly blockCount: number;
+  readonly byteLength: number;
+}
+
+export interface ShardedSamplePackLayout {
+  readonly grid: Pick<Grid, 'width' | 'height' | 'wrapLongitude'>;
+  readonly channelCount: number;
+  readonly blockCount: number;
+  readonly storedCells: number;
+  readonly byteLength: number;
+  readonly indexBytes: number;
+  readonly shards: readonly SampleShard[];
+  block(ordinal: number): ShardedSampleBlock;
+  blockFor(gridIndex: number): ShardedSampleBlock | null;
+}
+
+export function prepareShardedSamplePackLayout(
+  grid: Pick<Grid, 'width' | 'height' | 'wrapLongitude'>,
+  activeBlocks: Uint32Array,
+  channelCount: number,
+  shardTargetBytes = SAMPLE_SHARD_TARGET_BYTES
+): ShardedSamplePackLayout {
+  const { width, height, wrapLongitude } = grid, cellCount = width * height;
+  if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 0x7fffffff)
+      || !Number.isSafeInteger(cellCount) || cellCount >= 0xffffffff || typeof wrapLongitude !== 'boolean') throw new RangeError('Invalid pack grid');
+  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_SAMPLE_VALUES) throw new RangeError('Invalid pack channel count');
+  if (!Number.isSafeInteger(shardTargetBytes) || shardTargetBytes < 1 || shardTargetBytes > SAMPLE_SHARD_TARGET_BYTES) throw new RangeError('Invalid shard target');
+  if (!(activeBlocks instanceof Uint32Array)) throw new RangeError('Invalid active blocks');
+  const columns = Math.ceil(width / SAMPLE_BLOCK_SIZE), blockSlots = columns * Math.ceil(height / SAMPLE_BLOCK_SIZE);
+  const slots = activeBlocks.slice(), offsets = new Uint32Array(slots.length);
+  const stride = channelCount * CELL_BYTES;
+  const dimensions = (slot: number) => {
+    const row = Math.floor(slot / columns) * SAMPLE_BLOCK_SIZE, column = (slot % columns) * SAMPLE_BLOCK_SIZE;
+    const coreWidth = Math.min(SAMPLE_BLOCK_SIZE, width - column);
+    return { row, column, width: wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column), height: Math.min(SAMPLE_BLOCK_SIZE + 1, height - row) };
+  };
+  const shards: SampleShard[] = [];
+  let storedCells = 0, byteLength = 0, shardLength = 0, firstBlock = 0;
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i];
+    if (slot >= blockSlots || (i > 0 && slot <= slots[i - 1])) throw new RangeError('Invalid active block order');
+    const block = dimensions(slot), cells = block.width * block.height, bytes = cells * stride;
+    if (bytes > shardTargetBytes) throw new RangeError('Block exceeds shard target');
+    if (shardLength && shardLength + bytes > shardTargetBytes) {
+      shards.push({ firstBlock, blockCount: i - firstBlock, byteLength: shardLength });
+      firstBlock = i; shardLength = 0;
+    }
+    offsets[i] = shardLength;
+    shardLength += bytes; storedCells += cells; byteLength += bytes;
+    if (!Number.isSafeInteger(storedCells) || !Number.isSafeInteger(byteLength)) throw new RangeError('Pack offsets exceed safe integers');
+  }
+  if (shardLength) shards.push({ firstBlock, blockCount: slots.length - firstBlock, byteLength: shardLength });
+  const block = (ordinal: number): ShardedSampleBlock => {
+    if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= slots.length) throw new RangeError('Pack block index out of range');
+    const slot = slots[ordinal], dims = dimensions(slot);
+    let lo = 0, hi = shards.length;
+    while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (shards[mid].firstBlock <= ordinal) lo = mid + 1; else hi = mid; }
+    return { slot, ...dims, shard: lo - 1, byteOffset: offsets[ordinal], byteLength: dims.width * dims.height * stride };
+  };
+  return {
+    grid: { width, height, wrapLongitude }, channelCount, blockCount: slots.length, storedCells, byteLength,
+    indexBytes: slots.byteLength + offsets.byteLength, shards, block,
+    blockFor(index) {
+      if (!Number.isSafeInteger(index) || index < 0 || index >= cellCount) throw new RangeError('Pack cell index out of range');
+      const slot = Math.floor(Math.floor(index / width) / SAMPLE_BLOCK_SIZE) * columns + Math.floor((index % width) / SAMPLE_BLOCK_SIZE);
+      let lo = 0, hi = slots.length;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (slots[mid] < slot) lo = mid + 1; else hi = mid;
+      }
+      return lo < slots.length && slots[lo] === slot ? block(lo) : null;
+    }
+  };
+}
+
+export interface ShardedPackedSamplePlan extends PackedSamplePlan {
+  readonly shard: number;
+}
+
+export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample: SamplePlan, channels: readonly number[]): ShardedPackedSamplePlan {
+  const { width, height, wrapLongitude } = layout.grid, channelCount = layout.channelCount;
+  if (!channels.length || new Set(channels).size !== channels.length || channels.some(channel => !Number.isSafeInteger(channel) || channel < 0 || channel >= channelCount)) throw new RangeError('Invalid selected pack channels');
+  if (!sample.contributors.length || sample.contributors.length > 4) throw new RangeError('Invalid sample contributor count');
+  const firstContributor = sample.contributors[0];
+  for (const c of sample.contributors) {
+    if (!Number.isSafeInteger(c.row) || c.row < 0 || c.row >= height || !Number.isSafeInteger(c.column) || c.column < 0 || c.column >= width
+        || c.index !== c.row * width + c.column || !Number.isFinite(c.weight) || c.weight <= 0) throw new RangeError('Invalid sample contributor');
+    const dx = wrapLongitude ? (c.column - firstContributor.column + width) % width : c.column - firstContributor.column;
+    if (c.row - firstContributor.row < 0 || c.row - firstContributor.row > 1 || dx < 0 || dx > 1) throw new RangeError('Invalid sample neighborhood');
+  }
+  const owner = layout.blockFor(sample.contributors[0].index);
+  if (!owner) throw new RangeError('Sample owner block is outside pack coverage');
+  const stride = channelCount * CELL_BYTES;
+  const contributorRanks = sample.contributors.map(c => {
+    const row = c.row - owner.row, column = wrapLongitude ? (c.column - owner.column + width) % width : c.column - owner.column;
+    if (row < 0 || row >= owner.height || column < 0 || column >= owner.width) throw new RangeError('Sample contributor is outside its owner block');
+    return owner.byteOffset / stride + row * owner.width + column;
+  });
+  const first = Math.min(...contributorRanks), last = Math.max(...contributorRanks);
+  const firstChannel = Math.min(...channels), lastChannel = Math.max(...channels);
+  return {
+    shard: owner.shard,
+    byteRange: { offset: first * stride + firstChannel * CELL_BYTES, length: (last - first) * stride + (lastChannel - firstChannel + 1) * CELL_BYTES },
+    channelCount, channels: [...channels], contributorRanks
+  };
 }

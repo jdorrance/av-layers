@@ -1,19 +1,25 @@
 import { dirname, resolve } from 'node:path';
-import { manifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson } from '@av/contracts';
-import { readCoverage } from './coverage.js';
+import { getProduct, publishedManifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type ProductDefinition } from '@av/contracts';
+import { loadCoverage, readCoverage } from './coverage.js';
 import { readLocalFile } from './local-file.js';
 import { localPath, validateBuild } from './validate.js';
 
 /** Read the bounded immutable manifest from its declared build tree. */
 export async function readLocalManifest(manifestPath: string) {
   const path = resolve(manifestPath), root = resolve(dirname(path), '../../..');
-  const manifest = manifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
+  const manifest = publishedManifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
   if (localPath(root, `builds/${manifest.model}/${manifest.buildId}/manifest.json`) !== path) throw new Error('Manifest path differs from its declared build identity');
   return { root, manifest };
 }
 
-/** Operator validation resolves this build's actual local dependencies, never bundled coverage. */
-export async function validateLocalBuild(manifestPath: string) {
+export async function validateLocalBuild(manifestPath: string, trustedProduct?: ProductDefinition) {
   const { root, manifest } = await readLocalManifest(manifestPath);
-  return { root, manifest: await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash) };
+  const product = trustedProduct ?? getProduct(manifest.model);
+  if (!product || product.modelId !== manifest.model || manifest.recipe.id !== product.id) throw new Error('Unsupported local build recipe or model');
+  if (manifest.version === 5) {
+    const validated = await validateBuild(root, manifest, await loadCoverage(product), undefined, product);
+    return { root, manifest: validated.manifest, validated };
+  }
+  const validated = await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash, product);
+  return { root, manifest: validated.manifest, validated };
 }

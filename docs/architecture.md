@@ -14,8 +14,8 @@ flowchart LR
 ```
 
 GFS and ICON-EU share the build and serving pipeline. The scheduled workflow
-runs all registered models; manual runs can target one model. Refinement patches
-share their model's cycle, timeline, publication and URLs. See
+runs all registered models; manual runs can target one model. Whole-domain lift
+surfaces share each model's cycle, timeline, publication and URLs. See
 [deployments](status.md) for live apps and workflow runs.
 
 ## Workspace map
@@ -41,7 +41,7 @@ share their model's cycle, timeline, publication and URLs. See
 [GFS](../packages/contracts/config/gfs.json) and
 [ICON-EU](../packages/contracts/config/icon-eu.json) define each model's grid,
 forecast hours, layers, coverage, vertical coordinate, and freshness limits.
-Coverage masks exclude Russia, China, Antarctica, and Greenland.
+Coverage masks exclude Africa, Russia, China, Antarctica and Greenland.
 [products.ts](../packages/contracts/src/products.ts) loads them into the model
 registry, and the Python coverage-mask generator reads the same files. Source
 field selection and decoding live in the [GFS](../apps/batch/src/gfs/README.md)
@@ -85,10 +85,11 @@ their output into a complete build. See the
 [batch guide](../apps/batch/README.md#parallel-builds) for the worker flow and
 [capacity checks](../apps/batch/src/capacity.ts) for build budgets.
 
-Each layer and frame writes one composited PMTiles archive. Each numeric grid
-has a `samples.bin` storing its frames and layers in spatial blocks with a
-1-cell halo. Point queries read one range per selected grid. Tiles and point
-queries share grid selection and interpolation logic.
+Each layer and frame writes one composited PMTiles archive. Version-5 manifests
+assign each layer to a native or fine surface with sparse coverage and bounded
+sample shards. Point queries read one range per selected surface. Tiles and point
+queries share packed fields and interpolation logic. Legacy version-3/version-4
+readers retain their numeric pack formats.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells
@@ -113,7 +114,7 @@ flowchart LR
   dem[Native DEM] --> ingest[One-time verified import]
   ingest --> terrain[Immutable terrain namespace]
   terrain --> prepare[Bounded grid preparation]
-  zones[JSON polygons] --> prepare
+  domain[Model grid and sparse coverage] --> prepare
   prepare --> inputs[Reusable arrays and coverage]
   inputs --> plan[Frozen build-plan inputs]
   plan --> workers[Local load once per shard]
@@ -125,9 +126,12 @@ flowchart LR
   columns --> agl[Fine MSL/AGL pack and composited tiles]
 ```
 
-The [polygon configuration](../packages/contracts/config/refinement.json)
-selects bounded 1 km grids. The prepare job freezes coverage and DEM references
-in the build plan and stages their files for workers to verify and load locally.
+The model configuration selects native-grid subdivision factors.
+[Whole-domain preparation](../apps/batch/src/whole-domain/prepare.ts) freezes
+sparse coverage and packed DEM identities in the build plan, staging their files
+for workers. GFS precipitation retains its native surface. The
+[polygon configuration](../packages/contracts/config/refinement.json) supports
+regional evaluation grids.
 
 [`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) derives
 terrain-referenced MSL and AGL by reconstructing native columns over prepared

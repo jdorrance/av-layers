@@ -12,7 +12,7 @@ import { TerrainTestStorage, terrainCatalogFixture } from './test-fixtures.js';
 vi.mock('./reader.js', () => ({ createTerrainReader: async () => ({ sample: async () => ({ elevationM: 42, source: 'dem' }), close: async () => {}, stats: () => ({ requests: 0, bytesRead: 0, decodedPixels: 0, outputPixels: 4, cacheHits: 0 }) }) }));
 const product: ProductDefinition = { ...GFS_PRODUCT, modelId: 'terrain-fixture', id: 'terrain-fixture', bounds: [0, 0, 1, 1],
   grid: { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false },
-  coverageId: 'terrain-fixture', coverageDescription: 'Synthetic terrain staging test', maxNativeZoom: 0, frameHours: [1] };
+  coverageId: 'terrain-fixture', coverageDescription: 'Synthetic terrain staging test', maxNativeZoom: 0, frameHours: [1], terrainSubdivisionFactor: undefined };
 const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, maxZoom: 0, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1) };
 const roots: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
+import { GFS_PRODUCT, LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, sparseCoverageFromDense, type ForecastSurfaceV5, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
 import type { SamplePayload } from '@av/contracts/client';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
-import { resolveCoverage } from '../src/coverage';
+import { resolveCoverage, resolveSparseCoverage } from '../src/coverage';
+import { describeSparseCoverage } from '../../batch/src/coverage';
 import { fixturePatch } from '../../../tests/forecast-fixture';
 
 const now = Date.parse('2026-11-01T00:00:00Z');
@@ -150,6 +151,40 @@ it('evicts and reloads coverage through the production 16-entry cache limit', as
   expect(owner.get.mock.calls.filter(([key]) => key.startsWith(variants[0].coveragePrefix))).toHaveLength(8);
 });
 
+it('lazily verifies sparse coverage and binds its canonical sample layout', async () => {
+  const gridHash = hash(new TextEncoder().encode(canonicalGridJson(regular)));
+  const coverage = sparseCoverageFromDense({ width: 3, height: 3, wrapLongitude: false, gridHash, output: Uint8Array.of(16, 0), halo: Uint8Array.of(239, 1) });
+  const mask = { grid: regular, coverage, maxZoom: 0, tiles: Uint8Array.of(1) }, description = describeSparseCoverage(mask, GFS_PRODUCT);
+  const prefix = `coverage/${description.hash}`;
+  const objects = new Map<string, Uint8Array>([[`${prefix}/manifest.json`, description.bytes], [`${prefix}/sparse.bin`, description.sparseBytes], [`${prefix}/tiles.bin`, mask.tiles]]);
+  const get = vi.fn(async (key: string) => {
+    const bytes = objects.get(key);
+    return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null;
+  });
+  const bucket = { get } as unknown as R2Bucket;
+  const surface: ForecastSurfaceV5 = {
+    id: 'fine', kind: 'fine', grid: regular, gridHash, coverage: { id: description.descriptor.id, hash: description.hash, maskKey: `${prefix}/manifest.json`, maxZoom: 0, gridHash }, layers: ['usable-lift-msl'],
+    samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
+  };
+  const results = await Promise.all([resolveSparseCoverage(bucket, surface), resolveSparseCoverage(bucket, surface)]);
+  expect(results[0].coverage).toBe(results[1].coverage);
+  expect(results[0].coverage.mask.coverage).toEqual(coverage);
+  expect(results[0].coverage.layout.storedCells).toBe(9);
+  for (const result of results) result.release();
+  expect(get).toHaveBeenCalledTimes(3);
+  await expect(resolveSparseCoverage(bucket, { ...surface, gridHash: '0'.repeat(64) })).rejects.toThrow('disagrees');
+  await expect(resolveSparseCoverage(bucket, { ...surface, samples: { ...surface.samples, shards: [{ ...surface.samples.shards[0], bytes: 44 }] } })).rejects.toThrow('disagrees');
+  const corrupted = new Map(objects); corrupted.set(`${prefix}/sparse.bin`, Uint8Array.from(description.sparseBytes, (value, i) => i ? value : value ^ 1));
+  const badBucket = { get: async (key: string) => { const bytes = corrupted.get(key); return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null; } } as unknown as R2Bucket;
+  await expect(resolveSparseCoverage(badBucket, surface)).rejects.toThrow('hash mismatch');
+  const oversized = json({ ...description.descriptor, files: { ...description.descriptor.files, sparse: { ...description.descriptor.files.sparse, bytes: 60 + 72 * 110000 } } });
+  const oversizedHash = hash(oversized), oversizedKey = `coverage/${oversizedHash}/manifest.json`;
+  const oversizedGet = vi.fn(async (key: string) => { const data = key === oversizedKey ? oversized : mask.tiles; return { size: data.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(data); controller.close(); } }) }; });
+  const oversizedSurface = { ...surface, coverage: { ...surface.coverage, hash: oversizedHash, maskKey: oversizedKey }, samples: { ...surface.samples, coverageHash: oversizedHash } };
+  await expect(resolveSparseCoverage({ get: oversizedGet } as unknown as R2Bucket, oversizedSurface)).rejects.toThrow('serving byte budget');
+  expect(oversizedGet).toHaveBeenCalledTimes(2);
+});
+
 function refinedFixture(flag = 0) {
   const data = fixture(regular, 3, { layers: ['precip-rate', 'usable-lift-agl'] });
   const { manifest, product, objects } = data;
@@ -178,7 +213,10 @@ it('samples base precipitation and refined AGL using each pack’s inherited fra
   const result = await response.json() as SamplePayload;
   expect(result.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 7, 7]);
   expect(result.frames.map(frame => frame.layers['usable-lift-agl'].value)).toEqual([900, 901, 902]);
-  expect(result.frames.every(frame => frame.layers['usable-lift-agl'].patchId === patch.id && frame.layers['precip-rate'].patchId === undefined)).toBe(true);
+  expect(result.frames.every(frame => {
+    const agl = frame.layers['usable-lift-agl'], rain = frame.layers['precip-rate'];
+    return 'patchId' in agl && agl.patchId === patch.id && !('patchId' in rain);
+  })).toBe(true);
   const ranges = get.mock.calls.filter(([, options]) => options?.range);
   expect(ranges).toHaveLength(2);
   expect(ranges.some(([key]) => key === patch.samples.key)).toBe(true);

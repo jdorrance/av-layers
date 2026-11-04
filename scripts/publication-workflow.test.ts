@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createRefinementDescriptors, getProduct, MODEL_IDS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, validateArtifactRecords, type Manifest, type ModelPointer } from '@av/contracts';
+import { canonicalGridJson, createRefinementDescriptors, createSparseCoverage, encodeSparseCoverage, getProduct, manifestV5Schema, MODEL_IDS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, validateArtifactRecords, type Manifest, type ManifestV5, type ModelPointer } from '@av/contracts';
 import * as refinementConfiguration from '../apps/batch/src/refinement/config.js';
 import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { refinementInputSchema } from '../apps/batch/src/refinement/prepare.js';
+import { localPath } from '../apps/batch/src/validate.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn() }));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
@@ -21,7 +24,7 @@ vi.mock('node:child_process', async () => {
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
 vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
-import { resumePublication, forecastArtifactRevision, downloadForecastArtifact, planForecast, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
+import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 const catalogRef = { key: `terrain/catalogs/${'c'.repeat(64)}.json`, sha256: 'c'.repeat(64), bytes: 100 };
 let manifest: Manifest;
@@ -84,39 +87,38 @@ it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered n
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
-  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), refinement: { catalogRef, storage: {} } });
+  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), wholeDomain: { catalogRef, storage: {} } });
 });
 
 it.each(MODEL_IDS)('passes the same global catalog pin for configured %s zones', async model => {
   vi.stubEnv('MODEL', model);
   await planForecast();
-  expect(fake.plan).toHaveBeenCalledWith(model, expect.objectContaining({ refinement: { catalogRef, storage: {} } }));
+  expect(fake.plan).toHaveBeenCalledWith(model, expect.objectContaining({ wholeDomain: { catalogRef, storage: {} } }));
 });
-it.each(MODEL_IDS)('keeps scheduled and manual %s forecasts native until a catalog is configured', async model => {
+it.each(MODEL_IDS)('requires a pinned catalog for configured %s scheduled and manual builds', async model => {
   vi.stubEnv('MODEL', model);
   for (const event of ['schedule', 'workflow_dispatch']) {
     vi.stubEnv('GITHUB_EVENT_NAME', event);
     vi.stubEnv('TERRAIN_CATALOG_REF', '');
-    await planForecast();
-    expect(fake.plan).toHaveBeenLastCalledWith(model, { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal) });
+    await expect(planForecast()).rejects.toThrow('TERRAIN_CATALOG_REF is required');
+    expect(fake.plan).not.toHaveBeenCalled();
   }
 });
-it('ignores an unused catalog input when no configured zone intersects the product', async () => {
-  vi.spyOn(refinementConfiguration, 'configuredRefinements').mockReturnValue([]);
+it('rejects a malformed catalog pin before preparing a whole-domain build', async () => {
   vi.stubEnv('TERRAIN_CATALOG_REF', 'not JSON');
-  await planForecast();
-  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal) });
+  await expect(planForecast()).rejects.toThrow();
+  expect(fake.plan).not.toHaveBeenCalled();
 });
-it('rejects a malformed catalog pin before preparing a build', async () => {
+it('rejects an unpinned catalog before preparing a whole-domain build', async () => {
   vi.stubEnv('TERRAIN_CATALOG_REF', '{}');
   await expect(planForecast()).rejects.toThrow();
   expect(fake.plan).not.toHaveBeenCalled();
 });
-it('preserves the optional native-grid terrain reference alongside refinement preparation', async () => {
+it('preserves the optional native-grid terrain reference alongside whole-domain preparation', async () => {
   const ref = { key: `terrain/prepared/${'a'.repeat(64)}/manifest.json`, sha256: 'b'.repeat(64), bytes: 100, arrayBytes: 20 };
   vi.stubEnv('TERRAIN_INPUTS', JSON.stringify({ gfs: ref }));
   await planForecast();
-  expect(fake.plan).toHaveBeenCalledWith('gfs', expect.objectContaining({ terrain: { ref, storage: {} }, refinement: { catalogRef, storage: {} } }));
+  expect(fake.plan).toHaveBeenCalledWith('gfs', expect.objectContaining({ terrain: { ref, storage: {} }, wholeDomain: { catalogRef, storage: {} } }));
 });
 it('uses all retained cycles after rollback, including expired entries', async () => {
   fake.pointer.mockResolvedValue({ pointer: retainedPointer(['2026-10-29T18:00:00Z', manifest.cycle]) });
@@ -228,6 +230,116 @@ function refinedResumePlan(): BuildPlan {
   fake.readPlan.mockResolvedValue(plan);
   return plan;
 }
+
+function digest(data: Uint8Array | string): string { return createHash('sha256').update(data).digest('hex'); }
+
+function v5ResumeFixture(metrics: Record<string, unknown> = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
+  const base = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')) as Manifest;
+  const grid = { kind: 'regular-latlon' as const, width: 34, height: 17, earthRadiusM: 6371229, lon0: -10, lat0: 10, dx: 0.1, dy: -0.1, wrapLongitude: false };
+  const gridHash = digest(canonicalGridJson(grid)), blockCount = 3;
+  const output = new Uint8Array(blockCount * 32);
+  for (let block = 0; block < blockCount; block++) output[block * 32] = 1;
+  const coverage = createSparseCoverage({ width: grid.width, height: grid.height, wrapLongitude: grid.wrapLongitude, gridHash,
+    blockIds: Uint32Array.of(0, 2, 3), offsets: Uint32Array.of(0, 1, 2, 3), output, halo: new Uint8Array(output.length) });
+  const sparse = encodeSparseCoverage(coverage), tiles = Uint8Array.of(1, 2, 3);
+  const descriptor = Buffer.from(JSON.stringify({ version: 2, id: 'fine', grid, gridHash, bounds: base.descriptors.bounds,
+    policy: 'fixture', maxZoom: 7, supportHaloCells: 1, sampleLayout: { format: 'cell-major-block-shards-v1', blockSize: 16 },
+    files: { sparse: { bytes: sparse.length, sha256: digest(sparse) }, tiles: { bytes: tiles.length, sha256: digest(tiles) } } }));
+  const coverageHash = digest(descriptor), maskKey = `coverage/${coverageHash}/manifest.json`, prefix = `coverage/${coverageHash}`;
+  const terrainDataId = 'd'.repeat(64);
+  const terrainBytes = Buffer.from(JSON.stringify({ version: 2, dataId: terrainDataId, grid, gridHash, coverageHash, layoutVersion: 1, cells: 3 }));
+  const terrainSha = digest(terrainBytes), terrainKey = `terrain/prepared/${terrainSha}/manifest.json`;
+  const surface = (id: 'native' | 'fine', layers: ManifestV5['layers']) => {
+    const channelCount = base.frames.length * layers.length, storedCells = 3;
+    const bytes = Buffer.alloc(storedCells * channelCount * 5, 1);
+    const shard = { firstBlock: 0, blockCount, storedCells, bytes: bytes.byteLength, sha256: digest(bytes), key: `builds/${base.model}/${base.buildId}/surfaces/${id}/samples/0.bin` };
+    return { id, kind: id, grid, gridHash, coverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: 7, gridHash }, layers,
+      samples: { format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const, channelCount,
+        coverageHash, blockCount, storedCells, shards: [shard] },
+      ...(id === 'fine' ? { terrain: { dataId: terrainDataId, key: terrainKey, sha256: terrainSha, verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const } } : {}),
+      file: bytes };
+  };
+  const native = surface('native', ['precip-rate']), fine = surface('fine', ['usable-lift-msl', 'usable-lift-agl']);
+  const { file: nativeFile, ...nativeSurface } = native, { file: fineFile, ...fineSurface } = fine;
+  const manifest = manifestV5Schema.parse({ version: 5, descriptors: base.descriptors, recipe: { ...base.recipe, sourceRevision: revision, sourceDirty: false }, model: base.model,
+    buildId: base.buildId, cycle: base.cycle, createdAt: base.createdAt, expiresAt: base.expiresAt, method: base.method,
+    frames: base.frames, layers: base.layers, artifacts: base.artifacts, source: base.source, tool: base.tool,
+    palettes: base.palettes, metrics, surfaces: [nativeSurface, fineSurface] });
+  const plan: BuildPlan = { version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+    createdAt: manifest.createdAt, coverageHash, providerId: 'fixture-provider', recipe: structuredClone(manifest.recipe),
+    groups: [manifest.frames.map(frame => Number(frame.id.slice(1)))],
+    wholeDomain: { k: 10, nativeCoverageHash: coverageHash, fineCoverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: 7, gridHash },
+      terrain: { key: terrainKey, sha256: terrainSha, bytes: terrainBytes.length, arrayBytes: 15 } } };
+  const files = new Map<string, Buffer>([
+    [localPath('output', maskKey), descriptor], [localPath('output', `${prefix}/sparse.bin`), Buffer.from(sparse)],
+    [localPath('output', `${prefix}/tiles.bin`), Buffer.from(tiles)], [localPath('output', nativeSurface.samples.shards[0]!.key), nativeFile],
+    [localPath('output', fineSurface.samples.shards[0]!.key), fineFile], [localPath('output', terrainKey), terrainBytes],
+    [localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest))],
+    [resolve('output/plan.json'), Buffer.from(JSON.stringify(plan))]
+  ]);
+  return { manifest, plan, files };
+}
+
+it('validates matching v5 frozen plan, coverage, terrain and shard bytes', async () => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output')).resolves.toBeUndefined();
+  expect(fake.identity).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gfs' }), plan.wholeDomain!.nativeCoverageHash,
+    undefined, [], undefined, expect.objectContaining({ k: 10, fineCoverageHash: plan.wholeDomain!.fineCoverage.hash }));
+});
+
+it('resumes matching v5 artifacts with measured metrics within budget', async () => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await resumePublication(revision);
+  expect(fake.publish).toHaveBeenCalledOnce();
+  expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
+});
+
+it.each([
+  { defect: 'elapsed', metrics: { elapsedMs: 51 * 60_000, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'elapsedMs' },
+  { defect: 'rss', metrics: { elapsedMs: 1000, peakRssBytes: 3 * 1024 ** 3, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'peakRssBytes' },
+  { defect: 'invalid', metrics: { elapsedMs: -1, peakRssBytes: 0 }, message: 'missing or invalid' }
+] as const)('rejects v5 publication with $defect budget metrics', async ({ metrics, message }) => {
+  const { manifest, plan, files } = v5ResumeFixture(metrics);
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(resumePublication(revision)).rejects.toThrow(message);
+  expect(fake.publish).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining(message));
+});
+
+it.each(['factor', 'native-coverage', 'fine-coverage', 'fine-grid', 'fine-mask', 'terrain-ref', 'recipe'] as const)('rejects altered v5 frozen %s identity before publication', async defect => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  const frozen = plan.wholeDomain!;
+  if (defect === 'factor') frozen.k = 5;
+  else if (defect === 'native-coverage') frozen.nativeCoverageHash = 'e'.repeat(64);
+  else if (defect === 'fine-coverage') frozen.fineCoverage.hash = 'e'.repeat(64);
+  else if (defect === 'fine-grid') frozen.fineCoverage.gridHash = 'e'.repeat(64);
+  else if (defect === 'fine-mask') frozen.fineCoverage.maskKey = `coverage/${'e'.repeat(64)}/manifest.json`;
+  else if (defect === 'terrain-ref') frozen.terrain.sha256 = 'e'.repeat(64);
+  else fake.identity.mockResolvedValueOnce({ recipe: { hash: 'e'.repeat(64) } });
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output')).rejects.toThrow(/differs|identity/);
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+
+it.each(['coverage-descriptor', 'sparse', 'tiles', 'shard', 'terrain-file'] as const)('rejects corrupted v5 local %s bytes before publication', async defect => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  const surface = manifest.surfaces[1]!, prefix = `coverage/${surface.coverage.hash}`;
+  if (defect === 'coverage-descriptor') files.set(localPath('output', surface.coverage.maskKey), Buffer.from('corrupt'));
+  else if (defect === 'sparse') files.set(localPath('output', `${prefix}/sparse.bin`), Buffer.from([9]));
+  else if (defect === 'tiles') files.set(localPath('output', `${prefix}/tiles.bin`), Buffer.from([9]));
+  else if (defect === 'shard') files.set(localPath('output', surface.samples.shards[0]!.key), Buffer.alloc(surface.samples.shards[0]!.bytes, 2));
+  else files.set(localPath('output', surface.terrain!.key), Buffer.from('{"dataId":"other"}'));
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output')).rejects.toThrow(/hash|binding/);
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+
 
 it('resumes a valid v4 build using frozen inputs without consulting current catalog or zones', async () => {
   const plan = refinedResumePlan();

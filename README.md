@@ -5,11 +5,9 @@ ground, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
 The builder supports NOAA GFS and regional DWD ICON-EU. The forecast workflow
-runs either model or both in parallel; scheduled runs build both. Configure
-[polygons](packages/contracts/config/refinement.json) to derive MSL and AGL
-from terrain columns on 1 km DEM grids; see
-[science](docs/science.md#terrain-columns). Coverage excludes Russia, China,
-Antarctica, and Greenland. See
+runs either model or both in parallel; scheduled runs build both. Whole-domain
+terrain columns derive MSL and AGL lift; see [science](docs/science.md#terrain-columns).
+Coverage excludes Africa, Russia, China, Antarctica and Greenland. See
 [deployments](docs/status.md) for live applications and runs.
 
 ## Quick start

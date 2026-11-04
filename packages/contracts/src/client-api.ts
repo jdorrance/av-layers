@@ -1,4 +1,4 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, sampleResponseSchema, validateArtifactRecords, type LayerId, type Manifest, type ModelId } from './index.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId } from './index.ts';
 import type { PinnedBuild, SamplePayload } from './client-types.ts';
 import { refinementCandidate } from './refinement.ts';
 
@@ -165,7 +165,7 @@ export class ApiClient {
     if (!manifestRaw) throw new InvalidApiResponseError('expanded manifest is missing');
     if (manifestRaw.model !== model) throw new InvalidApiResponseError('manifest model does not match request');
     if (manifestRaw.buildId !== pointer.latestBuildId) throw new InvalidApiResponseError('manifest build is not the pinned pointer build');
-    try { validateArtifactRecords(manifestRaw); getProvenanceReference(manifestRaw); } catch { throw new InvalidApiResponseError('manifest records or capabilities are inconsistent'); }
+    try { if (manifestRaw.version === 5) validateArtifactRecordsV5(manifestRaw); else validateArtifactRecords(manifestRaw); getProvenanceReference(manifestRaw); } catch { throw new InvalidApiResponseError('manifest records or capabilities are inconsistent'); }
     const retained = pointer.retained.find(entry => entry.buildId === manifestRaw.buildId);
     if (!retained || retained.cycle !== manifestRaw.cycle || retained.expiresAt !== manifestRaw.expiresAt || retained.manifestKey !== `builds/${model}/${manifestRaw.buildId}/manifest.json`) throw new InvalidApiResponseError('manifest does not match retained entry');
     if (options.requireLive !== false) assertNotExpired(manifestRaw.expiresAt, this.now());
@@ -202,7 +202,7 @@ export class ApiClient {
     const path = `/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/sample?${params.toString()}`;
     const raw = await this.getJson(path, request.signal);
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
-    const parsed = sampleResponseSchema.safeParse(raw);
+    const parsed = publishedSampleResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
     if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId) {
@@ -212,8 +212,13 @@ export class ApiClient {
     if (payload.expiresAt !== build.manifest.expiresAt || payload.method.id !== build.manifest.method.id || payload.method.hash !== build.manifest.method.hash) {
       throw new InvalidApiResponseError('sample method or expiry does not match pinned build');
     }
-    for (const key of Object.keys(build.manifest.coverage) as (keyof Manifest['coverage'])[]) {
-      if (JSON.stringify(payload.coverage[key]) !== JSON.stringify(build.manifest.coverage[key])) throw new InvalidApiResponseError('sample coverage does not match pinned build');
+    if (build.manifest.version === 5) {
+      if (payload.version !== 5 || JSON.stringify(payload.surfaces) !== JSON.stringify(build.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })))) throw new InvalidApiResponseError('sample surfaces do not match pinned build');
+    } else {
+      if (payload.version === 5) throw new InvalidApiResponseError('sample version does not match pinned build');
+      for (const key of Object.keys(build.manifest.coverage) as (keyof Manifest['coverage'])[]) {
+        if (JSON.stringify(payload.coverage[key]) !== JSON.stringify(build.manifest.coverage[key])) throw new InvalidApiResponseError('sample coverage does not match pinned build');
+      }
     }
     for (const key of ['provider', 'provenanceKey', 'provenanceSha256'] as const) {
       if (payload.source[key] !== build.manifest.source[key]) throw new InvalidApiResponseError('sample source does not match pinned build');
@@ -233,12 +238,15 @@ export class ApiClient {
       }
       for (const layer of layers) {
         const cell = frame.layers[layer];
-        const patch = cell.patchId === undefined ? undefined : build.manifest.patches?.find(item => item.id === cell.patchId);
-        if (cell.patchId !== undefined && (!patch || refinementCandidate(build.manifest.patches ?? [], layer, request.lat, request.lon)?.id !== patch.id || cell.status === 'outside-domain')) {
+        const patchId = 'patchId' in cell ? cell.patchId : undefined;
+        const patch = patchId === undefined || build.manifest.version === 5 ? undefined : build.manifest.patches?.find(item => item.id === patchId);
+        if (patchId !== undefined && (!patch || build.manifest.version === 5 || refinementCandidate(build.manifest.patches ?? [], layer, request.lat, request.lon)?.id !== patch.id || cell.status === 'outside-domain')) {
           throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} refinement`);
         }
-        if (owners.has(layer) && owners.get(layer) !== cell.patchId) throw new InvalidApiResponseError(`sample ${layer} refinement changes between frames`);
-        owners.set(layer, cell.patchId);
+        const owner = 'surfaceId' in cell ? cell.surfaceId : patchId;
+        if (build.manifest.version === 5 && (!('surfaceId' in cell) || build.manifest.surfaces.find(surface => surface.layers.includes(layer))?.id !== cell.surfaceId)) throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} surface`);
+        if (owners.has(layer) && owners.get(layer) !== owner) throw new InvalidApiResponseError(`sample ${layer} ownership changes between frames`);
+        owners.set(layer, owner);
         const spec = (patch?.descriptors ?? build.manifest.descriptors).layers[layer];
         if (cell.support < 0 || cell.support > SUPPORT_MASK || (cell.support & ~SUPPORT_MASK) !== 0 || (!spec.supportsLiftFlags && cell.support !== 0) ||
             (cell.status === 'valid' && cell.value === null) ||

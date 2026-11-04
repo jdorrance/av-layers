@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ASSET_MAX_BYTES, sha256 } from './contract.js';
-import { fetchSourceInventory, fetchSourceTile, INVENTORY_MAX_BYTES, parseSourceInventory } from './source.js';
+import * as contract from './contract.js';
+import { fetchSourceInventory, fetchSourceTile, INVENTORY_MAX_BYTES, parseSourceInventory, TERRAIN_INVENTORY_BYTES, TERRAIN_INVENTORY_SHA256, verifyTerrainCatalogInventory } from './source.js';
+import { terrainCatalogFixture, TerrainTestStorage } from './test-fixtures.js';
 
 const north = 'Copernicus_DSM_COG_30_N40_00_E044_00_DEM';
 const south = 'Copernicus_DSM_COG_30_S90_00_W180_00_DEM';
 const encode = (value: string) => new TextEncoder().encode(value);
 
 describe('terrain source inventory', () => {
+  it('requires the trusted snapshot and exact catalog membership', async () => {
+    const catalog = terrainCatalogFixture(), storage = new TerrainTestStorage();
+    await expect(verifyTerrainCatalogInventory(catalog, storage)).rejects.toThrow('not the trusted provider inventory');
+    catalog.inventorySha256 = TERRAIN_INVENTORY_SHA256;
+    await expect(verifyTerrainCatalogInventory(catalog, storage)).rejects.toThrow('snapshot missing or corrupt');
+    const bytes = new Uint8Array(TERRAIN_INVENTORY_BYTES).fill(32);
+    bytes.set(encode(`${catalog.tiles[0].id}\n`));
+    storage.objects.set(`terrain/inventories/${TERRAIN_INVENTORY_SHA256}.txt`, bytes);
+    await expect(verifyTerrainCatalogInventory(catalog, storage)).rejects.toThrow('snapshot missing or corrupt');
+    const hash = vi.spyOn(contract, 'sha256').mockReturnValue(TERRAIN_INVENTORY_SHA256);
+    try {
+      await expect(verifyTerrainCatalogInventory(catalog, storage)).resolves.toBeUndefined();
+      await expect(verifyTerrainCatalogInventory({ ...catalog, tiles: [] }, storage)).rejects.toThrow('does not match trusted inventory');
+      await expect(verifyTerrainCatalogInventory({ ...catalog, tiles: [{ ...catalog.tiles[0], west: 1 }] }, storage)).rejects.toThrow('does not match trusted inventory');
+    } finally { hash.mockRestore(); }
+  });
   it('retains the exact source digest while sorting a global inventory', async () => {
     const bytes = encode(`${south}\r\n${north}\r\n`), fetch = vi.fn(async () => new Response(bytes));
     const result = await fetchSourceInventory({ fetch });

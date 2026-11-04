@@ -1,6 +1,6 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
-import { prepareTerrainColumns, terrainClearanceMappingBytes } from '@av/forecast/refinement';
+import { prepareTerrainColumns } from '@av/forecast/refinement';
 import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import type { LoadedRefinement } from './refinement/prepare.js';
@@ -15,6 +15,7 @@ export const BUILD_BUDGETS = {
 } as const;
 
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
+export const MAX_V5_SHARD_BYTES = 64 * 1024 * 1024;
 export type PreparedBuild = ReturnType<typeof prepareBuild<LoadedRefinement>> & { terrain?: PreparedTerrain };
 
 export interface CapacityScenario {
@@ -84,7 +85,7 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
     const columns = prepareTerrainColumns(mask, item.mask, indices.active, resources.maxLevels, { clearanceFallback: 'unsupported' });
     refinementSize.gridCells += cells;
     refinementSize.storedCells += layout.storedCells;
-    refinementMappingBytes += terrainClearanceMappingBytes(active.active.length) + columns.byteLength + columns.workspaceBytes;
+    refinementMappingBytes += columns.byteLength + columns.workspaceBytes;
     refinementTerrainBytes += cells * PREPARED_TERRAIN_CELL_BYTES;
     refinementMaskBytes += item.mask.output.byteLength + item.mask.halo.byteLength + item.mask.tiles.byteLength;
     return { ...item, layout, columns };
@@ -99,8 +100,7 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   const fieldsPerLevel = product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2;
   const workingSet = {
     samplePack: capacity.samplePackBytes,
-    // Each patch derives same-frame terrain-clearance fallback fields alongside the final terrain-column fields.
-    derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_COLUMN_METHOD.outputs.length * 2) * CELL_BYTES,
+    derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_COLUMN_METHOD.outputs.length) * CELL_BYTES,
     normalizedFrame: activeCells * (7 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
     diagnostics: refinements.length ? cells * 9 : 0,
     retainedGeometry: activeCells * retainedGeometryFields * CELL_BYTES,
@@ -124,7 +124,7 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
 }
 
 /** Gate recorded build metrics against the same budgets used by build admission. */
-export function checkPerformance(manifest: Manifest) {
+export function checkPerformance(manifest: Manifest | ManifestV5) {
   const failures: string[] = [];
   const metric = (key: string): number => {
     const value = manifest.metrics[key];
@@ -133,12 +133,33 @@ export function checkPerformance(manifest: Manifest) {
   };
   const elapsedMs = metric('elapsedMs'), peakRssBytes = metric('peakRssBytes');
   const counts = manifest.metrics.tiles;
-  const validCounts = Array.isArray(counts) && counts.length === manifest.coverage.maxZoom + 1 && counts.every(n => Number.isSafeInteger(n) && n >= 0);
+  const maxZoom = manifest.version === 5 ? Math.max(...manifest.surfaces.map(surface => surface.coverage.maxZoom)) : manifest.coverage.maxZoom;
+  const validCounts = Array.isArray(counts) && counts.length === maxZoom + 1 && counts.every(n => Number.isSafeInteger(n) && n >= 0);
   if (!validCounts) failures.push('missing or invalid tile counts');
   const tiles = validCounts ? counts.reduce((sum: number, count: number) => sum + count, 0) * manifest.artifacts.length : NaN;
+  if (manifest.version === 5) {
+    let samplePackBytes = 0, emittedSampleBytes = 0, gridCells = 0;
+    for (const surface of manifest.surfaces) {
+      if (surface.kind === 'native') gridCells += surface.grid.width * surface.grid.height;
+      const shardBytes = surface.samples.storedCells * surface.samples.channelCount * CELL_BYTES;
+      if (!Number.isSafeInteger(shardBytes) || !Number.isSafeInteger(surface.samples.storedCells) || !Number.isSafeInteger(surface.samples.channelCount)) failures.push('unsafe v5 sample size');
+      for (const shard of surface.samples.shards) {
+        const bytes = shard.storedCells * surface.samples.channelCount * CELL_BYTES;
+        if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(shard.bytes) || shard.bytes <= 0 || bytes !== shard.bytes) { failures.push('invalid v5 shard size'); continue; }
+        samplePackBytes = Math.max(samplePackBytes, shard.bytes);
+        emittedSampleBytes += shard.bytes;
+        if (shard.bytes > MAX_V5_SHARD_BYTES) failures.push(`samplePackBytes: ${shard.bytes} exceeds ${MAX_V5_SHARD_BYTES}`);
+      }
+    }
+    const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes, gridCells };
+    for (const key of ['gridCells', 'tiles', 'elapsedMs', 'peakRssBytes'] as const) {
+      if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);
+    }
+    return { version: 1, buildId: manifest.buildId, cycle: manifest.cycle, observed, budgets: { ...BUILD_BUDGETS, samplePackBytes: MAX_V5_SHARD_BYTES }, passed: failures.length === 0, failures };
+  }
   const grids = forecastGrids(manifest);
-  const observed = { elapsedMs, peakRssBytes, tiles,
-    samplePackBytes: grids.reduce((sum, grid) => sum + grid.samples.bytes, 0),
+  const samplePackBytes = grids.reduce((sum, grid) => sum + grid.samples.bytes, 0);
+  const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes: samplePackBytes,
     gridCells: grids.reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) };
   for (const key of Object.keys(BUILD_BUDGETS) as (keyof typeof BUILD_BUDGETS)[]) {
     if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);

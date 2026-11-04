@@ -6,11 +6,15 @@ import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from 
 import { GFS_PRESSURE_LEVELS_HPA } from './gfs/constants.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { spawnSync } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
 import { fileURLToPath } from 'node:url';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
-const Z7_TILES_BY_ZOOM = [1, 4, 8, 30, 92, 263, 818, 2655];
-const Z7_TOTAL_TILES = 278712;
+const Z7_TILES_BY_ZOOM = [1, 4, 8, 29, 84, 233, 708, 2235];
+const Z7_TOTAL_TILES = 237744;
 
 function receipt(): Manifest {
   return {
@@ -25,13 +29,18 @@ function receipt(): Manifest {
 }
 
 describe('build capacity admission and performance budgets', () => {
-  it('reports current-product memory admission separately from hypothetical growth', () => {
+  it('rejects missing fine coverage independently of bundled assets', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'capacity-coverage-'));
+    try {
+      const product = { ...GFS_PRODUCT, coverageDir: directory };
+      await expect(loadBundledFineCoverage(product, wholeDomainPlan(product)!)).rejects.toThrow('Fine coverage is missing');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+  it('rejects scenario overrides instead of silently ignoring them for configured whole-domain capacity', () => {
     const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--frames', '48', '--layers', '8', '--models', '4'], { encoding: 'utf8' });
-    expect(result.status).toBe(1);
-    const report = JSON.parse(result.stdout);
-    expect(report).toMatchObject({ frames: 48, layers: 8, models: 4, currentProductAdmission: { frames: 24, layers: 3, rasterWorkers: rasterWorkerCount(), budgetBytes: BUILD_BUDGETS.peakRssBytes } });
-    expect(report.currentProductAdmission.estimatedPeakBytes).toBe(Object.values(report.currentProductAdmission.workingSet as Record<string, number>).reduce((sum, value) => sum + value, 0));
-    expect(report.violations.length).toBeGreaterThan(0);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('scenario overrides are unsupported');
+    expect(result.stdout).not.toContain('currentProductAdmission');
   });
   it('rejects empty public coverage before opening a provider', async () => {
     const mask = await loadCoverage(GFS_PRODUCT);
@@ -39,12 +48,12 @@ describe('build capacity admission and performance budgets', () => {
   });
   it('counts the real z0-z7 product before acquisition and leaves hourly retention headroom', async () => {
     const mask = await loadCoverage(GFS_PRODUCT), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    expect(indices.active.length).toBe(210453);
+    expect(indices.active.length).toBe(164788);
     expect(capacity).toMatchObject({
       tilesByZoom: Z7_TILES_BY_ZOOM,
       tiles: Z7_TOTAL_TILES,
       quarterSamples: Z7_TOTAL_TILES * 256 * 256 * 4,
-      samplePackBytes: 126824760,
+      samplePackBytes: 105392520,
       point: { reads: 1, worstCaseRangeBytes: 6840, values: 72 },
       violations: []
     });
@@ -59,7 +68,7 @@ describe('build capacity admission and performance budgets', () => {
     const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
     const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
     expect(doubled.tiles).toBe(Z7_TOTAL_TILES * 8);
-    expect(doubled.totalSamplePackBytes).toBe(126824760 * 8);
+    expect(doubled.totalSamplePackBytes).toBe(105392520 * 8);
     const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 8 });
     expect(deeper.violations).toContain('tile budget exceeded');
     expect(deeper.violations.join()).toContain('trusted product');

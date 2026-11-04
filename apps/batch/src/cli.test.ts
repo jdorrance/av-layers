@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BuildOptions } from './build.js';
-import { MODEL_IDS } from '@av/contracts';
+import { getProduct, MODEL_IDS, planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
 
 const fake = vi.hoisted(() => ({ build: vi.fn(), read: vi.fn(), storage: vi.fn() }));
 vi.mock('./build.js', () => ({ buildProduct: fake.build }));
@@ -90,15 +90,24 @@ it.each(['terrain-catalog-ref', 'terrain-store-dir'])('accepts %s only for the b
   expect(fake.storage).not.toHaveBeenCalled();
 });
 
-it.each(MODEL_IDS)('reports configured %s refinement resources without a terrain store', async model => {
+it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrain store', async model => {
   const { readLocalFile } = await vi.importActual<typeof import('./local-file.js')>('./local-file.js');
   fake.read.mockImplementation(readLocalFile);
   await runBatch(['capacity', '--model', model]);
   const report = JSON.parse(vi.mocked(console.log).mock.lastCall![0] as string);
-  expect(report.refinement.gridCells).toBeGreaterThan(0);
-  expect(report.refinement.storedCells).toBeGreaterThan(0);
-  expect(report.currentProductAdmission.workingSet.preparedTerrain).toBeGreaterThan(0);
-  expect(report.currentProductAdmission.workingSet.refinementMapping).toBeGreaterThan(0);
-  expect(report.currentProductAdmission.workingSet.samplePack).toBe(report.samplePackBytes);
+  const product = getProduct(model)!, plan = planWholeDomainGrid(product.grid as RegularLatLonGrid, product.terrainSubdivisionFactor!);
+  expect(report).toMatchObject({ mode: 'whole-domain', model, k: product.terrainSubdivisionFactor });
+  expect(report.fineGrid).toEqual(plan.fine);
+  expect(report.capacity.workingSet.terrain).toBeGreaterThan(0);
+  expect(report.capacity.workingSet.nativeFields).toBeGreaterThan(0);
+  expect(report.capacity.workingSet.shardAssembly).toBeGreaterThan(0);
+  expect(report.capacity.violations).toEqual([]);
+  expect(fake.storage).not.toHaveBeenCalled();
+});
+
+it('rejects scenario overrides for whole-domain capacity reports', async () => {
+  const { readLocalFile } = await vi.importActual<typeof import('./local-file.js')>('./local-file.js');
+  fake.read.mockImplementation(readLocalFile);
+  await expect(runBatch(['capacity', '--model', 'gfs', '--frames', '2'])).rejects.toThrow('scenario overrides are unsupported');
   expect(fake.storage).not.toHaveBeenCalled();
 });

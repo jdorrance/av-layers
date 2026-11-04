@@ -32,10 +32,12 @@ or `pnpm dev --seed-only` to seed `.wrangler/fixture-state` and exit.
 
 ## Build a real forecast
 
-Build the native model forecast:
+Build the configured GFS forecast with a pinned catalog and complete
+[local terrain store](../apps/batch/src/terrain/README.md#import-a-dataset):
 
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
+  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
 ```
 
 For ICON-EU:
@@ -43,11 +45,12 @@ For ICON-EU:
 ```sh
 pnpm capacity --model icon-eu
 pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
-pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu
+pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu \
+  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
 ```
 
-`capacity` includes configured refinement grids in its offline memory, tile and
-sample-pack estimates. `input:proof`
+`capacity` reports configured whole-domain sparse storage and working-set
+admission. `input:proof`
 downloads and validates one frame. Both models accept `--cycle YYYY-MM-DDTHH:00:00Z`
 (`00`, `06`, `12`, or `18` UTC) or discover the latest complete upstream run
 automatically. See the [CLI reference](reference.md#batch-cli) for all flags.
@@ -64,17 +67,11 @@ preview server.
 ### Terrain refinement
 
 Save the terrain import's catalog reference as `output/terrain-catalog-ref.json`.
-For a [local terrain store](../apps/batch/src/terrain/README.md#import-a-dataset):
-
-```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
-  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
-```
-
-The directory must contain the referenced catalog and DEM objects. Omit
-`--terrain-store-dir` to use R2 with the [terrain credentials](../apps/batch/src/terrain/README.md#import-a-dataset).
-The catalog option enables the configured polygons for either model. A supplied
-catalog must pass validation before weather acquisition starts.
+The local store must contain the referenced catalog, pinned inventory snapshot
+and DEM assets. Omit `--terrain-store-dir` to use R2 with the
+[terrain credentials](../apps/batch/src/terrain/README.md#import-a-dataset).
+The configured whole-domain lift grids require the catalog to pass validation
+before weather acquisition starts.
 
 ## Tests and builds
 

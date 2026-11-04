@@ -50,7 +50,9 @@ export interface BuildIdentity {
   readonly scienceHash: string;
 }
 /** Content identity includes actual files, even in a dirty local checkout; Git SHA alone is not a recipe. */
-export async function buildIdentity(product: ProductDefinition, coverageHash: string, terrain?: PreparedTerrainRef, refinements: readonly RefinementInput[] = [], root = ROOT): Promise<BuildIdentity> {
+export interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
+
+export async function buildIdentity(product: ProductDefinition, coverageHash: string, terrain?: PreparedTerrainRef, refinements: readonly RefinementInput[] = [], root = ROOT, wholeDomain?: WholeDomainIdentityInput): Promise<BuildIdentity> {
   const contractConfigSettings = [...new Set(PRODUCTS.map(p => p.configPath))].sort();
   const groups = {
     adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
@@ -80,11 +82,12 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
   const lockHash = digest(await readFile(join(root, 'pnpm-lock.yaml')));
   const configurationHash = digest(JSON.stringify({ product, coverageHash,
     ...(terrain ? { terrain: preparedTerrainRefSchema.parse(terrain) } : {}),
-    ...(refinements.length ? { refinements: refinements.map(input => refinementInputSchema.parse(input)) } : {}) }));
+    ...(refinements.length ? { refinements: refinements.map(input => refinementInputSchema.parse(input)) } : {}),
+    ...(wholeDomain ? { wholeDomain } : {}) }));
   const hash = digest(JSON.stringify({ components, lockHash, configurationHash }));
   const { revision, dirty } = await readProducerSourceState(root);
   const refinementMethod = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
   const scienceHash = digest(JSON.stringify({ source: components.science, methods: { ...createProductDescriptors(product).methods,
-    ...(refinements.length ? { [refinementMethod.id]: refinementMethod } : {}) } }));
+    ...(refinements.length || wholeDomain ? { [refinementMethod.id]: refinementMethod } : {}) } }));
   return { recipe: createRecipeIdentity(product, hash, revision, dirty, lockHash), components: { ...components, configuration: configurationHash }, scienceHash };
 }

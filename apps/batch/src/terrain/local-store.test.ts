@@ -37,7 +37,7 @@ it('supports concurrent immutable retries and exact byte ranges without leftover
   await expect(store.head(key)).resolves.toBeNull();
   await Promise.all(Array.from({ length: 3 }, () => putImmutable(store, key, bytes, 'application/octet-stream')));
   const etag = `"${createHash('md5').update(bytes).digest('hex')}"`;
-  await expect(store.head(key)).resolves.toEqual({ size: bytes.length, etag });
+  await expect(store.head(key)).resolves.toEqual({ size: bytes.length, etag, computedSha256: createHash('sha256').update(bytes).digest('hex') });
   await expect(store.get(key, { offset: 7, length: 7 }, 7)).resolves.toEqual({ bytes: Buffer.from('terrain'), etag });
   await expect(putImmutable(store, key, Buffer.from('changed values'), 'application/octet-stream')).rejects.toThrow(/hash mismatch/);
   expect(await readdir(join(directory, 'terrain'))).toEqual(['test.bin']);
@@ -82,7 +82,7 @@ it.each(['hashing', 'before reading', 'during reading'] as const)('retries a har
     }
     return calls === changeAt + 1 ? changedCtime(stats, ctime) : stats;
   };
-  if (window === 'hashing') await expect(store.head(key)).resolves.toEqual({ size: bytes.length, etag });
+  if (window === 'hashing') await expect(store.head(key)).resolves.toEqual({ size: bytes.length, etag, computedSha256: createHash('sha256').update(bytes).digest('hex') });
   else await expect(store.get(key, { offset: 7, length: 7 }, 7)).resolves.toEqual({ bytes: Buffer.from('terrain'), etag });
   expect(calls).toBeGreaterThan(changeAt + 1);
   expect(await readdir(join(directory, 'terrain'))).toEqual(['test.bin']);

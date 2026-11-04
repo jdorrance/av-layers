@@ -23,7 +23,7 @@ describe('offline native-grid build integration', () => {
   it('rejects invalid product shapes before opening a provider or writing coverage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-product-admission-')); temporary.push(root);
     const grid = gridSchema.parse({ ...GFS_GRID, width: 3, height: 3, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false });
-    const base: ProductDefinition = { ...GFS_PRODUCT, grid, maxNativeZoom: 0 };
+    const base: ProductDefinition = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, grid, maxNativeZoom: 0 };
     const mask: CoverageMask = { grid, bounds: base.bounds, output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1), maxZoom: 0 };
     const open = vi.fn(async () => { throw new Error('Provider must not open'); });
     const provider: ForecastProvider = { id: 'admission-fixture', provider: 'fixture', maxLevels: 3, open };
@@ -43,7 +43,7 @@ describe('offline native-grid build integration', () => {
     const registeredModels = [...MODEL_IDS];
     const root = await mkdtemp(join(tmpdir(), `av-native-${scenario.name}-`)); temporary.push(root);
     const product: ProductDefinition = {
-      ...GFS_PRODUCT, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
+      ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
       label: `Offline ${scenario.name} fixture`, attribution: 'Synthetic infrastructure fixture', coverageDescription: 'Synthetic native-grid cells only; no forecast claims',
       bounds: [-180, -85, 180, 85], grid: scenario.grid, coverageId: `fixture-${scenario.name}`, maxNativeZoom: 0,
       frameHours: scenario.hours, intervalHours: scenario.interval, layers: scenario.layers

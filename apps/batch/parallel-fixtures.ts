@@ -18,7 +18,7 @@ export const product: ProductDefinition = {
   coverageDescription: 'Synthetic grid spanning block and longitude-wrap boundaries',
   bounds: [-180, 70, 180, 72],
   grid: { kind: 'regular-latlon', width: 18, height: 3, earthRadiusM: 6371229, lon0: -180, lat0: 72, dx: 20, dy: -1, wrapLongitude: true },
-  coverageId: 'parallel-fixture-coverage', maxNativeZoom: 0,
+  coverageId: 'parallel-fixture-coverage', maxNativeZoom: 0, terrainSubdivisionFactor: undefined,
   frameHours: [2, 4, 6, 8], intervalHours: 2
 };
 const cellCount = product.grid.width * product.grid.height;

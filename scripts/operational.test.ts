@@ -119,6 +119,12 @@ describe('declarative workflows', () => {
     expect(download.uses).toBe('actions/download-artifact@v4');
     expect(download.if).toBe("${{ !inputs['resume-run-id'] }}");
     expect(record(download.with)).toEqual({ pattern: '${{ needs.prepare.outputs.artifact }}-shard-*', 'merge-multiple': true, path: 'output' });
+    const plan = list(record(jobs.prepare).steps).map(record).find(step => step.uses === 'actions/upload-artifact@v4' && step.if === "steps.plan.outputs.ready == 'true'")!;
+    expect(String(record(plan.with).path)).toContain('output/coverage/');
+    expect(String(record(plan.with).path)).toContain('output/terrain/');
+    const full = steps.find(step => String(step.name).startsWith('Upload full build artifacts'))!;
+    expect(String(record(full.with).path)).toContain('output/coverage/');
+    expect(String(record(full.with).path)).toContain('output/terrain/');
     for (const [job, command] of [[record(jobs.prepare), 'forecast-plan'], [shard, 'forecast-shard']] as const) {
       expect(list(job.steps).map(record).some(step => step.run === `pnpm operations ${command}`)).toBe(true);
     }

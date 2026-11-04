@@ -6,6 +6,7 @@ export type TerrainStorage = Pick<ObjectStorage, 'get' | 'head' | 'put'>;
 
 export const ASSET_MAX_BYTES = 32 * 1024 * 1024;
 export const CATALOG_MAX_BYTES = 16 * 1024 * 1024;
+export const TERRAIN_BATCH_POINTS = 4096;
 export const TERRAIN_SOURCE = Object.freeze({
   id: 'copernicus-glo90-2021', release: '2021', units: 'm',
   verticalDatum: 'EGM2008', surface: 'DSM', horizontalCrs: 'EPSG:4326'

@@ -13,7 +13,7 @@ it('labels transparent and opaque no-lift legend swatches accurately', () => {
 const frames = fixtureManifest().frames;
 const layerIds = fixtureManifest().layers;
 function manifest() { return fixtureManifest({ buildId: '20261030T000000Z-abc', createdAt: created, expiresAt }); }
-function latestPayload(): LatestPayload { return fixtureLatest(manifest()); }
+function latestPayload(): LatestPayload & { manifest: ReturnType<typeof manifest> } { return fixtureLatest(manifest()) as LatestPayload & { manifest: ReturnType<typeof manifest> }; }
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -28,7 +28,7 @@ describe('ApiClient.latest', () => {
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/v1/models/gfs/latest?expand=manifest');
     expect(build.manifest.buildId).toBe('20261030T000000Z-abc');
     expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.webp');
-    expect(build.manifest.coverage.maxZoom).toBe(manifest().coverage.maxZoom);
+    expect(build.manifest.version !== 5 && build.manifest.coverage.maxZoom).toBe(manifest().coverage.maxZoom);
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
   });
 
@@ -147,7 +147,7 @@ describe('ApiClient.sample', () => {
     const build = await client.latest('gfs');
     const result = await client.sample(build, { lat: 0, lon: 0 });
     expect(result.frames[0].layers['usable-lift-agl']).toMatchObject({ value: null, status: 'no-usable-lift', patchId: patch.id });
-    expect(result.frames[0].layers['precip-rate'].patchId).toBeUndefined();
+    expect(result.frames[0].layers['precip-rate']).not.toHaveProperty('patchId');
   });
 
   it.each(['unknown', 'unsupported-layer', 'outside-polygon', 'outside-status', 'missing-frame-owner', 'old-manifest'] as const)('rejects %s refinement claims', async failure => {

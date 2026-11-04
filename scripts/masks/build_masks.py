@@ -145,14 +145,29 @@ def iter_shapefile_records(shp_path: Path):
         yield rec, row.geometry
 
 
-def load_features(shp_path: Path, excluded_a3: tuple[str, ...]):
+def load_features(
+    shp_path: Path,
+    excluded_a3: tuple[str, ...],
+    excluded_continents: tuple[str, ...],
+):
     admitted = []
     excluded = []
     iso_exceptions = []
+    continent_exclusions = []
     for rec, raw_geom in iter_shapefile_records(shp_path):
         adm0 = rec.get("ADM0_A3")
         iso3 = rec.get("ISO_A3")
         iso3_eh = rec.get("ISO_A3_EH")
+        continent = rec.get("CONTINENT")
+        excluded_by_continent = continent in excluded_continents and adm0 not in excluded_a3
+        if excluded_by_continent:
+            continent_exclusions.append(
+                {
+                    "admin": rec.get("ADMIN"),
+                    "adm0_a3": adm0,
+                    "continent": continent,
+                }
+            )
         if (iso3 == "-99" or iso3_eh != iso3) and adm0 not in excluded_a3:
             iso_exceptions.append(
                 {
@@ -166,12 +181,13 @@ def load_features(shp_path: Path, excluded_a3: tuple[str, ...]):
             )
         geom = fill_holes(raw_geom)
         for part in polygon_parts(geom):
-            if adm0 in excluded_a3:
+            if adm0 in excluded_a3 or excluded_by_continent:
                 excluded.append(part)
             else:
                 admitted.append(part)
     iso_exceptions.sort(key=lambda r: (r["adm0_a3"] or "", r["admin"] or ""))
-    return admitted, unary_union(excluded), iso_exceptions
+    continent_exclusions.sort(key=lambda r: (r["adm0_a3"] or "", r["admin"] or ""))
+    return admitted, unary_union(excluded), iso_exceptions, continent_exclusions
 
 
 def local_aeqd(lat0: float) -> tuple[Transformer, Transformer]:
@@ -344,6 +360,7 @@ def main() -> None:
     lat_min, lat_max = coverage["south"], coverage["north"]
     sea_buffer_meters = coverage["seaBufferMeters"]
     excluded_a3 = tuple(coverage["excludedA3"])
+    excluded_continents = tuple(coverage.get("excludedContinents", ()))
     halo_cells = coverage["interpolationHaloCells"]
     lon0, lat0 = grid["lon0"], grid["lat0"]
     width, height = grid["width"], grid["height"]
@@ -550,6 +567,8 @@ def main() -> None:
                 ("exclude_greenland_nuuk", 64.1814, -51.6941, False),
                 ("exclude_antarctica", -77.8500, 166.6700, False),
                 ("exclude_china_beijing", 39.9042, 116.4074, False),
+                ("exclude_africa_lagos", 6.5244, 3.3792, False),
+                ("exclude_africa_cape_town", -33.9249, 18.4241, False),
                 ("outside_band_north", 66.0000, 20.0000, False),
                 ("outside_band_south", -56.0000, 10.0000, False),
                 ("open_ocean_atlantic", 30.0000, -40.0000, False),
@@ -561,6 +580,8 @@ def main() -> None:
                 ("pyrenees_ager", 42.0000, 0.7620, True),
                 ("dolomites_marmolada", 46.4336, 11.8511, True),
                 ("exclude_russia_moscow", 55.7558, 37.6173, False),
+                ("exclude_africa_cairo", 30.0444, 31.2357, False),
+                ("exclude_africa_tunis", 36.8065, 10.1815, False),
                 ("open_ocean_atlantic", 45.0000, -20.0000, False),
             ]
         results = []
@@ -602,7 +623,9 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="soaring-mask-") as tmp:
         archive, shp_path = materialize_source(args.source, Path(tmp))
-        admitted, excluded_geom, iso_exceptions = load_features(shp_path, excluded_a3)
+        admitted, excluded_geom, iso_exceptions, continent_exclusions = load_features(
+            shp_path, excluded_a3, excluded_continents
+        )
         dateline_checks = dateline_shift_selfchecks(lat_min, lat_max, sea_buffer_meters)
 
         tile_geoms = []
@@ -675,8 +698,10 @@ def main() -> None:
                 "attributes": {
                     "excludeField": "ADM0_A3",
                     "excludeValues": list(excluded_a3),
+                    "excludeContinents": list(excluded_continents),
                     "isoFallback": "ISO_A3_EH",
                     "isoExceptionRows": iso_exceptions,
+                    "continentExclusionRows": continent_exclusions,
                 },
             },
             "policy": {
@@ -692,7 +717,8 @@ def main() -> None:
                 ),
                 "excludedPrecedence": (
                     "An output cell is cleared if its nearest-cell footprint "
-                    "intersects the filled raw ADM0 footprint of RUS, CHN, ATA or GRL, "
+                    "intersects the filled raw ADM0 footprint of RUS, CHN, ATA, GRL "
+                    "or any country whose CONTINENT attribute is Africa, "
                     "even when that removes a buffer strip outside the excluded polygon."
                 ),
                 "inlandLakes": (

@@ -34,41 +34,23 @@ leave `precip-rate` valid and vice versa. Sample responses also report
 
 ## Coverage and resolution
 
-- `soaring-land-v1` (GFS): land and a 50 km coastal buffer between 55°S and
-  65°N on the 0.25° global grid (native tile zoom 7), excluding Russia, China,
-  Antarctica, and Greenland.
-- `icon-eu-land-v1` (ICON-EU): land and a 50 km coastal buffer across the
-  0.0625° European domain (23.5°W–62.5°E, 29.5°N–70.5°N, native tile zoom 8),
-  with the same country exclusions.
+The [configured models](reference.md#configured-models) define coverage,
+subdivision factors and tile zooms. Coverage intersects cell footprints with
+pinned Natural Earth polygons and includes a separate 1-cell interpolation halo.
+Source receipts are emitted by the [native coverage generator](../scripts/masks/build_masks.py)
+and [fine coverage generator](../scripts/masks/build_fine_masks.py).
 
-Coverage masks intersect cell footprints with Natural Earth land polygons and
-include a 1-cell halo for boundary interpolation. Source metadata and digests
-live in [`packages/contracts/coverage/source.json`](../packages/contracts/coverage/source.json)
-and [`packages/contracts/coverage/icon-eu-land-v1/source.json`](../packages/contracts/coverage/icon-eu-land-v1/source.json).
-Version-3 manifests pin the grid, bounds, coverage descriptor, and bitset
-digests so retained builds remain self-contained.
+Version-5 manifests assign each layer to one surface. Lift uses the fine
+terrain-column surface; GFS precipitation uses its native surface. Each surface
+pins its grid, coverage and sample shards. A sample value's `surfaceId` identifies
+its grid and ground reference. Output masks select coverage; halo cells supply
+boundary contributors. No-lift and unavailable values retain their selected
+surface's status. Missing advertised assets fail the request.
 
-Version-4 builds add internal patches with their own grids and methods under the
-same model and frame times. Patches derive both `usable-lift-msl` and
-`usable-lift-agl` on 1 km grids with [terrain columns](science.md#terrain-columns)
-and unsupported-valley terrain-clearance fallback.
-Polygon and output-mask membership select a patch per layer before values are
-read. Selected no-lift and unavailable values remain
-in effect; sampling never falls back to the coarse grid. Halo cells support
-interpolation at the mask edges. Missing advertised patch assets fail the request.
-
-```mermaid
-flowchart LR
-  B[Model build and timeline] --> N[Base grid]
-  B --> P[Polygon patches]
-  N --> S[Select grid by layer and coverage]
-  P --> S
-  S --> M[Composited map tiles]
-  S --> Q[Point values with patchId]
-```
-
-A point value's `patchId` selects its grid, method and ground-reference
-descriptors. One request can combine base MSL or precipitation with refined AGL.
+Retained version-3 builds use one grid. Version-4 builds add polygon patches with
+`patchId`, independent coverage and methods. Both formats keep their existing
+sampling behavior; [regional refinement](../apps/batch/src/refinement/README.md)
+owns their evaluation tooling.
 
 ## Time and retention
 

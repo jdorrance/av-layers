@@ -2,14 +2,18 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
-import type { CoverageMask } from '@av/contracts';
+import type { CoverageMask, ProductDefinition } from '@av/contracts';
 import { buildForecast } from '../apps/batch/src/build.js';
 import type { ForecastProvider } from '../apps/batch/src/provider.js';
 import { normalizedFixtureFrame } from './fixtures/normalized-provider.js';
 import { previewBuild } from './sample-preview.js';
 
+export function offlineFixtureProduct(): ProductDefinition {
+  return { ...OFFLINE_PRODUCT, terrainSubdivisionFactor: undefined };
+}
+
 export async function generateOfflineFixture(out: string, now = Date.now()): Promise<string> {
-  const product = OFFLINE_PRODUCT, cycle = new Date(Math.floor(now / 3600000) * 3600000).toISOString();
+  const product = offlineFixtureProduct(), cycle = new Date(Math.floor(now / 3600000) * 3600000).toISOString();
   const cells = product.grid.width * product.grid.height, tileCount = (4 ** (product.maxNativeZoom + 1) - 1) / 3;
   const output = new Uint8Array(Math.ceil(cells / 8)), tiles = new Uint8Array(Math.ceil(tileCount / 8));
   for (let i = 0; i < cells; i++) output[i >> 3] |= 1 << (i & 7);
@@ -33,7 +37,7 @@ async function main(): Promise<void> {
   console.log(`SYNTHETIC fixture: ${manifestPath}`);
   console.log('No model downloads. Test sample: latitude 40, longitude -100; first-frame rain = 2.75 mm/h.');
   if (values['generate-only']) return;
-  await previewBuild({ manifestPath, persistTo: resolve(values['persist-to'] ?? '.wrangler/fixture-state'), port: Number(values.port ?? 8787), fixture: true, seedOnly: values['seed-only'], reseed: values.reseed });
+  await previewBuild({ manifestPath, persistTo: resolve(values['persist-to'] ?? '.wrangler/fixture-state'), port: Number(values.port ?? 8787), fixture: true, seedOnly: values['seed-only'], reseed: values.reseed, trustedProduct: offlineFixtureProduct() });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

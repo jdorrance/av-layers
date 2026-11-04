@@ -6,6 +6,7 @@ import {
   frameBadge,
   frameTileUrl,
   frameTime,
+  layerMaxZoom,
   matchHostFrame,
   selectExplicitFrame,
   syncTimestampForFrame,
@@ -99,6 +100,7 @@ export class PluginController {
   private activeTiles = new WeakSet<object>();
   private readonly failedTiles = new Set<object>();
   private tileUrl: string | null = null;
+  private tileMaxZoom: number | null = null;
   private timeTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private disposed = false;
@@ -200,14 +202,7 @@ export class PluginController {
         return this.state();
       }
       this.badge = frameBadge(first, hostFrame, hostValue).text;
-      this.tileUrl = frameTileUrl(template, first.id);
-      const tileLayer = this.host.createTileLayer(this.tileUrl, windyTileOptions(build.manifest.coverage.maxZoom, this.opacity, build.manifest.descriptors.attribution));
-      this.layer = tileLayer;
-      tileLayer.on?.('tileloadstart', this.onTileStart);
-      tileLayer.on?.('tileerror', this.onTileError);
-      tileLayer.on?.('tileunload', this.onTileUnload);
-      tileLayer.on?.('tileload', this.onTileLoad);
-      this.host.map.addLayer(tileLayer);
+      this.mountLayer(frameTileUrl(template, first.id), layerMaxZoom(build.manifest, this.layerId));
       // Own the subscription before calling a host that may subscribe and throw.
       this.subscribed = true;
       this.host.store.on('timestamp', this.onTimestamp);
@@ -250,8 +245,24 @@ export class PluginController {
       this.emit();
       return this.state();
     }
+    const template = this.build!.templates[id];
+    if (!template || !this.frameId) {
+      this.message = `No tile template for ${id}`;
+      this.emit();
+      return this.state();
+    }
+    const maxZoom = layerMaxZoom(this.build!.manifest, id);
     this.layerId = id;
-    this.applyUrl();
+    if (maxZoom !== this.tileMaxZoom) {
+      this.clearTileState();
+      this.unmountLayer();
+      try {
+        this.mountLayer(frameTileUrl(template, this.frameId), maxZoom);
+      } catch (error) {
+        this.fail(error instanceof Error ? error.message : String(error));
+        return this.state();
+      }
+    } else this.applyUrl();
     this.message = null;
     this.emit();
     return this.state();
@@ -321,6 +332,32 @@ export class PluginController {
     this.layer.setUrl(url);
   }
 
+  private mountLayer(url: string, maxZoom: number): void {
+    const layer = this.host.createTileLayer(url, windyTileOptions(maxZoom, this.opacity, this.build!.manifest.descriptors.attribution));
+    this.layer = layer;
+    this.tileUrl = url;
+    this.tileMaxZoom = maxZoom;
+    layer.on?.('tileloadstart', this.onTileStart);
+    layer.on?.('tileerror', this.onTileError);
+    layer.on?.('tileunload', this.onTileUnload);
+    layer.on?.('tileload', this.onTileLoad);
+    this.host.map.addLayer(layer);
+  }
+
+  private unmountLayer(): void {
+    const layer = this.layer;
+    this.layer = null;
+    this.tileUrl = null;
+    this.tileMaxZoom = null;
+    if (!layer) return;
+    try {
+      layer.off?.('tileloadstart', this.onTileStart);
+      layer.off?.('tileerror', this.onTileError);
+      layer.off?.('tileunload', this.onTileUnload);
+      layer.off?.('tileload', this.onTileLoad);
+    } finally { this.host.map.removeLayer(layer); }
+  }
+
   private clearTileState(): void {
     this.activeTiles = new WeakSet();
     this.failedTiles.clear();
@@ -352,22 +389,13 @@ export class PluginController {
     this.loadAbort?.abort();
     this.loadAbort = null;
     this.cancelTimeTimer();
-    const layer = this.layer;
-    this.layer = null;
     try {
       if (this.subscribed) {
         this.subscribed = false;
         this.host.store.off?.('timestamp', this.onTimestamp);
       }
     } finally {
-      if (layer) {
-        try {
-          layer.off?.('tileloadstart', this.onTileStart);
-          layer.off?.('tileerror', this.onTileError);
-          layer.off?.('tileunload', this.onTileUnload);
-          layer.off?.('tileload', this.onTileLoad);
-        } finally { this.host.map.removeLayer(layer); }
-      }
+      this.unmountLayer();
     }
   }
 

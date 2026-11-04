@@ -1,7 +1,7 @@
 import z from 'zod';
 import { gridSchema, MAX_GRID_CELLS, prepareGridGeometry, sameGrid, type Grid } from '@av/contracts';
 import { putImmutable } from '../immutable-upload.js';
-import { encodeJson, parseJson, sha256, terrainAssetSchema, terrainCatalogSchema, type TerrainAsset, type TerrainCatalog, type TerrainStorage } from './contract.js';
+import { encodeJson, parseJson, sha256, TERRAIN_BATCH_POINTS, terrainAssetSchema, terrainCatalogSchema, type TerrainAsset, type TerrainCatalog, type TerrainStorage } from './contract.js';
 import { createTerrainReader, type TerrainReadStats } from './reader.js';
 
 export const PREPARED_TERRAIN_METHOD = 'bilinear-native-v1';
@@ -76,19 +76,26 @@ export interface PrepareTerrainOptions {
   storage: TerrainStorage;
   grid: Grid;
   signal?: AbortSignal;
-  limits?: { maxCells?: number; reader?: Parameters<typeof createTerrainReader>[0]['limits'] };
+  limits?: { maxCells?: number; maxDurationMs?: number; reader?: Parameters<typeof createTerrainReader>[0]['limits'] };
   onReport?: (report: TerrainPreparationReport) => void;
 }
 
 /** Prepare DEM elevations at target grid centres once; immutable source/method/grid identity is the cache key. */
 export async function prepareTerrain(options: PrepareTerrainOptions): Promise<PreparedTerrainRef> {
-  const { storage, signal } = options, started = Date.now();
-  signal?.throwIfAborted();
+  const { storage } = options, started = Date.now(), duration = options.limits?.maxDurationMs;
+  if (duration !== undefined && (!Number.isSafeInteger(duration) || duration < 1 || duration > 2_147_483_647)) throw new Error('Invalid terrain preparation deadline');
+  const signal = duration === undefined ? options.signal : options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(duration)]) : AbortSignal.timeout(duration);
+  const checkDeadline = () => {
+    signal?.throwIfAborted();
+    if (duration !== undefined && Date.now() - started >= duration) throw new Error('Terrain preparation deadline exceeded');
+  };
+  checkDeadline();
   const catalog = terrainCatalogSchema.parse(options.catalog), grid = gridSchema.parse(options.grid);
   const cells = grid.width * grid.height, maxCells = options.limits?.maxCells ?? MAX_GRID_CELLS;
   if (!Number.isSafeInteger(maxCells) || maxCells < 1 || maxCells > MAX_GRID_CELLS || cells > maxCells) throw new Error('Prepared terrain cell budget exceeded');
   const prefix = preparationPrefix(catalog.dataId, grid), key = `${prefix}/manifest.json`;
   const existing = await storage.get(key, undefined, PREPARED_DESCRIPTOR_MAX_BYTES, signal);
+  checkDeadline();
   if (existing) {
     const ref = preparedTerrainRefSchema.parse({ key, bytes: existing.bytes.byteLength, sha256: sha256(existing.bytes), arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES });
     const prepared = await readPreparedTerrain(ref, async asset => {
@@ -98,6 +105,7 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
       return result.bytes;
     }, grid, signal);
     if (prepared.descriptor.dataId !== catalog.dataId) throw new Error('Prepared terrain source identity mismatch');
+    checkDeadline();
     options.onReport?.({ cacheHit: true, cells, arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES, elapsedMs: Date.now() - started });
     return ref;
   }
@@ -106,15 +114,23 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
   const reader = await createTerrainReader({ catalog, storage, signal, limits: options.limits?.reader });
   let readerStats: TerrainReadStats | undefined;
   try {
-    for (let index = 0; index < cells; index++) {
-      signal?.throwIfAborted();
-      const point = geometry.gridToGeographic(index % grid.width, Math.floor(index / grid.width));
-      if (!point) continue;
-      const sample = await reader.sample(point.lat, point.lon);
-      if (!sample) continue;
-      view.setFloat32(index * 4, sample.elevationM, true);
-      if (!Number.isFinite(view.getFloat32(index * 4, true))) throw new Error('Terrain elevation exceeds float32 storage');
-      valid[index] = 1;
+    for (let start = 0; start < cells; start += TERRAIN_BATCH_POINTS) {
+      checkDeadline();
+      const points: Array<{ latitude: number; longitude: number }> = [], indices: number[] = [];
+      for (let index = start; index < Math.min(cells, start + TERRAIN_BATCH_POINTS); index++) {
+        const point = geometry.gridToGeographic(index % grid.width, Math.floor(index / grid.width));
+        if (point) { points.push({ latitude: point.lat, longitude: point.lon }); indices.push(index); }
+      }
+      const samples = reader.sampleBatch ? await reader.sampleBatch(points) : [];
+      if (!reader.sampleBatch) for (const point of points) samples.push(await reader.sample(point.latitude, point.longitude));
+      checkDeadline();
+      for (let i = 0; i < samples.length; i++) {
+        const sample = samples[i], index = indices[i];
+        if (!sample) continue;
+        view.setFloat32(index * 4, sample.elevationM, true);
+        if (!Number.isFinite(view.getFloat32(index * 4, true))) throw new Error('Terrain elevation exceeds float32 storage');
+        valid[index] = 1;
+      }
     }
     readerStats = reader.stats();
   } finally { await reader.close(); }
@@ -122,9 +138,13 @@ export async function prepareTerrain(options: PrepareTerrainOptions): Promise<Pr
   const descriptor = descriptorSchema.parse({ version: 1, dataId: catalog.dataId, method: PREPARED_TERRAIN_METHOD, grid, source: catalog.source,
     files: { elevationM: asset('elevation.f32', elevationBytes), valid: asset('valid.u8', valid) } });
   const bytes = encodeJson(descriptor, PREPARED_DESCRIPTOR_MAX_BYTES);
+  checkDeadline();
   await putImmutable(storage, descriptor.files.elevationM.key, elevationBytes, 'application/octet-stream', signal);
+  checkDeadline();
   await putImmutable(storage, descriptor.files.valid.key, valid, 'application/octet-stream', signal);
+  checkDeadline();
   await putImmutable(storage, key, bytes, 'application/json', signal);
+  checkDeadline();
   options.onReport?.({ cacheHit: false, cells, arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES, elapsedMs: Date.now() - started, reader: readerStats });
   return preparedTerrainRefSchema.parse({ key, bytes: bytes.byteLength, sha256: sha256(bytes), arrayBytes: cells * PREPARED_TERRAIN_CELL_BYTES });
 }

@@ -64,6 +64,132 @@ describe('R2 S3 client configuration', () => {
     } finally { send.mockRestore(); }
   });
 
+  it('admits each retry before transferring another response body', async () => {
+    const failed = Readable.from((async function* () { yield Uint8Array.of(99); throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); })());
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: failed } as never);
+    const onRetry = vi.fn(() => { throw new Error('transfer budget exceeded'); });
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2, undefined, onRetry)).rejects.toThrow('transfer budget exceeded');
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledOnce();
+      expect(failed.destroyed).toBe(true);
+      expect(await (send.mock.contexts[0] as S3Client).config.maxAttempts()).toBe(1);
+    } finally { send.mockRestore(); }
+  });
+
+  it.each([
+    Object.assign(new Error('reset'), { code: 'ECONNRESET' }),
+    Object.assign(new Error('timeout'), { name: 'TimeoutError' }),
+    Object.assign(new Error('throttled'), { $metadata: { httpStatusCode: 429 } }),
+    Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } })
+  ])('retries a budgeted transport failure before the body: $message', async failure => {
+    const order: string[] = [];
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementationOnce(async () => { order.push('send'); throw failure; })
+      .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never; });
+    const onRetry = vi.fn(() => { order.push('reserve'); });
+    try {
+      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry);
+      expect([...result!.bytes]).toEqual([1, 2]);
+      expect(order).toEqual(['send', 'reserve', 'send']);
+      expect(await (send.mock.contexts[0] as S3Client).config.maxAttempts()).toBe(1);
+    } finally { send.mockRestore(); }
+  });
+
+  it('shares three attempts across transport and partial-body failures', async () => {
+    const order: string[] = [], failed = Readable.from((async function* () { yield Uint8Array.of(99); throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); })());
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementationOnce(async () => { order.push('send'); throw Object.assign(new Error('reset'), { code: 'ECONNRESET' }); })
+      .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: failed } as never; })
+      .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never; });
+    const onRetry = vi.fn(() => { order.push('reserve'); });
+    try {
+      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry);
+      expect([...result!.bytes]).toEqual([1, 2]);
+      expect(order).toEqual(['send', 'reserve', 'send', 'reserve', 'send']);
+      expect(failed.destroyed).toBe(true);
+    } finally { send.mockRestore(); }
+  });
+
+  it('cancels an HTTP error body before SDK deserialization and retries its status', async () => {
+    const original = S3Client.prototype.send, body = Readable.from([Buffer.alloc(4096)]), order: string[] = [];
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(function (this: S3Client, command, options) {
+      this.config.requestHandler = { handle: async () => {
+        order.push('send');
+        return { response: order.filter(value => value === 'send').length === 1
+          ? { statusCode: 503, headers: { 'content-length': '4096' }, body }
+          : { statusCode: 206, headers: { 'content-length': '2', etag: 'etag' }, body: Readable.from([Uint8Array.of(1, 2)]) } };
+      } } as typeof this.config.requestHandler;
+      return Reflect.apply(original, this, [command, options]) as never;
+    } as typeof S3Client.prototype.send);
+    try {
+      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, () => { order.push('reserve'); });
+      expect([...result!.bytes]).toEqual([1, 2]);
+      expect(order).toEqual(['send', 'reserve', 'send']);
+      expect(body.destroyed).toBe(true);
+      expect(send).toHaveBeenCalledTimes(2);
+    } finally { send.mockRestore(); }
+  });
+
+  it.each(['declared', 'streamed'])('bounds an SDK error body with %s oversize', async kind => {
+    const original = S3Client.prototype.send, body = Readable.from([Buffer.alloc(32)]);
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(function (this: S3Client, command, options) {
+      this.config.requestHandler = { handle: async () => ({ response: { statusCode: 400, headers: kind === 'declared' ? { 'content-length': '32' } : {}, body } }) } as typeof this.config.requestHandler;
+      return Reflect.apply(original, this, [command, options]) as never;
+    } as typeof S3Client.prototype.send);
+    const onRetry = vi.fn();
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('read byte budget');
+      expect(send).toHaveBeenCalledOnce();
+      expect(onRetry).not.toHaveBeenCalled();
+      expect(body.destroyed).toBe(true);
+    } finally { send.mockRestore(); }
+  });
+
+  it('stops after three failed budgeted transport attempts', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }));
+    const onRetry = vi.fn();
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('unavailable');
+      expect(send).toHaveBeenCalledTimes(3);
+      expect(onRetry).toHaveBeenCalledTimes(2);
+    } finally { send.mockRestore(); }
+  });
+
+  it('cancels a budgeted transport retry during backoff', async () => {
+    const controller = new AbortController(), reason = new Error('cancel request');
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('reset'), { code: 'ECONNRESET' }));
+    const onRetry = vi.fn();
+    try {
+      const pending = r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, controller.signal, onRetry);
+      await nextTurn();
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(send).toHaveBeenCalledOnce();
+      expect(onRetry).not.toHaveBeenCalled();
+    } finally { send.mockRestore(); }
+  });
+
+  it.each([403, 404])('does not retry a budgeted HTTP %i response', async status => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('denied'), { $metadata: { httpStatusCode: status }, $retryable: {} }));
+    const onRetry = vi.fn();
+    try {
+      const pending = r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry);
+      if (status === 404) await expect(pending).resolves.toBeNull();
+      else await expect(pending).rejects.toThrow('denied');
+      expect(send).toHaveBeenCalledOnce();
+      expect(onRetry).not.toHaveBeenCalled();
+    } finally { send.mockRestore(); }
+  });
+
+  it('stops before a transport retry when admission fails', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('reset'), { code: 'ECONNRESET' }));
+    const onRetry = vi.fn(() => { throw new Error('transfer budget exceeded'); });
+    try {
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('transfer budget exceeded');
+      expect(send).toHaveBeenCalledOnce();
+      expect(onRetry).toHaveBeenCalledOnce();
+    } finally { send.mockRestore(); }
+  });
+
   it('bounds failed body attempts and preserves the final cause with the object range', async () => {
     const failure = Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
     const bodies: Readable[] = [];
@@ -135,6 +261,17 @@ describe('R2 S3 client configuration', () => {
       expect(send).toHaveBeenCalledTimes(1);
       await expect(store.get('missing')).resolves.toBeNull();
       expect(send).toHaveBeenCalledTimes(2);
+    } finally { send.mockRestore(); }
+  });
+
+  it('preserves object digest metadata on immutable puts and heads', async () => {
+    const metadata = { sha256: 'a'.repeat(64) };
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 2, ETag: 'etag', Metadata: metadata } as never);
+    try {
+      const store = r2Storage({ ...env, R2_BUCKET: 'test' });
+      await store.put('shard', Uint8Array.of(1, 2), { ifNoneMatch: '*' }, 'application/octet-stream', undefined, metadata);
+      expect(send.mock.calls[0][0].input).toMatchObject({ Metadata: metadata, IfNoneMatch: '*' });
+      expect(await store.head('shard')).toEqual({ size: 2, etag: 'etag', metadata });
     } finally { send.mockRestore(); }
   });
 

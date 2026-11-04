@@ -66,6 +66,15 @@ export function createRefinementDescriptors(product: ProductDefinition, bounds: 
   });
 }
 
+export function createWholeDomainDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
+  const base = createProductDescriptors(product), fine = createRefinementDescriptors(product, product.bounds);
+  const layers = product.layers.map(id => fine.layers[id] ?? base.layers[id]);
+  return descriptorSchema.parse({ ...base,
+    layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
+    methods: Object.fromEntries(layers.map(layer => [layer.methodId, fine.methods[layer.methodId] ?? base.methods[layer.methodId]]))
+  });
+}
+
 const timestamp = z.iso.datetime();
 const key = z.string().min(1);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
@@ -120,10 +129,164 @@ export const freshnessSchema = z.object({
   horizonRemainingSeconds: z.number().optional(),
   horizonExhausted: z.boolean().optional()
 });
-export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: manifestSchema.optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
 export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
 export type FreshnessSummary = z.infer<typeof freshnessSchema>;
+
+const safePositive = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const safeNonnegative = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const shardSchema = z.strictObject({
+  firstBlock: safeNonnegative, blockCount: safePositive, storedCells: safePositive,
+  bytes: safePositive.max(64 * 1024 * 1024), key, sha256
+});
+const surfaceV5Schema = z.strictObject({
+  id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
+  coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
+  layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  samples: z.strictObject({
+    format: z.literal('cell-major-block-shards-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE),
+    channelOrder: z.literal('frame-then-layer'), channelCount: safePositive,
+    coverageHash: sha256, blockCount: safePositive, storedCells: safePositive,
+    shards: z.array(shardSchema).min(1)
+  }),
+  terrain: z.strictObject({
+    dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
+    sha256, verticalDatum: z.string().min(1).max(80), surface: z.string().min(1).max(80),
+    gridHash: sha256, coverageHash: sha256, layoutVersion: z.literal(1)
+  }).optional()
+});
+export type ForecastSurfaceV5 = z.infer<typeof surfaceV5Schema>;
+const manifestV5BaseSchema = z.strictObject({
+  version: z.literal(5), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
+  buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
+  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
+  source: manifestSchema.shape.source, tool: manifestSchema.shape.tool, palettes: manifestSchema.shape.palettes, metrics: manifestSchema.shape.metrics
+});
+export const manifestV5Schema = manifestV5BaseSchema.superRefine((manifest, ctx) => {
+  try { validateV5Records(manifest); }
+  catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid v5 manifest' }); }
+});
+export type ManifestV5 = z.infer<typeof manifestV5Schema>;
+export const publishedManifestSchema = z.union([manifestSchema, manifestV5Schema]);
+export type PublishedManifest = z.infer<typeof publishedManifestSchema>;
+export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: publishedManifestSchema.optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
+
+const sampleValueV5Schema = sampleValueSchema.omit({ patchId: true }).extend({ surfaceId: modelIdSchema }).strict();
+export const sampleResponseV5Schema = z.strictObject({
+  version: z.literal(5), model: sampleResponseSchema.shape.model, buildId: sampleResponseSchema.shape.buildId,
+  lat: sampleResponseSchema.shape.lat, lon: sampleResponseSchema.shape.lon, method: methodIdentitySchema,
+  source: manifestSchema.shape.source, expiresAt: sampleResponseSchema.shape.expiresAt,
+  surfaces: z.array(surfaceV5Schema.pick({ id: true, kind: true, layers: true, coverage: true })).min(1).max(2),
+  frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueV5Schema) }))
+}).superRefine((response, ctx) => {
+  const owners = new Map<string, string>(), ids = new Set<string>(), kinds = new Set<string>();
+  for (const surface of response.surfaces) {
+    if (ids.has(surface.id) || kinds.has(surface.kind)) ctx.addIssue({ code: 'custom', message: 'Duplicate surface identity' });
+    ids.add(surface.id); kinds.add(surface.kind);
+    for (const layer of surface.layers) {
+      if (owners.has(layer) || (layer === 'precip-rate' ? surface.kind !== 'native' : surface.kind !== 'fine')) ctx.addIssue({ code: 'custom', message: 'Invalid layer ownership' });
+      owners.set(layer, surface.id);
+    }
+  }
+  for (const frame of response.frames) for (const [layer, value] of Object.entries(frame.layers)) {
+    if (owners.get(layer) !== value.surfaceId) ctx.addIssue({ code: 'custom', message: 'Sample surface does not own layer' });
+  }
+});
+export const publishedSampleResponseSchema = z.union([sampleResponseV5Schema, sampleResponseSchema.extend({ version: z.never().optional() })]);
+
+export function validateArtifactRecordsV5(manifest: ManifestV5): void {
+  validateV5Records(manifestV5BaseSchema.parse(manifest));
+}
+
+function validateV5Records(manifest: ManifestV5): void {
+  const frames = new Set(manifest.frames.map(frame => frame.id)), layers = new Set(manifest.layers);
+  if (frames.size !== manifest.frames.length || layers.size !== manifest.layers.length) throw new Error('Duplicate frames or layers');
+  const channels = manifest.frames.length * manifest.layers.length;
+  if (!Number.isSafeInteger(channels) || channels > manifest.descriptors.maxSampleValues) throw new Error('Sample value budget exceeded');
+  const methods = new Set<string>();
+  for (const layer of manifest.layers) {
+    const descriptor = manifest.descriptors.layers[layer];
+    if (!descriptor || descriptor.id !== layer || !manifest.descriptors.palettes.some(p => p.id === descriptor.palette)) throw new Error('Incomplete product descriptors');
+    methods.add(descriptor.methodId);
+  }
+  if (manifest.method.id !== [...methods].join('+')) throw new Error('Method identity does not match published descriptor snapshots');
+  for (const frame of manifest.frames) {
+    if (Date.parse(frame.intervalStart) > Date.parse(frame.intervalEnd) || Date.parse(frame.validTime) !== Date.parse(frame.intervalEnd)) throw new Error('Invalid frame time support');
+  }
+  const prefix = `builds/${manifest.model}/${manifest.buildId}`;
+  const owned = new Set<LayerId>(), ids = new Set<string>(), kinds = new Set<string>(), keys = new Set<string>();
+  for (const surface of manifest.surfaces) {
+    if (ids.has(surface.id) || kinds.has(surface.kind)) throw new Error('Duplicate surface identity');
+    ids.add(surface.id); kinds.add(surface.kind);
+    if (surface.coverage.gridHash !== surface.gridHash || surface.samples.coverageHash !== surface.coverage.hash
+      || !new RegExp(`^coverage/${surface.coverage.hash}/[a-z0-9][a-z0-9._-]*$`).test(surface.coverage.maskKey)) throw new Error('Coverage identity mismatch');
+    if ((surface.kind === 'fine') !== (surface.terrain !== undefined)) throw new Error('Fine surface requires terrain identity');
+    if (surface.terrain && (surface.terrain.gridHash !== surface.gridHash || surface.terrain.coverageHash !== surface.coverage.hash)) throw new Error('Terrain identity mismatch');
+    let previous = -1;
+    for (const layer of surface.layers) {
+      const index = manifest.layers.indexOf(layer);
+      if (index <= previous || owned.has(layer) || (layer === 'precip-rate' ? surface.kind !== 'native' : surface.kind !== 'fine')) throw new Error('Invalid layer ownership or order');
+      previous = index; owned.add(layer);
+    }
+    const samples = surface.samples, expectedChannels = manifest.frames.length * surface.layers.length;
+    if (samples.channelCount !== expectedChannels) throw new Error('Invalid channel count');
+    const blockSlots = Math.ceil(surface.grid.width / SAMPLE_BLOCK_SIZE) * Math.ceil(surface.grid.height / SAMPLE_BLOCK_SIZE);
+    if (!Number.isSafeInteger(blockSlots) || samples.blockCount > blockSlots) throw new Error('Invalid sample block count');
+    let nextBlock = 0, cells = 0;
+    for (let i = 0; i < samples.shards.length; i++) {
+      const shard = samples.shards[i], bytes = shard.storedCells * expectedChannels * CELL_BYTES;
+      if (shard.firstBlock !== nextBlock || shard.storedCells < shard.blockCount || shard.storedCells > shard.blockCount * (SAMPLE_BLOCK_SIZE + 1) ** 2
+        || !Number.isSafeInteger(bytes) || shard.bytes !== bytes
+        || shard.key !== `${prefix}/surfaces/${surface.id}/samples/${i}.bin` || keys.has(shard.key)) throw new Error('Invalid sample shard');
+      nextBlock += shard.blockCount; cells += shard.storedCells; keys.add(shard.key);
+      if (!Number.isSafeInteger(nextBlock) || !Number.isSafeInteger(cells)) throw new Error('Sample shard arithmetic overflow');
+    }
+    if (nextBlock !== samples.blockCount || cells !== samples.storedCells) throw new Error('Incomplete sample shard ranges');
+  }
+  if (owned.size !== layers.size || manifest.layers.some(layer => !owned.has(layer))) throw new Error('Incomplete layer ownership');
+  if (manifest.artifacts.length !== channels) throw new Error('Invalid artifact count');
+  const combinations = new Set<string>();
+  for (const artifact of manifest.artifacts) {
+    const combination = `${artifact.layer}/${artifact.frame}`;
+    if (!layers.has(artifact.layer) || !frames.has(artifact.frame) || combinations.has(combination)
+      || artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles` || keys.has(artifact.tilesKey)) throw new Error('Invalid artifact record');
+    combinations.add(combination); keys.add(artifact.tilesKey);
+  }
+}
+
+export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding: { grid: ForecastSurfaceV5['grid']; gridHash: string; coverageHash: string; blockIds: ArrayLike<number> }): void {
+  if (!sameGrid(surface.grid, binding.grid) || surface.gridHash !== binding.gridHash || surface.coverage.hash !== binding.coverageHash
+    || surface.samples.blockCount !== binding.blockIds.length) throw new Error('Sample layout identity mismatch');
+  const { width, height, wrapLongitude } = surface.grid, columns = Math.ceil(width / SAMPLE_BLOCK_SIZE), rows = Math.ceil(height / SAMPLE_BLOCK_SIZE);
+  let previous = -1, nextBlock = 0, totalCells = 0;
+  for (const shard of surface.samples.shards) {
+    let cells = 0;
+    const end = shard.firstBlock + shard.blockCount;
+    if (!Number.isSafeInteger(shard.firstBlock) || shard.firstBlock !== nextBlock || !Number.isSafeInteger(shard.blockCount) || shard.blockCount <= 0
+      || !Number.isSafeInteger(end) || end > binding.blockIds.length) throw new Error('Sample block range mismatch');
+    for (let i = shard.firstBlock; i < end; i++) {
+      const id = binding.blockIds[i];
+      if (!Number.isSafeInteger(id) || id <= previous || id >= columns * rows) throw new Error('Invalid sample block order');
+      previous = id;
+      const row = Math.floor(id / columns) * SAMPLE_BLOCK_SIZE, column = (id % columns) * SAMPLE_BLOCK_SIZE;
+      const coreWidth = Math.min(SAMPLE_BLOCK_SIZE, width - column);
+      const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
+      cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
+    }
+    if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * surface.samples.channelCount * CELL_BYTES)
+      || shard.bytes !== cells * surface.samples.channelCount * CELL_BYTES) throw new Error('Sample block size mismatch');
+    nextBlock = end; totalCells += cells;
+  }
+  if (nextBlock !== binding.blockIds.length || totalCells !== surface.samples.storedCells) throw new Error('Incomplete sample block ranges');
+}
+
+export function forecastObjectsV5(manifest: ManifestV5): { key: string; sha256: string; contentType: string }[] {
+  return [
+    ...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, contentType: 'application/octet-stream' }))),
+    ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256, contentType: 'application/vnd.pmtiles' }))
+  ];
+}
 
 /** One numerical surface; every surface inherits the parent model's frame axis. */
 export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'layers' | 'descriptors' | 'method'>;

@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { CoverageError } from './coverage';
-import { countCacheHit, reserveAllocation, boundResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, type WaitContext } from './resources';
+import { countCacheHit, reserveAllocation, boundResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, waitFor, type WaitContext } from './resources';
 
 const IMMUTABLE_TTL = 86400;
 
@@ -96,6 +96,7 @@ export function finish(request: Request, res: Response, expiresAt?: string): Res
 
 export async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>, representation?: string): Promise<Response> {
   ensureLive(expiresAt);
+  request.signal.throwIfAborted();
   if (ctx.responseCacheEnabled === false) {
     if (ctx.metrics) ctx.metrics.responseCache = 'bypass';
     return finish(request, await build(), expiresAt);
@@ -104,7 +105,7 @@ export async function cached(request: Request, expiresAt: string, ctx: WaitConte
   const cacheUrl = new URL(request.url);
   if (representation) cacheUrl.searchParams.set('__representation', representation);
   const key = new Request(cacheUrl, { method: 'GET' });
-  const hit = await cache?.match(key);
+  const hit = cache ? await waitFor(cache.match(key), request.signal, value => { void value?.body?.cancel().catch(() => {}); }) : undefined;
   if (ctx.metrics) ctx.metrics.responseCache = hit ? 'hit' : 'miss';
   if (hit) { countCacheHit(ctx); return finish(request, boundResponse(hit), expiresAt); }
   let result = await build();

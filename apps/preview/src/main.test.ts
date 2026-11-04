@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createProductDescriptors, ICON_EU_PRODUCT, type Manifest } from '@av/contracts';
+import { createProductDescriptors, ICON_EU_PRODUCT, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
@@ -77,6 +77,48 @@ const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
 const sourceId = () => map().layers.get(OVERLAY_LAYER_ID)!.source!;
 function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
+
+function v5Manifest() {
+  const base = fixtureManifest();
+  const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
+  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
+  const prefix = `builds/${base.model}/${base.buildId}`;
+  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
+  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
+  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
+    const blockCount = blocks(gridValue), channelCount = base.frames.length * layers.length;
+    return {
+      id, kind, grid: gridValue, gridHash,
+      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
+      layers,
+      samples: {
+        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
+        channelCount, coverageHash, blockCount, storedCells: blockCount,
+        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
+      },
+      ...(terrain ? { terrain: {
+        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
+        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
+      } } : {})
+    };
+  };
+  return manifestV5Schema.parse({
+    ...rest, version: 5,
+    surfaces: [
+      surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
+      surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
+    ]
+  });
+}
+
+function v5Latest(manifestValue = v5Manifest()) {
+  return latestSchema.parse({
+    pointer: { version: 1, model: manifestValue.model, latestBuildId: manifestValue.buildId, retained: [{ buildId: manifestValue.buildId, manifestKey: `builds/${manifestValue.model}/${manifestValue.buildId}/manifest.json`, cycle: manifestValue.cycle, expiresAt: manifestValue.expiresAt }] },
+    manifest: manifestValue,
+    templates: Object.fromEntries(manifestValue.layers.map(layer => [layer, `https://api.test/tiles/${manifestValue.model}/${manifestValue.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
+    freshness: computeFreshness(manifestValue, Date.parse(manifestValue.createdAt))
+  });
+}
 
 function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
   const event = new Event(name);
@@ -361,4 +403,39 @@ it('keeps the selected forecast without background requests on focus or elapsed 
   doc.dispatchEvent(new Event('visibilitychange'));
   await vi.advanceTimersByTimeAsync(120_000);
   expect(fetchMock).toHaveBeenCalledTimes(1);
+});
+
+it('selects the v5 surface max zoom for each layer and renders a v5 sample with surface ownership', async () => {
+  const published = v5Manifest();
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify(v5Latest(published))));
+  await start();
+  const source = () => map().getSource(sourceId()) as { maxzoom: number; tiles: string[] };
+  expect(source().maxzoom).toBe(9);
+  expect(source().tiles[0]).toContain('/usable-lift-msl/');
+  ui('layer').value = 'precip-rate';
+  ui('layer').dispatchEvent(new Event('change'));
+  expect(source().maxzoom).toBe(7);
+  expect(source().tiles[0]).toContain('/precip-rate/');
+  ui('layer').value = 'usable-lift-agl';
+  ui('layer').dispatchEvent(new Event('change'));
+  expect(source().maxzoom).toBe(9);
+  expect(source().tiles[0]).toContain('/usable-lift-agl/');
+
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+    version: 5, model: published.model, buildId: published.buildId, lat: 32.9, lon: -117.25,
+    method: published.method, source: published.source, expiresAt: published.expiresAt,
+    surfaces: published.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
+    frames: published.frames.map(frame => ({
+      ...frame,
+      layers: Object.fromEntries(published.layers.map(layer => {
+        const surface = published.surfaces.find(item => item.layers.includes(layer))!;
+        return [layer, { value: layer === 'precip-rate' ? 1 : 500, status: 'valid', support: 0, interpolated: false, surfaceId: surface.id }];
+      }))
+    }))
+  })));
+  ui('series-button').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('series').children).toHaveLength(1));
+  expect(ui('series-status').textContent).toContain('coverage gfs-native, gfs-fine');
+  expect(ui('series').children[0].children.some(row => row.children.some(cell => cell.textContent.includes('gfs-fine')))).toBe(true);
 });

@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { deriveLift, ReconstructedProfileWorkspace, type ColumnInput } from './index.js';
 
 function donor(): ColumnInput {
@@ -200,7 +200,7 @@ it('crosses an entering donor jump at its height instead of ramping toward it', 
     { heightM: 3500, temperatureC: 14 }, { heightM: 4000, temperatureC: 11 }
   ] };
   const workspace = new ReconstructedProfileWorkspace(2, 4);
-  expect(workspace.byteLength).toBe(2 * (4 * 16 + 28) + 4 * (4 + 3) * 24);
+  expect(workspace.byteLength).toBe(2 * (4 * 16 + 28) + 4 * (4 + 3) * 58 + 4);
   expect(deriveLift({ ...low, levels: [low.levels[0]!, low.levels[0]!] }, 2).status).toBe('unavailable');
   expect(workspace.admit(0, { ...low, levels: [low.levels[0]!, low.levels[0]!] }, 2)).toBe(false);
   expect(workspace.admit(0, low, 4)).toBe(true);
@@ -236,4 +236,96 @@ it('crosses an entering donor jump at its height instead of ramping toward it', 
     humidity: { specificHumidityKgKg: 0.005 }, sensibleHeatFluxWm2: 200, latentHeatFluxWm2: 0 });
   expect(beforeJump.branch).toBe('parcel-crossing');
   expect(beforeJump.depthM).toBeCloseTo(789.473684, 4);
+});
+
+it('reuses sorted donor knots without changing reconstruction across active sets and support entries', () => {
+  const inputs = [
+    { ...donor(), terrainM: 0, levels: [{ heightM: 500, temperatureC: 17 }, { heightM: 1000, temperatureC: 14 }, { heightM: 1500, temperatureC: 11 }] },
+    { ...donor(), terrainM: 2000, levels: [{ heightM: 2500, temperatureC: 17 }, { heightM: 3000, temperatureC: 14 }, { heightM: 3500, temperatureC: 11 }] }
+  ];
+  const reused = new ReconstructedProfileWorkspace(2, 3);
+  for (let i = 0; i < 2; i++) expect(reused.admit(i, inputs[i]!, 3)).toBe(true);
+  const solve = { surfaceTemperatureC: 21, surfacePressureHpa: 900,
+    humidity: { specificHumidityKgKg: 0.005 }, sensibleHeatFluxWm2: 200, latentHeatFluxWm2: 0 };
+  const cases = [
+    { slots: [0, 1], weights: [0.75, 0.25], height: 0, bridge: 1000 },
+    { slots: [0, 1], weights: [0.5, 0.5], height: 999.999, bridge: 1000 },
+    { slots: [0, 1], weights: [0.25, 0.75], height: 1000, bridge: 1000 },
+    { slots: [0, 1], weights: [0.5, 0.5], height: -1001, bridge: 1000 },
+    { slots: [0, 1], weights: [0.5, 0.5], height: 500, bridge: 1500 },
+    { slots: [0], weights: [1], height: 1000, bridge: 1000 },
+    { slots: [1], weights: [1], height: 2000, bridge: 1000 },
+    { slots: [0, 1], weights: [0.5, 0.5], height: 1499, bridge: 1000 }
+  ];
+  for (const item of cases) {
+    const fresh = new ReconstructedProfileWorkspace(2, 3);
+    for (let i = 0; i < 2; i++) expect(fresh.admit(i, inputs[i]!, 3)).toBe(true);
+    const slots = Uint32Array.from(item.slots), weights = Float64Array.from(item.weights);
+    const expected = fresh.reconstruct(slots, weights, 0, slots.length, item.height, item.bridge);
+    expect(reused.reconstruct(slots, weights, 0, slots.length, item.height, item.bridge)).toBe(expected);
+    expect(reused.failure).toBe(fresh.failure);
+    expect(reused.maximumBelowGroundDepthM).toBe(fresh.maximumBelowGroundDepthM);
+    if (expected) {
+      expect(reused.levelCount).toBe(fresh.levelCount);
+      expect(reused.environmentAtGroundC).toBe(fresh.environmentAtGroundC);
+      expect(reused.surfaceEnvironmentAtGroundC).toBe(fresh.surfaceEnvironmentAtGroundC);
+      expect(reused.solve(solve)).toEqual(fresh.solve(solve));
+    }
+  }
+  reused.reset();
+  expect(reused.admit(0, inputs[0]!, 3)).toBe(true);
+  expect(reused.reconstruct(Uint32Array.of(0), Float64Array.of(1), 0, 1, 0, 1000)).toBe(true);
+});
+
+it('matches reference knot temperatures and support across bridge modes', () => {
+  const workspace = new ReconstructedProfileWorkspace(2, 3);
+  for (let i = 0; i < 2; i++) expect(workspace.admit(i, { ...donor(), terrainM: i * 2000,
+    levels: [500, 1000, 1500].map((heightM, j) => ({ heightM: i * 2000 + heightM, temperatureC: 17 - j * 3 })) }, 3)).toBe(true);
+  const solve = { surfaceTemperatureC: 21, surfacePressureHpa: 900, humidity: { specificHumidityKgKg: 0.005 },
+    sensibleHeatFluxWm2: 200, latentHeatFluxWm2: 0 };
+  const cases = [
+    { height: 0, bridge: 1000, mode: 'neutral' as const, levels: 4, ground: 20, surface: 20,
+      result: { status: 'valid', usableDepthM: 243.10541761262942, branch: 'parcel-crossing', depthM: 263.1578947368423, thermalVelocityMps: 1.180380467927981 } },
+    { height: 1000, bridge: 1000, mode: 'neutral' as const, levels: 1, ground: 21.9, surface: 18.633333333333333,
+      result: { status: 'no-lift', usableDepthM: 0, branch: 'surface-stable', depthM: 0, thermalVelocityMps: 0 } },
+    { height: 1001, bridge: 1000, mode: 'neutral' as const, levels: 1, ground: 21.8921, surface: 18.62978852568379,
+      result: { status: 'no-lift', usableDepthM: 0, branch: 'surface-stable', depthM: 0, thermalVelocityMps: 0 } },
+    { height: 1001, bridge: 1000, mode: 'lowest-layer' as const, levels: 1, ground: 19.994, surface: 17.996666444296196,
+      result: { status: 'valid', usableDepthM: 244.7589598786603, branch: 'parcel-crossing', depthM: 264.7368421052632, thermalVelocityMps: 1.1827365230176934 } },
+    { height: 500, bridge: 1500, mode: 'lowest-layer' as const, levels: 2, ground: 23, surface: 20,
+      result: { status: 'no-lift', usableDepthM: 0, branch: 'surface-stable', depthM: 0, thermalVelocityMps: 0 } }
+  ];
+  for (const item of cases) {
+    expect(workspace.reconstruct(Uint32Array.of(0, 1), Float64Array.of(0.5, 0.5), 0, 2, item.height, item.bridge, item.mode)).toBe(true);
+    expect(workspace.levelCount).toBe(item.levels);
+    expect(workspace.environmentAtGroundC).toBe(item.ground);
+    expect(workspace.surfaceEnvironmentAtGroundC).toBe(item.surface);
+    expect(workspace.solve(solve)).toEqual(item.result);
+  }
+});
+
+it.each(['neutral', 'lowest-layer'] as const)('shares quad knot rows without adding inactive donor knots in %s mode', mode => {
+  const inputs = Array.from({ length: 4 }, (_, i) => ({ ...donor(), terrainM: i * 100,
+    levels: [500, 1000, 1500].map((heightM, j) => ({ heightM: heightM + i * 100, temperatureC: 17 - j * 3 + i })) }));
+  const sets = [[0, 1, 2, 3], [0, 1], [0, 2], [0]];
+  const solve = { surfaceTemperatureC: 21, surfacePressureHpa: 900, humidity: { specificHumidityKgKg: 0.005 },
+    sensibleHeatFluxWm2: 200, latentHeatFluxWm2: 0 };
+  const run = (workspace: ReconstructedProfileWorkspace, set: number[]) => {
+    expect(workspace.reconstruct(Uint32Array.from(set), new Float64Array(set.length).fill(1 / set.length), 0, set.length, 0, 1000, mode)).toBe(true);
+    return { levels: workspace.levelCount, ground: workspace.environmentAtGroundC, surface: workspace.surfaceEnvironmentAtGroundC,
+      result: workspace.solve(solve) };
+  };
+  const make = () => {
+    const workspace = new ReconstructedProfileWorkspace(4, 3);
+    for (let i = 0; i < 4; i++) expect(workspace.admit(i, inputs[i]!, 3)).toBe(true);
+    return workspace;
+  };
+  const expected = sets.map(set => run(make(), set));
+  const reused = make(), sort = vi.spyOn(Float64Array.prototype, 'sort');
+  try {
+    expect(sets.map(set => run(reused, set))).toEqual(expected);
+    expect(sort).toHaveBeenCalledTimes(1);
+  } finally {
+    sort.mockRestore();
+  }
 });

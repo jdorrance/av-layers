@@ -3,8 +3,8 @@ import { setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, 
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { saturationVaporPressureHpa } from '@av/thermodynamics';
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
-import { deriveFrame } from './frame.js';
-import { prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './refinement.js';
+import { deriveFrame, FRAME_BRANCH } from './frame.js';
+import { prepareTerrainClearance, prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './refinement.js';
 
 const grid: RegularLatLonGrid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 1, height: 1,
   lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false };
@@ -135,7 +135,7 @@ it('maps sparse global contributors to compact slots and conserves RH at zero di
   expect(capacity.workspaceBytes).toBe(prepared.workspaceBytes);
   expect(terrainColumnCapacity(4, 1, 3, targetMask.grid).mappingBufferBytes).toBeGreaterThanOrEqual(prepared.byteLength);
   expect(prepared.workspaceBytes).toBe(prepared.workspaceBufferBytes + prepared.workspaceObjectBudgetBytes);
-  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 45) + 4 * (3 + 3) * 24 + 88);
+  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 45) + 4 * (3 + 3) * 58 + 4 + 88);
   const result = prepared.derive(input, terrain(250), day, { daylightOnly: false, probeIndices: [0] });
   expect(result.daylightBufferBytes).toBe(0);
   const probe = result.probes[0]!;
@@ -503,4 +503,82 @@ it.each(['unsupported', 'none'] as const)('preserves a valid column with nonfini
   const unavailable = prepared.derive(input, terrain(-1), day, { daylightOnly: false, clearance: fallback });
   expect(unavailable.fields['usable-lift-agl'].flags[0]! & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
   expect(unavailable.metrics.belowGroundBridgeExceeded).toBe(1);
+});
+
+it.each(['isobaric', 'model-levels'] as const)('matches dense clearance fallback for %s donors and boundary targets', coordinate => {
+  const { input: source, active, sourceMask } = sparseFixture();
+  source.terrainM.fill(1200);
+  source.pressureLevelsHpa = [900, 850, 800];
+  source.hgtM = [1700, 2200, 2700].map(height => new Float32Array(4).fill(height));
+  source.tempK = [286, 282, 278].map(temperature => new Float32Array(4).fill(temperature));
+  const pressure = source.pressureLevelsHpa.map(value => new Float32Array(4).fill(value * 100));
+  const input = coordinate === 'isobaric' ? source : { ...source, pressureLevelsHpa: undefined, pressurePa: pressure,
+    missing: { ...source.missing, pressure: pressure.map(() => new Uint8Array(4)) } };
+  const targetGrid = { ...grid, width: 3, height: 3, lon0: 1, lat0: 1, dx: 0.5, dy: -0.5 };
+  const targetMask: CoverageMask = { grid: targetGrid, output: Uint8Array.of(255, 1), halo: Uint8Array.of(0, 0), tiles: Uint8Array.of(1), maxZoom: 0 };
+  const dem = { elevationM: Float32Array.of(200, 199, -50, 1200, 199, 2700, 199, 200, 0), valid: new Uint8Array(9).fill(1) };
+  const diagnostics = { ceilingMslM: new Float32Array(8), buoyancyM2S3: new Float32Array(8), branch: new Uint8Array(8) };
+  const flags = deriveFrame(input, sourceMask, { daylightOnly: false, diagnostics })['usable-lift-agl']!.flags;
+  const nativeClearance = { validTime: day.validTime, grid: sourceMask.grid, diagnostics, flags };
+  const prepared = prepareTerrainColumns(sourceMask, targetMask, active, 3, { clearanceFallback: 'unsupported' });
+  const dense = prepareTerrainClearance(sourceMask, targetMask);
+  const compare = () => {
+    const fields = dense.derive(diagnostics, flags, dem, day, false);
+    const reference = prepared.derive(input, dem, day, { daylightOnly: false, clearance: {
+      methodId: TERRAIN_CLEARANCE_METHOD.id, validTime: day.validTime, grid: targetGrid, fields
+    }, probeIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8] });
+    const lazy = prepared.derive(input, dem, day, { daylightOnly: false, nativeClearance, probeIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8] });
+    expect(lazy.fields).toEqual(reference.fields);
+    expect(lazy.metrics).toEqual(reference.metrics);
+    expect(lazy.probes).toEqual(reference.probes);
+    return lazy;
+  };
+  const convective = compare();
+  expect(convective.metrics.clearance).toBeGreaterThan(0);
+  expect(convective.metrics.column).toBeGreaterThan(0);
+  expect(convective.metrics.unsupportedHeight).toBe(1);
+  diagnostics.branch[2] = FRAME_BRANCH.nonConvective;
+  diagnostics.ceilingMslM[2] = 1200;
+  diagnostics.buoyancyM2S3[2] = 0;
+  flags[2] = STATUS_NO_LIFT;
+  const mixed = compare();
+  expect(mixed.probes[1]!.reason).toBe('belowGroundBridgeExceeded');
+  expect(mixed.probes[2]!.provenance).toBe('clearance');
+  expect(mixed.probes[4]!.provenance).toBeNull();
+  diagnostics.branch[2] = FRAME_BRANCH.unavailable;
+  diagnostics.ceilingMslM[2] = NaN;
+  flags[2] = STATUS_UNAVAILABLE;
+  const missing = compare();
+  expect(missing.probes[6]!.provenance).toBe('clearance');
+  expect(missing.probes[1]!.provenance).toBeNull();
+  for (const index of active) {
+    diagnostics.branch[index] = FRAME_BRANCH.surfaceStable;
+    diagnostics.ceilingMslM[index] = 1200;
+    diagnostics.buoyancyM2S3[index] = 0;
+    flags[index] = STATUS_NO_LIFT | SUPPORT_PROFILE_TOP;
+  }
+  const stable = compare();
+  expect(stable.fields['usable-lift-agl'].flags[1]).toBe(STATUS_NO_LIFT | SUPPORT_PROFILE_TOP);
+  expect(stable.fields['usable-lift-agl'].values[1]).toBe(0);
+});
+
+it('validates native clearance identity and reads diagnostics only on eligible fallback', () => {
+  const input = frame(), diagnostics = { ceilingMslM: Float32Array.of(3000), buoyancyM2S3: Float32Array.of(1),
+    branch: new Proxy(Uint8Array.of(FRAME_BRANCH.profileTop), { get(target, key) {
+      if (key === '0') throw new Error('diagnostics accessed');
+      return Reflect.get(target, key, target);
+    } }) };
+  const nativeClearance = { validTime: day.validTime, grid, diagnostics, flags: Uint8Array.of(STATUS_VALID) };
+  const prepared = prepareTerrainColumns(mask, mask, input.activeIndices, 5, { clearanceFallback: 'unsupported' });
+  expect(prepared.derive(input, terrain(1000), day, { daylightOnly: false, nativeClearance }).metrics.column).toBe(1);
+  expect(prepared.derive({ ...input, validAt: night.validTime }, terrain(-1), night,
+    { nativeClearance: { ...nativeClearance, validTime: night.validTime }, daylightOnly: true }).metrics.dark).toBe(1);
+  expect(prepareTerrainColumns(mask, mask, input.activeIndices, 5).derive(input, terrain(-1), day,
+    { daylightOnly: false, nativeClearance }).metrics.belowGroundBridgeExceeded).toBe(1);
+  expect(() => prepared.derive(input, terrain(-1), day, { daylightOnly: false, nativeClearance })).toThrow('diagnostics accessed');
+  expect(() => prepared.derive(input, terrain(-1), day, { daylightOnly: false,
+    nativeClearance: { ...nativeClearance, validTime: night.validTime } })).toThrow(/native terrain clearance/);
+  expect(() => prepared.derive(input, terrain(-1), day, { daylightOnly: false,
+    nativeClearance: { ...nativeClearance, grid: { ...grid, lon0: 1 } } })).toThrow(/native terrain clearance/);
+  expect(() => prepared.derive(input, terrain(-1), day, { daylightOnly: false, nativeClearance, clearance: clearance(-1) })).toThrow(/one terrain clearance/);
 });

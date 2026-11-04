@@ -40,18 +40,19 @@ mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
 
 ## Use in forecasts
 
-The [refinement producer](../refinement/README.md) prepares configured grids
-from one pinned global catalog and stages their masks and elevation arrays in
-the build plan artifact. Shards validate and load these files once before
-weather acquisition. Models with no intersecting zones retain native output.
+The [whole-domain producer](../whole-domain/prepare.ts) prepares packed DEM
+values in sparse coverage offset order from a pinned global catalog. The plan
+stages coverage and terrain files; shards validate their identities and load them
+before weather acquisition. [Regional evaluation](../refinement/README.md)
+retains polygon-grid preparation.
 
 [Operations](../../../../docs/operations.md#terrain-data) configures the hosted
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
 covers local builds with `--terrain-catalog-ref PATH`.
 
-The existing `--terrain-ref PATH` option loads a staged native-grid preparation.
-The hosted `terrain-inputs` model map stages equivalent references. These inputs
-keep their own recipe identity and must match the forecast product's grid.
+Legacy native-grid builds accept `--terrain-ref PATH` and the hosted
+`terrain-inputs` model map. Those references keep their own recipe identity and
+must match the forecast product's grid.
 
 ```mermaid
 flowchart LR
@@ -69,7 +70,7 @@ flowchart LR
 - [contract.ts](contract.ts): schemas, digests, and bounds validation.
 - [source.ts](source.ts), [ingest.ts](ingest.ts), [repack.py](repack.py): upstream inventory, resumable R2 import, and COG repacking.
 - [reader.ts](reader.ts): bounded COG range reads, tile seam stitching, and block cache.
-- [prepare.ts](prepare.ts) & [staging.ts](staging.ts): grid resampling and local shard staging.
+- [prepare.ts](prepare.ts), [sparse.ts](sparse.ts), [staging.ts](staging.ts): grid resampling, packed coverage-bound terrain, and local shard staging.
 - [cli.ts](cli.ts) & [local-store.ts](local-store.ts): CLI entry point and filesystem storage backend.
 
 Run tests:

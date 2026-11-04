@@ -24,7 +24,7 @@ import { localPath, sha256 } from './validate.js';
 import { fixturePatch } from '../../../tests/forecast-fixture.js';
 
 class MemoryStore implements ObjectStorage {
-  objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date }>();
+  objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date; metadata?: Record<string, string> }>();
   failKey = '';
   beforePut?: (key: string) => void | Promise<void>;
   headOverride?: (key: string, result: { size: number; etag: string } | null) => { size: number; etag: string } | null;
@@ -37,10 +37,10 @@ class MemoryStore implements ObjectStorage {
   }
   async head(key: string) {
     const object = this.objects.get(key);
-    const result = object ? { size: object.bytes.length, etag: object.etag } : null;
+    const result = object ? { size: object.bytes.length, etag: object.etag, ...(object.metadata ? { metadata: object.metadata } : {}) } : null;
     return this.headOverride ? this.headOverride(key, result) : result;
   }
-  async put(key: string, bytes: Uint8Array, condition: { ifMatch?: string; ifNoneMatch?: '*' }, _contentType?: string, contentMd5?: string) {
+  async put(key: string, bytes: Uint8Array, condition: { ifMatch?: string; ifNoneMatch?: '*' }, _contentType?: string, contentMd5?: string, metadata?: Record<string, string>) {
     if (key === this.failKey) throw new Error('injected failure');
     await this.beforePut?.(key);
     const md5 = createHash('md5').update(bytes).digest();
@@ -50,7 +50,7 @@ class MemoryStore implements ObjectStorage {
     }
     const existing = this.objects.get(key);
     if ((condition.ifNoneMatch && existing) || (condition.ifMatch && existing?.etag !== condition.ifMatch)) throw new Error('precondition failed');
-    this.objects.set(key, { bytes: bytes.slice(), etag: `"${md5.toString('hex')}"`, lastModified: new Date() });
+    this.objects.set(key, { bytes: bytes.slice(), etag: `"${md5.toString('hex')}"`, lastModified: new Date(), ...(metadata ? { metadata: { ...metadata } } : {}) });
   }
   async list(prefix: string): ReturnType<ObjectStorage['list']> { return [...this.objects].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, lastModified: value.lastModified, size: value.bytes.length })); }
   async delete(keys: string[]) { for (const key of keys) this.objects.delete(key); }
@@ -94,6 +94,22 @@ async function addPatch(root: string, manifest: Manifest) {
 }
 
 describe('immutable publication', () => {
+  it('pins the fully computed digest as required immutable metadata', async () => {
+    const store = new MemoryStore(), bytes = Uint8Array.of(1, 2, 3);
+    await putImmutable(store, 'shard', bytes, 'application/octet-stream', undefined, true);
+    expect(store.objects.get('shard')?.metadata).toEqual({ sha256: sha256(bytes) });
+    await expect(putImmutable(store, 'shard', bytes, 'application/octet-stream', undefined, true)).resolves.toBeUndefined();
+    store.objects.get('shard')!.bytes[0] ^= 1;
+    await expect(putImmutable(store, 'shard', bytes, 'application/octet-stream', undefined, true)).rejects.toThrow('hash mismatch');
+  });
+
+  it.each([undefined, { sha256: 'f'.repeat(64) }])('rejects missing or mismatched required digest metadata', async metadata => {
+    const store = new MemoryStore(), bytes = Uint8Array.of(1, 2, 3);
+    await store.put('shard', bytes, { ifNoneMatch: '*' }, undefined, undefined, metadata);
+    await expect(putImmutable(store, 'shard', bytes, 'application/octet-stream', undefined, true)).rejects.toThrow('digest metadata mismatch');
+    await expect(putImmutable(store, 'shard', bytes, 'application/octet-stream')).resolves.toBeUndefined();
+  });
+
   it('publishes every patch before committing the one model pointer and verifies it during rollback', async () => {
     const { root, manifest } = await fixture(), patch = await addPatch(root, manifest), store = new MemoryStore();
     store.beforePut = key => {

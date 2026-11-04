@@ -11,18 +11,20 @@ import {
   isTileCovered,
   latestSchema,
   manifestSchema,
+  publishedManifestSchema,
   modelPointerSchema,
   paletteSchema,
   provenanceSchema,
   sampleResponseSchema,
+  sampleResponseV5Schema,
   type LayerId,
   type ModelId
 } from '@av/contracts';
 import { serveSample } from './sample';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
-import { resolveCoverage, sha256 } from './coverage';
-import { type RequestMetrics, boundResponse, type WaitContext } from './resources';
+import { resolveCoverage, resolveSparseTiles, sha256 } from './coverage';
+import { type RequestMetrics, boundResponse, waitFor, type WaitContext } from './resources';
 import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
 
@@ -81,6 +83,7 @@ const problemResponses = {
   503: { description: 'Publication, coverage, archive or rate limiter unavailable', content: { 'application/problem+json': { schema: problemSchema } } }
 };
 const param = z.string().min(1).max(128);
+const manifestResponseSchema = publishedManifestSchema.meta({ id: 'PublishedManifest' });
 
 function requiredParam(c: Context<Env>, name: string): string {
   const value = c.req.param(name);
@@ -124,6 +127,7 @@ const catalogModelSchema = z.object({
   cycle: z.string().optional(),
   expiresAt: z.string().optional(),
   coverage: manifestSchema.shape.coverage.optional(),
+  surfaces: sampleResponseV5Schema.shape.surfaces.optional(),
   ageSeconds: z.number().optional(),
   freshness: freshnessSchema.optional(),
   error: z.string().optional()
@@ -149,7 +153,7 @@ registerJsonRoute(
             latest: `/v1/models/${model}/latest`,
             cycle: m.cycle,
             expiresAt: m.expiresAt,
-            coverage: m.coverage,
+            ...(m.version === 5 ? { surfaces: m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })) } : { coverage: m.coverage }),
             ageSeconds: freshness.ageSeconds,
             freshness
           };
@@ -169,7 +173,7 @@ registerJsonRoute(
   '/v1/models/{model}/latest',
   { model: param },
   { expand: z.enum(['manifest']).optional() },
-  latestSchema,
+  latestSchema.extend({ manifest: manifestResponseSchema.optional() }),
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
@@ -203,7 +207,7 @@ registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}',
   { model: param, buildId: param },
   {},
-  manifestSchema,
+  manifestResponseSchema,
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
@@ -259,7 +263,7 @@ registerJsonRoute(
           name: `${layer} ${frame}`,
           tiles: [`${url.origin}/tiles/${model}/${m.buildId}/${layer}/${frame}/{z}/{x}/{y}.webp`],
           minzoom: 0,
-          maxzoom: m.coverage.maxZoom,
+          maxzoom: m.version === 5 ? m.surfaces.find(surface => surface.layers.includes(layer))!.coverage.maxZoom : m.coverage.maxZoom,
           bounds: m.descriptors.bounds
         },
         m.expiresAt,
@@ -273,12 +277,14 @@ registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/sample',
   { model: param, buildId: param },
   { lat: z.string(), lon: z.string(), frame: z.string().optional(), layers: z.string().optional() },
-  sampleResponseSchema,
+  z.union([sampleResponseSchema, sampleResponseV5Schema]),
   async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
-    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
-    const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
+    c.req.raw.signal.throwIfAborted();
+    const entry = await waitFor(admit(c.env.BUCKET, model, buildId, c.executionCtx), c.req.raw.signal);
+    c.req.raw.signal.throwIfAborted();
+    const m = await waitFor(manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]), c.req.raw.signal);
     return serveSample(c.req.raw, c.env.BUCKET, c.executionCtx, m, url);
   }
 );
@@ -346,12 +352,15 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
   const z = Number(p.z),
     x = Number(p.x),
     y = Number(p.y);
-  if (!Number.isSafeInteger(z) || z > m.coverage.maxZoom || !Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x >= 2 ** z || y >= 2 ** z) {
+  const surface = m.version === 5 ? m.surfaces.find(item => item.layers.includes(layer))! : undefined;
+  if (!Number.isSafeInteger(z) || z > (surface?.coverage.maxZoom ?? (m.version === 5 ? 0 : m.coverage.maxZoom)) || !Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x >= 2 ** z || y >= 2 ** z) {
     fail(400, 'invalid-tile', 'Tile address out of range');
   }
   return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
-    const { mask } = await resolveCoverage(c.env.BUCKET, m, c.executionCtx);
-    const data = isTileCovered(mask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx) : blank;
+    const tileMask = m.version === 5
+      ? { tiles: (await resolveSparseTiles(c.env.BUCKET, surface!, m.descriptors.bounds, c.executionCtx)).tiles, maxZoom: surface!.coverage.maxZoom }
+      : (await resolveCoverage(c.env.BUCKET, m, c.executionCtx)).mask;
+    const data = isTileCovered(tileMask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx) : blank;
     return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
   });
 });

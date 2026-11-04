@@ -4,12 +4,17 @@ import { dataIdentity } from './contract.js';
 import { prepareTerrain, readPreparedTerrain } from './prepare.js';
 import { TerrainTestStorage, terrainCatalogFixture } from './test-fixtures.js';
 
-const reader = vi.hoisted(() => ({ sample: vi.fn(), close: vi.fn(), open: vi.fn(), stats: () => ({ requests: 1, bytesRead: 100, decodedPixels: 4, outputPixels: 6, cacheHits: 5 }) }));
+const reader = vi.hoisted(() => ({ sample: vi.fn(), sampleBatch: vi.fn(), close: vi.fn(), open: vi.fn(), stats: () => ({ requests: 1, bytesRead: 100, decodedPixels: 4, outputPixels: 6, cacheHits: 5 }) }));
 vi.mock('./reader.js', () => ({ createTerrainReader: async () => { reader.open(); return reader; } }));
 const grid: Grid = { kind: 'regular-latlon', width: 3, height: 2, earthRadiusM: 6371229, lon0: 0.25, lat0: 0.75, dx: 0.25, dy: -0.25, wrapLongitude: false };
 beforeEach(() => {
   vi.clearAllMocks();
   reader.sample.mockImplementation(async (lat: number, lon: number) => lat === 0.5 && lon === 0.75 ? null : { elevationM: 2 * lon + 3 * lat - 10, source: 'dem' });
+  reader.sampleBatch.mockImplementation(async (points: Array<{ latitude: number; longitude: number }>) => {
+    const samples = [];
+    for (const point of points) samples.push(await reader.sample(point.latitude, point.longitude));
+    return samples;
+  });
 });
 
 async function loaded(storage: TerrainTestStorage, ref: Awaited<ReturnType<typeof prepareTerrain>>, target = grid) {
@@ -68,6 +73,16 @@ describe('native terrain preparation', () => {
     reader.sample.mockImplementationOnce(async () => { controller.abort(new Error('cancel preparation')); return null; });
     await expect(prepareTerrain({ catalog, storage, grid, signal: controller.signal })).rejects.toThrow('cancel preparation');
     expect(reader.close).toHaveBeenCalledOnce();
+    expect(storage.objects.size).toBe(0);
+  });
+  it('enforces the preparation deadline during cache lookup', async () => {
+    const storage = new TerrainTestStorage();
+    vi.spyOn(storage, 'get').mockImplementation(async (_key, _range, _max, signal) => {
+      await new Promise<void>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+      return null;
+    });
+    await expect(prepareTerrain({ catalog: terrainCatalogFixture(), storage, grid, limits: { maxDurationMs: 10 } })).rejects.toThrow();
+    expect(reader.open).not.toHaveBeenCalled();
     expect(storage.objects.size).toBe(0);
   });
 });

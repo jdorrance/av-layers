@@ -22,9 +22,9 @@ describe('serving resource bounds', () => {
     const ctx = { waitUntil: vi.fn() };
     const first = reads.run('same', load, ctx), second = reads.run('same', load, ctx);
     await Promise.resolve();
-    expect(first).toBe(second); expect(load).toHaveBeenCalledTimes(1); expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1); expect(ctx.waitUntil).toHaveBeenCalledTimes(1);
     await expect(reads.run('different', async () => 3)).rejects.toThrow('concurrent');
-    release(2); expect(await second).toBe(2);
+    release(2); expect(await Promise.all([first, second])).toEqual([2, 2]);
     await expect(reads.run('bad', async () => { throw new Error('failed'); })).rejects.toThrow('failed');
     expect(await reads.run('bad', async () => 4)).toBe(4);
   });
@@ -204,6 +204,22 @@ it('caps total coalesced waiters across keys and reclaims all permits after comp
   expect(load).toHaveBeenCalledOnce();
   release(7); expect(await Promise.all(admitted)).toEqual(Array(32).fill(7));
   expect(await reads.run('another', async () => 9)).toBe(9);
+});
+
+it('cancels one waiter without aborting the shared owner or its admission', async () => {
+  const reads = new MaterializedReads<number>(1, 15_000, 2), controller = new AbortController();
+  let finish!: (value: number) => void, owner!: AbortSignal;
+  const load = vi.fn((signal: AbortSignal) => { owner = signal; return new Promise<number>(resolve => { finish = resolve; }); });
+  const first = reads.run('same', load, undefined, controller.signal), second = reads.run('same', load);
+  controller.abort();
+  await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+  expect(owner.aborted).toBe(false);
+  await expect(reads.run('other', async () => 1)).rejects.toThrow('concurrent');
+  const replacement = reads.run('same', load);
+  expect(load).toHaveBeenCalledOnce();
+  finish(9);
+  expect(await Promise.all([second, replacement])).toEqual([9, 9]);
+  expect(await reads.run('other', async () => 1)).toBe(1);
 });
 
 

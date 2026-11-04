@@ -6,18 +6,24 @@ browser API client helpers.
 ## Usage
 
 ```ts
-import { manifestSchema, type Manifest } from '@av/contracts';
+import { publishedManifestSchema, type PublishedManifest } from '@av/contracts';
 
-export function parseManifest(json: string): Manifest {
-  return manifestSchema.parse(JSON.parse(json));
+export function parseManifest(json: string): PublishedManifest {
+  return publishedManifestSchema.parse(JSON.parse(json));
 }
 ```
 
-Version 3 describes one numeric grid. Version 4 adds internal patches under the
-same model, build and frame times. `forecastGrids` visits every grid;
-`forecastObjects` lists their numeric packs and one composited tile archive per
-frame/layer. `validateArtifactRecords` checks manifest references;
-`assertCoverageBinding` checks each loaded mask against its grid.
+Version 3 describes one numeric grid; version 4 adds regional patches.
+Version 5 assigns each layer to a native or fine surface with sparse coverage,
+terrain identity and bounded sample shards. [publication.ts](src/publication.ts)
+owns their schemas, artifact enumeration and layout binding. `manifestSchema`
+retains the version-3/version-4 reader; `publishedManifestSchema` admits every
+supported version.
+
+[whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
+positive-weight native donor support. [sparse-coverage.ts](src/sparse-coverage.ts)
+owns block masks and packed offsets; [coverage.ts](src/coverage.ts) binds the
+encoded coverage to its grid and validates its halo.
 
 ## Entry points
 
@@ -37,8 +43,9 @@ frame/layer. `validateArtifactRecords` checks manifest references;
 [gfs.json](config/gfs.json) and [icon-eu.json](config/icon-eu.json) configure
 each model's grid, forecast hours, layers, vertical coordinate, daylight policy,
 and coverage mask; [products.ts](src/products.ts) loads them with
-`defineProduct`. Coverage masks exclude Russia, China, Antarctica, and
-Greenland. [layers.ts](src/layers.ts) defines layer units and palettes,
+`defineProduct`. Coverage masks exclude Africa, Russia, China, Antarctica and
+Greenland. `terrainSubdivisionFactor` configures whole-domain lift grids.
+[layers.ts](src/layers.ts) defines layer units and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.
 See [extensions](../../docs/extensions.md) to add a model or layer.
 

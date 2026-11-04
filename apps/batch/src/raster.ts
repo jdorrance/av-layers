@@ -1,29 +1,31 @@
 import { performance } from 'node:perf_hooks';
 import { compilePaletteColor, LAYERS, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
 import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
-import { MAX_PREPARED_SAMPLES, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, type GridField, type PreparedGridSampling, type Sample } from '@av/forecast';
+import { fieldOffset, MAX_PREPARED_SAMPLES, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, samplingCovered, validateSamplingField, type GridField, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
 
 export interface RasterPixels { rgba: Uint8Array; blank: boolean }
 export interface RasterMetrics {
   geometryBytes: number; peakGeometryBytes: number; geometryHits: number; geometryMisses: number;
   prepareMs: number; rasterMs: number; tiles: number; blankTiles: number;
 }
-export interface RasterPatch {
+export interface RasterPatch<Mask extends SamplingMask = CoverageMask> {
   id: string;
   geometry: RefinementGeometry;
   descriptors: { bounds: GeographicBounds };
   layers: readonly LayerId[];
-  mask: CoverageMask;
+  mask: Mask;
 }
 export type RasterPatchFields = Readonly<Record<string, GridField>>;
 
 /** Each declared layer has a complete field, including unavailable/no-lift cells. */
-export function validateRasterPatchFields(patches: readonly RasterPatch[], layer: LayerId, fields: RasterPatchFields = {}): void {
+export function validateRasterPatchFields(patches: readonly RasterPatch<SamplingMask>[], layer: LayerId, fields: RasterPatchFields = {}): void {
   const expected = patches.filter(patch => patch.layers.includes(layer));
   if (Object.keys(fields).length !== expected.length) throw new RangeError('Raster patch field IDs do not match the declared layer');
   for (const patch of expected) {
-    const field = Object.hasOwn(fields, patch.id) ? fields[patch.id] : undefined, cells = patch.mask.grid.width * patch.mask.grid.height;
-    if (!field || !(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array) || field.values.length !== cells || field.flags.length !== cells) throw new RangeError(`Missing or invalid raster patch field: ${patch.id}`);
+    const field = Object.hasOwn(fields, patch.id) ? fields[patch.id] : undefined;
+    if (!field) throw new RangeError(`Missing or invalid raster patch field: ${patch.id}`);
+    try { validateSamplingField(patch.mask.grid, field, patch.mask); }
+    catch { throw new RangeError(`Missing or invalid raster patch field: ${patch.id}`); }
   }
 }
 
@@ -51,7 +53,7 @@ function axes(z: number, x: number, y: number) {
   }
   return { lats, lons };
 }
-const geometry = (mask: CoverageMask, z: number, x: number, y: number) => { const { lats, lons } = axes(z, x, y); return prepareGridSampling(mask, lats, lons); };
+const geometry = (mask: SamplingMask, z: number, x: number, y: number) => { const { lats, lons } = axes(z, x, y); return prepareGridSampling(mask, lats, lons); };
 
 interface CompositeGeometry {
   byteLength: number;
@@ -66,7 +68,7 @@ function span(axis: Float64Array, low: number, high: number): [number, number] |
   for (let i = 0; i < axis.length; i++) if (axis[i] >= low && axis[i] <= high) { if (first < 0) first = i; end = i + 1; }
   return first < 0 ? null : [first, end];
 }
-function compositeGeometry(mask: CoverageMask, patches: readonly RasterPatch[], covered: readonly ((lat: number, lon: number) => boolean)[], z: number, x: number, y: number): TileGeometry {
+function compositeGeometry(mask: SamplingMask, patches: readonly RasterPatch<SamplingMask>[], covered: readonly ((lat: number, lon: number) => boolean)[], z: number, x: number, y: number): TileGeometry {
   const { lats, lons } = axes(z, x, y), base = prepareGridSampling(mask, lats, lons);
   const windows = patches.flatMap((patch, index) => {
     const [w, s, e, n] = patch.descriptors.bounds, xs = span(lons, w, e), ys = span(lats, s, n);
@@ -150,7 +152,7 @@ function samplePixel(
   return true;
 }
 
-function raster(field: GridField, prepared: TileGeometry, layer: LayerId, palette: PaletteColorTable, patches: readonly RasterPatch[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
+function raster(field: GridField, mask: SamplingMask, prepared: TileGeometry, layer: LayerId, palette: PaletteColorTable, patches: readonly RasterPatch<SamplingMask>[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
   const rgba = new Uint8Array(256 * 256 * 4);
   const base = 'base' in prepared ? prepared.base : prepared;
   const baseInto = base.bind(field, layer);
@@ -167,8 +169,8 @@ function raster(field: GridField, prepared: TileGeometry, layer: LayerId, palett
     };
   }
   const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
-  if (!composite && !base.contributors.some(idx => paletteBinIndex(layer, field.values[idx], field.flags[idx], palette.colorCount) >= 0
-    || noLiftVisible && (field.flags[idx] & STATUS_MASK) === STATUS_NO_LIFT)) {
+  if (!composite && !base.contributors.some(idx => { const offset = fieldOffset(field, idx, mask.grid.width); return paletteBinIndex(layer, field.values[offset], field.flags[offset], palette.colorCount) >= 0
+    || noLiftVisible && (field.flags[offset] & STATUS_MASK) === STATUS_NO_LIFT; })) {
     return { rgba, blank: true };
   }
   const sample: Sample = { value: null, status: 3, support: 0, interpolated: false }, color = new Uint8Array(4);
@@ -180,17 +182,17 @@ function raster(field: GridField, prepared: TileGeometry, layer: LayerId, palett
 }
 
 /** Pure quarter-pixel rasterization: no codec, archive, filesystem or worker dependency. */
-export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, stats: RasterMetrics = {
+export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, stats: RasterMetrics = {
   geometryBytes: 0, peakGeometryBytes: 0, geometryHits: 0, geometryMisses: 0,
   prepareMs: 0, rasterMs: 0, tiles: 0, blankTiles: 0
-}, patches: readonly RasterPatch[] = [], liftInterpolation?: PaletteColorMode) {
+}, patches: readonly RasterPatch<SamplingMask>[] = [], liftInterpolation?: PaletteColorMode) {
   if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError('Invalid raster geometry budget');
   const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
   if (patches.length) {
     parseRefinementConfig({ type: 'FeatureCollection', features: patches.map(patch => ({ type: 'Feature', id: patch.id, properties: {}, geometry: patch.geometry })) });
     for (const patch of patches) if (!patch.layers.length || new Set(patch.layers).size !== patch.layers.length || patch.layers.some(layer => !Object.hasOwn(LAYERS, layer)) || patch.mask.maxZoom !== mask.maxZoom) throw new RangeError('Invalid raster patch layers or zoom');
   }
-  const covered = patches.length ? [mask, ...patches.map(patch => patch.mask)].map(prepareCoverageTester) : [];
+  const covered = patches.length ? [mask, ...patches.map(patch => patch.mask)].map(item => 'coverage' in item ? (lat: number, lon: number) => samplingCovered(item, lat, lon) : prepareCoverageTester(item)) : [];
   const cache = new Map<string, TileGeometry>();
   function prepared(z: number, x: number, y: number) {
     const key = `${z}/${x}/${y}`, found = cache.get(key);
@@ -213,7 +215,7 @@ export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, 
 
   function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patchFields?: RasterPatchFields) {
     if (patches.length || patchFields) validateRasterPatchFields(patches, layer, patchFields);
-    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, plan, layer, palettes[LAYERS[layer].palette], patches, patchFields);
+    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, mask, plan, layer, palettes[LAYERS[layer].palette], patches, patchFields);
     stats.rasterMs += performance.now() - started; stats.tiles++;
     if (result.blank) stats.blankTiles++;
     return result;
@@ -226,7 +228,7 @@ export function createRasterizer(mask: CoverageMask, budget = 24 * 1024 * 1024, 
   };
 }
 
-export function renderTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number, liftInterpolation?: PaletteColorMode): Uint8Array {
+export function renderTileRgba(field: GridField, mask: SamplingMask, layer: LayerId, z: number, x: number, y: number, liftInterpolation?: PaletteColorMode): Uint8Array {
   const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
-  return raster(field, geometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
+  return raster(field, mask, geometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
 }

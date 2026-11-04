@@ -37,7 +37,8 @@ vi.mock('./gfs/acquire.js', async () => {
 
 import { acquireGfsFrame, createGfsAcquisitionSession } from './gfs/acquire.js';
 import { discoverGfsRun } from './gfs/discover.js';
-import { buildProduct } from './build.js';
+import { buildForecast } from './build.js';
+import { getForecastProvider } from './providers.js';
 import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
 import * as validateModule from './validate.js';
@@ -101,7 +102,9 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
   vi.mocked(acquireGfsFrame).mockImplementation(async options => acquire(options.hour));
   const out = await mkdtemp(join(tmpdir(), 'av-build-test-'));
   temp.push(out);
-  const path = await buildProduct('gfs', { out, cycle, cacheDir: join(out, 'cache'), onValidated });
+  const nativeProduct = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined };
+  const path = await buildForecast({ out, cycle, cacheDir: join(out, 'cache'), onValidated, product: nativeProduct,
+    mask: await coverageModule.loadCoverage(nativeProduct), provider: getForecastProvider('gfs') });
   return JSON.parse((await readFile(path)).toString()) as Manifest;
 }
 
@@ -127,7 +130,8 @@ describe('build sample acquisition intervals', () => {
     const cacheDir = join(out, 'cache');
     vi.mocked(discoverGfsRun).mockResolvedValue({ cycle: noMs(0) } as Awaited<ReturnType<typeof discoverGfsRun>>);
     vi.mocked(acquireGfsFrame).mockImplementation(async options => frame(options.hour));
-    await buildProduct('gfs', { out, cacheDir });
+    const nativeProduct = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined };
+    await buildForecast({ out, cacheDir, product: nativeProduct, mask: await coverageModule.loadCoverage(nativeProduct), provider: getForecastProvider('gfs') });
     expect(discoverGfsRun).toHaveBeenCalledWith({ cacheDir });
     expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ cacheDir }));
   });

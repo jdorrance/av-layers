@@ -29,6 +29,7 @@ export interface ProductDefinition {
   readonly coverageId: string;
   readonly maxNativeZoom: number;
   readonly supportHaloCells: number;
+  readonly terrainSubdivisionFactor?: number;
   readonly frameHours: readonly number[];
   readonly intervalHours: number;
   readonly layers: readonly LayerId[];
@@ -57,6 +58,7 @@ const productConfigSchema = z.object({
     intervalHours: z.number().finite().positive()
   }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour'),
   freshness: z.object({ maxCycleAgeHours: z.number().positive(), minHorizonHours: z.number().nonnegative() }).readonly(),
+  terrainSubdivisionFactor: z.number().int().positive().max(64).optional(),
   coverage: z.object({
     id: identifier, description: z.string().min(1),
     west: z.number().min(-180).max(180), south: z.number().min(-90).max(90),
@@ -78,6 +80,7 @@ export function defineProduct(raw: unknown): ProductDefinition {
     grid: config.grid, coverageId: config.coverage.id,
     maxNativeZoom: config.coverage.maxNativeZoom,
     supportHaloCells: config.coverage.interpolationHaloCells,
+    ...(config.terrainSubdivisionFactor === undefined ? {} : { terrainSubdivisionFactor: config.terrainSubdivisionFactor }),
     frameHours: config.forecast.hours, intervalHours: config.forecast.intervalHours,
     layers: config.layers, capabilities: config.capabilities
   });

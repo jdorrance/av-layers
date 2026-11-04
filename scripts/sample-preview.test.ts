@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { MODEL_IDS, getProduct, manifestSchema, sampleResponseSchema, setBit, type CoverageMask } from '@av/contracts';
+import { MODEL_IDS, getProduct, manifestSchema, manifestV5Schema, sampleResponseSchema, setBit, createSparseCoverage, encodeSparseCoverage, canonicalGridJson, type CoverageMask, type ManifestV5 } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { readCoverage, writeCoverage } from '../apps/batch/src/coverage.js';
 import { createSamplePackBuilder } from '../apps/batch/src/sample-pack.js';
 import { fixturePatch } from '../tests/forecast-fixture.js';
-import { generateOfflineFixture } from './dev-fixture.js';
+import { generateOfflineFixture, offlineFixtureProduct } from './dev-fixture.js';
 import { openLocalPreviewStore, seedLocalBuild, type LocalPreviewStore } from './sample-preview.js';
 
 const temporary: string[] = [];
@@ -34,7 +34,7 @@ async function fixture() {
   await cp(base, root, { recursive: true });
   const manifestPath = join(root, relativeManifest), persistTo = join(root, 'state');
   const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
-  return { root, manifest, manifestPath, persistTo };
+  return { root, manifest, manifestPath, persistTo, trustedProduct: offlineFixtureProduct() };
 }
 
 async function refinedFixture() {
@@ -60,6 +60,62 @@ async function refinedFixture() {
   local.manifest = manifestSchema.parse({ ...local.manifest, version: 4, patches: [patch] });
   await writeFile(local.manifestPath, JSON.stringify(local.manifest));
   return local;
+}
+
+async function v5Fixture() {
+  const local = await fixture(), base = local.manifest, outputRoot = local.root;
+  const gridHash = createHash('sha256').update(canonicalGridJson(base.grid)).digest('hex');
+  const output = new Uint8Array(32), halo = new Uint8Array(32); output[0] = 1; setBit(halo, 1); setBit(halo, 16); setBit(halo, 17);
+  const coverage = createSparseCoverage({ width: base.grid.width, height: base.grid.height, wrapLongitude: base.grid.wrapLongitude, gridHash,
+    blockIds: Uint32Array.of(0), offsets: Uint32Array.of(0, 4), output, halo });
+  const sparse = encodeSparseCoverage(coverage), tiles = new Uint8Array(Math.ceil(((4 ** (base.coverage.maxZoom + 1) - 1) / 3) / 8)); tiles[0] = 1;
+  const descriptor = Buffer.from(JSON.stringify({ version: 2, id: base.coverage.id, grid: base.grid, gridHash, bounds: base.descriptors.bounds,
+    policy: 'fixture', maxZoom: base.coverage.maxZoom, supportHaloCells: 1, sampleLayout: { format: 'cell-major-block-shards-v1', blockSize: 16 },
+    files: { sparse: { bytes: sparse.length, sha256: createHash('sha256').update(sparse).digest('hex') },
+      tiles: { bytes: tiles.length, sha256: createHash('sha256').update(tiles).digest('hex') } } }));
+  const coverageHash = createHash('sha256').update(descriptor).digest('hex'), coveragePrefix = `coverage/${coverageHash}`;
+  const coverageDir = join(outputRoot, coveragePrefix);
+  await mkdir(coverageDir, { recursive: true });
+  await writeFile(join(coverageDir, 'manifest.json'), descriptor);
+  await writeFile(join(coverageDir, 'sparse.bin'), sparse);
+  await writeFile(join(coverageDir, 'tiles.bin'), tiles);
+  const elevation = Uint8Array.of(0, 0, 0, 0), valid = Uint8Array.of(1);
+  const terrainDataId = 'd'.repeat(64), terrainChunk = `terrain/prepared/${'e'.repeat(64)}`;
+  const terrainManifest = Buffer.from(JSON.stringify({ version: 2, dataId: terrainDataId, grid: base.grid, gridHash, coverageHash, layoutVersion: 1, cells: 1,
+    files: { elevationM: [{ key: `${terrainChunk}/elevation-0.f32`, bytes: elevation.length, sha256: createHash('sha256').update(elevation).digest('hex') }],
+      valid: [{ key: `${terrainChunk}/valid-0.u8`, bytes: valid.length, sha256: createHash('sha256').update(valid).digest('hex') }] } }));
+  const terrainSha = createHash('sha256').update(terrainManifest).digest('hex'), terrainKey = `terrain/prepared/${terrainSha}/manifest.json`;
+  const terrainDir = join(outputRoot, `terrain/prepared/${terrainSha}`);
+  await mkdir(terrainDir, { recursive: true });
+  await writeFile(join(outputRoot, terrainKey), terrainManifest);
+  await mkdir(join(outputRoot, terrainChunk), { recursive: true });
+  await writeFile(join(outputRoot, `${terrainChunk}/elevation-0.f32`), elevation);
+  await writeFile(join(outputRoot, `${terrainChunk}/valid-0.u8`), valid);
+  const surface = (id: 'native' | 'fine', layers: ManifestV5['layers']) => {
+    const channelCount = base.frames.length * layers.length, bytes = Buffer.alloc(channelCount * 5, 1);
+    const shard = { firstBlock: 0, blockCount: 1, storedCells: 1, bytes: bytes.byteLength,
+      sha256: createHash('sha256').update(bytes).digest('hex'), key: `builds/${base.model}/${base.buildId}/surfaces/${id}/samples/0.bin` };
+    return { id, kind: id, grid: base.grid, gridHash,
+      coverage: { id: base.coverage.id, hash: coverageHash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: base.coverage.maxZoom, gridHash }, layers,
+      samples: { format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const, channelCount,
+        coverageHash, blockCount: 1, storedCells: 1, shards: [shard] },
+      ...(id === 'fine' ? { terrain: { dataId: terrainDataId, key: terrainKey, sha256: terrainSha, verticalDatum: 'EGM2008', surface: 'DSM',
+        gridHash, coverageHash, layoutVersion: 1 as const } } : {}), bytes };
+  };
+  const native = surface('native', ['precip-rate']), fine = surface('fine', ['usable-lift-msl', 'usable-lift-agl']);
+  for (const current of [native, fine]) {
+    const path = join(outputRoot, current.samples.shards[0]!.key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, current.bytes);
+  }
+  const { bytes: _native, ...nativeSurface } = native, { bytes: _fine, ...fineSurface } = fine;
+  const manifest = manifestV5Schema.parse({ version: 5, descriptors: base.descriptors, recipe: base.recipe, model: base.model, buildId: base.buildId,
+    cycle: base.cycle, createdAt: base.createdAt, expiresAt: base.expiresAt, method: base.method, frames: base.frames, layers: base.layers,
+    artifacts: base.artifacts, source: base.source, tool: base.tool, palettes: base.palettes, metrics: base.metrics,
+    surfaces: [nativeSurface, fineSurface] });
+  await writeFile(local.manifestPath, JSON.stringify(manifest));
+  const validate = async () => ({ root: outputRoot, manifest });
+  return { ...local, manifest, outputRoot, validate, coveragePrefix, terrainKey, terrainChunk, shardKey: fineSurface.samples.shards[0]!.key };
 }
 
 function memoryStore() {
@@ -99,6 +155,26 @@ describe('offline fixture and local seeding', () => {
     expect(memory.writes.at(-2)).toBe(relativeManifest);
     expect(memory.writes.at(-1)).toBe('catalog/gfs/latest.json');
     expect(JSON.parse(Buffer.from(memory.objects.get('catalog/gfs/latest.json')!.bytes).toString()).latestBuildId).toBe(local.manifest.buildId);
+  });
+
+  it('rejects an unknown recipe instead of reporting record-only validation', async () => {
+    const local = await fixture(), memory = memoryStore();
+    await expect(seedLocalBuild({ ...local, trustedProduct: undefined }, memory.open)).rejects.toThrow('Unsupported local build recipe or model');
+    expect(memory.open).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing coverage', 'corrupt coverage', 'missing provenance', 'corrupt provenance', 'missing samples', 'corrupt samples', 'missing pmtiles', 'corrupt pmtiles'] as const)('rejects %s before opening local R2 with a trusted fixture product', async problem => {
+    const local = await fixture(), memory = memoryStore(), provenance = local.manifest.source.provenanceKey as string, artifact = local.manifest.artifacts[0];
+    if (problem === 'missing coverage') await rm(join(local.root, `coverage/${local.manifest.coverage.hash}/output.bin`));
+    if (problem === 'corrupt coverage') await writeFile(join(local.root, `coverage/${local.manifest.coverage.hash}/output.bin`), Uint8Array.of(0));
+    if (problem === 'missing provenance') await rm(join(local.root, provenance));
+    if (problem === 'corrupt provenance') await writeFile(join(local.root, provenance), 'corrupt');
+    if (problem === 'missing samples') await rm(join(local.root, local.manifest.samples.key));
+    if (problem === 'corrupt samples') await writeFile(join(local.root, local.manifest.samples.key), 'corrupt');
+    if (problem === 'missing pmtiles') await rm(join(local.root, artifact.tilesKey));
+    if (problem === 'corrupt pmtiles') await writeFile(join(local.root, artifact.tilesKey), 'corrupt');
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow();
+    expect(memory.open).not.toHaveBeenCalled();
   });
 
   it('reuses verified objects, repairs missing dependencies even with a marker, and rewrites the pointer', async () => {
@@ -180,6 +256,33 @@ describe('offline fixture and local seeding', () => {
     else { patch.descriptors.bounds[0] -= 0.001; await writeFile(local.manifestPath, JSON.stringify(local.manifest)); }
     await expect(seedLocalBuild(local, memory.open)).rejects.toThrow(/ENOENT|bitset|binding/);
     expect(memory.open).not.toHaveBeenCalled();
+  });
+
+  it('seeds v5 coverage, terrain, sample shards, PMTiles and provenance before the pointer', async () => {
+    const local = await v5Fixture(), memory = memoryStore();
+    const result = await seedLocalBuild(local, memory.open, local.validate);
+    expect(result.manifest.version).toBe(5);
+    for (const key of [`${local.coveragePrefix}/manifest.json`, `${local.coveragePrefix}/sparse.bin`, `${local.coveragePrefix}/tiles.bin`,
+      local.terrainKey, `${local.terrainChunk}/elevation-0.f32`, `${local.terrainChunk}/valid-0.u8`, local.shardKey,
+      ...local.manifest.artifacts.map(artifact => artifact.tilesKey), local.manifest.source.provenanceKey!]) {
+      expect(memory.objects.has(key)).toBe(true);
+      expect(memory.writes.indexOf(key)).toBeLessThan(memory.writes.indexOf(relativeManifest));
+    }
+    expect(memory.writes.at(-1)).toBe('catalog/gfs/latest.json');
+    expect(memory.writes.at(-2)).toBe(relativeManifest);
+    for (const key of [...memory.objects.keys()]) expect(memory.objects.get(key)!.customMetadata.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each(['missing coverage', 'corrupt coverage', 'missing terrain', 'corrupt terrain', 'corrupt shard'] as const)('rejects v5 %s before opening local R2 or writing the pointer', async problem => {
+    const local = await v5Fixture(), memory = memoryStore();
+    if (problem === 'missing coverage') await rm(join(local.outputRoot, `${local.coveragePrefix}/sparse.bin`));
+    if (problem === 'corrupt coverage') await writeFile(join(local.outputRoot, `${local.coveragePrefix}/sparse.bin`), Uint8Array.of(9));
+    if (problem === 'missing terrain') await rm(join(local.outputRoot, `${local.terrainChunk}/elevation-0.f32`));
+    if (problem === 'corrupt terrain') await writeFile(join(local.outputRoot, local.terrainKey), 'corrupt');
+    if (problem === 'corrupt shard') await writeFile(join(local.outputRoot, local.shardKey), 'corrupt');
+    await expect(seedLocalBuild(local, memory.open, local.validate)).rejects.toThrow();
+    expect(memory.open).not.toHaveBeenCalled();
+    expect(memory.objects.has('catalog/gfs/latest.json')).toBe(false);
   });
 
   it('serves a fine-zone sample through the real local Worker after seeding a v4 build', async () => {
