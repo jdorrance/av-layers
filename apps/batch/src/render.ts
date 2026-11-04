@@ -6,7 +6,7 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
-import { RASTER_TILE_SIZE, MAX_TILE_BYTES, expectedTiles, LAYERS, type CoverageMask, type LayerId } from '@av/contracts';
+import { RASTER_TILE_SIZE, MAX_TILE_BYTES, expectedTiles, LAYERS, type CoverageMask, type LayerId, type PaletteInterpolation } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import { createRasterizer, renderTileRgba, type RasterPatch, type RasterPatchFields } from './raster.js';
 export { mercatorPoint, renderTileRgba } from './raster.js';
@@ -27,6 +27,7 @@ export interface RendererOptions {
   rasterWorkers?: number;
   signal?: AbortSignal;
   patches?: readonly RasterPatch[];
+  liftInterpolation?: PaletteInterpolation;
 }
 
 /** One immutable coverage mask per build session; reuse across all frames and layers. */
@@ -44,7 +45,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
     tiles: 0, blankTiles: 0, peakPendingTiles: 0, peakPendingTileBytes: 0,
     rasterWorkers, workerStarts: 0, workerStartupMs: 0, peakSharedInputBytes: 0
   };
-  const rasterizer = createRasterizer(mask, budget, stats, options.patches);
+  const rasterizer = createRasterizer(mask, budget, stats, options.patches, options.liftInterpolation);
   const binary = process.env.PMTILES_BIN || fileURLToPath(new URL('../../../.tools/pmtiles', import.meta.url));
   let toolChecked = false, blankEncoded: Promise<Buffer> | undefined;
 
@@ -99,7 +100,7 @@ export function createRenderer(mask: CoverageMask, options: RendererOptions = {}
       if (rasterWorkers) {
         rasterizer.clearGeometry();
         const workerMetrics = new Map<number, RasterMetrics>(), started = performance.now();
-        pool = await createRasterPool(mask, targets, { patches: options.patches, workers: rasterWorkers, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, onMetrics(worker, metrics) {
+        pool = await createRasterPool(mask, targets, { patches: options.patches, liftInterpolation: options.liftInterpolation, workers: rasterWorkers, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, onMetrics(worker, metrics) {
           const before = workerMetrics.get(worker);
           for (const key of ['geometryHits', 'geometryMisses', 'prepareMs', 'rasterMs', 'tiles', 'blankTiles'] as const) stats[key] += metrics[key] - (before?.[key] ?? 0);
           workerMetrics.set(worker, metrics);

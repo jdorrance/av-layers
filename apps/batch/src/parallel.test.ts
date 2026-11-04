@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { GFS_PRODUCT, manifestSchema, setBit, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { GFS_PRODUCT, LIFT_RENDER_STYLE, liftRenderStyle, manifestSchema, PALETTES, setBit, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
@@ -300,6 +300,9 @@ describe('forecast hour-group builds', () => {
     expect(manifest.layers).toEqual(serial.layers);
     expect(manifest.descriptors).toEqual(serial.descriptors);
     expect(manifest.method).toEqual(serial.method);
+    expect(manifest.tool.liftRenderStyle).toBe(serial.tool.liftRenderStyle);
+    expect(manifest.tool.liftRenderStyle).toBe(liftRenderStyle(PALETTES.lift.interpolation));
+    expect(manifest.tool.liftRenderStyle).toBe(LIFT_RENDER_STYLE);
     expect(manifest.samples.channelCount).toBe(12);
     expect(await readFile(localPath(out, manifest.samples.key))).toEqual(await readFile(localPath(serialRoot, serial.samples.key)));
     expect(manifest.artifacts.map(({ layer, frame }) => ({ layer, frame }))).toEqual(serial.artifacts.map(({ layer, frame }) => ({ layer, frame })));

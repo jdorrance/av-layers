@@ -415,7 +415,7 @@
                                 "type": "string"
                               },
                               "maxZoom": {
-                                "maximum": 8,
+                                "maximum": 9,
                                 "minimum": 0,
                                 "type": "integer"
                               }
@@ -742,7 +742,7 @@
                               "type": "string"
                             },
                             "maxZoom": {
-                              "maximum": 8,
+                              "maximum": 9,
                               "minimum": 0,
                               "type": "integer"
                             }
@@ -1037,6 +1037,13 @@
                                     "minLength": 1,
                                     "type": "string"
                                   },
+                                  "interpolation": {
+                                    "enum": [
+                                      "step",
+                                      "linear-rgb"
+                                    ],
+                                    "type": "string"
+                                  },
                                   "noLiftColor": {
                                     "type": "string"
                                   },
@@ -1324,7 +1331,7 @@
                                     "type": "string"
                                   },
                                   "maxZoom": {
-                                    "maximum": 8,
+                                    "maximum": 9,
                                     "minimum": 0,
                                     "type": "integer"
                                   }
@@ -1609,6 +1616,13 @@
                                         },
                                         "id": {
                                           "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "interpolation": {
+                                          "enum": [
+                                            "step",
+                                            "linear-rgb"
+                                          ],
                                           "type": "string"
                                         },
                                         "noLiftColor": {
@@ -2677,7 +2691,7 @@
                           "type": "string"
                         },
                         "maxZoom": {
-                          "maximum": 8,
+                          "maximum": 9,
                           "minimum": 0,
                           "type": "integer"
                         }
@@ -2972,6 +2986,13 @@
                                 "minLength": 1,
                                 "type": "string"
                               },
+                              "interpolation": {
+                                "enum": [
+                                  "step",
+                                  "linear-rgb"
+                                ],
+                                "type": "string"
+                              },
                               "noLiftColor": {
                                 "type": "string"
                               },
@@ -3259,7 +3280,7 @@
                                 "type": "string"
                               },
                               "maxZoom": {
-                                "maximum": 8,
+                                "maximum": 9,
                                 "minimum": 0,
                                 "type": "integer"
                               }
@@ -3544,6 +3565,13 @@
                                     },
                                     "id": {
                                       "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "interpolation": {
+                                      "enum": [
+                                        "step",
+                                        "linear-rgb"
+                                      ],
                                       "type": "string"
                                     },
                                     "noLiftColor": {
@@ -4765,7 +4793,7 @@
                           "type": "string"
                         },
                         "maxZoom": {
-                          "maximum": 8,
+                          "maximum": 9,
                           "minimum": 0,
                           "type": "integer"
                         }
@@ -5080,6 +5108,13 @@
                     },
                     "id": {
                       "minLength": 1,
+                      "type": "string"
+                    },
+                    "interpolation": {
+                      "enum": [
+                        "step",
+                        "linear-rgb"
+                      ],
                       "type": "string"
                     },
                     "noLiftColor": {

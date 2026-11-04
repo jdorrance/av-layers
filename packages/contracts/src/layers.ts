@@ -13,17 +13,26 @@ export type SampleStatus = z.infer<typeof sampleStatusSchema>;
 
 export const LIFT_EDGES = [0,300,600,900,1200,1500,1850,2150,2450,2750,3050,3350,3650,3950,4250,4550,4900,5200,5500,5800,6100,6400,6700] as const;
 export const LIFT_COLORS = ['#55184d','#b93b88','#8f7fac','#62cbff','#0168ff','#00345d','#036d00','#35cd34','#9dff64','#fefa02','#cbc939','#d59b99','#d3595a','#f92d2d','#9b0900','#d87400','#ffa50b','#f1cd5d','#a6a7a9','#516565','#1c4f4f','#003333'] as const;
-export const LIFT_RENDER_STYLE = 'transparent-no-lift-v2' as const;
+export const LIFT_STEP_RENDER_STYLE = 'transparent-no-lift-v2' as const;
+export const LIFT_RENDER_STYLE = 'continuous-lift-rgb-v1' as const;
 export const RAIN_EDGES = [0.1,0.5,1,2,5,10,20,50] as const;
 export const RAIN_COLORS = ['#b9e5ff','#66b3ff','#2d78d2','#36a657','#f0dc43','#f09b32','#dc493c','#963f9c'] as const;
-export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_COLORS, units: 'm', noLiftColor: '#00000000' }, rain: { id: 'rain', edges: RAIN_EDGES, colors: RAIN_COLORS, units: 'mm/h', transparentBelow: 0.1, provisional: true } } as const;
+export const PALETTE_INTERPOLATIONS = ['step', 'linear-rgb'] as const;
+export type PaletteInterpolation = typeof PALETTE_INTERPOLATIONS[number];
+export function paletteInterpolation(palette: object | null | undefined): PaletteInterpolation {
+  return palette != null && 'interpolation' in palette && palette.interpolation === 'linear-rgb' ? 'linear-rgb' : 'step';
+}
+export function liftRenderStyle(interpolation: PaletteInterpolation | undefined): typeof LIFT_RENDER_STYLE | typeof LIFT_STEP_RENDER_STYLE {
+  return interpolation === 'linear-rgb' ? LIFT_RENDER_STYLE : LIFT_STEP_RENDER_STYLE;
+}
+export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_COLORS, units: 'm', noLiftColor: '#00000000', interpolation: 'linear-rgb' }, rain: { id: 'rain', edges: RAIN_EDGES, colors: RAIN_COLORS, units: 'mm/h', transparentBelow: 0.1, provisional: true } } as const;
 
 
 export const PALETTE_IDS = Object.keys(PALETTES) as (keyof typeof PALETTES)[];
 export const paletteIdSchema = z.enum(PALETTE_IDS);
 export type PaletteId = z.infer<typeof paletteIdSchema>;
 
-export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional() });
+export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional(), interpolation: z.enum(PALETTE_INTERPOLATIONS).optional() });
 export const layerDescriptorSchema = z.object({
   id: layerIdSchema, kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
   verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface']), timeSupport: z.enum(['interval-mean', 'interval-flux-endpoint-profile']),

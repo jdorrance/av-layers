@@ -13,7 +13,7 @@ export interface ForecastProvider {
   maxLevels: number;
   /** Cached Float32 value/Uint8 mask pairs retained alongside each normalized frame. */
   retainedGeometryFields?: number;
-  open(options: { cycle?: string; activeIndices: Uint32Array; cacheDir: string; signal?: AbortSignal }): Promise<ForecastSession>;
+  open(options: { cycle?: string; activeIndices: Uint32Array; cacheDir: string; signal?: AbortSignal; readOnlyCache?: boolean; offline?: boolean }): Promise<ForecastSession>;
 }
 
 export type ResolvableForecastProvider = ForecastProvider & {

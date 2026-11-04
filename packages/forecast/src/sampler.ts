@@ -30,25 +30,41 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
   if ((fa & fb & fc & fd & STATUS_MASK) === STATUS_NO_LIFT) {
     out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
   }
+  const left = 1 - fx, top = 1 - fy;
+  let w00 = top * left, w10 = top * fx, w01 = fy * left, w11 = fy * fx;
+  if (spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0) {
+    const na = (fa & STATUS_MASK) === STATUS_NO_LIFT, nb = (fb & STATUS_MASK) === STATUS_NO_LIFT;
+    const nc = (fc & STATUS_MASK) === STATUS_NO_LIFT, nd = (fd & STATUS_MASK) === STATUS_NO_LIFT;
+    const noLiftWeight = (na ? w00 : 0) + (nb ? w10 : 0) + (nc ? w01 : 0) + (nd ? w11 : 0);
+    if (noLiftWeight > 0.5) {
+      out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
+    }
+    if (!spec.zeroOnNoLiftInterpolation) {
+      const validWeight = 1 - noLiftWeight;
+      w00 = na ? 0 : w00 / validWeight;
+      w10 = nb ? 0 : w10 / validWeight;
+      w01 = nc ? 0 : w01 / validWeight;
+      w11 = nd ? 0 : w11 / validWeight;
+    }
+  }
   if (spec.zeroOnNoLiftInterpolation) {
     if (fa & STATUS_NO_LIFT) va = 0;
     if (fb & STATUS_NO_LIFT) vb = 0;
     if (fc & STATUS_NO_LIFT) vc = 0;
     if (fd & STATUS_NO_LIFT) vd = 0;
   }
-  const left = 1 - fx, top = 1 - fy;
   let value = 0;
-  value += va * (top * left);
-  value += vb * (top * fx);
-  value += vc * (fy * left);
-  value += vd * (fy * fx);
+  value += va * w00;
+  value += vb * w10;
+  value += vc * w01;
+  value += vd * w11;
   out.value = value; out.status = STATUS_VALID;
   return true;
 }
 
 function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: LayerSpec, out: Sample): void {
   const { values, flags, weights, rows, columns } = cells;
-  let missing = false, finite = true, allNoLift = true, support = 0;
+  let missing = false, finite = true, allNoLift = true, support = 0, noLiftWeight = 0;
   for (let i = 0; i < count; i++) {
     const flag = flags[i], status = flag & STATUS_MASK;
     if ((!spec.supportsNoLift && status === STATUS_NO_LIFT) || (!spec.supportsLiftFlags && (flag & SUPPORT_MASK) !== 0)) {
@@ -57,6 +73,7 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
     missing ||= status >= STATUS_UNAVAILABLE;
     finite &&= Number.isFinite(values[i]);
     allNoLift &&= status === STATUS_NO_LIFT;
+    if (status === STATUS_NO_LIFT) noLiftWeight += weights[i];
     support |= flag & SUPPORT_MASK;
   }
   if (missing) {
@@ -79,9 +96,18 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
     return;
   }
   out.support = support; out.interpolated = true;
-  if (spec.supportsNoLift && allNoLift) { out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return; }
+  if (spec.supportsNoLift && (allNoLift || noLiftWeight > 0.5)) { out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return; }
+  const renormalizeMsl = spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation && count === 4 && noLiftWeight > 0;
+  const validWeight = 1 - noLiftWeight;
   let value = 0;
-  for (let i = 0; i < count; i++) value += (spec.zeroOnNoLiftInterpolation && (flags[i] & STATUS_MASK) === STATUS_NO_LIFT ? 0 : values[i]) * weights[i];
+  for (let i = 0; i < count; i++) {
+    const isNoLift = (flags[i] & STATUS_MASK) === STATUS_NO_LIFT;
+    if (renormalizeMsl) {
+      value += isNoLift ? 0 : values[i] * (weights[i] / validWeight);
+    } else {
+      value += (spec.zeroOnNoLiftInterpolation && isNoLift ? 0 : values[i]) * weights[i];
+    }
+  }
   out.value = value; out.status = STATUS_VALID;
 }
 

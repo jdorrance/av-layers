@@ -2,7 +2,7 @@ import { availableParallelism } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import type { CoverageMask, LayerId } from '@av/contracts';
+import type { CoverageMask, LayerId, PaletteInterpolation } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import { validateRasterPatchFields, type RasterMetrics, type RasterPixels, type RasterPatch, type RasterPatchFields } from './raster.js';
 export type { RasterMetrics, RasterPixels } from './raster.js';
@@ -27,7 +27,7 @@ export function rasterWorkerCount(cpus = availableParallelism()): number {
   if (!Number.isSafeInteger(cpus) || cpus < 1) throw new RangeError('Invalid available CPU count');
   return cpus === 1 ? 0 : Math.min(MAX_RASTER_WORKERS, cpus);
 }
-export interface RasterWorkerData { mask: CoverageMask; fields: GridField[]; layers: LayerId[]; geometryCacheBytes: number; patches: RasterPatch[]; patchFields: RasterPatchFields[] }
+export interface RasterWorkerData { mask: CoverageMask; fields: GridField[]; layers: LayerId[]; geometryCacheBytes: number; patches: RasterPatch[]; patchFields: RasterPatchFields[]; liftInterpolation?: PaletteInterpolation }
 export interface RasterJob { id: number; field: number; z: number; x: number; y: number }
 export interface RasterResult extends RasterPixels { id: number; metrics: RasterMetrics }
 
@@ -40,6 +40,7 @@ export async function createRasterPool(mask: CoverageMask, targets: readonly { f
   workers: number; geometryCacheBytes: number; maxPending: number; signal?: AbortSignal;
   onMetrics?: (worker: number, metrics: RasterMetrics) => void;
   patches?: readonly RasterPatch[];
+  liftInterpolation?: PaletteInterpolation;
 }) {
   const { workers: count, maxPending, geometryCacheBytes, signal } = options;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_RASTER_WORKERS || !Number.isSafeInteger(maxPending) || maxPending < 1 || maxPending > 32
@@ -79,7 +80,7 @@ export async function createRasterPool(mask: CoverageMask, targets: readonly { f
   try {
     await Promise.all(Array.from({ length: count }, (_, index) => new Promise<void>((resolve, reject) => {
       initialization.push(reject);
-      const data: RasterWorkerData = { mask: sharedMask, fields, layers: targets.map(target => target.layer), geometryCacheBytes: Math.floor(geometryCacheBytes / count), patches: sharedPatches, patchFields };
+      const data: RasterWorkerData = { mask: sharedMask, fields, layers: targets.map(target => target.layer), geometryCacheBytes: Math.floor(geometryCacheBytes / count), patches: sharedPatches, patchFields, liftInterpolation: options.liftInterpolation };
       const worker = new Worker('import("node:worker_threads").then(async ({workerData}) => { const {tsImport} = await import(workerData.loader); await tsImport(workerData.entry, workerData.entry); })', {
         eval: true, resourceLimits: { ...RASTER_WORKER_RESOURCE_LIMITS },
         workerData: { ...data, loader: pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href, entry: new URL('./raster-worker.ts', import.meta.url).href }

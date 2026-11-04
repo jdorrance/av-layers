@@ -46,6 +46,18 @@ describe('bounded per-frame raster workers', () => {
     expect(workers.metrics().peakGeometryBytes).toBeLessThanOrEqual(180_000);
   }, 20_000);
 
+  it('keeps worker lift interpolation identical to inline for step and linear-rgb modes', async () => {
+    const { mask, targets } = fixture(), target = targets[0];
+    for (const mode of ['step', 'linear-rgb'] as const) {
+      const inline = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: mode }).renderTileRgba(target.field, target.layer, 1, 0, 0);
+      const pool = await createRasterPool(mask, [target], { workers: 1, geometryCacheBytes: 120_000, maxPending: 1, liftInterpolation: mode });
+      try {
+        const result = await pool.render(0, 0, 1, 0, 0);
+        expect(Buffer.from(result.rgba).equals(Buffer.from(inline)), mode).toBe(true);
+      } finally { await pool.close(); }
+    }
+  }, 20_000);
+
   it('propagates worker sampling errors, settles admitted work and closes the pool', async () => {
     const { mask, targets } = fixture(); targets[2].field.values[0] = NaN;
     const pool = await createRasterPool(mask, [targets[2]], { workers: 2, geometryCacheBytes: 120_000, maxPending: 2 });

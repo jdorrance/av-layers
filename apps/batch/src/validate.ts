@@ -36,9 +36,15 @@ export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, m
   return validatedResult(root, manifest);
 }
 
-export async function fileSha256(path: string): Promise<string> {
+export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINITY): Promise<string> {
+  if (maxBytes !== Number.POSITIVE_INFINITY && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) throw new RangeError('Invalid file hash budget');
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  let bytes = 0;
+  for await (const chunk of createReadStream(path, Number.isFinite(maxBytes) ? { end: maxBytes } : undefined)) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw new RangeError(`File hash byte budget exceeded: ${path}`);
+    hash.update(chunk);
+  }
   return hash.digest('hex');
 }
 

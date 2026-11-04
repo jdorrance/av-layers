@@ -32,6 +32,11 @@ parcel crossing, unresolved profile cap, surface-stable, non-convective and unav
 support. `buoyancyM2S3` records `w*³ / depth`, including convective columns below
 the usable-lift cutoff. Diagnostics preserve the published layer values.
 
+`deriveSelectedFrameDiagnostics(frame, sourceIndices)` computes diagnostics and
+flags for selected global source indices. Its full-grid buffers feed terrain
+clearance at sparse targets; `bufferBytes` counts their typed storage. Callers
+apply daylight gating when deriving target clearance.
+
 ## Entry points
 
 - [`@av/forecast/frame`](src/frame.ts): `deriveFrame` whole-grid calculation.
@@ -61,6 +66,38 @@ convective-column support to publish both `usable-lift-msl` and
 `usable-lift-agl`; mixed convective and non-convective neighbors are unavailable.
 See [terrain clearance](../../docs/science.md#terrain-clearance)
 for the calculation, daylight rules and vertical references.
+
+## Terrain-column evaluation
+
+`prepareTerrainColumns` compiles compact donor slots and returns a per-frame
+`derive` operation for DEM elevations. [terrain-column.ts](src/terrain-column.ts)
+owns surface transfer, pressure and humidity closure, failure counters and probes.
+The solver-owned [workspace](../soaring/src/column.ts) validates native donors
+and merges their breakpoints into an environmental profile above each fine cell.
+
+`byteLength` counts retained mapping buffers. `workspaceBufferBytes` and
+`daylightBufferBytes` count typed-array storage; `workspaceObjectBudgetBytes`
+estimates JavaScript overhead. Returned field buffers and preparation temporaries
+have separate lifetimes. Measure full-process RSS before production promotion.
+
+The [evaluation command](../../apps/batch/src/refinement/README.md#evaluation)
+compares donor-ground surface-anomaly transfer against stored clearance and
+native columns. Production uses `prepareTerrainClearance`. Terrain-column
+promotion requires observational, support-preservation and resource gates.
+
+Surface excess is evaluated at each donor's native terrain and interpolated with
+the original horizontal weights. Environmental weights are renormalized among
+height-supported donors. Support-entry knots retain their one-sided temperature
+limits in the reconstructed profile.
+
+`clearanceFallback: 'unsupported'` accepts same-frame
+`clearance: { methodId, validTime, grid, fields }` in `derive` for an unsupported
+valley column. `methodId` must equal `TERRAIN_CLEARANCE_METHOD.id`.
+Fallback-only probes identify a legacy height estimate and leave local
+thermodynamic state unknown. Invalid native observations and atmospheric-top
+limits retain their availability checks.
+Callers supply clearance computed from the exact `NormalizedFrame`; evaluation
+verifies matching cycle, intervals and raw-source hashes.
 
 See [data](../../docs/data.md) for units and status flags.
 

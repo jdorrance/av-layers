@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
-import { GFS_PRODUCT } from '@av/contracts';
+import { GFS_PRODUCT, LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, liftRenderStyle } from '@av/contracts';
 import { sha256 } from './terrain/contract.js';
 import { buildIdentity, readProducerSourceState } from './identity.js';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
@@ -62,4 +62,37 @@ it('pins resolved polygon, grid and DEM references while keeping the scientific 
   expect(otherTerrain.scienceHash).toBe(refined.scienceHash);
   expect(otherGeometry.scienceHash).toBe(refined.scienceHash);
   expect(refined.scienceHash).not.toBe(baseline.scienceHash);
+});
+
+async function sourceFixture(interpolation: 'step' | 'linear-rgb'): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'av-render-identity-')), git = promisify(execFile);
+  for (const directory of ['apps/batch/src', 'packages/contracts/src', 'packages/contracts/config', 'packages/forecast/src', 'packages/soaring/src', 'packages/solar/src', 'packages/thermodynamics/src']) {
+    await mkdir(join(root, directory), { recursive: true });
+  }
+  await writeFile(join(root, 'packages/contracts/src/layers.ts'), `export const liftInterpolation = '${interpolation}';\n`);
+  for (const model of ['gfs', 'icon-eu']) await writeFile(join(root, `packages/contracts/config/${model}.json`), '{}\n');
+  await writeFile(join(root, 'apps/batch/pmtiles.json'), '{}\n');
+  await writeFile(join(root, 'pnpm-lock.yaml'), 'lock\n');
+  await writeFile(join(root, 'package.json'), '{}\n');
+  await writeFile(join(root, 'tsconfig.json'), '{}\n');
+  await git('git', ['init', '--quiet'], { cwd: root });
+  await git('git', ['add', '-A'], { cwd: root });
+  await git('git', ['-c', 'user.name=Source test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture'], { cwd: root });
+  return root;
+}
+
+it('changes the render recipe for a lift interpolation source change while science identity holds', async () => {
+  const step = await sourceFixture('step'), linear = await sourceFixture('linear-rgb');
+  try {
+    const coverageHash = 'a'.repeat(64);
+    const stepIdentity = await buildIdentity(GFS_PRODUCT, coverageHash, undefined, [], step);
+    const linearIdentity = await buildIdentity(GFS_PRODUCT, coverageHash, undefined, [], linear);
+    expect(stepIdentity.components.contracts).not.toBe(linearIdentity.components.contracts);
+    expect(stepIdentity.components.science).toBe(linearIdentity.components.science);
+    expect(stepIdentity.recipe.hash).not.toBe(linearIdentity.recipe.hash);
+    expect(stepIdentity.scienceHash).toBe(linearIdentity.scienceHash);
+    expect(liftRenderStyle('step')).toBe(LIFT_STEP_RENDER_STYLE);
+    expect(liftRenderStyle('linear-rgb')).toBe(LIFT_RENDER_STYLE);
+    expect(liftRenderStyle('step')).not.toBe(liftRenderStyle('linear-rgb'));
+  } finally { await Promise.all([rm(step, { recursive: true, force: true }), rm(linear, { recursive: true, force: true })]); }
 });

@@ -14,7 +14,8 @@ import {
   deriveLift,
   type ColumnDerivationOptions,
   type ColumnInput,
-  type DepthBranch
+  type DepthBranch,
+  type LiftResult
 } from '@av/soaring';
 
 export interface ColumnResult {
@@ -39,14 +40,17 @@ export function deriveColumn(
   levelCount: number,
   options?: ColumnDerivationOptions
 ): ColumnResult {
-  const result = deriveLift(input, levelCount, options);
+  return columnResult(input.terrainM, deriveLift(input, levelCount, options));
+}
+
+export function columnResult(terrainM: number, result: LiftResult): ColumnResult {
   const status = result.status === 'unavailable'
     ? STATUS_UNAVAILABLE
     : result.status === 'no-lift' ? STATUS_NO_LIFT : STATUS_VALID;
   const flags = status | supportFlags[result.branch];
   const msl = result.status === 'unavailable'
     ? null
-    : result.status === 'no-lift' ? input.terrainM : input.terrainM + result.usableDepthM;
+    : result.status === 'no-lift' ? terrainM : terrainM + result.usableDepthM;
   return {
     msl: { value: msl, flags },
     agl: { value: result.usableDepthM, flags },

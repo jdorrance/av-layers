@@ -331,15 +331,27 @@ describe('read-only worker', () => {
       expect(result.status).toBe(200);
       const text = await result.text(), etag = `"${createHash('sha256').update(text).digest('hex')}"`;
       expect(result.headers.get('etag')).toBe(etag);
-      if (extension === 'json') expect(JSON.parse(text)).toMatchObject({ noLiftColor: '#00000000' });
-      else {
+      if (extension === 'json') {
+        expect(JSON.parse(text)).toMatchObject({ noLiftColor: '#00000000', interpolation: 'linear-rgb' });
+        const legacy = JSON.parse(text) as Record<string, unknown>;
+        delete legacy.interpolation;
+        const legacyEtag = `"${createHash('sha256').update(JSON.stringify(legacy)).digest('hex')}"`;
+        expect(result.headers.get('etag')).not.toBe(legacyEtag);
+      } else {
         expect(text).toContain('font-size="12"');
-        expect(text).toContain('fill="#00000000"/><text x="32" y="545">no usable lift (transparent)</text>');
+        expect(text).toContain('<linearGradient id="palette-gradient"');
+        expect(text).toContain('stop-color="rgb(135,42,107)"');
+        expect(text).toContain('>0 m</text>');
+        expect(text).toContain('>≥ 6400 m</text>');
+        expect(text).toContain('no usable lift (transparent)');
       }
       expect((await call(path, { headers: { 'if-none-match': etag } })).status).toBe(304);
       const rain = await call(`/v1/palettes/rain.${extension}`, { headers: { 'if-none-match': '"palette-rain-v2"' } });
       expect(rain.status).toBe(200);
-      expect(rain.headers.get('etag')).toBe(`"${createHash('sha256').update(await rain.text()).digest('hex')}"`);
+      const rainText = await rain.text();
+      expect(rain.headers.get('etag')).toBe(`"${createHash('sha256').update(rainText).digest('hex')}"`);
+      if (extension === 'json') expect(JSON.parse(rainText)).not.toHaveProperty('interpolation');
+      else expect(rainText).toContain('&lt; 0.1 mm/h (transparent)');
     }
   });
   it('uses immutable palette descriptors for retained builds', async () => {

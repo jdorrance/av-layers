@@ -1,7 +1,9 @@
 import {
   getBit,
+  gridSchema,
   LAYER_IDS,
   LIFT_METHOD_PARAMETERS,
+  MAX_GRID_CELLS,
   PRECIPITATION_METHOD_PARAMETERS,
   STATUS_NO_LIFT,
   STATUS_OUTSIDE,
@@ -19,10 +21,10 @@ import {
   type ColumnDerivationOptions
 } from './science.js';
 import type { GridField } from './sampler.js';
-import type { NormalizedFrame } from './inputs.js';
+import { validateNormalizedFrame, type NormalizedFrame } from './inputs.js';
 import type { DepthBranch } from '@av/soaring';
+import { createNativeColumnScratch, readNativeColumn } from './column-input.js';
 
-const { kelvinOffset: KELVIN_OFFSET, pascalsPerHectopascal: PA_PER_HPA } = LIFT_METHOD_PARAMETERS;
 
 export interface FrameDiagnostics {
   readonly ceilingMslM: Float32Array;
@@ -152,6 +154,38 @@ function writeColumnDiagnostics(
   diagnostics.branch[index] = code;
 }
 
+export function deriveSelectedFrameDiagnostics(frame: NormalizedFrame, sourceIndices: Uint32Array): {
+  diagnostics: FrameDiagnostics; flags: Uint8Array; bufferBytes: number;
+} {
+  const grid = gridSchema.parse(frame.grid), cells = grid.width * grid.height;
+  if (!Number.isSafeInteger(cells) || cells > MAX_GRID_CELLS || !(sourceIndices instanceof Uint32Array) || !sourceIndices.length ||
+      !(frame.activeIndices instanceof Uint32Array) || !frame.activeIndices.length) throw new RangeError('Invalid selected frame dimensions');
+  const active = frame.activeIndices;
+  for (let i = 0; i < active.length; i++) {
+    if (active[i]! >= cells || (i > 0 && active[i]! <= active[i - 1]!)) throw new RangeError('Invalid frame active indices');
+  }
+  const levelCount = frame.pressurePa?.length ?? frame.pressureLevelsHpa?.length ?? 0;
+  validateNormalizedFrame(frame, active, grid, levelCount, ['usable-lift-agl']);
+  for (let i = 0; i < sourceIndices.length; i++) {
+    const index = sourceIndices[i]!;
+    if (index >= cells || (i > 0 && index <= sourceIndices[i - 1]!)) throw new RangeError('Invalid selected source indices');
+    let lo = 0, hi = active.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (active[mid]! < index) lo = mid + 1; else hi = mid; }
+    if (active[lo] !== index) throw new RangeError('Selected source index is not active');
+  }
+  const diagnostics: FrameDiagnostics = { ceilingMslM: new Float32Array(cells), buoyancyM2S3: new Float32Array(cells), branch: new Uint8Array(cells) };
+  resetDiagnostics(diagnostics);
+  const flags = new Uint8Array(cells).fill(STATUS_OUTSIDE), scratch = createNativeColumnScratch(levelCount);
+  for (const index of sourceIndices) {
+    let lo = 0, hi = active.length;
+    while (lo < hi) { const mid = (lo + hi) >>> 1; if (active[mid]! < index) lo = mid + 1; else hi = mid; }
+    const count = readNativeColumn(frame, lo, scratch), lift = deriveColumn(scratch, count);
+    flags[index] = lift.agl.flags;
+    writeColumnDiagnostics(diagnostics, index, scratch.terrainM, lift.branch, lift.depthM, lift.thermalVelocityMps);
+  }
+  return { diagnostics, flags, bufferBytes: diagnostics.ceilingMslM.byteLength + diagnostics.buoyancyM2S3.byteLength + diagnostics.branch.byteLength + flags.byteLength };
+}
+
 const buildDaylightTimestampsMs = (frame: NormalizedFrame): readonly number[] => {
   if (typeof frame.validAt !== 'string') {
     return [];
@@ -208,10 +242,7 @@ export function deriveFrame(
     missing[i] ? NaN : values[i];
 
   const totalLevels = frame.pressurePa !== undefined ? frame.pressurePa.length : frame.pressureLevelsHpa.length;
-  const levels = Array.from({ length: totalLevels }, () => ({
-    heightM: NaN,
-    temperatureC: NaN
-  }));
+  const column = createNativeColumnScratch(totalLevels);
 
   const daylightOnly = options?.daylightOnly ?? true;
   const minimumSolarElevationDeg =
@@ -254,43 +285,9 @@ export function deriveFrame(
     }
 
     if (requiresLift) {
-      const pressure =
-        read(frame.surfacePressurePa, frame.missing.surfacePressure, i) / PA_PER_HPA;
-      let levelCount = 0;
-      for (let j = 0; j < totalLevels; j++) {
-        const p = frame.pressurePa !== undefined
-          ? read(frame.pressurePa[j], frame.missing.pressure[j], i) / PA_PER_HPA
-          : frame.pressureLevelsHpa[j];
-        const heightM = read(frame.hgtM[j]!, frame.missing.hgt[j]!, i);
-        const validPressure = Number.isFinite(p) && p > 0;
-        if ((validPressure && p >= pressure) || (Number.isFinite(heightM) && heightM <= terrain)) {
-          continue;
-        }
-        const level = levels[levelCount++]!;
-        // Unknown pressure cannot establish a below-ground level or bridge a missing observation.
-        level.heightM = validPressure ? heightM : NaN;
-        level.temperatureC = read(frame.tempK[j]!, frame.missing.temp[j]!, i) - KELVIN_OFFSET;
-      }
+      const levelCount = readNativeColumn(frame, i, column);
       const lift = deriveColumn(
-        {
-          terrainM: terrain,
-          surfaceTemperatureC: read(frame.temp2mK, frame.missing.temp2m, i) - KELVIN_OFFSET,
-          surfacePressureHpa: pressure,
-          humidity: {
-            specificHumidityKgKg: read(
-              frame.specificHumidity2mKgKg,
-              frame.missing.humidity2m,
-              i
-            )
-          },
-          sensibleHeatFluxWm2: read(
-            frame.sensibleHeatFluxWm2,
-            frame.missing.sensibleHeatFlux,
-            i
-          ),
-          latentHeatFluxWm2: read(frame.latentHeatFluxWm2, frame.missing.latentHeatFlux, i),
-          levels
-        },
+        column,
         levelCount,
         options
       );

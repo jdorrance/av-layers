@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, open, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -5,8 +6,9 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
 import { expectedTiles, paletteColor, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
-import { QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
+import { prepareSamplePackLayout, QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
 import { createRenderer, mercatorPoint, renderArchive, renderTile, renderTileRgba } from './render.js';
+import { createSamplePackBuilder } from './sample-pack.js';
 import { validateArchive } from './validate.js';
 import { decodeWebp } from './webp.js';
 import * as codec from './webp.js';
@@ -67,6 +69,33 @@ describe('rendered WebP and PMTiles fixtures', () => {
       const field: GridField = { values: new Float32Array([0.2, 1, 0.2, 1]), flags: new Uint8Array(4) };
       expect(pixel(await decodeWebp(await renderPartial(field, mask, 'precip-rate', 5, 16, 16)), 30, 30)).toEqual([170, 0, 85, 96]);
     } finally { vi.doUnmock('@av/contracts'); vi.resetModules(); }
+  });
+
+  it('renders identical lift inputs through step and linear-rgb modes without changing numeric pack bytes', async () => {
+    const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
+    for (let i = 0; i < 4; i++) setBit(mask.output, i);
+    const lift: GridField = { values: new Float32Array(4).fill(150), flags: new Uint8Array(4) };
+    const sourceHash = () => createHash('sha256').update(Buffer.from(lift.values.buffer)).update(lift.flags).digest('hex');
+    const before = sourceHash(), layout = prepareSamplePackLayout(grid, mask.output, mask.halo);
+    const pack = async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'av-render-pack-')); temporary.push(directory);
+      const builder = createSamplePackBuilder(layout, 1);
+      builder.writeChannel(0, lift);
+      return (await builder.finish(join(directory, 'samples.bin'))).sha256;
+    };
+    const step = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: 'step' }).renderTileRgba(lift, 'usable-lift-msl', 5, 16, 16);
+    const stepPack = await pack();
+    const linear = createRenderer(mask, { rasterWorkers: 0 }).renderTileRgba(lift, 'usable-lift-msl', 5, 16, 16);
+    const linearPack = await pack();
+    expect(pixel({ data: step }, 30, 30)).toEqual([85, 24, 77, 255]);
+    expect(pixel({ data: linear }, 30, 30)).toEqual([135, 42, 107, 255]);
+    expect(stepPack).toBe(linearPack);
+    expect(sourceHash()).toBe(before);
+    const rain: GridField = { values: new Float32Array(4).fill(2.5), flags: new Uint8Array(4) };
+    const rainStep = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: 'step' }).renderTileRgba(rain, 'precip-rate', 5, 16, 16);
+    const rainLinear = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: 'linear-rgb' }).renderTileRgba(rain, 'precip-rate', 5, 16, 16);
+    expect(Buffer.from(rainStep).equals(Buffer.from(rainLinear))).toBe(true);
   });
 
   it('does not replace nonzero hidden RGB with the shared transparent payload', async () => {
@@ -221,13 +250,13 @@ describe('build-owned prepared renderer', () => {
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
     for (let i = 0; i < 12; i++) if (i !== 5) setBit(mask.output, i);
     const geometryBudget = 2 * (57344 + 12 * Uint32Array.BYTES_PER_ELEMENT);
-    const renderer = createRenderer(mask, { geometryCacheBytes: geometryBudget });
+    const renderer = createRenderer(mask, { geometryCacheBytes: geometryBudget, liftInterpolation: 'step' });
     const field = { values: Float32Array.from([0.1, 0.5, 1, 2, 300, 600, 1500, 2750, 0, -10, 50, 100]), flags: Uint8Array.from([0, 1, 0, 2, 0, 0, 1, 0, 3, 0, 0, 0]) };
     for (const layer of ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const) {
       if (layer === 'precip-rate') field.flags.fill(0);
       const expected = referenceTileRgba(field, mask, layer, 1, 0, 0);
       expectRgbaEqual(renderer.renderTileRgba(field, layer, 1, 0, 0), expected, `prepared ${layer}/1/0/0`);
-      expectRgbaEqual(renderTileRgba(field, mask, layer, 1, 0, 0), expected, `uncached ${layer}/1/0/0`);
+      expectRgbaEqual(renderTileRgba(field, mask, layer, 1, 0, 0, 'step'), expected, `uncached ${layer}/1/0/0`);
     }
     expect(renderer.metrics()).toMatchObject({ geometryHits: 2, geometryMisses: 1, geometryBytes: 57368 });
     renderer.renderTileRgba(field, 'precip-rate', 1, 0, 1);
