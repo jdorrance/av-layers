@@ -2,239 +2,29 @@ import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PMTiles } from 'pmtiles';
-import { GFS_PRODUCT, LIFT_STEP_RENDER_STYLE, liftRenderStyle, manifestSchema, PALETTES, setBit, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { LIFT_STEP_RENDER_STYLE, liftRenderStyle, PALETTES, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { buildShard, createBuildPlan, finalizeBuild, type BuildPlan } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
 import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
-import { decodeWebp } from './webp.js';
-import * as refinementConfig from './refinement/config.js';
-import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
+import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
 
 // Keep real rasterization, encoding and archive validation, without starting workers for one tile.
 vi.mock('./raster-pool.js', async importOriginal => ({
   ...await importOriginal<typeof import('./raster-pool.js')>(),
   rasterWorkerCount: () => 0
 }));
-const terrainReader = vi.hoisted(() => ({
-  opened: 0, close() {},
+vi.mock('./terrain/reader.js', () => ({ createTerrainReader: async () => ({
+  close() {},
   async sample(lat: number, lon: number) { return { elevationM: 200 + lat + 50 * lon, source: 'dem' as const }; },
   stats: () => ({ requests: 1, bytesRead: 100, decodedPixels: 4, outputPixels: 100, cacheHits: 0 })
-}));
-vi.mock('./terrain/reader.js', () => ({ createTerrainReader: async () => { terrainReader.opened++; return terrainReader; } }));
+}) }));
 
-const CYCLE = '2026-06-21T00:00:00.000Z';
-const product: ProductDefinition = {
-  ...GFS_PRODUCT,
-  modelId: 'parallel-fixture', id: 'parallel-fixture-recipe',
-  source: { modelFamily: 'fixture-model', configurationId: 'parallel-fixture-provider', domainId: 'synthetic' },
-  label: 'Parallel build fixture', attribution: 'Synthetic test data',
-  coverageDescription: 'Synthetic grid spanning block and longitude-wrap boundaries',
-  bounds: [-180, 70, 180, 72],
-  grid: { kind: 'regular-latlon', width: 18, height: 3, earthRadiusM: 6371229, lon0: -180, lat0: 72, dx: 20, dy: -1, wrapLongitude: true },
-  coverageId: 'parallel-fixture-coverage', maxNativeZoom: 0,
-  frameHours: [2, 4, 6, 8], intervalHours: 2
-};
-const cellCount = product.grid.width * product.grid.height;
-const mask: CoverageMask = {
-  grid: product.grid, bounds: product.bounds, maxZoom: 0,
-  output: new Uint8Array(Math.ceil(cellCount / 8)),
-  halo: new Uint8Array(Math.ceil(cellCount / 8)), tiles: Uint8Array.of(1)
-};
-for (let index = 0; index < cellCount - 1; index++) setBit(mask.output, index);
-setBit(mask.halo, cellCount - 1);
-
-function fixtureProvider(options: { failHour?: number; abort?: AbortController; returnedCycle?: string; beforeAcquire?: (hour: number) => Promise<void> } = {}) {
-  const observed = { cycles: [] as (string | undefined)[], hours: [] as number[], closed: 0, sessions: 0, peakSessions: 0 };
-  const close = vi.fn(async () => { observed.closed++; observed.sessions--; });
-  const acquire = vi.fn();
-  const open = vi.fn<ForecastProvider['open']>(async ({ cycle, activeIndices }) => {
-    observed.cycles.push(cycle);
-    observed.sessions++;
-    observed.peakSessions = Math.max(observed.peakSessions, observed.sessions);
-    return {
-    cycle: options.returnedCycle ?? cycle ?? CYCLE,
-    stats: { fixture: true, networkRequests: 0 },
-    async acquire(hour) {
-      acquire(hour);
-      observed.hours.push(hour);
-      await options.beforeAcquire?.(hour);
-      if (hour === options.failHour) {
-        options.abort?.abort(new Error('Fixture cancellation'));
-        throw new Error('Fixture acquisition failure');
-      }
-      const frame = normalizedFixtureFrame(product.grid, activeIndices, cycle ?? CYCLE, hour, product.intervalHours);
-      for (let index = 0; index < activeIndices.length; index++) {
-        const elevation = activeIndices[index] * 2;
-        frame.terrainM[index] += elevation;
-        frame.temp2mK[index] += hour * 0.25;
-        for (const heights of frame.hgtM) heights[index] += elevation;
-      }
-      frame.missing.temp[0][5] = 1;
-      return frame;
-    },
-    close
-  };
-  });
-  const provider: ForecastProvider = {
-    id: product.source.configurationId, provider: 'Synthetic fixture', maxLevels: 3,
-    open
-  };
-  return { provider, open, close, acquire, observed };
-}
-
-async function readManifest(path: string): Promise<Manifest> {
-  return manifestSchema.parse(JSON.parse(await readFile(path, 'utf8')));
-}
-
-async function tilePixels(root: string, artifact: Manifest['artifacts'][number]): Promise<Uint8Array> {
-  const bytes = await readFile(localPath(root, artifact.tilesKey));
-  const archive = new PMTiles({
-    getKey: () => artifact.tilesKey,
-    async getBytes(offset, length) {
-      const selected = bytes.subarray(offset, offset + length);
-      return { data: selected.buffer.slice(selected.byteOffset, selected.byteOffset + selected.byteLength) };
-    }
-  });
-  const tile = await archive.getZxy(0, 0, 0);
-  expect(tile).toBeDefined();
-  return (await decodeWebp(new Uint8Array(tile!.data))).data;
-}
-
-const temporary: string[] = [];
-async function temporaryRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'av-parallel-test-'));
-  temporary.push(root);
-  return root;
-}
 afterEach(async () => {
   vi.unstubAllEnvs();
-  await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true })));
-});
-
-describe('refined hour-group builds', () => {
-  let fixtureRoot: string, serialRoot: string, shardRoot: string;
-  let plan: BuildPlan, serial: Manifest;
-  let restoreConfig: () => void;
-  const source = fixtureProvider();
-  const zones = { type: 'FeatureCollection', features: [
-    { type: 'Feature', id: 'east', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0.3, 71.2], [0.34, 71.2], [0.34, 71.24], [0.3, 71.24], [0.3, 71.2]]] } },
-    { type: 'Feature', id: 'west', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0.1, 71.1], [0.14, 71.1], [0.14, 71.14], [0.1, 71.14], [0.1, 71.1]]] } }
-  ] };
-
-  beforeAll(async () => {
-    fixtureRoot = await mkdtemp(join(tmpdir(), 'av-refined-parallel-'));
-    serialRoot = join(fixtureRoot, 'serial'); shardRoot = join(fixtureRoot, 'parallel');
-    const configured = refinementConfig.configuredRefinements;
-    const resolveConfig = vi.spyOn(refinementConfig, 'configuredRefinements').mockImplementation(product => configured(product, zones));
-    restoreConfig = () => resolveConfig.mockRestore();
-    const storage = new TerrainTestStorage(), refinement = { storage, catalogRef: seedTerrainCatalog(storage) };
-    serial = await readManifest(await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask, provider: source.provider, refinement }));
-    plan = await createBuildPlan({ out: shardRoot, cycle: CYCLE, product, mask, provider: source.provider, refinement, shards: 2 });
-    expect(source.acquire.mock.calls.map(([hour]) => hour)).toEqual(product.frameHours);
-    expect(resolveConfig).toHaveBeenCalledTimes(2);
-    expect(plan.refinements?.map(input => input.id)).toEqual(['east', 'west']);
-    // Configuration and remote terrain may disappear after the immutable plan artifact is handed off.
-    resolveConfig.mockImplementation(() => { throw new Error('Workers must use the frozen regions'); });
-    storage.objects.clear();
-    const workerRoots = plan.groups.map((_, shard) => join(fixtureRoot, `worker-${shard}`));
-    await Promise.all(workerRoots.map(async (out, shard) => {
-      await cp(shardRoot, out, { recursive: true });
-      const downloadedPlan = JSON.parse(await readFile(join(out, 'plan.json'), 'utf8')) as BuildPlan;
-      await buildShard({ plan: downloadedPlan, shard, out, product, mask, provider: source.provider });
-    }));
-    for (const out of workerRoots) for (const directory of ['builds', 'shards']) {
-      await cp(join(out, directory), join(shardRoot, directory), { recursive: true });
-    }
-  }, 60_000);
-  afterAll(async () => {
-    restoreConfig?.();
-    if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  async function copyCompleted(): Promise<string> {
-    const out = await temporaryRoot();
-    await cp(shardRoot, out, { recursive: true });
-    return out;
-  }
-  const manifestPath = (out: string) => join(out, 'builds', product.modelId, plan.buildId, 'manifest.json');
-  const finalize = (out: string, onValidated?: Parameters<typeof finalizeBuild>[0]['onValidated']) =>
-    finalizeBuild({ plan, out, product, mask, provider: source.provider, onValidated });
-
-  it('merges byte-identical fine AGL packs without acquiring extra forecast hours or rereading terrain', async () => {
-    const out = await copyCompleted(), onValidated = vi.fn();
-    const manifest = await readManifest(await finalize(out, onValidated));
-    expect(manifest.version).toBe(4);
-    expect(manifest.frames).toEqual(serial.frames);
-    expect(manifest.patches?.map(patch => patch.id)).toEqual(['east', 'west']);
-    expect(await readFile(localPath(out, manifest.samples.key))).toEqual(await readFile(localPath(serialRoot, serial.samples.key)));
-    for (const [index, patch] of manifest.patches!.entries()) {
-      const expected = serial.patches![index], input = plan.refinements![index];
-      expect(patch.layers).toEqual([...TERRAIN_CLEARANCE_METHOD.outputs]);
-      expect(patch.samples.channelCount).toBe(product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
-      expect(patch.grid).toEqual(input.grid);
-      expect(patch.coverage).toEqual(input.coverage);
-      expect(patch.terrain).toEqual(expected.terrain);
-      expect(patch.terrain).toMatchObject({ key: input.terrain.key, sha256: input.terrain.sha256 });
-      expect(patch.descriptors).toEqual(expected.descriptors);
-      const bytes = await readFile(localPath(out, patch.samples.key));
-      expect(bytes).toEqual(await readFile(localPath(serialRoot, expected.samples.key)));
-      expect(Array.from({ length: bytes.length / 5 }, (_, i) => bytes.readFloatLE(i * 5)).some(value => value > 0)).toBe(true);
-    }
-    for (let index = 0; index < manifest.artifacts.length; index++) {
-      expect(await tilePixels(out, manifest.artifacts[index])).toEqual(await tilePixels(serialRoot, serial.artifacts[index]));
-    }
-    expect([...source.observed.hours].sort((a, b) => a - b)).toEqual([2, 2, 4, 4, 6, 6, 8, 8]);
-    expect(terrainReader.opened).toBe(2);
-    expect(onValidated).toHaveBeenCalledOnce();
-    expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();
-  }, 60_000);
-
-  it.each(['omitted', 'missing', 'extra', 'reordered'])('rejects %s refinement receipts before publishing', async kind => {
-    const out = await copyCompleted(), path = join(out, 'shards/0/receipt.json'), onValidated = vi.fn();
-    const receipt = JSON.parse(await readFile(path, 'utf8'));
-    if (kind === 'omitted') delete receipt.refinements;
-    else if (kind === 'missing') receipt.refinements.pop();
-    else if (kind === 'extra') receipt.refinements.push({ id: 'unexpected', sampleSha256: '0'.repeat(64) });
-    else receipt.refinements.reverse();
-    await writeFile(path, JSON.stringify(receipt));
-    await expect(finalize(out, onValidated)).rejects.toThrow(/refinement set mismatch/);
-    expect(onValidated).not.toHaveBeenCalled();
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it.each(['missing', 'truncated', 'wrong-hash'])('rejects a %s fine shard pack instead of filling or ignoring it', async kind => {
-    const out = await copyCompleted(), path = join(out, 'shards/0/refinements/east/samples.bin'), onValidated = vi.fn();
-    if (kind === 'missing') await rm(path);
-    else {
-      const bytes = await readFile(path);
-      if (kind === 'wrong-hash') { bytes[0] ^= 1; await writeFile(path, bytes); }
-      else await writeFile(path, bytes.subarray(0, bytes.length - 5));
-    }
-    await expect(finalize(out, onValidated)).rejects.toThrow();
-    expect(onValidated).not.toHaveBeenCalled();
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it.each(['geometry', 'terrain-reference'])('binds frozen %s to the recipe before opening a provider', async kind => {
-    const out = await temporaryRoot(), provider = fixtureProvider(), changed = structuredClone(plan);
-    if (kind === 'terrain-reference') changed.refinements![0].terrain.sha256 = '0'.repeat(64);
-    else changed.refinements![0].bounds[0] += 0.001;
-    await expect(buildShard({ plan: changed, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow(/recipe or source revision/);
-    expect(provider.open).not.toHaveBeenCalled();
-    expect(await readdir(out)).toEqual([]);
-  });
-
-  it('rejects missing staged terrain before any acquisition', async () => {
-    const out = await copyCompleted(), provider = fixtureProvider();
-    await rm(join(out, 'shards'), { recursive: true });
-    await rm(localPath(out, plan.refinements![0].terrain.key));
-    await expect(buildShard({ plan, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow();
-    expect(provider.open).not.toHaveBeenCalled();
-  });
+  await cleanupTemporaryRoots();
 });
 
 describe('forecast hour-group builds', () => {
