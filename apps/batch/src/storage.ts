@@ -15,15 +15,21 @@ function retryableBodyError(error: unknown): boolean {
     || ['ECONNRESET', 'ETIMEDOUT', 'ERR_STREAM_PREMATURE_CLOSE'].includes((error as NodeJS.ErrnoException).code ?? ''));
 }
 
-function retryableRequestError(error: unknown, depth = 0): boolean {
+function retryableRequestError(error: unknown, depth = 0, includeBody = false): boolean {
   if (!error || typeof error !== 'object' || depth > 10) return false;
   const value = error as { name?: string; code?: string; $metadata?: { httpStatusCode?: number }; $retryable?: unknown; cause?: unknown };
   const status = value.$metadata?.httpStatusCode;
-  if (value.name === 'AbortError' || status === 403 || status === 404) return false;
-  return status === 429 || [500, 502, 503, 504].includes(status ?? 0) || value.$retryable !== undefined
+  if (status === 403 || status === 404) return false;
+  if (value.name === 'AbortError') return includeBody && retryableRequestError(value.cause, depth + 1, includeBody);
+  return (includeBody && retryableBodyError(error)) || status === 429 || [500, 502, 503, 504].includes(status ?? 0) || value.$retryable !== undefined
     || ['TimeoutError', 'RequestTimeout', 'RequestTimeoutException', 'SlowDown', 'Throttling', 'ThrottlingException', 'TooManyRequestsException'].includes(value.name ?? '')
     || ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN'].includes(value.code ?? '')
-    || retryableRequestError(value.cause, depth + 1);
+    || retryableRequestError(value.cause, depth + 1, includeBody);
+}
+
+/** Classify exhausted transport failures for checkpointed preparation retries. */
+export function isTransientStorageError(error: unknown): boolean {
+  return retryableRequestError(error, 0, true);
 }
 
 async function readBody(body: Readable, maximum: number, key: string, signal?: AbortSignal): Promise<Uint8Array> {
@@ -275,6 +281,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
         if (result.ContentLength === undefined || !result.ETag) throw new Error(`Incomplete response for ${key}`);
         return { size: result.ContentLength, etag: result.ETag, ...(result.Metadata ? { metadata: result.Metadata } : {}) };
       } catch (error) {
+        signal?.throwIfAborted();
         if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
         throw error;
       }

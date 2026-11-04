@@ -56,12 +56,14 @@ cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
 
-Each selected model runs `forecast-terrain` (60m job timeout), `forecast-plan`
+Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
 (15m timeout), up to four parallel `forecast-shard` jobs (60m timeout), and
 `forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. Terrain preparation has its
-own 50-minute operation budget; forecast elapsed time starts with planning. If a
-shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
+own 50-minute operation budget per attempt; forecast elapsed time starts with
+planning.
+
+If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the plan remains within the 50-minute build elapsed-time budget and its environment
 secret has not been rotated by a later same-model build. After rotation, start a
 new build.
@@ -71,8 +73,10 @@ reporting progress in the job log. Planning requires that cache; a missing cache
 fails planning immediately.
 
 Cold preparation stages verified source files in a bounded local cache and
-commits each completed window to R2. Retrying a failed terrain job reuses its
-verified windows. The [terrain CLI](../apps/batch/src/terrain/README.md#use-in-forecasts)
+commits each completed window to R2. `forecast-terrain` retries transport failures
+and operation deadlines up to three attempts, reusing verified windows and the
+local cache. Integrity and configuration failures stop immediately. The
+[terrain CLI](../apps/batch/src/terrain/README.md#use-in-forecasts)
 can prepare and upload the same arrays locally.
 
 The prepare job signs [temporary R2 credentials](https://developers.cloudflare.com/r2/examples/authenticate-r2-temp-credentials/)

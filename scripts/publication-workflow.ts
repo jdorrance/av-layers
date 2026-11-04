@@ -10,11 +10,13 @@ import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
 import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
-import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
+import { isTransientStorageError, r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/validate.js';
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
 import { configuredRefinements } from '../apps/batch/src/refinement/config.js';
 import { terrainCatalogInput, terrainInputForModel } from './terrain-inputs.js';
+
+const TERRAIN_ATTEMPTS = 3;
 
 /** Check at entry and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
@@ -125,9 +127,20 @@ export async function prepareForecastTerrain(store?: ObjectStorage): Promise<voi
     const plan = wholeDomainPlan(product);
     if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
     const fine = await loadBundledFineCoverage(product, plan);
-    const ref = await ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
-      coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal });
-    console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
+    for (let attempt = 1; attempt <= TERRAIN_ATTEMPTS; attempt++) {
+      signal.throwIfAborted();
+      try {
+        const ref = await ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
+          coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal });
+        console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
+        return;
+      } catch (error) {
+        signal.throwIfAborted();
+        const deadline = error instanceof Error && error.message === 'Terrain preparation deadline exceeded';
+        if (attempt === TERRAIN_ATTEMPTS || (!deadline && !isTransientStorageError(error))) throw error;
+        console.error(JSON.stringify({ phase: 'terrain-retry', model, attempt, error: String(error) }));
+      }
+    }
   }, store);
 }
 

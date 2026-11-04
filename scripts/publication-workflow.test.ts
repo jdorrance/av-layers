@@ -18,7 +18,7 @@ vi.mock('../apps/batch/src/providers.js', async () => {
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer, verifyV5Dependencies: fake.verifyDependencies }));
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
-vi.mock('../apps/batch/src/storage.js', () => ({ r2Storage: fake.storage }));
+vi.mock('../apps/batch/src/storage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/storage.js')>(), r2Storage: fake.storage }));
 vi.mock('../apps/batch/src/whole-domain/coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/whole-domain/coverage.js')>(), loadBundledFineCoverage: fake.fineCoverage }));
 vi.mock('../apps/batch/src/whole-domain/terrain.js', () => ({ ensureWholeDomainTerrain: fake.terrain }));
 vi.mock('node:child_process', async () => {
@@ -115,6 +115,54 @@ it('preserves terrain preparation failures for workflow diagnostics', async () =
   await expect(prepareForecastTerrain()).rejects.toThrow('terrain unavailable');
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('terrain unavailable'));
   for (const call of [fake.discover, fake.plan, fake.publish]) expect(call).not.toHaveBeenCalled();
+});
+it.each([
+  { reason: 'operation deadline', error: new Error('Terrain preparation deadline exceeded') },
+  { reason: 'timeout', error: Object.assign(new Error('R2 request timed out'), { name: 'TimeoutError' }) },
+  { reason: 'native operation timeout', error: new DOMException('The operation was aborted due to timeout', 'TimeoutError') },
+  { reason: 'wrapped network reset', error: new Error('R2 GET terrain/assets/source.tif failed', { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) }) },
+  { reason: 'wrapped premature body close', error: new Error('R2 GET source failed', { cause: Object.assign(new Error('closed'), { code: 'ERR_STREAM_PREMATURE_CLOSE' }) }) },
+  { reason: 'internal abort caused by timeout', error: Object.assign(new Error('aborted', { cause: Object.assign(new Error('timed out'), { name: 'TimeoutError' }) }), { name: 'AbortError' }) },
+  { reason: 'R2 server failure', error: Object.assign(new Error('service unavailable'), { $metadata: { httpStatusCode: 503 } }) }
+])('resumes checkpointed terrain after a $reason with a fresh operation lifetime', async ({ error }) => {
+  fake.terrain.mockRejectedValueOnce(error);
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await prepareForecastTerrain();
+  expect(fake.terrain).toHaveBeenCalledTimes(2);
+  expect(fake.terrain.mock.calls[1][0]).toEqual(fake.terrain.mock.calls[0][0]);
+  expect(fake.terrain.mock.calls[1][0].signal.aborted).toBe(false);
+  expect(fake.fineCoverage).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('terrain-retry'));
+  expect(fake.write).not.toHaveBeenCalled();
+});
+it('bounds terrain preparation at three attempts and preserves the final failure', async () => {
+  const first = Object.assign(new Error('source timed out'), { name: 'TimeoutError' });
+  const last = new Error('Terrain preparation deadline exceeded');
+  fake.terrain.mockRejectedValueOnce(first).mockRejectedValueOnce(first).mockRejectedValueOnce(last);
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(prepareForecastTerrain()).rejects.toBe(last);
+  expect(fake.terrain).toHaveBeenCalledTimes(3);
+  expect(log).toHaveBeenCalledTimes(2);
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining(last.message));
+});
+it.each(['timeout', 'deadline'] as const)('honors outer cancellation before retrying a terrain %s', async kind => {
+  fake.terrain.mockImplementationOnce(async () => {
+    process.emit('SIGTERM');
+    throw kind === 'deadline' ? new Error('Terrain preparation deadline exceeded') : Object.assign(new Error('timed out'), { name: 'TimeoutError' });
+  });
+  await expect(prepareForecastTerrain()).rejects.toThrow('Publication interrupted');
+  expect(fake.terrain).toHaveBeenCalledOnce();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"cancelled": true'));
+});
+it.each([
+  new Error('Terrain checkpoint payload hash mismatch'),
+  new Error('Terrain source asset integrity mismatch'),
+  new Error('Invalid terrain preparation deadline'),
+  Object.assign(new Error('access denied'), { $metadata: { httpStatusCode: 403 } })
+])('preserves deterministic terrain failures without retrying: %s', async error => {
+  fake.terrain.mockRejectedValueOnce(error);
+  await expect(prepareForecastTerrain()).rejects.toBe(error);
+  expect(fake.terrain).toHaveBeenCalledOnce();
 });
 it.each(MODEL_IDS)('requires a pinned catalog for configured %s scheduled and manual builds', async model => {
   vi.stubEnv('MODEL', model);
