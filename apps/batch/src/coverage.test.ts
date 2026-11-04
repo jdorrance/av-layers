@@ -1,9 +1,10 @@
-import { describeCoverage, loadCoverage, readCoverage, writeCoverage } from './coverage.js';
+import { describeCoverage, describeSparseCoverage, loadCoverage, readCoverage, readSparseCoverage, writeCoverage, writeSparseCoverage } from './coverage.js';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createProductMethodId, createRecipeIdentity, type CoverageMask } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
 import { validateBuild } from './validate.js';
 
 function manifest(hash: string) {
@@ -53,4 +54,24 @@ describe('coverage integrity', () => {
     expect(actual).not.toBe(stale);
     await expect(validateBuild('.', manifest(stale), mask)).rejects.toThrow('Coverage identity mismatch');
   });
+});
+
+it('writes and verifies sparse coverage artifacts without changing dense descriptors', async () => {
+  const grid = { ...GFS_GRID, width: 3, height: 3, wrapLongitude: false }, gridHash = createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
+  const coverage = sparseCoverageFromDense({ width: 3, height: 3, wrapLongitude: false, gridHash, output: Uint8Array.of(0x10, 0), halo: Uint8Array.of(0xef, 1) });
+  const mask = { grid, coverage, tiles: Uint8Array.of(1), maxZoom: 0 };
+  const root = await mkdtemp(join(tmpdir(), 'av-sparse-coverage-'));
+  try {
+    const description = describeSparseCoverage(mask, GFS_PRODUCT), hash = await writeSparseCoverage(root, mask, GFS_PRODUCT);
+    expect(hash).toBe(description.hash);
+    expect(await writeSparseCoverage(root, mask, GFS_PRODUCT)).toBe(hash);
+    expect(await readSparseCoverage(root, hash)).toEqual({ descriptor: description.descriptor, bytes: description.bytes, mask: { ...mask, bounds: GFS_PRODUCT.bounds } });
+    for (const name of ['sparse', 'tiles'] as const) {
+      const path = join(root, 'coverage', hash, `${name}.bin`), data = await readFile(path), changed = Buffer.from(data);
+      changed[0] ^= 1; await writeFile(path, changed);
+      await expect(readSparseCoverage(root, hash)).rejects.toThrow(`Coverage ${name} hash mismatch`);
+      await writeFile(path, data);
+    }
+    await expect(writeSparseCoverage(root, { ...mask, coverage: { ...coverage, gridHash: '0'.repeat(64) } }, GFS_PRODUCT)).rejects.toThrow('grid mismatch');
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

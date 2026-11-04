@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { manifestSchema } from '@av/contracts';
+import { manifestSchema, type PublishedManifest } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 import { verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
@@ -139,7 +139,9 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
   const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: Object.fromEntries(manifest.layers.map(layer => [layer, 'unused'])) as PinnedBuild['templates'] };
   const latest = vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
-  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockResolvedValue({ model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt, frames: [] });
+  const sampleLayer = () => ({ value: 1, status: 'valid' as const, support: 0, interpolated: false });
+  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockResolvedValue({ model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
+    frames: [{ ...manifest.frames[0]!, layers: Object.fromEntries(manifest.layers.map(layer => [layer, sampleLayer()])) }] });
   let corruptTile = false;
   await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl: async input => {
     const path = new URL(String(input)).pathname;
@@ -165,7 +167,7 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   await expect(verifyPublishedForecast({ ...options, manifest, signal: cancelled })).rejects.toThrow('Publication interrupted');
   expect(fetchImpl.mock.calls.length).toBe(calls);
   expect(latest).toHaveBeenCalledWith(manifest.model, { requireLive: true });
-  expect(sample).toHaveBeenCalledWith(build, { lat: (manifest.descriptors.bounds[1] + manifest.descriptors.bounds[3]) / 2, lon: (manifest.descriptors.bounds[0] + manifest.descriptors.bounds[2]) / 2, frames: [manifest.frames[0].id], signal: undefined });
+  expect(sample).toHaveBeenCalledWith(build, { lat: (manifest.descriptors.bounds[1] + manifest.descriptors.bounds[3]) / 2, lon: (manifest.descriptors.bounds[0] + manifest.descriptors.bounds[2]) / 2, frames: [manifest.frames[0].id], layers: manifest.layers, signal: undefined });
   corruptTile = true;
   const observeManifest = vi.fn();
   await expect(probeApi({ ...options, requireLive: false, observeManifest })).rejects.toThrow('not WebP');
@@ -173,4 +175,77 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   expect(latest).toHaveBeenLastCalledWith(manifest.model, { requireLive: false, signal: undefined });
   sample.mockRejectedValueOnce(new Error('sample unavailable'));
   await expect(probeApi(options)).rejects.toThrow('sample unavailable');
+});
+
+it('samples every v5 surface through one, listed and all frame selections', async () => {
+  const legacy = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const surface = (id: 'native' | 'fine', layers: PublishedManifest['layers']) => ({ id, kind: id, layers, coverage: legacy.coverage, grid: legacy.grid });
+  const surfaces = [surface('native', ['precip-rate']), surface('fine', ['usable-lift-msl', 'usable-lift-agl'])];
+  const manifest = { ...legacy, version: 5, surfaces } as unknown as PublishedManifest;
+  const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: {} as PinnedBuild['templates'] };
+  const latest = vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async (_build, request) => {
+    const ids = Array.isArray(request.frames) ? request.frames : legacy.frames.map(frame => frame.id), value = (layer: string, surfaceId: string) => ({ value: 1, status: 'valid' as const, support: 0, interpolated: false, surfaceId });
+    return { version: 5 as const, model: manifest.model, buildId: manifest.buildId, lat: request.lat, lon: request.lon, method: manifest.method, source: manifest.source, expiresAt: manifest.expiresAt, surfaces: [],
+      frames: ids.map(id => ({ ...legacy.frames.find(frame => frame.id === id)!, layers: Object.fromEntries(request.layers!.map(layer => [layer, value(layer, surfaces.find(surface => surface.layers.includes(layer))!.id)])) })) };
+  });
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/healthz') return Response.json({ ok: true });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+  });
+  await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl });
+  const frames = manifest.frames.map(frame => frame.id);
+  expect(sample.mock.calls.map(([, request]) => [request.layers, request.frames])).toEqual([
+    [['precip-rate'], [frames[0]]], [['precip-rate'], frames], [['precip-rate'], 'all'],
+    [['usable-lift-msl', 'usable-lift-agl'], [frames[0]]], [['usable-lift-msl', 'usable-lift-agl'], frames], [['usable-lift-msl', 'usable-lift-agl'], 'all']
+  ]);
+  latest.mockResolvedValue({ ...build, manifest: { ...manifest, surfaces: [surface('native', ['precip-rate'])] } as unknown as PublishedManifest });
+  await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl })).rejects.toThrow('native precipitation and fine lift');
+});
+
+it('uses a bounded covered land candidate when the descriptor center is outside coverage', async () => {
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  manifest.descriptors.bounds = [-180, -55, 180, 65];
+  const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: {} as PinnedBuild['templates'] };
+  vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async (_build, request) => {
+    const covered = request.lat === 40.5 && request.lon === 44.5;
+    return { model: manifest.model, buildId: manifest.buildId, lat: request.lat, lon: request.lon, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
+      frames: [{ ...manifest.frames[0]!, layers: Object.fromEntries(manifest.layers.map(layer => [layer, {
+        value: covered ? 1 : null, status: covered ? 'valid' : 'outside-domain', support: 0, interpolated: false }])) }] };
+  });
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/healthz') return Response.json({ ok: true });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+  });
+  await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl });
+  expect(sample.mock.calls.map(([, request]) => [request.lat, request.lon])).toEqual([[5, 0], [40.5, 44.5]]);
+});
+
+it('fails clearly when every bounded candidate is outside coverage', async () => {
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  manifest.descriptors.bounds = [-180, -55, 180, 65];
+  const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: {} as PinnedBuild['templates'] };
+  vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async (_build, request) => ({
+    model: manifest.model, buildId: manifest.buildId, lat: request.lat, lon: request.lon, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
+    frames: [{ ...manifest.frames[0]!, layers: Object.fromEntries(manifest.layers.map(layer => [layer, { value: null, status: 'outside-domain', support: 0, interpolated: false }])) }]
+  }));
+  const tileRequests: string[] = [];
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/healthz') return Response.json({ ok: true });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+    tileRequests.push(path);
+    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+  });
+  await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl })).rejects.toThrow('did not reach output coverage');
+  expect(tileRequests).toEqual([]);
 });

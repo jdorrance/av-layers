@@ -19,7 +19,7 @@ vi.mock('../raster-pool.js', async importOriginal => ({
 
 const cycle = '2026-06-21T12:00:00.000Z';
 const product: ProductDefinition = {
-  ...GFS_PRODUCT, modelId: 'refinement-fixture', id: 'refinement-fixture-recipe',
+  ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, modelId: 'refinement-fixture', id: 'refinement-fixture-recipe',
   coverageId: 'refinement-fixture-coverage', coverageDescription: 'Synthetic bounded validation grid',
   bounds: [-1, -1, 1, 1], maxNativeZoom: 0, frameHours: [1], intervalHours: 1, layers: ['usable-lift-msl', 'usable-lift-agl'],
   grid: { kind: 'regular-latlon', width: 3, height: 3, earthRadiusM: 6371229, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }

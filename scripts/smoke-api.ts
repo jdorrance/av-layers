@@ -1,5 +1,5 @@
-import { DEFAULT_PROBE_TIMEOUT_MS, type Manifest } from '@av/contracts';
-import { ApiClient } from '@av/contracts/client';
+import { DEFAULT_PROBE_TIMEOUT_MS, type LayerId, type PublishedManifest } from '@av/contracts';
+import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -71,12 +71,54 @@ export async function verifyWorkerReadiness(options: WorkerReadinessOptions): Pr
   }, options);
 }
 
+type SamplePayload = Awaited<ReturnType<ApiClient['sample']>>;
+
+const SAMPLE_CANDIDATES = [[40.5, 44.5], [50, 10], [39, -98]] as const;
+
+function sampleCandidates(manifest: PublishedManifest): Array<readonly [number, number]> {
+  const [west, south, east, north] = manifest.descriptors.bounds;
+  const candidates: Array<readonly [number, number]> = [[(south + north) / 2, (west + east) / 2], ...SAMPLE_CANDIDATES];
+  return candidates.filter(([lat, lon], index) => lat >= south && lat <= north && lon >= west && lon <= east
+    && candidates.findIndex(([otherLat, otherLon]) => otherLat === lat && otherLon === lon) === index);
+}
+
+function hitsCoverage(payload: SamplePayload, layers: readonly LayerId[]): boolean {
+  return payload.frames.some(frame => layers.some(layer => frame.layers[layer]?.status !== 'outside-domain'));
+}
+
+async function coveredPoint(client: ApiClient, build: PinnedBuild, layers: readonly LayerId[], signal?: AbortSignal) {
+  const frame = build.manifest.frames[0]!.id;
+  for (const [lat, lon] of sampleCandidates(build.manifest)) {
+    const payload = await client.sample(build, { lat, lon, frames: [frame], layers, signal });
+    if (hitsCoverage(payload, layers)) return { lat, lon };
+  }
+  throw new Error(`Sample probe did not reach output coverage for ${layers.join(',')}`);
+}
+
+async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: AbortSignal): Promise<void> {
+  const { manifest } = build, frames = manifest.frames.map(frame => frame.id);
+  const sample = (lat: number, lon: number, layers: readonly LayerId[], selection: 'all' | readonly string[]) =>
+    client.sample(build, { lat, lon, frames: selection, layers, signal });
+  if (manifest.version === 5) {
+    const kinds = new Set(manifest.surfaces.map(surface => surface.kind));
+    if (manifest.model === 'gfs') invariant(kinds.has('native') && kinds.has('fine'), 'GFS v5 requires native precipitation and fine lift surfaces');
+    for (const surface of manifest.surfaces) {
+      invariant(surface.layers.length > 0, `Surface ${surface.id} has no layers`);
+      const point = await coveredPoint(client, build, surface.layers, signal);
+      if (frames.length > 1) await sample(point.lat, point.lon, surface.layers, frames);
+      await sample(point.lat, point.lon, surface.layers, 'all');
+    }
+    return;
+  }
+  await coveredPoint(client, build, manifest.layers, signal);
+}
+
 /** One live serving check for deployment and monitoring, pinned to a single immutable build. */
 export async function probeApi(options: {
   baseUrl: string; model: string; expectedDeploymentId?: string; requireLive?: boolean;
-  expectedModels?: readonly string[]; expectedBuild?: Pick<Manifest, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
-  fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: Manifest) => void;
-}): Promise<Manifest> {
+  expectedModels?: readonly string[]; expectedBuild?: Pick<PublishedManifest, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
+  fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: PublishedManifest) => void;
+}): Promise<PublishedManifest> {
   const baseUrl = options.baseUrl.replace(/\/+$/, ''), fetchImpl = options.fetchImpl ?? fetch;
   await verifyWorkerReadiness({ url: `${baseUrl}/healthz`, expectedDeploymentId: options.expectedDeploymentId, fetchImpl, signal: options.signal });
   const get = async (path: string, accept: string) => {
@@ -98,8 +140,7 @@ export async function probeApi(options: {
   options.observeManifest?.(manifest);
   const runs = await json(`/v1/models/${options.model}/runs`) as { retained?: Array<{ buildId?: string }> };
   invariant(Array.isArray(runs.retained) && runs.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
-  const [west, south, east, north] = manifest.descriptors.bounds;
-  await client.sample(build, { lat: (south + north) / 2, lon: (west + east) / 2, frames: [frame], signal: options.signal });
+  await probeSamples(client, build, options.signal);
   const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`, 'image/webp');
   invariant(response.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
   invariant(response.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
@@ -109,7 +150,7 @@ export async function probeApi(options: {
   return manifest;
 }
 
-export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: Manifest; fetchImpl?: typeof fetch }): Promise<void> {
+export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: PublishedManifest; fetchImpl?: typeof fetch }): Promise<void> {
   const signal = probeSignal(options.signal, 60_000);
   await retryProbe('Published forecast', async () => {
     await probeApi({ baseUrl: options.baseUrl, model: options.manifest.model, expectedBuild: options.manifest, fetchImpl: options.fetchImpl, signal });

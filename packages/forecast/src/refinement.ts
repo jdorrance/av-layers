@@ -3,20 +3,17 @@ import {
   gridSchema,
   MAX_GRID_CELLS,
   prepareGridGeometry,
-  STATUS_MASK,
   STATUS_NO_LIFT,
   STATUS_OUTSIDE,
   STATUS_UNAVAILABLE,
-  STATUS_VALID,
-  SUPPORT_MASK,
   type CoverageMask
 } from '@av/contracts';
 import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './daylight.js';
-import { usableLiftDepthM } from '@av/soaring/velocity';
-import { FRAME_BRANCH, type FrameDiagnostics } from './frame.js';
+import { clearanceCell } from './clearance-cell.js';
+import type { FrameDiagnostics } from './frame.js';
 import { planSample, type GridField } from './sampler.js';
-export { prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './terrain-column.js';
-export type { PreparedTerrainColumns, TerrainColumnDerivation, TerrainColumnMetrics, TerrainColumnProbe, TerrainColumnEvaluationOptions, TerrainColumnClearance } from './terrain-column.js';
+export { preparePackedTerrainColumns, prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './terrain-column.js';
+export type { PreparedPackedTerrainColumns, PreparedTerrainColumns, TerrainColumnDerivation, TerrainColumnMetrics, TerrainColumnProbe, TerrainColumnEvaluationOptions, TerrainColumnClearance, TerrainColumnNativeClearance } from './terrain-column.js';
 
 const CONTRIBUTORS_PER_CELL = 4;
 
@@ -111,6 +108,7 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
       const isDaylight = createMaskDaylightTester(target.grid, timestamps);
       const mslValues = new Float32Array(target.cells), mslFlags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
       const aglValues = new Float32Array(target.cells), aglFlags = new Uint8Array(target.cells).fill(STATUS_OUTSIDE);
+      const result = { msl: 0, agl: 0, flags: 0 };
       for (let slot = 0; slot < targets.length; slot++) {
         const index = targets[slot], elevation = terrain.elevationM[index], count = counts[slot];
         mslValues[index] = NaN; aglValues[index] = NaN;
@@ -121,40 +119,9 @@ export function prepareTerrainClearance(sourceMask: CoverageMask, targetMask: Co
           mslFlags[index] = STATUS_NO_LIFT; aglFlags[index] = STATUS_NO_LIFT;
           continue;
         }
-        let support = 0, ceiling = 0, buoyancy = 0, complete = true, branches = 0;
-        for (let contributor = 0; contributor < count; contributor++) {
-          const offset = slot * CONTRIBUTORS_PER_CELL + contributor, sourceIndex = indices[offset];
-          const flag = sourceFlags[sourceIndex], nextStatus = flag & STATUS_MASK;
-          const value = diagnostics.ceilingMslM[sourceIndex], b = diagnostics.buoyancyM2S3[sourceIndex];
-          const branch = diagnostics.branch[sourceIndex];
-          const zeroDepth = branch === FRAME_BRANCH.nonConvective || branch === FRAME_BRANCH.surfaceStable;
-          const convective = branch === FRAME_BRANCH.parcelCrossing || branch === FRAME_BRANCH.profileTop;
-          if (nextStatus >= STATUS_UNAVAILABLE || (flag & ~(STATUS_MASK | SUPPORT_MASK)) !== 0
-              || (!zeroDepth && !convective) || (zeroDepth && (nextStatus !== STATUS_NO_LIFT || b !== 0))
-              || !Number.isFinite(value) || !Number.isFinite(b) || b < 0) {
-            complete = false;
-            break;
-          }
-          branches |= zeroDepth ? 1 : 2;
-          support |= flag & SUPPORT_MASK;
-          ceiling += value * weights[offset];
-          buoyancy += b * weights[offset];
-        }
-        if (!complete || branches === 3) continue;
-        if (branches === 1) {
-          mslValues[index] = elevation; aglValues[index] = 0;
-          mslFlags[index] = STATUS_NO_LIFT | support; aglFlags[index] = STATUS_NO_LIFT | support;
-          continue;
-        }
-        const depth = Math.max(0, ceiling - elevation);
-        const velocity = Math.cbrt(buoyancy * depth);
-        if (!Number.isFinite(depth) || !Number.isFinite(velocity)) continue;
-        const clearance = Math.fround(usableLiftDepthM(depth, velocity) ?? 0);
-        const msl = Math.fround(elevation + clearance);
-        if (!Number.isFinite(clearance) || !Number.isFinite(msl)) continue;
-        const flags = (clearance > 0 ? STATUS_VALID : STATUS_NO_LIFT) | support;
-        aglValues[index] = clearance; aglFlags[index] = flags;
-        mslValues[index] = msl; mslFlags[index] = flags;
+        if (!clearanceCell(diagnostics, sourceFlags, indices, weights, slot * CONTRIBUTORS_PER_CELL, count, elevation, result)) continue;
+        aglValues[index] = result.agl; aglFlags[index] = result.flags;
+        mslValues[index] = result.msl; mslFlags[index] = result.flags;
       }
       return {
         'usable-lift-msl': { values: mslValues, flags: mslFlags },

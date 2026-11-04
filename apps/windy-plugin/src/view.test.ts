@@ -271,3 +271,27 @@ it('reuses legend nodes for unchanged state and refreshes them for layer or immu
   expect(legend.children[0]).not.toBe(recolored);
   expect(legend.children[0].children[0].textContent).toBe('lift · m');
 });
+
+it('renders a v5 sample with surface ids and surfaces in the series summary', () => {
+  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
+  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
+  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  panel.renderBuild(fixtureBuild());
+  panel.renderSeries(
+    {
+      frames: [{ id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z', layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false, surfaceId: 'gfs-native' } } }],
+      method: { id: 'trailing-precipitation-rate-v1', hash: 'a'.repeat(64) },
+      source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
+      surfaces: [{ id: 'gfs-native' }],
+      expiresAt: '2026-10-31T00:00:00Z'
+    },
+    ['precip-rate'],
+    { lat: 32.9, lon: -117.25 }
+  );
+  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+  const nodes = visit(panel.root as unknown as FakeElement);
+  const series = nodes.find(element => element.className === 'av-series')!;
+  expect(series.children).toHaveLength(1);
+  expect(visit(series).some(element => element.textContent.includes('gfs-native'))).toBe(true);
+  expect(nodes.some(element => element.textContent.includes('coverage gfs-native'))).toBe(true);
+});

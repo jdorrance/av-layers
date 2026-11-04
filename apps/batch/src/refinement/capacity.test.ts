@@ -45,7 +45,7 @@ async function fixture() {
   const out = await mkdtemp(join(tmpdir(), 'av-refinement-capacity-')); roots.push(out);
   const storage = new TerrainTestStorage(), catalogRef = seedTerrainCatalog(storage);
   const product: ProductDefinition = {
-    ...GFS_PRODUCT,
+    ...GFS_PRODUCT, terrainSubdivisionFactor: undefined,
     grid: { kind: 'regular-latlon', width: 9, height: 7, earthRadiusM: 6371229, lon0: 0.46, lat0: 0.53, dx: 0.01, dy: -0.01, wrapLongitude: false },
     bounds: [0.46, 0.47, 0.54, 0.53], maxNativeZoom: 0, frameHours: [1, 2]
   };
@@ -120,7 +120,6 @@ describe('refinement build admission', () => {
       const encodedTerrain = await Promise.all(refinements.flatMap(patch => Object.values(patch.terrain.descriptor.files).map(file => readFile(join(out, file.key)))));
       const decodedTerrain = refinements.reduce((sum, patch) => sum + bytes(patch.terrain.elevationM, patch.terrain.valid), 0);
       const baseAndFinalFields = [...fields, ...fineFields.flatMap(fields => Object.values(fields))].reduce((sum, field) => sum + fieldBytes(field), 0);
-      const overlappingFallbackFields = fineFields.flatMap(fields => Object.values(fields)).reduce((sum, field) => sum + fieldBytes(field), 0);
       const allMasks = [mask, ...refinements.map(patch => patch.mask)].reduce((sum, item) => sum + maskBytes(item), 0);
       const { workingSet } = prepared.capacity;
       for (const [index, patch] of prepared.refinements.entries()) {
@@ -129,11 +128,8 @@ describe('refinement build admission', () => {
       }
       expect(workingSet.samplePack).toBe(packs.reduce((sum, pack) => sum + pack.byteLength, 0));
       expect(workingSet.preparedTerrain).toBe(decodedTerrain + bytes(...encodedTerrain));
-      expect(workingSet.refinementMapping).toBe(
-        mappings.reduce((sum, mapping) => sum + mapping.byteLength, 0)
-        + columns.reduce((sum, column) => sum + column.byteLength + column.workspaceBytes, 0)
-      );
-      expect(workingSet.derivedFields).toBe(baseAndFinalFields + overlappingFallbackFields);
+      expect(workingSet.refinementMapping).toBe(columns.reduce((sum, column) => sum + column.byteLength + column.workspaceBytes, 0));
+      expect(workingSet.derivedFields).toBe(baseAndFinalFields);
       expect(workingSet.diagnostics).toBe(63 * 9);
       expect(workingSet.rasterSharedInputs).toBe(baseAndFinalFields + allMasks);
       expect(workingSet.indicesAndLayout).toBe(

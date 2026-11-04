@@ -48,8 +48,8 @@ apply daylight gating when deriving target clearance.
   sampling and Web Mercator tile sampling plans.
 - [`@av/forecast/intervals`](src/intervals.ts): `recoverTrailingWindow` for
   cumulative and run-averaged model fields.
-- [`@av/forecast/sample-pack`](src/sample-pack.ts): $16 \times 16$ block layout
-  and byte-range planning for `samples.bin`.
+- [`@av/forecast/sample-pack`](src/sample-pack.ts): block layouts and one-range
+  point-query plans for legacy packs and bounded version-5 shards.
 - [`@av/forecast/support`](src/support.ts): grid neighbor lookup.
 - [`resolveProductFrameHours`](src/daylight.ts): pre-acquisition daylight frame
   filter, exported from `@av/forecast`.
@@ -80,9 +80,11 @@ estimates JavaScript overhead. Returned field buffers and preparation temporarie
 have separate lifetimes. [Build admission](../../apps/batch/src/capacity.ts) retains
 the prepared mapping for frame execution and accounts for these buffers.
 
-Production uses `prepareTerrainColumns` with unsupported-valley clearance
-fallback. The [evaluation command](../../apps/batch/src/refinement/README.md#evaluation)
-compares its fields against stored clearance and native columns.
+`preparePackedTerrainColumns` derives whole-domain fields in sparse active-cell
+offset order. `PackedGridField` shares immutable coverage with the sampler and
+raster consumers. Native-grid donor support comes from
+[`planWholeDomainGrid`](../contracts/src/whole-domain-grid.ts).
+`prepareTerrainColumns` retains the regional mapping path for evaluation.
 
 Surface excess is evaluated at each donor's native terrain and interpolated with
 the original horizontal weights. Environmental weights are renormalized among
@@ -93,14 +95,12 @@ weights before conversion to fine-cell specific humidity;
 [Method descriptors](../contracts/src/methods.ts) select the pressure coordinate
 for GFS or ICON-EU and publish the shared parameters.
 
-`clearanceFallback: 'unsupported'` accepts same-frame
-`clearance: { methodId, validTime, grid, fields }` in `derive` for an unsupported
-valley column. `methodId` must equal `TERRAIN_CLEARANCE_METHOD.id`.
-Fallback-only probes identify a legacy height estimate and leave local
-thermodynamic state unknown. Invalid native observations and atmospheric-top
-limits retain their availability checks.
-Callers supply clearance computed from the exact `NormalizedFrame`; evaluation
-verifies matching cycle, intervals and raw-source hashes.
+`clearanceFallback: 'unsupported'` accepts same-frame `nativeClearance`
+diagnostics and flags. The shared cell calculation runs when a column exceeds
+the supported below-ground bridge. The regional evaluation path also accepts
+precomputed clearance fields. Both inputs bind the frame, grid and valid time.
+Fallback probes identify their provenance; [science](../../docs/science.md#terrain-clearance)
+owns the calculation.
 
 See [data](../../docs/data.md) for units and status flags.
 

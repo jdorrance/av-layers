@@ -57,13 +57,14 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Public model ID: `gfs`; model family: `gfs`; source configuration: `noaa-gfs-0p25`; domain: `global`.
 - Attribution: NOAA GFS · Aviation Forecast Layers.
 - Grid: `regular-latlon`; 1440 columns × 721 rows; spherical Earth radius 6371229 m; periodic longitude: true.
+- Terrain subdivision factor: `10`; fine grid: 14400 columns × 7201 rows.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
-- Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland and Antarctica excluded.
+- Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–7.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
 - Vertical coordinate: `isobaric`; maximum levels: 21.
-- Calculation methods: `dry-lenschow-1p2-v2`, `trailing-precipitation-rate-v1`.
-- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `precipitationMmPerHour`.
+- Calculation methods: `supported-terrain-column-1p2-v1`, `trailing-precipitation-rate-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `precipitationMmPerHour`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
@@ -72,13 +73,14 @@ Source: [product registry](../packages/contracts/src/products.ts). See [deployme
 - Public model ID: `icon-eu`; model family: `icon`; source configuration: `dwd-icon-eu-regular-0p0625`; domain: `europe`.
 - Attribution: DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers.
 - Grid: `regular-latlon`; 1377 columns × 657 rows; spherical Earth radius 6371229 m; periodic longitude: false.
+- Terrain subdivision factor: `5`; fine grid: 6881 columns × 3281 rows.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
-- Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland and Antarctica excluded.
+- Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–8.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
-- Calculation methods: `dry-lenschow-1p2-model-levels-v2`.
-- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`.
+- Calculation methods: `supported-terrain-column-1p2-model-levels-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
 
@@ -414,6 +416,7 @@ Shared limits and storage constants:
 - `MAX_RETAINED_BUILDS`: `256`.
 - `MAX_SAMPLE_RANGE_BYTES`: `262144`.
 - `MAX_SAMPLE_VALUES`: `256`.
+- `MAX_SPARSE_COVERAGE_BYTES`: `268435456`.
 - `MAX_TILE_BYTES`: `1048576`.
 - `RETENTION_DAYS`: `7`.
 - `SAMPLE_BLOCK_SIZE`: `16`.

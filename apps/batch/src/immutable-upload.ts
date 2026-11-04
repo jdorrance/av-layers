@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { ObjectStorage } from './storage.js';
 
 /** Retries prove every byte of an existing object; they never overwrite immutable keys. */
-export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<void> {
+export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal, requireDigestMetadata = false): Promise<void> {
   signal?.throwIfAborted();
   const md5 = createHash('md5').update(bytes).digest(), sha = createHash('sha256').update(bytes).digest('hex');
   const proveExisting = async (): Promise<boolean> => {
@@ -10,6 +10,7 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
     const head = await store.head(key, signal);
     if (!head) return false;
     if (head.size !== bytes.byteLength) throw new Error(`Immutable object size mismatch: ${key}`);
+    if (requireDigestMetadata && head.metadata?.sha256 !== sha) throw new Error(`Immutable object digest metadata mismatch: ${key}`);
     const hash = createHash('sha256');
     for (let offset = 0; offset < head.size; offset += 4 * 1024 * 1024) {
       signal?.throwIfAborted();
@@ -23,7 +24,7 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
   };
   if (await proveExisting()) return;
   signal?.throwIfAborted();
-  try { await store.put(key, bytes, { ifNoneMatch: '*' }, contentType, md5.toString('base64')); }
+  try { await store.put(key, bytes, { ifNoneMatch: '*' }, contentType, md5.toString('base64'), { sha256: sha }); }
   catch (error) {
     // A timeout can follow a successful create. Reconcile before deciding whether to retry.
     if (await proveExisting()) return;
@@ -32,6 +33,7 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
   signal?.throwIfAborted();
   const head = await store.head(key, signal), etag = `"${md5.toString('hex')}"`;
   if (!head || head.size !== bytes.byteLength || head.etag !== etag) throw new Error(`R2 single-PUT MD5 ETag or size mismatch: ${key}`);
+  if (requireDigestMetadata && head.metadata?.sha256 !== sha) throw new Error(`Immutable object digest metadata mismatch: ${key}`);
   const length = Math.min(bytes.byteLength, 32), tail = await store.get(key, { offset: bytes.byteLength - length, length }, length, signal);
   if (!tail || tail.etag !== etag || !Buffer.from(tail.bytes).equals(bytes.subarray(bytes.byteLength - length))) throw new Error(`R2 tail or ETag mismatch: ${key}`);
 }

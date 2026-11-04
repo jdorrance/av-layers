@@ -6,7 +6,8 @@ and a build manifest.
 Run from the repository root:
 
 ```sh
-pnpm forecast --model gfs --out output --cache-dir .cache/gfs
+pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
+  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
 ```
 
 Writes the completed build under `output/builds/gfs/` and prints the manifest
@@ -14,12 +15,13 @@ path. Pass `--model icon-eu` for regional ICON-EU lift and `--cycle` to select a
 specific UTC run. See [development](../../docs/development.md#build-a-real-forecast)
 to preview the build locally.
 
-Add `--terrain-catalog-ref PATH` to enable configured refinement zones. Use
-`--terrain-store-dir PATH` for a local terrain store; otherwise the catalog and
-terrain come from R2. See [terrain setup](../../docs/development.md#terrain-refinement).
+Configured GFS and ICON-EU builds require `--terrain-catalog-ref PATH` for
+whole-domain lift surfaces. Use `--terrain-store-dir PATH` for a local terrain
+store; otherwise terrain comes from R2. GFS precipitation retains its native
+surface. See [terrain setup](../../docs/development.md#terrain-refinement).
 
-Estimate build resources including configured refinement grids, or verify a
-single upstream frame:
+Estimate build resources from the bundled sparse coverage, or verify a single
+upstream frame:
 
 ```sh
 pnpm capacity --model icon-eu
@@ -41,7 +43,8 @@ Run batch tests with `pnpm test apps/batch`.
 - [src/icon](src/icon/README.md): DWD ICON-EU adapter.
 - [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
 - [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
-- [src/refinement](src/refinement/README.md): polygon grids, prepared terrain, and frozen shard inputs.
+- [src/whole-domain](src/whole-domain/prepare.ts): sparse coverage, packed terrain columns, bounded sample shards and frozen whole-domain inputs.
+- [src/refinement](src/refinement/README.md): regional polygon grids and legacy refinement evaluation.
 - [pmtiles.json](pmtiles.json): pinned `pmtiles` binary version and SHA-256 digests.
 
 ## Parallel builds
@@ -50,10 +53,10 @@ The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
 `gfs`, or `icon-eu` and calls the reusable
 [model workflow](../../.github/workflows/forecast-model.yml) per model. Each
 model resolves its cycle and daylight-filtered hours, prepares configured grids,
-and freezes their masks and terrain arrays in the plan artifact. Up to four
-`forecast-shard` workers load these inputs locally. Each acquired native frame
-supplies the base fields and every refinement patch. Assembly merges each grid's
-sample packs and validates the complete build before publication to R2.
+and freezes coverage, terrain and recipe identities in the plan artifact. Up to
+four `forecast-shard` workers load these inputs locally. Each acquired native
+frame supplies its native layers and packed fine lift fields. Assembly writes
+bounded numeric shards and validates the complete build before publication to R2.
 
 ```mermaid
 flowchart TB

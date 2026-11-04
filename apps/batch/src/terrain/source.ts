@@ -1,8 +1,10 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { ASSET_MAX_BYTES, TERRAIN_SOURCE, sha256, terrainInventorySchema, type TerrainInventory, type TerrainTileSource } from './contract.js';
+import { ASSET_MAX_BYTES, TERRAIN_SOURCE, sha256, terrainInventorySchema, type TerrainCatalog, type TerrainInventory, type TerrainStorage, type TerrainTileSource } from './contract.js';
 
 const SOURCE_ORIGIN = 'https://copernicus-dem-90m.s3.amazonaws.com';
 export const INVENTORY_MAX_BYTES = 4 * 1024 * 1024;
+export const TERRAIN_INVENTORY_SHA256 = 'e5a5efe088e70506bc1007d22006bdcb09b0ec03177b62f9652363c13f49ed97';
+export const TERRAIN_INVENTORY_BYTES = 1_111_950;
 export interface SourceOptions { fetch?: typeof globalThis.fetch; signal?: AbortSignal }
 
 /** Freeze the provider's complete tile list; a missing listed tile is never ocean. */
@@ -25,6 +27,16 @@ export function parseSourceInventory(bytes: Uint8Array): TerrainInventory {
     return { id, south, west };
   }).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return terrainInventorySchema.parse({ version: 1, source: TERRAIN_SOURCE, sha256: sha256(bytes), tiles });
+}
+
+export async function verifyTerrainCatalogInventory(catalog: TerrainCatalog, storage: Pick<TerrainStorage, 'get'>, signal?: AbortSignal, onRetry?: () => void): Promise<void> {
+  signal?.throwIfAborted();
+  if (catalog.inventorySha256 !== TERRAIN_INVENTORY_SHA256) throw new Error('Terrain inventory is not the trusted provider inventory');
+  const snapshot = await storage.get(`terrain/inventories/${TERRAIN_INVENTORY_SHA256}.txt`, undefined, TERRAIN_INVENTORY_BYTES, signal, onRetry);
+  signal?.throwIfAborted();
+  if (!snapshot || snapshot.bytes.length !== TERRAIN_INVENTORY_BYTES || sha256(snapshot.bytes) !== TERRAIN_INVENTORY_SHA256) throw new Error('Trusted terrain inventory snapshot missing or corrupt');
+  const inventory = parseSourceInventory(snapshot.bytes);
+  if (inventory.tiles.length !== catalog.tiles.length || inventory.tiles.some((tile, index) => tile.id !== catalog.tiles[index].id || tile.south !== catalog.tiles[index].south || tile.west !== catalog.tiles[index].west)) throw new Error('Terrain catalog does not match trusted inventory');
 }
 
 /** A source URL is constructed only from an inventory tile, never from remote metadata. */

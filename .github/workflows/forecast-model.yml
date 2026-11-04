@@ -82,7 +82,10 @@ jobs:
         if: failure() || cancelled()
         with:
           name: forecast-plan-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: output/failure.json
+          path: |
+            output/failure.json
+            output/coverage/
+            output/terrain/
           if-no-files-found: warn
           retention-days: 7
   shard:
@@ -192,5 +195,6 @@ jobs:
             output/plan.json
             output/builds/
             output/coverage/
+            output/terrain/
           if-no-files-found: warn
           retention-days: 7

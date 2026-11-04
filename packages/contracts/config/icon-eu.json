@@ -36,7 +36,7 @@
   "freshness": { "maxCycleAgeHours": 18, "minHorizonHours": 6 },
   "coverage": {
     "id": "icon-eu-land-v1",
-    "description": "Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland and Antarctica excluded.",
+    "description": "Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.",
     "west": -23.5,
     "south": 29.5,
     "east": 62.5,
@@ -44,6 +44,7 @@
     "maxNativeZoom": 8,
     "seaBufferMeters": 50000,
     "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
+    "excludedContinents": ["Africa"],
     "interpolationHaloCells": 1
   },
   "upstream": {
@@ -73,5 +74,6 @@
     },
     "discoveryLagHours": 3,
     "discoveryCandidates": 4
-  }
+  },
+  "terrainSubdivisionFactor": 5
 }

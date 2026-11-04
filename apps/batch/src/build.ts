@@ -15,9 +15,13 @@ import type { PreparedTerrainRef } from './terrain/prepare.js';
 import { prepareRefinements, loadRefinements } from './refinement/prepare.js';
 import type { TerrainAsset, TerrainStorage } from './terrain/contract.js';
 import { buildFrames, type FrameBuildOptions, type BuildStamp, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
+import { prepareWholeDomain, type WholeDomainOptions } from './whole-domain/prepare.js';
+import { buildWholeDomainFrames } from './whole-domain/frames.js';
+import { finishWholeDomain } from './whole-domain/finish.js';
 export interface BuildOptions extends FrameBuildOptions {
   onValidated?: (result: ValidatedBuild, path: string) => Promise<void>;
   refinement?: { catalogRef: TerrainAsset; storage: TerrainStorage };
+  wholeDomain?: WholeDomainOptions;
 }
 
 export function createBuildStamp(): BuildStamp {
@@ -33,6 +37,7 @@ export async function buildProduct(modelId: string, options: BuildOptions): Prom
 /** Local sequential execution and distributed workers share the same frame implementation. */
 export async function buildForecast(options: BuildOptions & ForecastInputs): Promise<string> {
   const stamp = createBuildStamp();
+  if (options.product.terrainSubdivisionFactor !== undefined) return buildWholeDomainForecast(options, stamp);
   const inputs = options.refinement ? await prepareRefinements({ ...options.refinement, product: options.product, mask: options.mask, out: options.out, signal: options.signal }) : [];
   const refinements = await loadRefinements({ inputs, out: options.out, baseMask: options.mask, signal: options.signal });
   const prepared = prepareBuild(options.mask, options.product, { ...options.provider, terrainBytes: options.terrain?.arrayBytes, refinements });
@@ -41,6 +46,19 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
   const result = await buildFrames({ ...options, ...stamp, prepared, samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix });
   return finishForecast({ ...options, ...stamp, prepared, coverageHash, identity, result });
+}
+
+async function buildWholeDomainForecast(options: BuildOptions & ForecastInputs, stamp: BuildStamp): Promise<string> {
+  const prepared = await prepareWholeDomain({ product: options.product, mask: options.mask, out: options.out,
+    maxLevels: options.provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
+  const coverageHash = prepared.native.hash;
+  const identity = await buildIdentity(options.product, coverageHash, undefined, [], undefined, {
+    k: prepared.plan.k, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash,
+    nativeCoverageHash: prepared.native.hash, terrain: prepared.terrain });
+  const preparation = { elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 };
+  const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
+  const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix });
+  return finishWholeDomain({ ...options, ...stamp, prepared, result, identity, preparation });
 }
 
 /** Assemble and validate a complete product once, before any publication callback. */

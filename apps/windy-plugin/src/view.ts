@@ -229,7 +229,7 @@ export class PluginPanel {
   }
 
   renderSeries(
-    payload: { frames: FrameSample[]; method: unknown; source: unknown; coverage: unknown; expiresAt: string },
+    payload: { frames: FrameSample[]; method: unknown; source?: unknown; coverage?: unknown; surfaces?: readonly { id: string }[]; expiresAt: string },
     layers: string[],
     point?: GeoPoint
   ): void {

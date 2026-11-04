@@ -274,6 +274,10 @@ export class ReconstructedProfileWorkspace {
   readonly #surfaceExcesses: Float64Array;
   readonly #counts: Uint32Array;
   readonly #knots: Float64Array;
+  readonly #knotTemperatures: Float64Array;
+  readonly #knotSupport: Uint8Array;
+  readonly #knotOrigin: Uint8Array;
+  readonly #knotIndices: Uint8Array;
   readonly #profile: { heights: Float64Array; temperatures: Float64Array };
   readonly #maxLevels: number;
   #count = 0;
@@ -287,6 +291,10 @@ export class ReconstructedProfileWorkspace {
   #maximumBelowGroundDepth = NaN;
   #failure: 'unsupportedHeight' | 'belowGroundBridgeExceeded' | null = null;
   #admitting = false;
+  #knotSlots: number[] = [];
+  #knotBridge = NaN;
+  #knotCount = 0;
+  #knotMode: 'neutral' | 'lowest-layer' = 'neutral';
 
   constructor(donorCount: number, maxLevels: number) {
     if (!Number.isSafeInteger(donorCount) || donorCount < 0 || !Number.isSafeInteger(maxLevels) || maxLevels < 1 ||
@@ -299,10 +307,16 @@ export class ReconstructedProfileWorkspace {
     this.#surfaceExcesses = new Float64Array(donorCount);
     this.#counts = new Uint32Array(donorCount);
     this.#knots = new Float64Array(4 * (maxLevels + 3));
+    this.#knotTemperatures = new Float64Array(this.#knots.length * 4);
+    this.#knotSupport = new Uint8Array(this.#knots.length);
+    this.#knotOrigin = new Uint8Array(this.#knots.length);
+    this.#knotIndices = new Uint8Array(4);
     this.#profile = { heights: new Float64Array(this.#knots.length), temperatures: new Float64Array(this.#knots.length) };
     this.byteLength = this.#heights.byteLength + this.#temperatures.byteLength + this.#grounds.byteLength +
       this.#groundEnvironments.byteLength + this.#surfaceExcesses.byteLength +
-      this.#counts.byteLength + this.#knots.byteLength + this.#profile.heights.byteLength + this.#profile.temperatures.byteLength;
+      this.#counts.byteLength + this.#knots.byteLength + this.#knotTemperatures.byteLength + this.#knotSupport.byteLength +
+      this.#knotOrigin.byteLength + this.#knotIndices.byteLength +
+      this.#profile.heights.byteLength + this.#profile.temperatures.byteLength;
   }
 
   get referenceTerrainM(): number { return this.#referenceGround; }
@@ -323,6 +337,7 @@ export class ReconstructedProfileWorkspace {
   reset(): void {
     if (this.#admitting) throw new Error('Donor admission is in progress');
     this.#counts.fill(0);
+    this.#knotSlots = [];
     this.#count = 0;
     this.#minimumDonorTop = NaN;
     this.#maximumBelowGroundDepth = NaN;
@@ -335,6 +350,7 @@ export class ReconstructedProfileWorkspace {
     }
     this.#count = 0;
     this.#counts[slot] = 0;
+    this.#knotSlots = [];
     this.#admitting = true;
     try {
       const levels = input.levels, humidity = input.humidity;
@@ -381,7 +397,7 @@ export class ReconstructedProfileWorkspace {
         offset + count > slots.length || offset + count > weights.length || !Number.isFinite(terrainM) ||
         !Number.isFinite(bridgeM) || bridgeM < 0 || bridgeM > 1500 ||
         (bridgeMode !== 'neutral' && bridgeMode !== 'lowest-layer')) return false;
-    let top = Infinity, h0 = 0, weightSum = 0, knotCount = 0;
+    let top = Infinity, h0 = 0, weightSum = 0;
     for (let i = 0; i < count; i++) {
       const slot = slots[offset + i]!, weight = weights[offset + i]!, n = this.#counts[slot] ?? 0;
       if (!n || !Number.isFinite(weight) || weight <= 0) return false;
@@ -435,31 +451,91 @@ export class ReconstructedProfileWorkspace {
     const groundEnvironment = environment(terrainM);
     if (!Number.isFinite(groundEnvironment)) return false;
     const surfaceGroundEnvironment = environment(terrainM, false, true);
+    let cached = this.#knotBridge === bridgeM && this.#knotMode === bridgeMode;
+    let activeMask = 0;
     for (let i = 0; i < count; i++) {
-      const slot = slots[offset + i]!, base = slot * this.#maxLevels, n = this.#counts[slot]!;
-      const ground = this.#grounds[slot]!;
-      const entry = ground - bridgeM;
-      if (entry > terrainM && entry <= top) this.#knots[knotCount++] = entry;
-      if (ground > terrainM && ground <= top) this.#knots[knotCount++] = ground;
-      for (let j = 0; j < n; j++) {
-        const h = this.#heights[base + j]!;
-        if (h > terrainM && h <= top) this.#knots[knotCount++] = h;
-      }
+      const position = this.#knotSlots.indexOf(slots[offset + i]!);
+      if (position < 0) { cached = false; break; }
+      this.#knotIndices[i] = position;
+      activeMask |= 1 << position;
     }
-    this.#knots.subarray(0, knotCount).sort();
+    if (!cached) {
+      this.#knotSlots = [];
+      this.#knotBridge = bridgeM;
+      this.#knotMode = bridgeMode;
+      this.#knotCount = 0;
+      for (let i = 0; i < count; i++) {
+        const slot = slots[offset + i]!, base = slot * this.#maxLevels, n = this.#counts[slot]!;
+        const ground = this.#grounds[slot]!;
+        this.#knotSlots.push(slot);
+        this.#knots[this.#knotCount++] = ground - bridgeM;
+        this.#knots[this.#knotCount++] = ground;
+        for (let j = 0; j < n; j++) this.#knots[this.#knotCount++] = this.#heights[base + j]!;
+      }
+      this.#knots.subarray(0, this.#knotCount).sort();
+      for (let k = 0; k < this.#knotCount; k++) {
+        const height = this.#knots[k]!;
+        let support = 0, origin = 0;
+        for (let i = 0; i < count; i++) {
+          const slot = slots[offset + i]!, base = slot * this.#maxLevels, n = this.#counts[slot]!;
+          const ground = this.#grounds[slot]!, first = this.#heights[base]!, t = this.#temperatures[base]!;
+          if (height === ground - bridgeM || height === ground) origin |= 1 << i;
+          for (let j = 0; j < n; j++) if (height === this.#heights[base + j]!) origin |= 1 << i;
+          if (height < ground - bridgeM || height > this.#heights[base + n - 1]!) continue;
+          const lapse = n > 1 ? Math.max(0, Math.min(DRY_LAPSE_RATE,
+            (t - this.#temperatures[base + 1]!) / (this.#heights[base + 1]! - first))) : DRY_LAPSE_RATE;
+          let temperature: number;
+          if (height < ground) {
+            temperature = t + lapse * (first - ground) + (bridgeMode === 'neutral' ? DRY_LAPSE_RATE : lapse) * (ground - height);
+          } else if (height <= first) {
+            temperature = t + lapse * (first - height);
+          } else {
+            let j = 1;
+            while (j < n && this.#heights[base + j]! < height) j++;
+            const lower = this.#heights[base + j - 1]!, upper = this.#heights[base + j]!;
+            temperature = this.#temperatures[base + j - 1]! + (height - lower) / (upper - lower) *
+              (this.#temperatures[base + j]! - this.#temperatures[base + j - 1]!);
+          }
+          this.#knotTemperatures[k * 4 + i] = temperature;
+          support |= 1 << i;
+        }
+        this.#knotSupport[k] = support;
+        this.#knotOrigin[k] = origin;
+      }
+      activeMask = (1 << count) - 1;
+      for (let i = 0; i < count; i++) this.#knotIndices[i] = i;
+    }
+    const knotEnvironment = (k: number, left: boolean): number => {
+      const height = this.#knots[k]!, support = this.#knotSupport[k]!;
+      let value = 0, supportedWeight = 0;
+      for (let i = 0; i < count; i++) {
+        const ground = this.#grounds[slots[offset + i]!]!;
+        const position = this.#knotIndices[i]!;
+        if (!(support & (1 << position)) || (left && height === ground - bridgeM)) continue;
+        if (height < ground) this.#bridgeUsed = true;
+        value += weights[offset + i]! * this.#knotTemperatures[k * 4 + position]!;
+        supportedWeight += weights[offset + i]!;
+      }
+      if (supportedWeight === 0) { this.#failure = 'belowGroundBridgeExceeded'; return NaN; }
+      value /= supportedWeight;
+      if (!Number.isFinite(value) || value <= -KELVIN_OFFSET) { this.#failure = 'unsupportedHeight'; return NaN; }
+      return value;
+    };
     let previous = terrainM;
-    for (let i = 0; i < knotCount; i++) {
+    for (let i = 0; i < this.#knotCount; i++) {
       const height = this.#knots[i]!;
+      if (!(this.#knotOrigin[i]! & activeMask)) continue;
+      if (height <= terrainM || height > top) continue;
       if (height === previous) continue;
       let entry = false;
       for (let j = 0; j < count; j++) if (this.#grounds[slots[offset + j]!]! - bridgeM === height) entry = true;
       if (entry) {
-        const left = environment(height, true);
+        const left = knotEnvironment(i, true);
         if (!Number.isFinite(left)) { this.#count = 0; return false; }
         this.#profile.heights[this.#count] = height;
         this.#profile.temperatures[this.#count++] = left;
       }
-      const temperature = environment(height);
+      const temperature = knotEnvironment(i, false);
       if (!Number.isFinite(temperature)) { this.#count = 0; return false; }
       this.#profile.heights[this.#count] = height;
       this.#profile.temperatures[this.#count++] = temperature;

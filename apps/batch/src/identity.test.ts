@@ -44,6 +44,15 @@ it('keeps unstaged configuration identity stable and pins requested terrain with
   expect(staged.scienceHash).toBe(baseline.scienceHash);
 });
 
+it('binds the fine terrain-column method into whole-domain science identity without regional refinements', async () => {
+  const baseline = await buildIdentity(GFS_PRODUCT, 'a'.repeat(64));
+  const wholeDomain = { k: 10, nativeCoverageHash: 'b'.repeat(64), fineCoverageHash: 'c'.repeat(64), fineGridHash: 'd'.repeat(64),
+    terrain: { key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, bytes: 100, sha256: 'f'.repeat(64), arrayBytes: 20 } };
+  const bound = await buildIdentity(GFS_PRODUCT, 'a'.repeat(64), undefined, [], undefined, wholeDomain);
+  expect(bound.scienceHash).not.toBe(baseline.scienceHash);
+  expect(bound.recipe.hash).not.toBe(baseline.recipe.hash);
+});
+
 it('pins resolved polygon, grid and DEM references while keeping the scientific method independent of the chosen region', async () => {
   const patch = fixturePatch(fixtureManifest()), coverageHash = 'a'.repeat(64);
   const input: RefinementInput = { id: patch.id, geometry: patch.geometry, bounds: patch.descriptors.bounds,

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { getProduct, manifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type Manifest } from '@av/contracts';
+import { getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -11,9 +11,10 @@ import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batc
 import { getForecastProvider } from '../apps/batch/src/providers.js';
 import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
-import type { ValidatedBuild } from '../apps/batch/src/validate.js';
+import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/validate.js';
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
 import { configuredRefinements } from '../apps/batch/src/refinement/config.js';
+import { terrainCatalogInput, terrainInputForModel } from './terrain-inputs.js';
 
 /** Check at entry and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
@@ -34,7 +35,7 @@ export async function downloadForecastArtifact(runId: string, root = 'output'): 
 /** Build and artifact-resume use the same writer, cancellation and durable outcome protocol. */
 export async function publicationWorkflow<T>(work: (run: {
   root: string; signal: AbortSignal; store: ObjectStorage; model: string;
-  commit(manifest: Manifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild): Promise<void>;
+  commit(manifest: PublishedManifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild): Promise<void>;
 }) => Promise<T>, store?: ObjectStorage): Promise<T> {
   const { revision } = workflowContext();
   const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
@@ -89,6 +90,17 @@ export async function publicationWorkflow<T>(work: (run: {
   }
 }
 
+export function configuredWholeDomain(model: string, env: NodeJS.ProcessEnv, store: ObjectStorage) {
+  const product = getProduct(model);
+  if (!product) throw new Error(`No forecast product for ${model}`);
+  const factor = product.terrainSubdivisionFactor;
+  if (factor === undefined) return undefined;
+  if (!Number.isSafeInteger(factor) || factor < 1) throw new Error(`Invalid terrain subdivision factor for ${model}`);
+  const catalog = env.TERRAIN_CATALOG_REF;
+  if (!catalog) throw new Error(`TERRAIN_CATALOG_REF is required for configured whole-domain ${model} build`);
+  return { catalogRef: terrainCatalogInput(catalog), storage: store };
+}
+
 /** Resolve the cycle once before independent workers receive the immutable plan. */
 export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | null> {
   return publicationWorkflow(async ({ root, signal, store, model }) => {
@@ -106,19 +118,16 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       }
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
-    let terrain, refinement;
     const product = getProduct(model);
     if (!product) throw new Error(`No forecast product for ${model}`);
-    if (process.env.TERRAIN_CATALOG_REF && configuredRefinements(product).length) {
-      const { terrainCatalogInput } = await import('./terrain-inputs.js');
-      refinement = { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store };
-    }
-    if (process.env.TERRAIN_INPUTS) {
-      const { terrainInputForModel } = await import('./terrain-inputs.js');
-      const ref = terrainInputForModel(process.env.TERRAIN_INPUTS, model);
-      if (ref) terrain = { ref, storage: store };
-    }
-    return createForecastPlan(model, { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain } : {}), ...(refinement ? { refinement } : {}) });
+    const wholeDomain = configuredWholeDomain(model, process.env, store);
+    const refinement = !wholeDomain && process.env.TERRAIN_CATALOG_REF && configuredRefinements(product).length
+      ? { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store }
+      : undefined;
+    const terrain = process.env.TERRAIN_INPUTS ? terrainInputForModel(process.env.TERRAIN_INPUTS, model) : undefined;
+    const options = { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
+      ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain } : {}) };
+    return createForecastPlan(model, options);
   }, store);
 }
 
@@ -151,6 +160,61 @@ export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
   }, store);
 }
 
+function record(value: unknown, name: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${name} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPlan, root: string, signal?: AbortSignal): Promise<void> {
+  validateArtifactRecordsV5(manifest);
+  const frozen = plan.wholeDomain;
+  if (!frozen) throw new Error('Resume whole-domain plan lacks frozen inputs');
+  const product = getProduct(manifest.model);
+  if (!product) throw new Error('Resume product is not registered');
+  const factor = product.terrainSubdivisionFactor;
+  if (factor === undefined || frozen.k !== factor) throw new Error('Resume whole-domain subdivision factor differs');
+  const native = manifest.surfaces.find(surface => surface.kind === 'native');
+  if (native && native.coverage.hash !== frozen.nativeCoverageHash) throw new Error('Resume native coverage identity differs');
+  const fine = manifest.surfaces.filter(surface => surface.kind === 'fine');
+  if (fine.length !== 1) throw new Error('Resume v5 manifest requires one fine surface');
+  const surface = fine[0]!, terrain = surface.terrain!;
+  if (surface.coverage.id !== frozen.fineCoverage.id || surface.coverage.hash !== frozen.fineCoverage.hash
+      || surface.coverage.maskKey !== frozen.fineCoverage.maskKey || surface.coverage.maxZoom !== frozen.fineCoverage.maxZoom
+      || surface.gridHash !== frozen.fineCoverage.gridHash || terrain.key !== frozen.terrain.key || terrain.sha256 !== frozen.terrain.sha256) {
+    throw new Error('Resume whole-domain coverage or terrain identity differs');
+  }
+  const identity = await buildIdentity(product, frozen.nativeCoverageHash, undefined, [], undefined,
+    { k: frozen.k, nativeCoverageHash: frozen.nativeCoverageHash, fineCoverageHash: frozen.fineCoverage.hash, fineGridHash: frozen.fineCoverage.gridHash, terrain: frozen.terrain });
+  if (identity.recipe.hash !== manifest.recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
+  for (const current of manifest.surfaces) {
+    signal?.throwIfAborted();
+    const descriptorBytes = await readLocalFile(localPath(root, current.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
+    if (sha256(descriptorBytes) !== current.coverage.hash) throw new Error('Resume coverage descriptor hash mismatch');
+    const descriptor = record(parseBoundedJson(descriptorBytes), 'Resume coverage descriptor');
+    if (descriptor.gridHash !== current.gridHash || descriptor.maxZoom !== current.coverage.maxZoom) throw new Error('Resume coverage descriptor binding mismatch');
+    const files = record(descriptor.files, 'Resume coverage files'), sparseFile = record(files.sparse, 'Resume sparse coverage'), tilesFile = record(files.tiles, 'Resume tiles coverage');
+    const prefix = dirname(current.coverage.maskKey);
+    const sparse = await readLocalFile(localPath(root, `${prefix}/sparse.bin`), MAX_SPARSE_COVERAGE_BYTES, sparseFile.bytes as number);
+    if (sha256(sparse) !== sparseFile.sha256) throw new Error('Resume sparse coverage hash mismatch');
+    const coverage = decodeSparseCoverage(new Uint8Array(sparse.buffer, sparse.byteOffset, sparse.byteLength), current.gridHash);
+    if (coverage.width !== current.grid.width || coverage.height !== current.grid.height || coverage.blockIds.length !== current.samples.blockCount) throw new Error('Resume sparse coverage layout mismatch');
+    const tiles = await readLocalFile(localPath(root, `${prefix}/tiles.bin`), MAX_COVERAGE_BITSET_BYTES, tilesFile.bytes as number);
+    if (sha256(tiles) !== tilesFile.sha256) throw new Error('Resume tile coverage hash mismatch');
+    for (const shard of current.samples.shards) {
+      signal?.throwIfAborted();
+      const bytes = await readLocalFile(localPath(root, shard.key), shard.bytes, shard.bytes);
+      if (sha256(bytes) !== shard.sha256) throw new Error(`Resume sample shard hash mismatch: ${shard.key}`);
+    }
+    if (current.terrain) {
+      const terrainBytes = await readLocalFile(localPath(root, current.terrain.key), 16 * 1024);
+      if (sha256(terrainBytes) !== current.terrain.sha256) throw new Error('Resume terrain descriptor hash mismatch');
+      const descriptor = record(parseBoundedJson(terrainBytes), 'Resume terrain descriptor');
+      if (descriptor.dataId !== current.terrain.dataId || descriptor.gridHash !== current.terrain.gridHash
+          || descriptor.coverageHash !== current.terrain.coverageHash || descriptor.layoutVersion !== current.terrain.layoutVersion) throw new Error('Resume terrain binding mismatch');
+    }
+  }
+}
+
 /** Revalidate an existing artifact under the same authority, without repeating acquisition or science. */
 export async function resumePublication(sourceRevision: string, store?: ObjectStorage): Promise<void> {
   await publicationWorkflow(async ({ root, signal, model, commit }) => {
@@ -165,10 +229,27 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       }
       throw error;
     });
-    const manifest = manifestSchema.parse(parseBoundedJson(bytes));
+    const manifest = publishedManifestSchema.parse(parseBoundedJson(bytes));
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
-    const product = getProduct(manifest.model);
+    const product = getProduct(manifest.model), same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+    if (manifest.version === 5) {
+      const { readBuildPlan } = await import('../apps/batch/src/parallel.js');
+      const plan = await readBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new Error('Resume artifact is incomplete: missing plan.json for whole-domain build; start a fresh forecast without resume-run-id', { cause: error });
+        }
+        throw error;
+      });
+      if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
+          || plan.createdAt !== manifest.createdAt || !same(plan.recipe, manifest.recipe)) {
+        throw new Error('Resume plan differs from the retained whole-domain manifest');
+      }
+      await assertV5ResumeIdentity(manifest, plan, root, signal);
+      signal.throwIfAborted();
+      await commit(manifest, path, runId);
+      return;
+    }
     let terrain;
     if (manifest.source.terrain !== undefined) {
       const { preparedTerrainRefSchema } = await import('../apps/batch/src/terrain/prepare.js');
@@ -183,7 +264,6 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
         }
         throw error;
       });
-      const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
       if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
           || plan.createdAt !== manifest.createdAt || plan.coverageHash !== manifest.coverage.hash
           || !same(plan.recipe, manifest.recipe) || !same(plan.terrain, terrain)

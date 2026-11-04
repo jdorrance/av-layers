@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, descriptorSchema } from './index.js';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('publishes $modelId whole-domain layers with their actual methods and ground references', product => {
+    const descriptors = createWholeDomainDescriptors(product), legacy = createProductDescriptors(product);
+    const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
+    expect(descriptors.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
+    expect(descriptors.layers['usable-lift-agl']).toMatchObject({ methodId: method.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' });
+    expect(descriptors.methods[method.id]).toEqual(method);
+    expect(Object.keys(descriptors.methods)).toEqual(product.layers.includes('precip-rate') ? [method.id, PRECIPITATION_METHOD.id] : [method.id]);
+    if (product.layers.includes('precip-rate')) expect(descriptors.layers['precip-rate']).toEqual(legacy.layers['precip-rate']);
+    expect(legacy.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
+    expect(createProductMethodId(product)).toBe([...new Set(product.layers.map(layer => legacy.layers[layer].methodId))].join('+'));
+    expect(descriptorSchema.parse(descriptors)).toEqual(descriptors);
+  });
+
   it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain-column refinement separately from its native atmospheric method and legacy clearance', product => {
     const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
     const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];

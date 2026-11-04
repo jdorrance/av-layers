@@ -19,6 +19,9 @@
         "ATA",
         "GRL"
       ],
+      "excludeContinents": [
+        "Africa"
+      ],
       "isoFallback": "ISO_A3_EH",
       "isoExceptionRows": [
         {
@@ -85,6 +88,278 @@
           "iso_a2": "-99",
           "iso_a2_eh": "-99"
         }
+      ],
+      "continentExclusionRows": [
+        {
+          "admin": "Angola",
+          "adm0_a3": "AGO",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Burundi",
+          "adm0_a3": "BDI",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Benin",
+          "adm0_a3": "BEN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Burkina Faso",
+          "adm0_a3": "BFA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Botswana",
+          "adm0_a3": "BWA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Central African Republic",
+          "adm0_a3": "CAF",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Ivory Coast",
+          "adm0_a3": "CIV",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Cameroon",
+          "adm0_a3": "CMR",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Democratic Republic of the Congo",
+          "adm0_a3": "COD",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Republic of the Congo",
+          "adm0_a3": "COG",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Comoros",
+          "adm0_a3": "COM",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Cabo Verde",
+          "adm0_a3": "CPV",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Djibouti",
+          "adm0_a3": "DJI",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Algeria",
+          "adm0_a3": "DZA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Egypt",
+          "adm0_a3": "EGY",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Eritrea",
+          "adm0_a3": "ERI",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Ethiopia",
+          "adm0_a3": "ETH",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Gabon",
+          "adm0_a3": "GAB",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Ghana",
+          "adm0_a3": "GHA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Guinea",
+          "adm0_a3": "GIN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Gambia",
+          "adm0_a3": "GMB",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Guinea-Bissau",
+          "adm0_a3": "GNB",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Equatorial Guinea",
+          "adm0_a3": "GNQ",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Kenya",
+          "adm0_a3": "KEN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Liberia",
+          "adm0_a3": "LBR",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Libya",
+          "adm0_a3": "LBY",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Lesotho",
+          "adm0_a3": "LSO",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Morocco",
+          "adm0_a3": "MAR",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Madagascar",
+          "adm0_a3": "MDG",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Mali",
+          "adm0_a3": "MLI",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Mozambique",
+          "adm0_a3": "MOZ",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Mauritania",
+          "adm0_a3": "MRT",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Malawi",
+          "adm0_a3": "MWI",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Namibia",
+          "adm0_a3": "NAM",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Niger",
+          "adm0_a3": "NER",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Nigeria",
+          "adm0_a3": "NGA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Rwanda",
+          "adm0_a3": "RWA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Western Sahara",
+          "adm0_a3": "SAH",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Sudan",
+          "adm0_a3": "SDN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "South Sudan",
+          "adm0_a3": "SDS",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Senegal",
+          "adm0_a3": "SEN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Sierra Leone",
+          "adm0_a3": "SLE",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Somaliland",
+          "adm0_a3": "SOL",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Somalia",
+          "adm0_a3": "SOM",
+          "continent": "Africa"
+        },
+        {
+          "admin": "S\u00e3o Tom\u00e9 and Principe",
+          "adm0_a3": "STP",
+          "continent": "Africa"
+        },
+        {
+          "admin": "eSwatini",
+          "adm0_a3": "SWZ",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Chad",
+          "adm0_a3": "TCD",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Togo",
+          "adm0_a3": "TGO",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Tunisia",
+          "adm0_a3": "TUN",
+          "continent": "Africa"
+        },
+        {
+          "admin": "United Republic of Tanzania",
+          "adm0_a3": "TZA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Uganda",
+          "adm0_a3": "UGA",
+          "continent": "Africa"
+        },
+        {
+          "admin": "South Africa",
+          "adm0_a3": "ZAF",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Zambia",
+          "adm0_a3": "ZMB",
+          "continent": "Africa"
+        },
+        {
+          "admin": "Zimbabwe",
+          "adm0_a3": "ZWE",
+          "continent": "Africa"
+        }
       ]
     }
   },
@@ -94,7 +369,7 @@
     "latMax": 65,
     "seaBufferMeters": 50000,
     "bufferMethod": "10-degree tiles; source clipped to tile plus 4deg lon/2deg lat; per-tile WGS84 azimuthal-equidistant local metric projection; 50 km planar buffer with 16 quad segments; inverse-projected and clipped to the 10-degree core.",
-    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA or GRL, even when that removes a buffer strip outside the excluded polygon.",
+    "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA, GRL or any country whose CONTINENT attribute is Africa, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
     "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.125deg, latitude center +/-0.125deg, clipped to bounds [-180, -55, 180, 65].",
     "tileRule": "A z0-7 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
@@ -126,12 +401,12 @@
     "bytes": 129780,
     "counts": {
       "totalCells": 1038240,
-      "activeCellsBeforeExclusion": 197968,
-      "clearedByExcludedFootprint": 3796,
-      "activeCells": 194172,
-      "inactiveCells": 844068
+      "activeCellsBeforeExclusion": 153819,
+      "clearedByExcludedFootprint": 3864,
+      "activeCells": 149955,
+      "inactiveCells": 888285
     },
-    "sha256": "0dc14fcb94f7fd993e3085ee7320c50b8d7399b1adb4018c0f31f01bb5faaa7a"
+    "sha256": "68b4299e250ad0526b97a7aaa1d0e9f0e81237ae71839f25d480769c72726f59"
   },
   "halo": {
     "file": "halo.bin",
@@ -139,11 +414,11 @@
     "bytes": 129780,
     "definition": "Input-only one-cell Chebyshev ring (8-neighbour) around output-active cells, excluding output-active cells.",
     "counts": {
-      "haloOnlyCells": 16281,
-      "activePlusHaloCells": 210453,
-      "haloOverheadRatio": 0.083848
+      "haloOnlyCells": 14833,
+      "activePlusHaloCells": 164788,
+      "haloOverheadRatio": 0.098916
     },
-    "sha256": "eb7c5d0b1cbd0c6fb9dccccb77587ec0ae1c2e9a397aaf5e00d0c98f9fddbac3"
+    "sha256": "1e4704935d6df919e705c582856807692eb7bf3c642f4f56570519ecc3ff6168"
   },
   "tiles": {
     "file": "tiles.bin",
@@ -184,11 +459,11 @@
       "0": 1,
       "1": 4,
       "2": 8,
-      "3": 30,
-      "4": 92,
-      "5": 263,
-      "6": 818,
-      "7": 2655
+      "3": 29,
+      "4": 84,
+      "5": 233,
+      "6": 708,
+      "7": 2235
     },
     "activeZ5Tiles": [
       "5/0/8",
@@ -298,75 +573,45 @@
       "5/12/21",
       "5/13/8",
       "5/13/12",
-      "5/13/14",
       "5/14/8",
       "5/14/12",
       "5/14/13",
-      "5/14/14",
-      "5/14/15",
       "5/14/16",
       "5/15/8",
       "5/15/9",
       "5/15/10",
       "5/15/11",
       "5/15/12",
-      "5/15/13",
-      "5/15/14",
-      "5/15/15",
       "5/15/17",
       "5/16/8",
       "5/16/9",
       "5/16/10",
       "5/16/11",
       "5/16/12",
-      "5/16/13",
-      "5/16/14",
-      "5/16/15",
-      "5/16/16",
-      "5/16/17",
       "5/17/8",
       "5/17/9",
       "5/17/10",
       "5/17/11",
       "5/17/12",
-      "5/17/13",
-      "5/17/14",
-      "5/17/15",
-      "5/17/16",
-      "5/17/17",
-      "5/17/18",
-      "5/17/19",
       "5/18/8",
       "5/18/9",
       "5/18/10",
       "5/18/11",
       "5/18/12",
       "5/18/13",
-      "5/18/14",
-      "5/18/15",
-      "5/18/16",
-      "5/18/17",
-      "5/18/18",
-      "5/18/19",
       "5/19/10",
       "5/19/11",
       "5/19/12",
       "5/19/13",
       "5/19/14",
-      "5/19/15",
-      "5/19/16",
       "5/19/17",
-      "5/19/18",
-      "5/19/20",
       "5/20/10",
       "5/20/11",
       "5/20/12",
       "5/20/13",
       "5/20/14",
-      "5/20/15",
       "5/20/16",
       "5/20/17",
-      "5/20/18",
       "5/20/20",
       "5/21/10",
       "5/21/11",
@@ -455,7 +700,7 @@
       "5/31/20",
       "5/31/21"
     ],
-    "sha256": "25385151fa23da909e158a927eb0d814d7f14688ead00f8c4ddb67d6e8a01dbe"
+    "sha256": "13238a738afb4834db855132936f88b8e0a99e5b3ba2e5e1c1ade6e6fce102ed"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.353553,
@@ -685,6 +930,36 @@
         }
       },
       {
+        "name": "exclude_africa_lagos",
+        "lat": 6.5244,
+        "lon": 3.3792,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 334,
+          "col": 734,
+          "centerLat": 6.5,
+          "centerLon": 3.5
+        }
+      },
+      {
+        "name": "exclude_africa_cape_town",
+        "lat": -33.9249,
+        "lon": 18.4241,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "observedHalo": false,
+        "withinLatitudeBand": true,
+        "nearestCell": {
+          "row": 496,
+          "col": 794,
+          "centerLat": -34.0,
+          "centerLon": 18.5
+        }
+      },
+      {
         "name": "outside_band_north",
         "lat": 66.0,
         "lon": 20.0,
@@ -769,7 +1044,7 @@
   "regional": {},
   "regeneration": {
     "tooling": "scripts/masks/build_masks.py",
-    "toolingSha256": "d0799a74276ae80a6995abb601e45c88b3c5157393d832b06deb86a9a0da333b",
+    "toolingSha256": "28d40b4a08cd94ddac1e34a84045ecaf19ebf4525b20eb879484e724722f3856",
     "python": "3.14.7",
     "pythonVersion": "3.14.7",
     "pythonImplementation": "CPython",

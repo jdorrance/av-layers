@@ -34,6 +34,15 @@ describe('scalar sampling', () => {
     field.flags[0] = STATUS_OUTSIDE;
     expect(sampleGrid(grid, field, 0.9, 0.1, 'precip-rate').status).toBe(STATUS_OUTSIDE);
   });
+  it('returns null for unavailable and outside exact nodes across layer semantics', () => {
+    for (const layer of ['usable-lift-agl', 'usable-lift-msl', 'precip-rate'] as const) {
+      for (const status of [STATUS_UNAVAILABLE, STATUS_OUTSIDE]) {
+        const field = { values: Float32Array.of(0, 1, 2, 3), flags: Uint8Array.of(status, 0, 0, 0) };
+        expect(sampleGrid(grid, field, 1, 0, layer)).toEqual({ value: null, status, support: 0, interpolated: false });
+        expect(sampleCells(planSample(grid, 1, 0)!, [{ value: 0, flags: status }], layer)).toEqual({ value: null, status, support: 0, interpolated: false });
+      }
+    }
+  });
   it('uses wrapped column as tie-breaker', () => {
     const g = { ...grid, wrapLongitude: true };
     const f = { values: Float32Array.of(8, 9, 0, 0), flags: Uint8Array.of(0, STATUS_UNAVAILABLE, 0, 0) };

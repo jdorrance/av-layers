@@ -1,10 +1,44 @@
-import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type Grid, type GridGeometry, type LayerId, type LayerSpec } from '@av/contracts';
+import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
+export interface PackedGridField extends GridField { coverage: SparseCoverage }
+export interface SparseSamplingMask { grid: Grid; bounds?: GeographicBounds; tiles: Uint8Array; maxZoom: number; coverage: SparseCoverage }
+export type SamplingMask = CoverageMask | SparseSamplingMask;
 export interface Cell { value: number; flags: number }
 export interface Contributor { index: number; row: number; column: number; weight: number }
 export interface SamplePlan { contributors: Contributor[]; byteRange: { offset: number; length: number } }
 export interface Sample { value: number | null; status: number; support: number; interpolated: boolean }
+
+export function validateSamplingField(grid: Grid, field: GridField, mask?: SamplingMask): void {
+  if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array)) throw new RangeError('Invalid field arrays');
+  const coverage = 'coverage' in field ? (field as PackedGridField).coverage : undefined;
+  if (coverage) {
+    if (coverage.width !== grid.width || coverage.height !== grid.height || coverage.wrapLongitude !== grid.wrapLongitude ||
+        field.values.length !== coverage.offsets[coverage.offsets.length - 1] || field.flags.length !== field.values.length ||
+        (mask && (!('coverage' in mask) || mask.coverage !== coverage))) throw new RangeError('Packed field does not match coverage');
+  } else if (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length || (mask && 'coverage' in mask)) {
+    throw new RangeError('field size differs from grid');
+  }
+}
+
+export function fieldOffset(field: GridField, index: number, width: number): number {
+  if (!('coverage' in field)) return index;
+  const offset = sparseCoverageLookup((field as PackedGridField).coverage, index % width, Math.floor(index / width))?.offset;
+  if (offset === undefined) throw new RangeError('Sampling contributor is outside active coverage');
+  return offset;
+}
+
+function outputAt(mask: SamplingMask, column: number, row: number): boolean {
+  return 'coverage' in mask ? sparseCoverageLookup(mask.coverage, column, row)?.output === true : getBit(mask.output, row * mask.grid.width + column);
+}
+
+function validateSamplingMask(mask: SamplingMask): void {
+  const { grid } = mask;
+  if (!gridSchema.safeParse(grid).success) throw new RangeError('Invalid prepared grid');
+  if ('coverage' in mask) {
+    if (mask.coverage.width !== grid.width || mask.coverage.height !== grid.height || mask.coverage.wrapLongitude !== grid.wrapLongitude) throw new RangeError('Coverage size differs from grid');
+  } else if (mask.output.length !== Math.ceil(grid.width * grid.height / 8)) throw new RangeError('Coverage size differs from grid');
+}
 
 export const QUAD_OFFSETS = [[0, 0], [1, 0], [0, 1], [1, 1]] as const;
 const snap = snapGridCoordinate;
@@ -185,13 +219,23 @@ export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: Lay
   return result;
 }
 
-export function sampleGrid(grid: Grid, field: GridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask?: CoverageMask): Sample {
+export function samplingCovered(mask: SamplingMask, lat: number, lon: number): boolean {
+  if (!('coverage' in mask)) return isCovered(mask, lat, lon);
+  if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
+  const located = locate(mask.grid, mask.grid.kind === 'lambert-conformal' ? prepareGridGeometry(mask.grid) : null, lat, lon);
+  if (!located) return false;
+  const { column, row, fractionX: fx, fractionY: fy } = located;
+  const next = mask.grid.wrapLongitude ? (column + 1) % mask.grid.width : column + 1;
+  return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
+}
+
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask?: SamplingMask): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
-  if (mask && !isCovered(mask, lat, lon)) return outside;
+  if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
   if (!plan) return outside;
-  if (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length) throw new RangeError('field size differs from grid');
-  return sampleCells(plan, plan.contributors.map(c => ({ value: field.values[c.index], flags: field.flags[c.index] })), layer);
+  validateSamplingField(grid, field, mask);
+  return sampleCells(plan, plan.contributors.map(c => { const i = fieldOffset(field, c.index, grid.width); return { value: field.values[i], flags: field.flags[i] }; }), layer);
 }
 
 /** Build-owned geometry for a Cartesian set of coordinates. No field values are retained. */
@@ -216,11 +260,10 @@ function prepareAxis(coordinates: Float64Array, origin: number, step: number, si
   return { lower, upper, fraction };
 }
 
-export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
+export function prepareGridSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid, width = longitudes.length, height = latitudes.length, total = width * height;
   if (!Number.isSafeInteger(total) || width < 1 || height < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
-  if (!gridSchema.safeParse(grid).success) throw new RangeError('Invalid prepared grid');
-  if (mask.output.length !== Math.ceil(grid.width * grid.height / 8)) throw new RangeError('Coverage size differs from grid');
+  validateSamplingMask(mask);
   if (grid.kind === 'lambert-conformal') return prepareProjectedSampling(mask, latitudes, longitudes);
   const rows = prepareAxis(latitudes, grid.lat0, grid.dy, grid.height, false, false);
   const columns = prepareAxis(longitudes, grid.lon0, grid.dx, grid.width, grid.wrapLongitude, true);
@@ -238,7 +281,7 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
     const row = fy <= 0.5 ? rows.lower[y] : Math.min(grid.height - 1, rows.upper[y]);
     const c0 = columns.lower[x], c1 = columns.upper[x];
     const col = fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
-    if (getBit(mask.output, row * grid.width + col)) {
+    if (outputAt(mask, col, row)) {
       covered[index >> 3] |= 1 << (index & 7);
       hasCoverage = true;
       for (const [dx, dy] of QUAD_OFFSETS) {
@@ -251,13 +294,13 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
   return {
     width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
     bind(field, layer) {
-      if (hasCoverage && (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length)) throw new RangeError('field size differs from grid');
+      if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       return (x, y, out) => {
         const coverageIndex = y * width + x;
         if (!(covered[coverageIndex >> 3] & (1 << (coverageIndex & 7)))) { out.value = null; out.status = STATUS_OUTSIDE; out.support = 0; out.interpolated = false; return; }
         const fx = columns.fraction[x], fy = rows.fraction[y];
-        if (fx !== 0 && fy !== 0) {
+        if (!('coverage' in field) && fx !== 0 && fy !== 0) {
           const r0 = rows.lower[y] * grid.width, r1 = rows.upper[y] * grid.width, c0 = columns.lower[x], c1 = columns.upper[x];
           if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, out)) return;
         }
@@ -265,7 +308,8 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
         for (const [dx, dy] of QUAD_OFFSETS) {
           if ((dx && fx === 0) || (dy && fy === 0)) continue;
           const row = dy === 0 ? rows.lower[y] : rows.upper[y], column = dx === 0 ? columns.lower[x] : columns.upper[x], index = row * grid.width + column;
-          scratch.values[count] = field.values[index]; scratch.flags[count] = field.flags[index];
+          const offset = fieldOffset(field, index, grid.width);
+          scratch.values[count] = field.values[offset]; scratch.flags[count] = field.flags[offset];
           scratch.weights[count] = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
           scratch.rows[count] = row; scratch.columns[count] = column; count++;
         }
@@ -279,7 +323,7 @@ export function prepareGridSampling(mask: CoverageMask, latitudes: Float64Array,
 function prepareLocatedSample(
   grid: Grid,
   geometry: GridGeometry | null,
-  mask: CoverageMask,
+  mask: SamplingMask,
   lat: number,
   lon: number,
   index: number,
@@ -297,7 +341,7 @@ function prepareLocatedSample(
   const upperColumn = grid.wrapLongitude ? (column + 1) % grid.width : column + 1, upperRow = row + 1;
   const nearestColumn = fx < 0.5 ? column : fx > 0.5 ? upperColumn : Math.min(column, upperColumn);
   const nearestRow = fy <= 0.5 ? row : Math.min(grid.height - 1, upperRow);
-  if (!getBit(mask.output, nearestRow * grid.width + nearestColumn)) return;
+  if (!outputAt(mask, nearestColumn, nearestRow)) return;
   covered[index >> 3] |= 1 << (index & 7);
   lowerX[index] = column; lowerY[index] = row; fractionX[index] = fx; fractionY[index] = fy;
   for (const [dx, dy] of QUAD_OFFSETS) {
@@ -307,7 +351,7 @@ function prepareLocatedSample(
 }
 
 /** Projected coordinates are not separable. Retain only four numbers per requested coordinate. */
-function prepareProjectedSampling(mask: CoverageMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
+function prepareProjectedSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid, geometry = prepareGridGeometry(grid);
   const width = longitudes.length, height = latitudes.length, total = width * height;
   const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
@@ -317,15 +361,14 @@ function prepareProjectedSampling(mask: CoverageMask, latitudes: Float64Array, l
     const x = index % width, y = (index - x) / width;
     prepareLocatedSample(grid, geometry, mask, latitudes[y], longitudes[x], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
   }
-  return preparedFromCells(grid, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
+  return preparedFromCells(mask, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
 }
 
 /** One latitude/longitude pair per retained sample; coordinates outside the mask are skipped. */
-export function preparePointSampling(mask: CoverageMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
+export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid, total = latitudes.length;
   if (latitudes.length !== longitudes.length || total < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
-  if (!gridSchema.safeParse(grid).success) throw new RangeError('Invalid prepared grid');
-  if (mask.output.length !== Math.ceil(grid.width * grid.height / 8)) throw new RangeError('Coverage size differs from grid');
+  validateSamplingMask(mask);
   const geometry = grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null;
   const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
@@ -333,16 +376,16 @@ export function preparePointSampling(mask: CoverageMask, latitudes: Float64Array
   for (let index = 0; index < total; index++) {
     prepareLocatedSample(grid, geometry, mask, latitudes[index], longitudes[index], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
   }
-  return preparedFromCells(grid, total, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
+  return preparedFromCells(mask, total, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
 }
 
-function preparedFromCells(grid: Grid, width: number, lowerX: Float64Array, lowerY: Float64Array, fractionX: Float64Array, fractionY: Float64Array, covered: Uint8Array, contributorSet: Set<number>, wrap: boolean): PreparedGridSampling {
-  const total = lowerX.length, contributors = Uint32Array.from(contributorSet);
+function preparedFromCells(mask: SamplingMask, width: number, lowerX: Float64Array, lowerY: Float64Array, fractionX: Float64Array, fractionY: Float64Array, covered: Uint8Array, contributorSet: Set<number>, wrap: boolean): PreparedGridSampling {
+  const grid = mask.grid, total = lowerX.length, contributors = Uint32Array.from(contributorSet);
   return {
     width, height: total / width, contributors,
     byteLength: total * 4 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
     bind(field, layer) {
-      if (contributors.length && (field.values.length !== grid.width * grid.height || field.flags.length !== field.values.length)) throw new RangeError('field size differs from grid');
+      if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       return (x, y, out) => {
         const index = y * width + x;
@@ -350,7 +393,7 @@ function preparedFromCells(grid: Grid, width: number, lowerX: Float64Array, lowe
         const fx = fractionX[index], fy = fractionY[index];
         const column = lowerX[index], row = lowerY[index];
         const nextColumn = wrap && column + 1 === grid.width ? 0 : column + 1, nextRow = row + 1;
-        if (fx !== 0 && fy !== 0) {
+        if (!('coverage' in field) && fx !== 0 && fy !== 0) {
           const r0 = row * grid.width, r1 = nextRow * grid.width;
           if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out)) return;
         }
@@ -358,7 +401,8 @@ function preparedFromCells(grid: Grid, width: number, lowerX: Float64Array, lowe
         for (const [dx, dy] of QUAD_OFFSETS) {
           if ((dx && fx === 0) || (dy && fy === 0)) continue;
           const sourceRow = dy === 0 ? row : nextRow, sourceColumn = dx === 0 ? column : nextColumn, source = sourceRow * grid.width + sourceColumn;
-          scratch.values[count] = field.values[source]; scratch.flags[count] = field.flags[source];
+          const offset = fieldOffset(field, source, grid.width);
+          scratch.values[count] = field.values[offset]; scratch.flags[count] = field.flags[offset];
           scratch.weights[count] = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
           scratch.rows[count] = sourceRow; scratch.columns[count] = sourceColumn; count++;
         }

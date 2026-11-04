@@ -1,8 +1,9 @@
 # Serving resource budgets
 
 The API bounds concurrent requests, R2 range reads, cache memory, and response
-allocations in [apps/api/src/resources.ts](../apps/api/src/resources.ts). Latest
-validation measurements are recorded in [project status](status.md). Limits
+allocations in [apps/api/src/resources.ts](../apps/api/src/resources.ts).
+[Whole-domain measurements](whole-domain-refinement-progress.md) record current
+validation evidence; [project status](status.md) records live deployments. Limits
 apply to the combined work across all grids selected by a request.
 
 ## Cache and in-flight limits
@@ -12,7 +13,10 @@ apply to the combined work across all grids selected by a request.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
   concurrent cold loads.
 - **Coverage cache:** 16 entries, 8 MiB max; 2 concurrent cold loads. Verifies
-  descriptor and bitset SHA-256 digests on load.
+  descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
+  and compact sample layouts. Tile requests load only descriptors and tile masks.
+  Request-held sparse objects reserve shared allocation bytes until their last
+  lease ends, including after cache eviction.
 - **PMTiles directory cache:** 256 entries, 4 MiB max (96 B/entry, max 16,384
   entries/directory); 4 concurrent tile reads.
 - **Binary sample & provenance reads:** 8 concurrent loads; identical range
@@ -24,14 +28,17 @@ apply to the combined work across all grids selected by a request.
   Requests exceeding any pool or concurrency limit return uncached HTTP 503.
 
 Per-object byte caps: pointer 128 KiB, manifest 512 KiB, coverage descriptor
-128 KiB, coverage bitset 512 KiB, provenance 4 MiB, PMTiles range 1 MiB, sample
-range 256 KiB. JSON structural token caps: 8,192 for metadata, 262,144 for
+128 KiB, legacy coverage bitset 512 KiB, provenance 4 MiB, PMTiles range 1 MiB,
+combined sample ranges 256 KiB. Sparse coverage is admitted only when decoded
+masks, indexes, tiles and metadata fit the 8 MiB cache entry bound. Version-5
+numeric objects are at most 64 MiB; point requests read bounded ranges from them.
+JSON structural token caps: 8,192 for metadata, 262,144 for
 provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
 at 16 KiB.
 
-Point requests group layers by grid and read one range per group. Base MSL plus
-refined AGL uses two reads whose combined size is capped by the sample range
-budget. Matching polygon masks load lazily through the shared coverage cache.
+Point requests group layers by surface and read one range per group. GFS
+precipitation and fine lift use separate ranges within the combined sample
+budget. Retained regional patches load their coverage lazily.
 
 ## Memory envelope
 

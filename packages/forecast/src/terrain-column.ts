@@ -1,14 +1,16 @@
 import {
-  getBit, gridSchema, MAX_GRID_CELLS, prepareGridGeometry, sameGrid,
+  createSparseCoverage, getBit, gridSchema, MAX_GRID_CELLS, planWholeDomainGrid, prepareGridGeometry, sameGrid, snapGridCoordinate, sparseCoverageLookup,
   STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS,
-  type CoverageMask, type Grid
+  type CoverageMask, type Grid, type SparseCoverage, type WholeDomainGrid
 } from '@av/contracts';
 import { ReconstructedProfileWorkspace } from '@av/soaring';
 import { DEFAULT_SOARING_PARAMETERS } from '@av/soaring/parameters';
 import { saturationVaporPressureHpa } from '@av/thermodynamics';
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
+import { clearanceCell } from './clearance-cell.js';
 import { createNativeColumnScratch, readNativeColumn } from './column-input.js';
 import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './daylight.js';
+import type { FrameDiagnostics } from './frame.js';
 import type { NormalizedFrame } from './inputs.js';
 import { planSample, type GridField } from './sampler.js';
 import { columnResult, deriveColumn, type ColumnResult } from './science.js';
@@ -24,6 +26,13 @@ export interface TerrainColumnClearance {
   readonly validTime: string;
   readonly grid: Grid;
   readonly fields: { readonly 'usable-lift-msl': GridField; readonly 'usable-lift-agl': GridField };
+}
+
+export interface TerrainColumnNativeClearance {
+  readonly validTime: string;
+  readonly grid: Grid;
+  readonly diagnostics: FrameDiagnostics;
+  readonly flags: Uint8Array;
 }
 
 export interface TerrainColumnMetrics {
@@ -63,7 +72,36 @@ export interface PreparedTerrainColumns {
   readonly daylightBufferBytes: number;
   derive(frame: NormalizedFrame, terrain: { elevationM: Float32Array; valid: Uint8Array },
     time: { intervalStart: string; validTime: string },
-    options?: { daylightOnly?: boolean; probeIndices?: readonly number[]; clearance?: TerrainColumnClearance }): TerrainColumnDerivation;
+    options?: { daylightOnly?: boolean; probeIndices?: readonly number[]; clearance?: TerrainColumnClearance;
+      nativeClearance?: TerrainColumnNativeClearance }): TerrainColumnDerivation;
+}
+
+interface ColumnTraversal {
+  readonly targetCount: number;
+  readonly outputCells: number;
+  readonly slots: Uint32Array;
+  readonly weights: Float64Array;
+  readonly compactSlots: Uint32Array | null;
+  readonly donorIndices: Uint32Array;
+  readonly donorCount: number;
+  readonly coverage?: SparseCoverage;
+  createCursor(): (position: number) => { index: number; outputIndex: number; count: number; offset: number };
+}
+
+export interface PreparedPackedTerrainColumns {
+  readonly byteLength: number;
+  readonly workspaceBufferBytes: number;
+  readonly workspaceObjectBudgetBytes: number;
+  readonly outputBufferBytes: number;
+  derive(frame: NormalizedFrame, terrain: { elevationM: Float32Array; valid: Uint8Array },
+    time: { intervalStart: string; validTime: string }, options?: { daylightOnly?: boolean; probeIndices?: readonly number[];
+      nativeClearance?: TerrainColumnNativeClearance }): TerrainColumnDerivation & {
+        fields: { 'usable-lift-msl': GridField & { coverage: SparseCoverage }; 'usable-lift-agl': GridField & { coverage: SparseCoverage } }
+      };
+  deriveAsync(frame: NormalizedFrame, terrain: { elevationM: Float32Array; valid: Uint8Array },
+    time: { intervalStart: string; validTime: string }, options: { daylightOnly?: boolean; probeIndices?: readonly number[];
+      nativeClearance?: TerrainColumnNativeClearance; signal?: AbortSignal; deadlineAt?: number; yieldControl: () => Promise<void> }):
+    Promise<ReturnType<PreparedPackedTerrainColumns['derive']>>;
 }
 
 const { kelvinOffset: K, pascalsPerHectopascal: PA, waterDryAirMolarMassRatio: EPSILON,
@@ -73,6 +111,10 @@ export function terrainColumnDaylightBufferBytes(grid: Grid, timestampCount: num
   if (!Number.isSafeInteger(timestampCount) || timestampCount < 0 || timestampCount > 3 ||
       !Number.isSafeInteger(grid.width) || grid.width < 1 || !Number.isSafeInteger(grid.height) || grid.height < 1 ||
       grid.width * grid.height > MAX_GRID_CELLS) throw new RangeError('Invalid terrain column daylight capacity');
+  return daylightBytes(grid, timestampCount);
+}
+
+function daylightBytes(grid: Grid, timestampCount: number): number {
   if (timestampCount === 0) return 0;
   return grid.kind === 'regular-latlon' ? 16 * grid.height + 8 * timestampCount * grid.width + 16 * timestampCount : 24 * timestampCount;
 }
@@ -86,8 +128,8 @@ export function terrainColumnCapacity(sourceActiveCells: number, targetActiveCel
   }
   const mappingBufferBytes = sourceActiveCells * 4 + targetActiveCells * 53 + donorCount * 8;
   const daylightBufferBytes = terrainColumnDaylightBufferBytes(targetGrid, 3);
-  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 24 + daylightBufferBytes;
-  const workspaceObjectBudgetBytes = 65536 + maxLevels * 256;
+  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBufferBytes;
+  const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
   const workspaceBytes = workspaceBufferBytes + workspaceObjectBudgetBytes;
   if (![mappingBufferBytes, workspaceBufferBytes, workspaceObjectBudgetBytes, workspaceBytes].every(Number.isSafeInteger)) {
     throw new RangeError('Terrain column capacity exceeded');
@@ -160,15 +202,191 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
     weights.byteLength + compactSlots.byteLength + donorIndices.byteLength;
   const { workspaceBufferBytes, workspaceObjectBudgetBytes, workspaceBytes, daylightBufferBytes } =
     terrainColumnCapacity(activeIndices.length, targetCount, maxLevels, target, compactSlots.length);
-
+  const traversal: ColumnTraversal = {
+    targetCount, outputCells: targetCells, slots, weights, compactSlots, donorIndices, donorCount: compactSlots.length,
+    createCursor() {
+      const cell = { index: 0, outputIndex: 0, count: 0, offset: 0 };
+      return t => { cell.index = targets[t]!; cell.outputIndex = cell.index; cell.count = counts[t]!; cell.offset = t * 4; return cell; };
+    }
+  };
   return {
     byteLength, workspaceBytes, workspaceBufferBytes, workspaceObjectBudgetBytes, daylightBufferBytes,
-    derive(frame, terrain, time, options = {}) {
+    derive: columnDeriver(source, target, activeIndices, maxLevels, bridgeM, bridgeMode, fallbackMode, traversal).derive
+  };
+}
+
+export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: SparseCoverage, sourceActiveIndices: Uint32Array,
+  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string }): PreparedPackedTerrainColumns {
+  const expected = planWholeDomainGrid(plan.native, plan.k);
+  if (!sameGrid(expected.fine, plan.fine)) throw new RangeError('Invalid whole-domain terrain column grid');
+  const source = expected.native, target = expected.fine;
+  createSparseCoverage(coverage);
+  if (typeof options.expectedGridHash !== 'string' || !/^[a-f0-9]{64}$/.test(options.expectedGridHash) ||
+      coverage.gridHash !== options.expectedGridHash) throw new RangeError('Packed terrain column grid identity mismatch');
+  if (coverage.width !== target.width || coverage.height !== target.height || coverage.wrapLongitude !== target.wrapLongitude ||
+      !(sourceActiveIndices instanceof Uint32Array) || !Number.isSafeInteger(maxLevels) || maxLevels < 1 ||
+      !Number.isSafeInteger(options.maxBytes) || options.maxBytes < 0 || options.maxBytes > 2 * 1024 ** 3) {
+    throw new RangeError('Invalid packed terrain column dimensions or budget');
+  }
+  for (let i = 0; i < sourceActiveIndices.length; i++) {
+    if (sourceActiveIndices[i]! >= source.width * source.height || (i > 0 && sourceActiveIndices[i]! <= sourceActiveIndices[i - 1]!)) {
+      throw new RangeError('Invalid active indices');
+    }
+  }
+  const bridgeM = options.maximumBelowGroundExtrapolationM ?? TERRAIN_COLUMN_PARAMETERS.maximumBelowGroundExtrapolationM;
+  const bridgeMode = options.bridgeMode ?? 'neutral', fallbackMode = options.clearanceFallback ?? 'none';
+  if ((bridgeM !== TERRAIN_COLUMN_PARAMETERS.maximumBelowGroundExtrapolationM && bridgeM !== 1500) ||
+      (bridgeMode !== 'neutral' && bridgeMode !== 'lowest-layer') || (fallbackMode !== 'unsupported' && fallbackMode !== 'none')) {
+    throw new RangeError('Invalid terrain column options');
+  }
+  const targetCount = coverage.offsets[coverage.blockIds.length]!;
+  const byteLength = sourceActiveIndices.length * 4 + (target.width + target.height) * 12 +
+    (source.width + source.height) * 8 + Math.ceil(source.width * source.height / 8) + 64;
+  const workspaceBufferBytes = sourceActiveIndices.length * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
+  const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
+  const outputBufferBytes = targetCount * 10;
+  const admittedBytes = byteLength + workspaceBufferBytes + workspaceObjectBudgetBytes + outputBufferBytes;
+  if (!Number.isSafeInteger(admittedBytes) || admittedBytes > options.maxBytes) throw new RangeError('Packed terrain column byte budget exceeded');
+  const activeIndices = sourceActiveIndices.slice(), xCoordinates = new Float64Array(target.width), yCoordinates = new Float64Array(target.height);
+  for (let x = 0; x < target.width; x++) {
+    const longitude = target.lon0 + x * target.dx;
+    const wrapped = ((longitude + 180) % 360 + 360) % 360 - 180;
+    let value = snapGridCoordinate((wrapped - source.lon0) / source.dx);
+    if (source.wrapLongitude) value = snapGridCoordinate(((value % source.width) + source.width) % source.width);
+    xCoordinates[x] = Number.isFinite(value) && (source.wrapLongitude || (value >= 0 && value <= source.width - 1)) ? value : NaN;
+  }
+  for (let y = 0; y < target.height; y++) {
+    const latitude = target.lat0 + y * target.dy;
+    const value = snapGridCoordinate((latitude - source.lat0) / source.dy);
+    yCoordinates[y] = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(value) &&
+      value >= 0 && value <= source.height - 1 ? value : NaN;
+  }
+  const xNext = new Uint32Array(target.width), yNext = new Uint32Array(target.height);
+  const xHeads = new Uint32Array(source.width * 2), yHeads = new Uint32Array(source.height * 2);
+  for (let x = target.width - 1; x >= 0; x--) {
+    const value = xCoordinates[x]!;
+    if (!Number.isFinite(value)) continue;
+    const group = Math.floor(value) * 2 + (value % 1 === 0 ? 0 : 1);
+    xNext[x] = xHeads[group]!; xHeads[group] = x + 1;
+  }
+  for (let y = target.height - 1; y >= 0; y--) {
+    const value = yCoordinates[y]!;
+    if (!Number.isFinite(value)) continue;
+    const group = Math.floor(value) * 2 + (value % 1 === 0 ? 0 : 1);
+    yNext[y] = yHeads[group]!; yHeads[group] = y + 1;
+  }
+  const quads = new Uint8Array(Math.ceil(source.width * source.height / 8));
+  const columns = Math.ceil(target.width / 16);
+  let hasInvalid = false;
+  for (let block = 0; block < coverage.blockIds.length; block++) {
+    const id = coverage.blockIds[block]!;
+    for (let bit = 0; bit < 256; bit++) {
+      const maskIndex = block * 32 + (bit >> 3);
+      if (((coverage.output[maskIndex]! | coverage.halo[maskIndex]!) & (1 << (bit & 7))) === 0) continue;
+      const x = (id % columns) * 16 + bit % 16, y = Math.floor(id / columns) * 16 + Math.floor(bit / 16);
+      const nx = xCoordinates[x]!, ny = yCoordinates[y]!;
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) { hasInvalid = true; continue; }
+      const quad = Math.floor(ny) * source.width + Math.floor(nx), byte = Math.floor(quad / 8);
+      quads[byte] |= 1 << (quad % 8);
+    }
+  }
+  const slots = new Uint32Array(4), weights = new Float64Array(4), quadSlots = new Uint32Array(4);
+  const traversal: ColumnTraversal = {
+    targetCount, outputCells: targetCount, slots, weights, compactSlots: null, donorIndices: activeIndices,
+    donorCount: activeIndices.length, coverage,
+    createCursor() {
+      const cell = { index: 0, outputIndex: 0, count: 0, offset: 0 };
+      function* cells() {
+        for (let byte = 0; byte < quads.length; byte++) {
+          let bits = quads[byte]!;
+          while (bits) {
+            const bit = 31 - Math.clz32(bits & -bits), quad = byte * 8 + bit;
+            bits &= bits - 1;
+            const x0 = quad % source.width, y0 = Math.floor(quad / source.width);
+            for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+              const x = x0 + dx, y = y0 + dy, position = dy * 2 + dx;
+              if (y >= source.height || (!source.wrapLongitude && x >= source.width)) { quadSlots[position] = 0xffffffff; continue; }
+              const global = y * source.width + x % source.width;
+              let lo = 0, hi = activeIndices.length;
+              while (lo < hi) { const mid = (lo + hi) >>> 1; if (activeIndices[mid]! < global) lo = mid + 1; else hi = mid; }
+              quadSlots[position] = activeIndices[lo] === global ? lo : 0xffffffff;
+            }
+            for (let subset = 3; subset >= 0; subset--) {
+              for (let yp = yHeads[y0 * 2 + (subset >> 1)]!; yp; yp = yNext[yp - 1]!) {
+                const y = yp - 1, fy = yCoordinates[y]! - y0;
+                for (let xp = xHeads[x0 * 2 + (subset & 1)]!; xp; xp = xNext[xp - 1]!) {
+                  const x = xp - 1, packed = sparseCoverageLookup(coverage, x, y);
+                  if (!packed) continue;
+                  const fx = xCoordinates[x]! - x0;
+                  cell.index = y * target.width + x; cell.outputIndex = packed.offset; cell.count = 0;
+                  for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+                    if ((dx && fx === 0) || (dy && fy === 0)) continue;
+                    const weight = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
+                    if (weight <= 0) continue;
+                    const slot = quadSlots[dy * 2 + dx]!;
+                    if (slot === 0xffffffff) throw new RangeError(`Whole-domain donor ${(y0 + dy) * source.width + (x0 + dx) % source.width} is not an active native index`);
+                    slots[cell.count] = slot; weights[cell.count++] = weight;
+                  }
+                  yield cell;
+                }
+              }
+            }
+          }
+        }
+        if (hasInvalid) for (let block = 0; block < coverage.blockIds.length; block++) {
+          const id = coverage.blockIds[block]!;
+          let offset = coverage.offsets[block]!;
+          for (let bit = 0; bit < 256; bit++) {
+            const maskIndex = block * 32 + (bit >> 3);
+            if (((coverage.output[maskIndex]! | coverage.halo[maskIndex]!) & (1 << (bit & 7))) === 0) continue;
+            const x = (id % columns) * 16 + bit % 16, y = Math.floor(id / columns) * 16 + Math.floor(bit / 16);
+            const outputIndex = offset++;
+            if (Number.isFinite(xCoordinates[x]!) && Number.isFinite(yCoordinates[y]!)) continue;
+            cell.index = y * target.width + x; cell.outputIndex = outputIndex; cell.count = 0;
+            yield cell;
+          }
+        }
+      }
+      const iterator = cells();
+      return () => {
+        const next = iterator.next();
+        if (next.done) throw new RangeError('Packed terrain column coverage changed');
+        return next.value;
+      };
+    }
+  };
+  const validate = traversal.createCursor();
+  for (let i = 0; i < targetCount; i++) validate(i);
+  const deriver = columnDeriver(source, target, activeIndices, maxLevels, bridgeM, bridgeMode, fallbackMode, traversal);
+  let busy = false;
+  return { byteLength, workspaceBufferBytes, workspaceObjectBudgetBytes, outputBufferBytes,
+    derive: (frame, terrain, time, deriveOptions) => {
+      if (deriveOptions && 'clearance' in deriveOptions) throw new RangeError('Packed terrain columns do not accept dense clearance');
+      if (busy) throw new Error('Packed terrain column derivation is already running');
+      return deriver.derive(frame, terrain, time, deriveOptions) as ReturnType<PreparedPackedTerrainColumns['derive']>;
+    },
+    deriveAsync: async (frame, terrain, time, deriveOptions) => {
+      if (deriveOptions && 'clearance' in deriveOptions) throw new RangeError('Packed terrain columns do not accept dense clearance');
+      if (busy) throw new Error('Packed terrain column derivation is already running');
+      busy = true;
+      try {
+        return await deriver.deriveAsync(frame, terrain, time, deriveOptions) as ReturnType<PreparedPackedTerrainColumns['derive']>;
+      } finally { busy = false; }
+    } };
+}
+
+function columnDeriver(source: Grid, target: Grid, activeIndices: Uint32Array, maxLevels: number, bridgeM: number,
+  bridgeMode: 'neutral' | 'lowest-layer', fallbackMode: 'unsupported' | 'none', traversal: ColumnTraversal) {
+  const { targetCount, outputCells, slots, weights, compactSlots, donorIndices, donorCount } = traversal;
+  const sourceCells = source.width * source.height, targetCells = target.width * target.height;
+  function* run(frame: Parameters<PreparedTerrainColumns['derive']>[0], terrain: Parameters<PreparedTerrainColumns['derive']>[1],
+    time: Parameters<PreparedTerrainColumns['derive']>[2], options: NonNullable<Parameters<PreparedTerrainColumns['derive']>[3]> = {}):
+    Generator<void, TerrainColumnDerivation> {
       if (!sameGrid(frame.grid, source) || frame.activeIndices.length !== activeIndices.length ||
           frame.activeIndices.some((value, i) => value !== activeIndices[i])) throw new Error('Normalized input grid or active-index identity mismatch');
       const levelCount = frame.pressurePa?.length ?? frame.pressureLevelsHpa?.length ?? 0;
       if (levelCount < 1 || levelCount > maxLevels || !(terrain.elevationM instanceof Float32Array) ||
-          !(terrain.valid instanceof Uint8Array) || terrain.elevationM.length !== targetCells || terrain.valid.length !== targetCells) {
+          !(terrain.valid instanceof Uint8Array) || terrain.elevationM.length !== outputCells || terrain.valid.length !== outputCells) {
         throw new RangeError('Invalid terrain column frame or terrain');
       }
       const requested = options.probeIndices ?? [];
@@ -178,6 +396,8 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
       const start = Date.parse(time.intervalStart), end = Date.parse(time.validTime);
       if (options.daylightOnly !== false && (!Number.isFinite(start) || !Number.isFinite(end) || start > end)) throw new RangeError('Invalid terrain column daylight interval');
       const clearance = options.clearance;
+      const nativeClearance = options.nativeClearance;
+      if (clearance && nativeClearance) throw new RangeError('Choose one terrain clearance input');
       if (clearance) {
         const cm = clearance.fields?.['usable-lift-msl'], ca = clearance.fields?.['usable-lift-agl'];
         if (clearance.methodId !== TERRAIN_CLEARANCE_METHOD.id || !sameGrid(clearance.grid, target) || !Number.isFinite(end) || Date.parse(clearance.validTime) !== end ||
@@ -187,22 +407,35 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
           throw new RangeError('Invalid terrain clearance frame, grid or fields');
         }
       }
+      if (nativeClearance) {
+        const d = nativeClearance.diagnostics;
+        if (!sameGrid(nativeClearance.grid, source) || !Number.isFinite(end) || Date.parse(nativeClearance.validTime) !== end ||
+            Date.parse(frame.validAt) !== end || !(d?.ceilingMslM instanceof Float32Array) ||
+            !(d.buoyancyM2S3 instanceof Float32Array) || !(d.branch instanceof Uint8Array) ||
+            !(nativeClearance.flags instanceof Uint8Array) || d.ceilingMslM.length !== sourceCells ||
+            d.buoyancyM2S3.length !== sourceCells || d.branch.length !== sourceCells || nativeClearance.flags.length !== sourceCells) {
+          throw new RangeError('Invalid native terrain clearance frame, grid or fields');
+        }
+      }
       const timestamps = options.daylightOnly === false ? [] : buildIntervalDaylightTimestampsMs(start, end);
-      const actualDaylightBufferBytes = terrainColumnDaylightBufferBytes(target, timestamps.length);
+      const actualDaylightBufferBytes = daylightBytes(target, timestamps.length);
       const daylight = createMaskDaylightTester(target, timestamps);
-      const msl: GridField = { values: new Float32Array(targetCells), flags: new Uint8Array(targetCells).fill(STATUS_OUTSIDE) };
-      const agl: GridField = { values: new Float32Array(targetCells), flags: new Uint8Array(targetCells).fill(STATUS_OUTSIDE) };
+      const msl: GridField = { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells).fill(STATUS_OUTSIDE) };
+      const agl: GridField = { values: new Float32Array(outputCells), flags: new Uint8Array(outputCells).fill(STATUS_OUTSIDE) };
       const metrics: TerrainColumnMetrics = { outside: targetCells - targetCount, dark: 0, invalidDem: 0, missingDonor: 0,
         invalidDonorInput: 0, unsupportedHeight: 0, belowGroundBridgeExceeded: 0, invalidSurfaceState: 0,
         solverRejected: 0, valid: 0, noLift: 0, belowGroundBridge: 0, profileTop: 0,
         filledBelowGroundBridgeExceeded: 0, belowGroundBridgeExceededObserved: 0, column: 0, clearance: 0 };
-      const workspace = new ReconstructedProfileWorkspace(compactSlots.length, maxLevels);
-      const donorState = new Uint8Array(compactSlots.length), scratch = createNativeColumnScratch(maxLevels);
-      const donorSpecificHumidity = new Float64Array(compactSlots.length), donorRelativeHumidity = new Float64Array(compactSlots.length);
+      const workspace = new ReconstructedProfileWorkspace(donorCount, maxLevels);
+      const donorState = new Uint8Array(donorCount), scratch = createNativeColumnScratch(maxLevels);
+      const donorSpecificHumidity = new Float64Array(donorCount), donorRelativeHumidity = new Float64Array(donorCount);
+      const clearanceResult = { msl: 0, agl: 0, flags: 0 };
+      const cursor = traversal.createCursor();
       for (let t = 0; t < targetCount; t++) {
-        const index = targets[t]!, h = terrain.elevationM[index]!, count = counts[t]!, offset = t * 4;
-        msl.values[index] = NaN; agl.values[index] = NaN;
-        msl.flags[index] = STATUS_UNAVAILABLE; agl.flags[index] = STATUS_UNAVAILABLE;
+        if (t > 0 && t % 1024 === 0) yield;
+        const cell = cursor(t), index = cell.index, outputIndex = cell.outputIndex, h = terrain.elevationM[outputIndex]!, count = cell.count, offset = cell.offset;
+        msl.values[outputIndex] = NaN; agl.values[outputIndex] = NaN;
+        msl.flags[outputIndex] = STATUS_UNAVAILABLE; agl.flags[outputIndex] = STATUS_UNAVAILABLE;
         const probe: TerrainColumnProbe | undefined = probeSet.has(index) ? {
           index, donorIndices: [], donorWeights: [], terrainM: h, referenceTerrainM: null, surfaceTemperatureK: null,
           groundEnvironmentK: null, surfaceExcessK: null, donorGroundEnvironmentK: [], donorSurfaceExcessK: [], donorGroundWeights: [], surfacePressurePa: null, humidityKgKg: null,
@@ -214,16 +447,16 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
           probes.push(probe);
         }
         const fail = (reason: keyof TerrainColumnMetrics) => { metrics[reason]++; if (probe) probe.reason = reason; };
-        if (terrain.valid[index] !== 1 || !Number.isFinite(h)) { fail('invalidDem'); continue; }
+        if (terrain.valid[outputIndex] !== 1 || !Number.isFinite(h)) { fail('invalidDem'); continue; }
         if (!count) { fail('missingDonor'); continue; }
         if (!daylight(index)) {
-          msl.values[index] = h; agl.values[index] = 0; msl.flags[index] = STATUS_NO_LIFT; agl.flags[index] = STATUS_NO_LIFT;
+          msl.values[outputIndex] = h; agl.values[outputIndex] = 0; msl.flags[outputIndex] = STATUS_NO_LIFT; agl.flags[outputIndex] = STATUS_NO_LIFT;
           metrics.dark++; if (probe) { probe.reason = 'dark'; probe.msl = h; probe.agl = 0; }
           continue;
         }
         let bad: 'missingDonor' | 'invalidDonorInput' | null = null;
         for (let i = 0; i < count; i++) {
-          const donor = slots[offset + i]!, compactSlot = compactSlots[donor]!;
+          const donor = slots[offset + i]!, compactSlot = compactSlots ? compactSlots[donor]! : donor;
           if (!donorState[donor]) {
             const n = readNativeColumn(frame, compactSlot, scratch);
             let missing = ![scratch.terrainM, scratch.surfaceTemperatureC, scratch.surfacePressureHpa,
@@ -252,19 +485,28 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
         const reconstructed = workspace.reconstruct(slots, weights, offset, count, h, bridgeM, bridgeMode);
         const depth = workspace.maximumBelowGroundDepthM;
         if (probe && Number.isFinite(depth)) probe.maxBelowGroundDepthM = depth;
-        const cm = clearance?.fields['usable-lift-msl'], ca = clearance?.fields['usable-lift-agl'];
-        const cf = ca?.flags[index], mf = cm?.flags[index], cv = ca?.values[index], mv = cm?.values[index];
-        const clearanceKnown = fallbackMode === 'unsupported' && cf !== undefined && mf !== undefined && cv !== undefined && mv !== undefined &&
-          cf === mf && (cf & ~(STATUS_MASK | SUPPORT_MASK)) === 0 &&
-          ((cf & STATUS_MASK) === STATUS_VALID ? Number.isFinite(cv) && cv > 0 : (cf & STATUS_MASK) === STATUS_NO_LIFT && cv === 0) &&
-          Number.isFinite(mv) && mv === Math.fround(h + cv);
         if (!reconstructed) {
           if (probe) for (let i = 0; i < count; i++) probe.donorGroundWeights.push(0);
           if (workspace.failure === 'belowGroundBridgeExceeded') metrics.belowGroundBridgeExceededObserved!++;
+          let mv: number | undefined, cv: number | undefined, mf: number | undefined, cf: number | undefined;
+          if (fallbackMode === 'unsupported' && workspace.failure === 'belowGroundBridgeExceeded') {
+            if (nativeClearance) {
+              if (clearanceCell(nativeClearance.diagnostics, nativeClearance.flags, slots, weights, offset, count, h, clearanceResult, donorIndices)) {
+                mv = clearanceResult.msl; cv = clearanceResult.agl; mf = clearanceResult.flags; cf = clearanceResult.flags;
+              }
+            } else {
+              const cm = clearance?.fields['usable-lift-msl'], ca = clearance?.fields['usable-lift-agl'];
+              cf = ca?.flags[index]; mf = cm?.flags[index]; cv = ca?.values[index]; mv = cm?.values[index];
+            }
+          }
+          const clearanceKnown = cf !== undefined && mf !== undefined && cv !== undefined && mv !== undefined &&
+            cf === mf && (cf & ~(STATUS_MASK | SUPPORT_MASK)) === 0 &&
+            ((cf & STATUS_MASK) === STATUS_VALID ? Number.isFinite(cv) && cv > 0 : (cf & STATUS_MASK) === STATUS_NO_LIFT && cv === 0) &&
+            Number.isFinite(mv) && mv === Math.fround(h + cv);
           if (workspace.failure !== 'belowGroundBridgeExceeded' || !clearanceKnown) {
             fail(workspace.failure ?? 'unsupportedHeight'); continue;
           }
-          msl.values[index] = mv!; agl.values[index] = cv!; msl.flags[index] = mf!; agl.flags[index] = cf!;
+          msl.values[outputIndex] = mv!; agl.values[outputIndex] = cv!; msl.flags[outputIndex] = mf!; agl.flags[outputIndex] = cf!;
           metrics.filledBelowGroundBridgeExceeded!++; metrics.clearance!++;
           if ((cf! & STATUS_MASK) === STATUS_VALID) metrics.valid++; else metrics.noLift++;
           if (probe) Object.assign(probe, { provenance: 'clearance', msl: mv, agl: cv, reason: 'belowGroundBridgeExceeded' });
@@ -274,7 +516,7 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
         const h0 = workspace.referenceTerrainM, ef = workspace.surfaceEnvironmentAtGroundC + K;
         let t0 = 0, p0 = 0, q0 = 0, rh = 0, sh = 0, lh = 0, hSup = 0;
         for (let i = 0; i < count; i++) {
-          const slot = slots[offset + i]!, j = compactSlots[slot]!;
+          const slot = slots[offset + i]!, j = compactSlots ? compactSlots[slot]! : slot;
           const gw = workspace.groundEnvironmentWeight(slot, weights[offset + i]!);
           if (probe) probe.donorGroundWeights.push(gw);
           t0 += gw * frame.temp2mK[j]!; p0 += gw * frame.surfacePressurePa[j]!; q0 += gw * donorSpecificHumidity[slot]!;
@@ -283,9 +525,11 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
           hSup += gw * frame.terrainM[j]!;
         }
         let result: ColumnResult;
-        const nativeGround = count === 1 && weights[offset] === 1 && h === frame.terrainM[compactSlots[slots[offset]!]!];
+        const firstSlot = slots[offset]!;
+        const nativeCompact = compactSlots ? compactSlots[firstSlot]! : firstSlot;
+        const nativeGround = count === 1 && weights[offset] === 1 && h === frame.terrainM[nativeCompact];
         if (nativeGround) {
-          const n = readNativeColumn(frame, compactSlots[slots[offset]!]!, scratch);
+          const n = readNativeColumn(frame, nativeCompact, scratch);
           result = deriveColumn(scratch, n);
           if (probe) Object.assign(probe, { referenceTerrainM: h0, surfaceTemperatureK: t0, groundEnvironmentK: ef,
             surfacePressurePa: p0, humidityKgKg: q0, sensibleHeatFluxWm2: sh, latentHeatFluxWm2: lh });
@@ -305,14 +549,45 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
         if (result.msl.value === null || result.agl.value === null || !Number.isFinite(result.msl.value) || !Number.isFinite(result.agl.value)) {
           fail('solverRejected'); continue;
         }
-        agl.values[index] = result.agl.value; agl.flags[index] = result.agl.flags;
-        msl.values[index] = nativeGround ? result.msl.value : h + agl.values[index]!; msl.flags[index] = result.msl.flags;
+        agl.values[outputIndex] = result.agl.value; agl.flags[outputIndex] = result.agl.flags;
+        msl.values[outputIndex] = nativeGround ? result.msl.value : h + agl.values[outputIndex]!; msl.flags[outputIndex] = result.msl.flags;
         metrics.column!++;
-        if ((agl.flags[index]! & STATUS_MASK) === STATUS_VALID) metrics.valid++; else metrics.noLift++;
+        if ((agl.flags[outputIndex]! & STATUS_MASK) === STATUS_VALID) metrics.valid++; else metrics.noLift++;
         if (result.branch === 'profile-top') metrics.profileTop++;
-        if (probe) Object.assign(probe, { branch: result.branch, depthM: result.depthM, msl: msl.values[index], agl: agl.values[index], provenance: 'column' });
+        if (probe) Object.assign(probe, { branch: result.branch, depthM: result.depthM, msl: msl.values[outputIndex], agl: agl.values[outputIndex], provenance: 'column' });
       }
-      return { fields: { 'usable-lift-msl': msl, 'usable-lift-agl': agl }, metrics, probes, daylightBufferBytes: actualDaylightBufferBytes };
+      if (traversal.coverage && probes.length > 1) {
+        const coverage = traversal.coverage;
+        probes.sort((a, b) => sparseCoverageLookup(coverage, a.index % target.width, Math.floor(a.index / target.width))!.offset -
+          sparseCoverageLookup(coverage, b.index % target.width, Math.floor(b.index / target.width))!.offset);
+      }
+      const fields = traversal.coverage ? {
+        'usable-lift-msl': { ...msl, coverage: traversal.coverage },
+        'usable-lift-agl': { ...agl, coverage: traversal.coverage }
+      } : { 'usable-lift-msl': msl, 'usable-lift-agl': agl };
+      return { fields, metrics, probes, daylightBufferBytes: actualDaylightBufferBytes };
+  }
+  const derive: PreparedTerrainColumns['derive'] = (frame, terrain, time, options) => {
+    const iterator = run(frame, terrain, time, options);
+    for (;;) { const step = iterator.next(); if (step.done) return step.value; }
+  };
+  const deriveAsync: PreparedPackedTerrainColumns['deriveAsync'] = async (frame, terrain, time, options) => {
+    const check = () => {
+      options.signal?.throwIfAborted();
+      if (options.deadlineAt !== undefined && Date.now() >= options.deadlineAt) throw new Error('Terrain column deadline exceeded');
+    };
+    if (options.deadlineAt !== undefined && !Number.isFinite(options.deadlineAt)) throw new RangeError('Invalid terrain column deadline');
+    check();
+    await options.yieldControl();
+    check();
+    const iterator = run(frame, terrain, time, options);
+    for (;;) {
+      const step = iterator.next();
+      check();
+      if (step.done) return step.value as ReturnType<PreparedPackedTerrainColumns['derive']>;
+      await options.yieldControl();
+      check();
     }
   };
+  return { derive, deriveAsync };
 }

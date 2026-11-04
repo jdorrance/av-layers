@@ -13,6 +13,7 @@ import {
   assertNotExpired,
   coverageSummaryText,
   forecastHorizonNotice,
+  layerMaxZoom,
   formatBuildFreshness,
   formatSeriesSummary,
   frameBadge,
@@ -261,7 +262,7 @@ function startPreview(): void {
       overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
       overlayProtocol = createRasterTileProtocol(apiBaseUrl);
       maplibregl.addProtocol(overlayProtocol.scheme, overlayProtocol.load);
-      const source = previewRasterSource(template, selectedFrame, build.manifest.coverage.maxZoom, build.manifest.descriptors.attribution);
+      const source = previewRasterSource(template, selectedFrame, layerMaxZoom(build.manifest, activeLayer), build.manifest.descriptors.attribution);
       source.tiles = source.tiles.map(overlayProtocol.url);
       map.addSource(overlaySourceId, source);
       map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });

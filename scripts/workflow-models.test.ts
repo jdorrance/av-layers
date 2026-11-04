@@ -74,8 +74,11 @@ describe('multi-model workflow isolation', () => {
     expect(String(record(upload.with).path)).toContain('output/terrain/');
     const publisherSteps = record(modelJobs['build-publish']).steps as Record<string, unknown>[];
     const full = publisherSteps.find(step => step.name === 'Upload full build artifacts on failure or explicit request')!;
-    expect(String(record(full.with).path)).toContain('output/plan.json');
-    expect(String(record(full.with).path)).not.toContain('output/terrain/');
+    const fullPath = String(record(full.with).path);
+    expect(fullPath).toContain('output/plan.json');
+    expect(fullPath).toContain('output/coverage/');
+    expect(fullPath).toContain('output/terrain/');
+    expect(fullPath).toContain('output/builds/');
   });
 
   it('expands models before calling one independently serialized forecast per model', () => {

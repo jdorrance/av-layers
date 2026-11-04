@@ -2,10 +2,10 @@ import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { getProduct, type Manifest } from '@av/contracts';
+import { getProduct, type PublishedManifest } from '@av/contracts';
 import { probeApi } from './smoke-api.js';
 
-export function forecastFindings(manifest: Manifest, now: number): string[] {
+export function forecastFindings(manifest: PublishedManifest, now: number): string[] {
   const findings: string[] = [], product = getProduct(manifest.model);
   if (!product) return ['unknown-product: latest forecast model is not registered'];
   const ageHours = (now - Date.parse(manifest.createdAt)) / 3600000;

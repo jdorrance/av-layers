@@ -1,7 +1,8 @@
 import type { GeographicBounds } from '@av/contracts';
 import type { GeoTIFFImage } from 'geotiff';
 import type { ObjectStorage } from '../storage';
-import { terrainCatalogSchema, type TerrainCatalog, type TerrainGeometry, type TerrainTile } from './contract';
+import { TERRAIN_BATCH_POINTS, terrainCatalogSchema, type TerrainCatalog, type TerrainGeometry, type TerrainTile } from './contract';
+import { TERRAIN_INVENTORY_BYTES, verifyTerrainCatalogInventory } from './source.js';
 
 export const TERRAIN_READ_LIMITS = Object.freeze({
   maxReadBytes: 256 * 1024 * 1024, maxRangeBytes: 8 * 1024 * 1024,
@@ -16,11 +17,13 @@ export interface TerrainWindow {
   source: 'dem' | 'ocean';
 }
 export interface TerrainReadStats {
-  requests: number; bytesRead: number; decodedPixels: number; outputPixels: number; cacheHits: number;
+  requests: number; bytesRead: number; readBytesBound: number; decodedPixels: number; outputPixels: number; cacheHits: number;
 }
 export interface TerrainReader {
   /** Native-row bilinear elevation in EGM2008 metres. Required nodata returns null; missing assets throw. */
   sample(latitude: number, longitude: number): Promise<{ elevationM: number; source: 'dem' | 'ocean' } | null>;
+  sampleBatch?(points: readonly { latitude: number; longitude: number }[]): Promise<Array<{ elevationM: number; source: 'dem' | 'ocean' } | null>>;
+  sourceBlocks(latitude: number, longitude: number): string;
   /** Native centres inside inclusive bounds, in bounded blocks; the caller owns yielded arrays. */
   readWindows(bounds: GeographicBounds): AsyncIterable<TerrainWindow>;
   stats(): TerrainReadStats;
@@ -30,11 +33,22 @@ export interface TerrainReader {
 type Cached<T> = { promise: Promise<T>; settled: boolean; pixels: number };
 type Block = { values: Float32Array; width: number; height: number; col: number; row: number };
 type Section = { tile?: TerrainTile; geometry: TerrainGeometry; left: number; top: number; right: number; bottom: number };
+type TerrainTotals = Pick<TerrainReadLimits, 'maxReadBytes' | 'maxDecodedPixels' | 'maxOutputPixels'>;
+export type TerrainReadBudget = { readonly token: unique symbol };
+type Proof = { etag: string; key: string; sha256: string; size: number };
+const budgets = new WeakMap<TerrainReadBudget, { limits: TerrainTotals; stats: TerrainReadStats; etags: Map<string, Proof>; inBatch: boolean; readerOpen: boolean; dataId?: string; signal?: AbortSignal; deadlineAt?: number }>();
+export function createTerrainReadBudget(limits: TerrainTotals, options: { deadlineAt?: number; signal?: AbortSignal } = {}): TerrainReadBudget {
+  if (Object.keys(limits).length !== 3 || Object.keys(limits).some(key => !['maxReadBytes', 'maxDecodedPixels', 'maxOutputPixels'].includes(key)) || Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw new Error('Invalid terrain total limit');
+  if (options.deadlineAt !== undefined && (!Number.isSafeInteger(options.deadlineAt) || options.deadlineAt < 1)) throw new Error('Invalid terrain deadline');
+  const budget = {} as TerrainReadBudget;
+  budgets.set(budget, { limits: { ...limits }, stats: { requests: 0, bytesRead: 0, readBytesBound: 0, decodedPixels: 0, outputPixels: 0, cacheHits: 0 }, etags: new Map(), inBatch: false, readerOpen: false, ...options });
+  return budget;
+}
 
 /** One preparation lifetime: immutable catalog, bounded range I/O and decoded-block reuse, no model dependency. */
 export async function createTerrainReader(options: {
   catalog: TerrainCatalog; storage: Pick<ObjectStorage, 'get' | 'head'>;
-  limits?: Partial<TerrainReadLimits>; signal?: AbortSignal;
+  limits?: Partial<TerrainReadLimits>; budget?: TerrainReadBudget; signal?: AbortSignal;
 }): Promise<TerrainReader> {
   const catalog = terrainCatalogSchema.parse(options.catalog);
   const limits = { ...TERRAIN_READ_LIMITS, ...options.limits };
@@ -42,20 +56,36 @@ export async function createTerrainReader(options: {
     if (!Object.hasOwn(TERRAIN_READ_LIMITS, key) || !Number.isSafeInteger(value) || value < 1
         || value > TERRAIN_READ_LIMITS[key as keyof TerrainReadLimits]) throw new Error('Invalid terrain read limit');
   }
+  const budget = options.budget ? budgets.get(options.budget) : undefined;
+  if (options.budget && !budget) throw new Error('Invalid terrain read budget');
+  if (budget?.dataId && budget.dataId !== catalog.dataId) throw new Error('Terrain read budget catalog mismatch');
+  if (budget?.readerOpen) throw new Error('Terrain shared budget already has a reader');
   const stopped = new AbortController();
-  const signal = options.signal ? AbortSignal.any([options.signal, stopped.signal]) : stopped.signal;
+  const signals = [options.signal, budget?.signal, stopped.signal].filter((value): value is AbortSignal => value !== undefined);
+  const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals);
   signal.throwIfAborted();
-  const { BaseClient, BaseResponse, fromCustomClient } = await import('geotiff');
-  signal.throwIfAborted();
+  if (budget?.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) throw new Error('Terrain preparation deadline exceeded');
+  if (budget) { budget.readerOpen = true; budget.dataId = catalog.dataId; }
+  let geotiff: typeof import('geotiff');
+  try { geotiff = await import('geotiff'); signal.throwIfAborted(); }
+  catch (error) { if (budget) budget.readerOpen = false; throw error; }
+  const { BaseClient, BaseResponse, fromCustomClient } = geotiff;
   const tiles = new Map(catalog.tiles.map(tile => [`${tile.south}/${tile.west}`, tile]));
   const opened = new Map<string, Cached<GeoTIFFImage>>();
-  const etags = new Map<string, string>();
+  const etags = budget?.etags ?? new Map<string, Proof>();
   const blocks = new Map<string, Cached<Block>>();
   let cachedPixels = 0;
-  const stats: TerrainReadStats = { requests: 0, bytesRead: 0, decodedPixels: 0, outputPixels: 0, cacheHits: 0 };
-  function spend(kind: 'bytesRead' | 'decodedPixels' | 'outputPixels', amount: number, maximum: number): void {
+  const stats: TerrainReadStats = budget?.stats ?? { requests: 0, bytesRead: 0, readBytesBound: 0, decodedPixels: 0, outputPixels: 0, cacheHits: 0 };
+  let batchStart: TerrainReadStats | undefined;
+  let inventoryProof: Promise<void> | undefined;
+  let inBatch = false;
+  let closed = false;
+  function spend(kind: 'readBytesBound' | 'decodedPixels' | 'outputPixels', amount: number, maximum: number): void {
     signal.throwIfAborted();
-    if (!Number.isSafeInteger(amount) || amount < 0 || stats[kind] + amount > maximum) throw new Error(`Terrain ${kind} budget exceeded`);
+    if (budget?.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) throw new Error('Terrain preparation deadline exceeded');
+    const totalMaximum = kind === 'readBytesBound' ? budget?.limits.maxReadBytes ?? maximum : kind === 'decodedPixels' ? budget?.limits.maxDecodedPixels ?? maximum : budget?.limits.maxOutputPixels ?? maximum;
+    if (!Number.isSafeInteger(amount) || amount < 0 || !Number.isSafeInteger(stats[kind] + amount)
+        || stats[kind] + amount > totalMaximum || (batchStart ? stats[kind] - batchStart[kind] + amount : stats[kind] + amount) > maximum) throw new Error(`Terrain ${kind} budget exceeded`);
     stats[kind] += amount;
   }
   function touch<T>(cache: Map<string, T>, key: string): T | undefined {
@@ -77,12 +107,39 @@ export async function createTerrainReader(options: {
     while (opened.size >= limits.maxOpenTiles) evict(opened);
     const entry: Cached<GeoTIFFImage> = { promise: Promise.resolve(null as never), settled: false, pixels: 0 };
     entry.promise = (async () => {
-      stats.requests++;
-      const head = await options.storage.head(tile.asset.key, signal);
-      signal.throwIfAborted();
-      if (!head || head.size !== tile.asset.bytes || (etags.has(key) && etags.get(key) !== head.etag)) throw new Error(`Missing or changed terrain asset: ${key}`);
-      const expectedEtag = head.etag;
-      etags.set(key, expectedEtag);
+      const previous = etags.get(key), reserved = previous ? 0 : tile.asset.bytes;
+      if (reserved) spend('readBytesBound', reserved, limits.maxReadBytes);
+      let actual = 0, expectedEtag: string;
+      try {
+        stats.requests++;
+        const head = await options.storage.head(tile.asset.key, signal);
+        signal.throwIfAborted();
+        if (!head || head.size !== tile.asset.bytes || (previous && (previous.etag !== head.etag || previous.key !== tile.asset.key || previous.sha256 !== tile.asset.sha256 || previous.size !== head.size))) throw new Error(`Missing or changed terrain asset: ${key}`);
+        expectedEtag = head.etag;
+        if (!previous) {
+          let digest = head.computedSha256;
+          if (digest !== undefined) actual = reserved;
+          else {
+            const hash = createHash('sha256');
+            if (Math.ceil(tile.asset.bytes / limits.maxRangeBytes) > 4096) throw new Error('Terrain byte range exceeds identity proof request budget');
+            for (let offset = 0; offset < tile.asset.bytes; offset += limits.maxRangeBytes) {
+              signal.throwIfAborted();
+              if (budget?.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) throw new Error('Terrain preparation deadline exceeded');
+              const length = Math.min(limits.maxRangeBytes, tile.asset.bytes - offset);
+              stats.requests++;
+              actual += length;
+              const part = await options.storage.get(tile.asset.key, { offset, length }, length, signal, () => { spend('readBytesBound', length, limits.maxReadBytes); stats.requests++; });
+              stats.bytesRead += part?.bytes.byteLength ?? 0;
+              signal.throwIfAborted();
+              if (!part || part.bytes.byteLength !== length || part.etag !== expectedEtag) throw new Error(`Missing or changed terrain range: ${key}`);
+              hash.update(part.bytes);
+            }
+            digest = hash.digest('hex');
+          }
+          if (digest !== tile.asset.sha256) throw new Error(`Invalid terrain asset hash: ${key}`);
+          etags.set(key, { etag: expectedEtag, key: tile.asset.key, sha256: tile.asset.sha256, size: head.size });
+        }
+      } finally { stats.readBytesBound -= reserved - actual; }
       class StorageClient extends BaseClient {
         async request(request?: RequestInit) {
           signal.throwIfAborted();
@@ -92,9 +149,10 @@ export async function createTerrainReader(options: {
           const offset = Number(match[1]), end = Math.min(Number(match[2]), tile.asset.bytes - 1);
           const length = end - offset + 1;
           if (!Number.isSafeInteger(offset) || offset < 0 || length < 1 || length > limits.maxRangeBytes) throw new Error('Terrain byte range exceeds bounds');
-          spend('bytesRead', length, limits.maxReadBytes);
+          spend('readBytesBound', length, limits.maxReadBytes);
           stats.requests++;
-          const result = await options.storage.get(tile.asset.key, { offset, length }, length, signal);
+          const result = await options.storage.get(tile.asset.key, { offset, length }, length, signal, () => { spend('readBytesBound', length, limits.maxReadBytes); stats.requests++; });
+          stats.bytesRead += result?.bytes.byteLength ?? 0;
           signal.throwIfAborted();
           if (!result || result.bytes.length !== length || result.etag !== expectedEtag) throw new Error(`Missing or changed terrain range: ${key}`);
           const data = result.bytes.buffer.slice(result.bytes.byteOffset, result.bytes.byteOffset + result.bytes.byteLength) as ArrayBuffer;
@@ -145,10 +203,18 @@ export async function createTerrainReader(options: {
   function tileAt(latitude: number, longitude: number) {
     return tiles.get(`${cellSouth(latitude)}/${Math.floor(wrap(longitude))}`);
   }
+  async function proveOcean(): Promise<void> {
+    if (!inventoryProof) {
+      spend('readBytesBound', TERRAIN_INVENTORY_BYTES, limits.maxReadBytes);
+      stats.requests++;
+      inventoryProof = verifyTerrainCatalogInventory(catalog, options.storage, signal, () => { spend('readBytesBound', TERRAIN_INVENTORY_BYTES, limits.maxReadBytes); stats.requests++; }).then(() => { stats.bytesRead += TERRAIN_INVENTORY_BYTES; });
+    }
+    await inventoryProof;
+  }
   async function valueAt(latitude: number, longitude: number): Promise<{ elevationM: number; source: 'dem' | 'ocean' } | null> {
     if (latitude < -90 || latitude > 90) return null;
     const lon = wrap(longitude), tile = tileAt(latitude, lon);
-    if (!tile) return { elevationM: 0, source: 'ocean' };
+    if (!tile) { await proveOcean(); return { elevationM: 0, source: 'ocean' }; }
     const g = tile.geometry;
     const x = snap((lon - g.lon0) / g.dx), y = snap((latitude - g.lat0) / g.dy);
     if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= g.width || y < 0 || y >= g.height) return null;
@@ -165,23 +231,77 @@ export async function createTerrainReader(options: {
     const second = await valueAt(latitude, g.lon0 + (left + 1) * g.dx);
     return mix(first, second, fraction);
   }
+  function pointBlocks(latitude: number, longitude: number): string {
+    const lon = wrap(longitude), tile = tileAt(latitude, lon);
+    const g = tile?.geometry ?? oceanGeometry(cellSouth(latitude), Math.floor(lon));
+    const y = snap((latitude - g.lat0) / g.dy), top = Math.floor(y), keys = new Set<string>();
+    const rows = [g.lat0 + top * g.dy];
+    if (y !== top) rows.push(g.lat0 + (top + 1) * g.dy);
+    for (const lat of rows) {
+      const rowTile = tileAt(lat, lon), rowGeometry = rowTile?.geometry ?? oceanGeometry(cellSouth(lat), Math.floor(lon));
+      const x = snap((lon - rowGeometry.lon0) / rowGeometry.dx), left = Math.floor(x);
+      const columns = [rowGeometry.lon0 + left * rowGeometry.dx];
+      if (x !== left) columns.push(rowGeometry.lon0 + (left + 1) * rowGeometry.dx);
+      for (const column of columns) {
+        if (lat < -90 || lat > 90) continue;
+        const wrapped = wrap(column), donor = tileAt(lat, wrapped);
+        if (!donor) continue;
+        const dx = snap((wrapped - donor.geometry.lon0) / donor.geometry.dx);
+        const dy = snap((lat - donor.geometry.lat0) / donor.geometry.dy);
+        if (!Number.isInteger(dx) || !Number.isInteger(dy) || dx < 0 || dx >= donor.geometry.width || dy < 0 || dy >= donor.geometry.height) continue;
+        keys.add(`${donor.id}/${Math.floor(dx / catalog.packing.blockSize)}/${Math.floor(dy / catalog.packing.blockSize)}`);
+      }
+    }
+    return [...keys].sort().join('|');
+  }
+  function validatePoint(latitude: number, longitude: number): void {
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) throw new Error('Invalid terrain point');
+  }
+  async function samplePoint(latitude: number, longitude: number) {
+    const lon = wrap(longitude), tile = tileAt(latitude, lon);
+    const g = tile?.geometry ?? oceanGeometry(cellSouth(latitude), Math.floor(lon));
+    const y = snap((latitude - g.lat0) / g.dy), top = Math.floor(y), fraction = y - top;
+    const first = await rowValue(g.lat0 + top * g.dy, lon);
+    if (!first || fraction === 0) return first;
+    const second = await rowValue(g.lat0 + (top + 1) * g.dy, lon);
+    return mix(first, second, fraction);
+  }
   return {
+    sourceBlocks(latitude, longitude) { validatePoint(latitude, longitude); return pointBlocks(latitude, longitude); },
     async sample(latitude, longitude) {
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) throw new Error('Invalid terrain point');
+      if (budget) throw new Error('Terrain shared budget requires batch reads');
+      validatePoint(latitude, longitude);
       spend('outputPixels', 1, limits.maxOutputPixels);
-      const lon = wrap(longitude), tile = tileAt(latitude, lon);
-      const g = tile?.geometry ?? oceanGeometry(cellSouth(latitude), Math.floor(lon));
-      const y = snap((latitude - g.lat0) / g.dy), top = Math.floor(y), fraction = y - top;
-      const first = await rowValue(g.lat0 + top * g.dy, lon);
-      if (!first || fraction === 0) return first;
-      const second = await rowValue(g.lat0 + (top + 1) * g.dy, lon);
-      return mix(first, second, fraction);
+      return samplePoint(latitude, longitude);
+    },
+    async sampleBatch(points) {
+      signal.throwIfAborted();
+      if (inBatch || budget?.inBatch) throw new Error('Terrain concurrent batches exceed budget');
+      if (points.length > TERRAIN_BATCH_POINTS) throw new Error('Terrain batch point budget exceeded');
+      for (const point of points) validatePoint(point.latitude, point.longitude);
+      inBatch = true;
+      if (budget) budget.inBatch = true;
+      batchStart = budget ? { ...stats } : undefined;
+      try {
+        spend('outputPixels', points.length, limits.maxOutputPixels);
+        const ordered = points.map((point, index) => ({ point, index, blocks: pointBlocks(point.latitude, point.longitude) }));
+        ordered.sort((a, b) => a.blocks < b.blocks ? -1 : a.blocks > b.blocks ? 1 : a.index - b.index);
+        const result: Array<{ elevationM: number; source: 'dem' | 'ocean' } | null> = Array(points.length);
+        for (const { point, index } of ordered) {
+          signal.throwIfAborted();
+          if (budget?.deadlineAt !== undefined && Date.now() >= budget.deadlineAt) throw new Error('Terrain preparation deadline exceeded');
+          result[index] = await samplePoint(point.latitude, point.longitude);
+        }
+        return result;
+      } finally { batchStart = undefined; inBatch = false; if (budget) { budget.inBatch = false; if (closed) budget.readerOpen = false; } }
     },
     async *readWindows(bounds) {
+      if (budget) throw new Error('Terrain shared budget requires batch reads');
       signal.throwIfAborted();
       const sections = sectionsFor(bounds, tiles, limits.maxOutputPixels - stats.outputPixels);
       const count = sections.reduce((sum, part) => sum + (part.right - part.left) * (part.bottom - part.top), 0);
       spend('outputPixels', count, limits.maxOutputPixels);
+      if (sections.some(part => !part.tile)) await proveOcean();
       const size = catalog.packing.blockSize;
       for (const part of sections) {
         for (let row = part.top; row < part.bottom;) {
@@ -208,7 +328,7 @@ export async function createTerrainReader(options: {
       }
     },
     stats: () => ({ ...stats }),
-    close() { stopped.abort(new Error('Terrain reader closed')); opened.clear(); blocks.clear(); etags.clear(); cachedPixels = 0; }
+    close() { if (closed) return; closed = true; stopped.abort(new Error('Terrain reader closed')); opened.clear(); blocks.clear(); if (budget && !inBatch) budget.readerOpen = false; else if (!budget) etags.clear(); cachedPixels = 0; }
   };
 }
 
@@ -267,3 +387,4 @@ function sectionsFor(bounds: GeographicBounds, tiles: Map<string, TerrainTile>, 
   }
   return result;
 }
+import { createHash } from 'node:crypto';

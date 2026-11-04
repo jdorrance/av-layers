@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { Grid } from '@av/contracts';
+import type { Grid, SparseCoverage } from '@av/contracts';
 import { readLocalFile } from '../local-file.js';
 import type { ObjectStorage } from '../storage.js';
 import { localPath } from '../validate.js';
 import { readPreparedTerrain, type PreparedTerrainRef } from './prepare.js';
 import { CATALOG_MAX_BYTES, parseJson, sha256, terrainAssetSchema, terrainCatalogSchema, type TerrainAsset } from './contract.js';
+import { readSparsePreparedTerrain, validateSparsePreparedTerrain, type SparseTerrainRef } from './sparse.js';
 
 interface LocalTerrainOptions { ref: PreparedTerrainRef; out: string; grid: Grid; signal?: AbortSignal }
 
@@ -49,4 +50,25 @@ export async function stagePreparedTerrain({ ref, storage, out, grid, signal }: 
       await rename(temporary, path);
     } finally { await rm(temporary, { force: true }); }
   }
+}
+
+export function loadSparsePreparedTerrain({ ref, out, grid, coverage, coverageDescriptor, signal }: { ref: SparseTerrainRef; out: string; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal }) {
+  return readSparsePreparedTerrain(ref, asset => readLocalFile(localPath(out, asset.key), asset.bytes, asset.bytes), grid, coverage, coverageDescriptor, signal);
+}
+
+export async function stageSparsePreparedTerrain({ ref, storage, out, grid, coverage, coverageDescriptor, signal }: { ref: SparseTerrainRef; storage: Pick<ObjectStorage, 'get'>; out: string; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal }): Promise<void> {
+  const pending: Array<{ key: string; path: string; temporary: string }> = [];
+  try {
+    await validateSparsePreparedTerrain(ref, async asset => {
+      const result = await storage.get(asset.key, undefined, asset.bytes, signal);
+      if (!result) throw new Error(`Sparse terrain asset missing: ${asset.key}`);
+      const path = localPath(out, asset.key), temporary = `${path}.${randomUUID()}.tmp`;
+      await mkdir(dirname(path), { recursive: true });
+      pending.push({ key: asset.key, path, temporary });
+      await writeFile(temporary, result.bytes, { flag: 'wx' });
+      return result.bytes;
+    }, grid, coverage, coverageDescriptor, signal);
+    pending.sort((a, b) => Number(a.key === ref.key) - Number(b.key === ref.key));
+    for (const item of pending) { signal?.throwIfAborted(); await rename(item.temporary, item.path); }
+  } finally { await Promise.all(pending.map(item => rm(item.temporary, { force: true }))); }
 }

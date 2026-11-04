@@ -39,16 +39,31 @@ export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metri
 export function countRead(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.r2Reads++; }
 export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.cacheHits++; }
 
+export function waitFor<T>(promise: Promise<T>, signal?: AbortSignal, discard?: (value: T) => void): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    let cancelled = false;
+    const abort = () => { cancelled = true; reject(signal.reason); };
+    if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    promise.then(value => { if (cancelled) discard?.(value); else resolve(value); }, reject)
+      .finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
 /** Share only completed plain values, never an R2 object, response or readable stream. */
 export class MaterializedReads<T> {
-  private pending = new Map<string, { promise: Promise<T>; waiters: number; deadlineError?: Error }>();
+  private pending = new Map<string, { promise: Promise<T>; deadlineError?: Error }>();
   private waiters = 0;
   constructor(readonly maxPending = 16, readonly timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, readonly maxWaiters = 32) {}
-  run(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext): Promise<T> {
+  run(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<T> {
+    if (waiterSignal?.aborted) return Promise.reject(waiterSignal.reason);
     const existing = this.pending.get(key);
     if (existing?.deadlineError) return Promise.reject(existing.deadlineError);
     if (this.waiters >= this.maxWaiters) return Promise.reject(new ResourceLimitError('Too many concurrent object waiters'));
-    if (existing) { existing.waiters++; this.waiters++; if (ctx?.metrics) ctx.metrics.coalesced++; return existing.promise; }
+    if (existing) {
+      this.waiters++; if (ctx?.metrics) ctx.metrics.coalesced++;
+      return waitFor(existing.promise, waiterSignal).finally(() => { this.waiters--; });
+    }
     if (this.pending.size >= this.maxPending) return Promise.reject(new ResourceLimitError('Too many concurrent object reads'));
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
@@ -60,20 +75,20 @@ export class MaterializedReads<T> {
     }, this.timeoutMs); });
     // R2 get() cannot be cancelled. A caller deadline must not release its
     // owner's admission slot while that underlying operation is still alive.
-    const operation = Promise.resolve().then(() => load(controller.signal)).finally(() => this.pending.delete(key));
+    const operation = (async () => load(controller.signal))().finally(() => this.pending.delete(key));
     this.waiters++;
-    const entry: { promise: Promise<T>; waiters: number; deadlineError?: Error } = {
-      promise: Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); this.waiters -= entry.waiters; }),
-      waiters: 1
+    const entry: { promise: Promise<T>; deadlineError?: Error } = {
+      promise: Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); })
     };
     this.pending.set(key, entry);
     ctx?.waitUntil(operation.then(() => undefined, () => undefined));
-    return entry.promise;
+    return waitFor(entry.promise, waiterSignal).finally(() => { this.waiters--; });
   }
 }
 
 const MAX_IN_FLIGHT_READ_BYTES = 32 * 1024 * 1024;
 let reservedReadBytes = 0;
+export function inFlightAllocationBytes(): number { return reservedReadBytes; }
 
 export function reserveAllocation(bytes: number): () => void {
   if (!Number.isSafeInteger(bytes) || bytes <= 0 || reservedReadBytes + bytes > MAX_IN_FLIGHT_READ_BYTES) throw new ResourceLimitError('In-flight read byte budget exceeded');
@@ -82,9 +97,9 @@ export function reserveAllocation(bytes: number): () => void {
   return () => { if (!released) { released = true; reservedReadBytes -= bytes; } };
 }
 
-export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limit: number, ctx?: WaitContext, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<Uint8Array> {
+export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limit: number, ctx?: WaitContext, options: { signal?: AbortSignal; timeoutMs?: number; reserved?: boolean } = {}): Promise<Uint8Array> {
   let release: () => void;
-  try { release = reserveAllocation(limit * 2); }
+  try { release = options.reserved ? () => {} : reserveAllocation(limit * 2); }
   catch (error) { void stream.cancel(error).catch(() => {}); throw error; }
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -113,13 +128,13 @@ export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limi
   } finally { clearTimeout(timer); if (abort) options.signal?.removeEventListener('abort', abort); release(); reader?.releaseLock(); }
 }
 
-export async function readObjectBytes(object: R2ObjectBody, limit: number, range = false, ctx?: WaitContext, signal?: AbortSignal): Promise<Uint8Array> {
+export async function readObjectBytes(object: R2ObjectBody, limit: number, range = false, ctx?: WaitContext, signal?: AbortSignal, reserved = false): Promise<Uint8Array> {
   if (signal?.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
   if (!range && (!Number.isSafeInteger(object.size) || object.size < 0 || object.size > limit)) {
     await object.body?.cancel?.();
     throw new ResourceLimitError('Object exceeds byte budget');
   }
-  return readBoundedStream(object.body, limit, ctx, { signal });
+  return readBoundedStream(object.body, limit, ctx, { signal, reserved });
 }
 
 export function estimateJsonBytes(value: unknown): number {
@@ -212,8 +227,8 @@ export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQ
 }
 
 const binaryReads = new WeakMap<R2Bucket, MaterializedReads<Uint8Array>>();
-export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext): Promise<Uint8Array> {
+export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   let reads = binaryReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(8); binaryReads.set(bucket, reads); }
-  return reads.run(key, load, ctx);
+  return reads.run(key, load, ctx, waiterSignal);
 }

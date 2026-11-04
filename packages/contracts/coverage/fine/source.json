@@ -1,0 +1,402 @@
+{
+  "source": {
+    "dataset": "Natural Earth 1:50m Admin 0 Countries",
+    "release": "5.1.1",
+    "url": "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip",
+    "sha256": "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139",
+    "archiveBytes": 799734,
+    "license": "public-domain",
+    "excludedA3": [
+      "RUS",
+      "CHN",
+      "ATA",
+      "GRL"
+    ],
+    "excludedContinents": [
+      "Africa"
+    ],
+    "isoExceptions": [
+      {
+        "admin": "Ashmore and Cartier Islands",
+        "adm0_a3": "ATC",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Northern Cyprus",
+        "adm0_a3": "CYN",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "France",
+        "adm0_a3": "FRA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "FRA",
+        "iso_a2": "-99",
+        "iso_a2_eh": "FR"
+      },
+      {
+        "admin": "Indian Ocean Territories",
+        "adm0_a3": "IOA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Siachen Glacier",
+        "adm0_a3": "KAS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "Kosovo",
+        "adm0_a3": "KOS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "XK"
+      },
+      {
+        "admin": "Norway",
+        "adm0_a3": "NOR",
+        "iso_a3": "-99",
+        "iso_a3_eh": "NOR",
+        "iso_a2": "-99",
+        "iso_a2_eh": "NO"
+      },
+      {
+        "admin": "Somaliland",
+        "adm0_a3": "SOL",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      }
+    ],
+    "continentExclusions": [
+      {
+        "admin": "Angola",
+        "adm0_a3": "AGO",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Burundi",
+        "adm0_a3": "BDI",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Benin",
+        "adm0_a3": "BEN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Burkina Faso",
+        "adm0_a3": "BFA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Botswana",
+        "adm0_a3": "BWA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Central African Republic",
+        "adm0_a3": "CAF",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Ivory Coast",
+        "adm0_a3": "CIV",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Cameroon",
+        "adm0_a3": "CMR",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Democratic Republic of the Congo",
+        "adm0_a3": "COD",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Republic of the Congo",
+        "adm0_a3": "COG",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Comoros",
+        "adm0_a3": "COM",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Cabo Verde",
+        "adm0_a3": "CPV",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Djibouti",
+        "adm0_a3": "DJI",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Algeria",
+        "adm0_a3": "DZA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Egypt",
+        "adm0_a3": "EGY",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Eritrea",
+        "adm0_a3": "ERI",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Ethiopia",
+        "adm0_a3": "ETH",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Gabon",
+        "adm0_a3": "GAB",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Ghana",
+        "adm0_a3": "GHA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Guinea",
+        "adm0_a3": "GIN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Gambia",
+        "adm0_a3": "GMB",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Guinea-Bissau",
+        "adm0_a3": "GNB",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Equatorial Guinea",
+        "adm0_a3": "GNQ",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Kenya",
+        "adm0_a3": "KEN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Liberia",
+        "adm0_a3": "LBR",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Libya",
+        "adm0_a3": "LBY",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Lesotho",
+        "adm0_a3": "LSO",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Morocco",
+        "adm0_a3": "MAR",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Madagascar",
+        "adm0_a3": "MDG",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Mali",
+        "adm0_a3": "MLI",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Mozambique",
+        "adm0_a3": "MOZ",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Mauritania",
+        "adm0_a3": "MRT",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Malawi",
+        "adm0_a3": "MWI",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Namibia",
+        "adm0_a3": "NAM",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Niger",
+        "adm0_a3": "NER",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Nigeria",
+        "adm0_a3": "NGA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Rwanda",
+        "adm0_a3": "RWA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Western Sahara",
+        "adm0_a3": "SAH",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Sudan",
+        "adm0_a3": "SDN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "South Sudan",
+        "adm0_a3": "SDS",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Senegal",
+        "adm0_a3": "SEN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Sierra Leone",
+        "adm0_a3": "SLE",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Somaliland",
+        "adm0_a3": "SOL",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Somalia",
+        "adm0_a3": "SOM",
+        "continent": "Africa"
+      },
+      {
+        "admin": "S\u00e3o Tom\u00e9 and Principe",
+        "adm0_a3": "STP",
+        "continent": "Africa"
+      },
+      {
+        "admin": "eSwatini",
+        "adm0_a3": "SWZ",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Chad",
+        "adm0_a3": "TCD",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Togo",
+        "adm0_a3": "TGO",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Tunisia",
+        "adm0_a3": "TUN",
+        "continent": "Africa"
+      },
+      {
+        "admin": "United Republic of Tanzania",
+        "adm0_a3": "TZA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Uganda",
+        "adm0_a3": "UGA",
+        "continent": "Africa"
+      },
+      {
+        "admin": "South Africa",
+        "adm0_a3": "ZAF",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Zambia",
+        "adm0_a3": "ZMB",
+        "continent": "Africa"
+      },
+      {
+        "admin": "Zimbabwe",
+        "adm0_a3": "ZWE",
+        "continent": "Africa"
+      }
+    ]
+  },
+  "grid": {
+    "kind": "regular-latlon",
+    "width": 14400,
+    "height": 7201,
+    "earthRadiusM": 6371229,
+    "lon0": -180,
+    "lat0": 90,
+    "dx": 0.025,
+    "dy": -0.025,
+    "wrapLongitude": true
+  },
+  "gridHash": "905a0c448342d858c8ac3a6b290e81dbf23ffde3d968c20044e76de41a82e56b",
+  "k": 10,
+  "seaBufferMeters": 50000,
+  "files": {
+    "sparse": {
+      "bytes": 4426044,
+      "sha256": "bea9a151189fe07ca44ce65e84ff1dfd3579804dee0da3e392b360b17908e543"
+    },
+    "tiles": {
+      "bytes": 2731,
+      "sha256": "26df2f068e7389caf04382c5d328d046e2ba30fd17756f844bc6b4d826654704"
+    }
+  },
+  "generator": {
+    "path": "scripts/masks/build_fine_masks.py",
+    "sha256": "ddacf2df99efa75084657de63fdbb5600b269d9c0b1b3f02d24b308409996479",
+    "policySha256": "28d40b4a08cd94ddac1e34a84045ecaf19ebf4525b20eb879484e724722f3856",
+    "python": "3.14.7",
+    "geos": "3.13.1",
+    "proj": "9.5.1",
+    "packages": {
+      "shapely": "2.1.2",
+      "pyproj": "3.7.2",
+      "pyshp": "2.3.1"
+    },
+    "arguments": [
+      "--config",
+      "packages/contracts/config/gfs.json",
+      "--output",
+      "packages/contracts/coverage/fine",
+      "--k",
+      "10"
+    ]
+  }
+}

@@ -686,9 +686,9 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const mask = await loadCoverage(ICON_EU_PRODUCT);
     const indices = coverageIndices(mask);
     const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
-    expect(indices.output.length).toBe(454836);
-    expect(indices.active.length).toBe(465559);
-    expect(layout.storedCells).toBe(596769);
+    expect(indices.output.length).toBe(399913);
+    expect(indices.active.length).toBe(409684);
+    expect(layout.storedCells).toBe(528650);
 
     const daylightHours = resolveProductFrameHours(
       ICON_EU_PRODUCT,
@@ -704,7 +704,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       frameCount: daylightHours.length
     });
     expect(capacity.violations).toEqual([]);
-    expect(capacity.tilesByZoom).toEqual([1, 2, 4, 8, 16, 45, 143, 485, 1691]);
+    expect(capacity.tilesByZoom).toEqual([1, 2, 4, 8, 16, 42, 134, 434, 1514]);
   });
 
   it.skipIf(!PROBE_DIR)(

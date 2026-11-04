@@ -1,5 +1,5 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, getProduct, gridSchema, getProvenanceReference, manifestSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type LayerId, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
-import { resolveCoverage } from './coverage';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
@@ -9,9 +9,10 @@ const MEMBERSHIP_REFRESH_MS = 1_000;
 type PointerEntry = { pointer: ModelPointer; fetchedAt: number } | { problem: Problem };
 const pointerCache = new WeakMap<R2Bucket, ByteCache<ModelId, PointerEntry>>();
 const pointerReads = new WeakMap<R2Bucket, MaterializedReads<ModelPointer>>();
-const manifestCache = new WeakMap<R2Bucket, ByteCache<string, Manifest>>();
-const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: Manifest; bytes: number }>>();
-const artifactIndexes = new WeakMap<Manifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
+export type PublishedManifest = Manifest | ManifestV5;
+const manifestCache = new WeakMap<R2Bucket, ByteCache<string, PublishedManifest>>();
+const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: PublishedManifest; bytes: number }>>();
+const artifactIndexes = new WeakMap<PublishedManifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
 
 function isOperationalReadFailure(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) return true;
@@ -80,7 +81,7 @@ export async function manifest(
   entry: Awaited<ReturnType<typeof admit>>,
   ctx?: WaitContext,
   product = getProduct(model)
-): Promise<Manifest> {
+): Promise<PublishedManifest> {
   let entries = manifestCache.get(bucket);
   if (!entries) { entries = new ByteCache(64, 4 * 1024 * 1024); manifestCache.set(bucket, entries); }
   const cacheKey = `${model}/${build}`;
@@ -100,7 +101,7 @@ export async function manifest(
         if (isOperationalReadFailure(error, signal)) throw error;
         return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
       }
-      const parsed = manifestSchema.safeParse(decoded.value);
+      const parsed = (typeof decoded.value === 'object' && decoded.value !== null && 'version' in decoded.value && decoded.value.version === 5 ? manifestV5Schema : manifestSchema).safeParse(decoded.value);
       if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
       return { manifest: parsed.data, bytes: decoded.estimatedBytes };
     }, ctx);
@@ -114,15 +115,30 @@ export async function manifest(
   ensureLive(m.expiresAt);
   if (!product || m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
-      || m.coverage.id !== product.coverageId || m.coverage.maxZoom > product.maxNativeZoom
-      || m.layers.some(layer => !product.layers.includes(layer)) || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid))) {
+      || m.layers.some(layer => !product.layers.includes(layer))
+      || (m.version === 5 ? false
+        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > product.maxNativeZoom || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid)))) {
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
-  const { layout: sampleLayout } = await resolveCoverage(bucket, m, ctx);
+  if (m.version === 5) {
+    if (product.grid.kind !== 'regular-latlon' || product.terrainSubdivisionFactor === undefined
+        || JSON.stringify(m.layers) !== JSON.stringify(product.layers)
+        || JSON.stringify(m.descriptors) !== JSON.stringify(createWholeDomainDescriptors(product))) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+    let plan: ReturnType<typeof planWholeDomainGrid>;
+    try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
+    catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }
+    for (const surface of m.surfaces) {
+      const expected = surface.kind === 'native' ? plan.native : plan.fine;
+      const gridHash = await sha256(new TextEncoder().encode(canonicalGridJson(expected)));
+      if (!sameGrid(surface.grid, expected) || surface.gridHash !== gridHash || surface.coverage.gridHash !== gridHash
+          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom !== product.maxNativeZoom) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
+    }
+  }
+  const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;
   if (!artifactIndexes.has(m)) {
     provenanceReference(m);
-    try { validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
-    if (m.samples.storedCells !== sampleLayout.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
+    try { if (m.version === 5) validateArtifactRecordsV5(m); else validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
+    if (m.version !== 5 && m.samples.storedCells !== sampleLayout!.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
     const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
     const layers = new Map(m.layers.map((layer, i) => [layer, i]));
     const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
@@ -139,7 +155,7 @@ export async function manifest(
   return m;
 }
 
-export function provenanceReference(m: Manifest) {
+export function provenanceReference(m: PublishedManifest) {
   try {
     return getProvenanceReference(m);
   } catch {
@@ -147,12 +163,12 @@ export function provenanceReference(m: Manifest) {
   }
 }
 
-export function servedSource(m: Manifest, origin: string): Manifest['source'] {
+export function servedSource(m: PublishedManifest, origin: string): Manifest['source'] {
   provenanceReference(m);
   return { ...m.source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` };
 }
 
-export function artifact(m: Manifest, layer: LayerId, frame: string) {
+export function artifact(m: PublishedManifest, layer: LayerId, frame: string) {
   validateId(frame);
   if (!m.layers.includes(layer) || !m.frames.some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
   const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
@@ -164,7 +180,7 @@ export function artifact(m: Manifest, layer: LayerId, frame: string) {
   return item;
 }
 
-export function readProvenance(bucket: R2Bucket, m: Manifest, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext): Promise<Uint8Array> {
+export function readProvenance(bucket: R2Bucket, m: PublishedManifest, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext): Promise<Uint8Array> {
   return binaryRead(bucket, `${reference.key}:${reference.sha256}`, async signal => {
     // Verification stays in the coalesced operation; consumers never reparse the receipt.
     countRead(ctx);

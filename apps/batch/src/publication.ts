@@ -1,10 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, coverageDescriptorSchema, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, getProduct, getProvenanceReference, manifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, type Manifest, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
-import { assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
+import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
-import { readCoverage } from './coverage.js';
+import { loadCoverage, readCoverage, readSparseCoverage } from './coverage.js';
+import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
@@ -24,7 +26,7 @@ export function buildIdTime(id: string): number {
   return time;
 }
 
-function assertLifetime(manifest: Manifest, now: number): void {
+function assertLifetime(manifest: PublishedManifest, now: number): void {
   const start = buildIdTime(manifest.buildId);
   if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > MAX_BUILD_LIFETIME_MS || Date.parse(manifest.expiresAt) <= now) {
     throw new Error('Build is outside its publication lifetime');
@@ -44,7 +46,7 @@ async function casPointer(store: ObjectStorage, model: ModelId, pointer: ModelPo
   await store.put(pointerKey(model), encodeBoundedJson(pointer, MAX_POINTER_BYTES), etag ? { ifMatch: etag } : { ifNoneMatch: '*' }, 'application/json');
 }
 
-export function assertUsefulHorizon(manifest: Manifest, now: number): void {
+export function assertUsefulHorizon(manifest: PublishedManifest, now: number): void {
   const product = getProduct(manifest.model);
   if (!product) throw new Error('No trusted publication recipe');
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
@@ -57,7 +59,7 @@ export function assertUsefulHorizon(manifest: Manifest, now: number): void {
 }
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild }): Promise<void> {
-  const now = options.now ?? Date.now, manifest = manifestSchema.parse(raw);
+  const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
   if (options.validated) assertValidatedBuild(root, manifest, options.validated);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
@@ -74,17 +76,24 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (!options.validated) await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
-  validateArtifactRecords(manifest);
+  if (!options.validated) {
+    if (manifest.version === 5) {
+      const product = getProduct(manifest.model);
+      if (!product) throw new Error('No trusted publication recipe');
+      await validateBuild(root, manifest, await loadCoverage(product));
+    } else await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
+  }
+  if (manifest.version !== 5) validateArtifactRecords(manifest);
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
-  const files = forecastObjects(manifest);
+  const files = manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest);
   if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
   const sized = await Promise.all(files.map(async file => {
     const { size } = await stat(localPath(root, file.key));
     if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
     return { ...file, size };
   }));
-  for (const grid of forecastGrids(manifest)) {
+  if (manifest.version === 5) await publishV5Dependencies(store, root, manifest, check, options.signal);
+  else for (const grid of forecastGrids(manifest)) {
     const coverageBytes = await readLocalFile(localPath(root, grid.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
     if (sha256(coverageBytes) !== grid.coverage.hash) throw new Error('Coverage descriptor hash mismatch');
     const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
@@ -100,7 +109,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     check();
     const bytes = await readLocalFile(localPath(root, file.key), MAX_UPLOAD_ARTIFACT_BYTES, file.size);
     if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
-    check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal);
+    check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal, manifest.version === 5 && file.contentType === 'application/octet-stream');
   });
   const provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
   if (provenanceBytes.byteLength > MAX_PROVENANCE_BYTES || sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Local hash mismatch: ${provenance.key}`);
@@ -124,6 +133,72 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   }
 }
 
+async function publishV5Dependencies(store: ObjectStorage, root: string, manifest: ManifestV5, check: () => void, signal?: AbortSignal): Promise<void> {
+  const product = getProduct(manifest.model);
+  if (!product) throw new Error('No trusted publication recipe');
+  for (const surface of manifest.surfaces) {
+    const coverage = await readSparseCoverage(root, surface.coverage.hash);
+    if (!sameGrid(surface.grid, coverage.descriptor.grid) || surface.gridHash !== coverage.descriptor.gridHash || surface.coverage.id !== coverage.descriptor.id || surface.coverage.maxZoom !== coverage.descriptor.maxZoom || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Sparse coverage binding mismatch');
+    for (const name of ['sparse', 'tiles'] as const) {
+      const file = coverage.descriptor.files[name], key = `${coveragePrefix(surface.coverage.hash)}/${name}.bin`;
+      const bytes = await readLocalFile(localPath(root, key), name === 'sparse' ? MAX_SPARSE_COVERAGE_BYTES : MAX_COVERAGE_BITSET_BYTES, file.bytes);
+      if (sha256(bytes) !== file.sha256) throw new Error(`Coverage ${name} hash mismatch`);
+      check(); await putImmutable(store, key, bytes, 'application/octet-stream', signal);
+    }
+    check(); await putImmutable(store, surface.coverage.maskKey, coverage.bytes, 'application/json', signal);
+    if (surface.terrain) {
+      const terrain = surface.terrain, { size } = await stat(localPath(root, terrain.key));
+      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: size, arrayBytes: coverage.mask.coverage.offsets[coverage.mask.coverage.blockIds.length] * 5 };
+      const verified = await validateSparsePreparedTerrain(ref, asset => readLocalFile(localPath(root, asset.key), asset.bytes, asset.bytes), surface.grid, coverage.mask.coverage, coverage.bytes, signal);
+      assertTerrainManifestBinding(manifest, terrain, verified.descriptor, ref.arrayBytes, product);
+      for (const asset of [...verified.descriptor.files.elevationM, ...verified.descriptor.files.valid, ref]) {
+        const bytes = await readLocalFile(localPath(root, asset.key), asset.bytes, asset.bytes);
+        if (sha256(bytes) !== asset.sha256) throw new Error(`Terrain hash mismatch: ${asset.key}`);
+        check(); await putImmutable(store, asset.key, bytes, asset.key === terrain.key ? 'application/json' : 'application/octet-stream', signal);
+      }
+    }
+  }
+}
+
+async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, signal?: AbortSignal): Promise<void> {
+  const product = getProduct(manifest.model);
+  if (!product) throw new Error('No trusted publication recipe');
+  for (const surface of manifest.surfaces) {
+    const object = await store.get(surface.coverage.maskKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, signal);
+    if (!object || sha256(object.bytes) !== surface.coverage.hash || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Rollback sparse coverage missing or corrupt');
+    const descriptor = sparseCoverageDescriptorSchema.parse(decode(object.bytes));
+    if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || sha256(Buffer.from(canonicalGridJson(descriptor.grid))) !== descriptor.gridHash || !sameGrid(descriptor.grid, surface.grid)) throw new Error('Rollback sparse coverage binding mismatch');
+    const values: Uint8Array[] = [];
+    for (const name of ['sparse', 'tiles'] as const) {
+      const file = descriptor.files[name], key = `${coveragePrefix(surface.coverage.hash)}/${name}.bin`, max = name === 'sparse' ? MAX_SPARSE_COVERAGE_BYTES : MAX_COVERAGE_BITSET_BYTES;
+      await verifyRemoteHash(store, key, file.sha256, max, file.bytes, signal);
+      const item = await store.get(key, undefined, max, signal);
+      if (!item || item.bytes.length !== file.bytes || sha256(item.bytes) !== file.sha256) throw new Error(`Rollback coverage corrupt: ${key}`);
+      values.push(item.bytes);
+    }
+    const coverage = decodeSparseCoverage(values[0], descriptor.gridHash);
+    if (coverage.width !== surface.grid.width || coverage.height !== surface.grid.height || coverage.wrapLongitude !== surface.grid.wrapLongitude) throw new Error('Rollback sparse grid mismatch');
+    assertSparseCoverageHalo(coverage);
+    assertSampleLayoutBindingV5(surface, { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds });
+    const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, surface.samples.channelCount);
+    if (layout.shards.length !== surface.samples.shards.length || layout.shards.some((item, i) => item.firstBlock !== surface.samples.shards[i].firstBlock || item.blockCount !== surface.samples.shards[i].blockCount || item.byteLength !== surface.samples.shards[i].bytes)) throw new Error('Rollback sample layout mismatch');
+    for (const shard of surface.samples.shards) await verifyRemoteHash(store, shard.key, shard.sha256, shard.bytes, shard.bytes, signal, true);
+    if (surface.terrain) {
+      const terrain = surface.terrain, head = await store.head(terrain.key, signal);
+      if (!head) throw new Error('Rollback terrain descriptor missing');
+      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: head.size, arrayBytes: coverage.offsets[coverage.blockIds.length] * 5 };
+      const verified = await validateSparsePreparedTerrain(ref, async asset => {
+        await verifyRemoteHash(store, asset.key, asset.sha256, asset.bytes, asset.bytes, signal);
+        const item = await store.get(asset.key, undefined, asset.bytes, signal);
+        if (!item) throw new Error(`Rollback terrain missing: ${asset.key}`);
+        return item.bytes;
+      }, surface.grid, coverage, object.bytes, signal);
+      assertTerrainManifestBinding(manifest, terrain, verified.descriptor, ref.arrayBytes, product);
+    }
+  }
+  for (const artifact of manifest.artifacts) await verifyRemoteHash(store, artifact.tilesKey, artifact.tilesSha256, MAX_UPLOAD_ARTIFACT_BYTES, undefined, signal);
+}
+
 export async function rollback(store: ObjectStorage, model: ModelId, target: string, authority: PublicationAuthority, now = Date.now(), options: { signal?: AbortSignal; onPointerOutcome?: (outcome: 'unconfirmed' | 'confirmed') => void } = {}): Promise<void> {
   const started = Date.now(), check = (): void => options.signal?.throwIfAborted();
   check();
@@ -136,7 +211,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   const object = await store.get(retained.manifestKey, undefined, MAX_MANIFEST_BYTES, options.signal);
   check();
   if (!object) throw new Error('Rollback manifest missing');
-  const manifest = manifestSchema.parse(decode(object.bytes));
+  const manifest = publishedManifestSchema.parse(decode(object.bytes));
   if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) {
     throw new Error('Rollback manifest does not match pointer');
   }
@@ -145,6 +220,8 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   check();
   if (!receipt || sha256(receipt.bytes) !== provenance.sha256) throw new Error(`Rollback provenance missing or corrupt: ${provenance.key}`);
   parseProvenance(decode(receipt.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  if (manifest.version === 5) await verifyV5Dependencies(store, manifest, options.signal);
+  else {
   validateArtifactRecords(manifest);
   const grids = forecastGrids(manifest);
   for (const grid of grids) {
@@ -161,6 +238,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   for (const { key, sha256: hash } of forecastObjects(manifest)) {
     await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, grids.find(grid => key === grid.samples.key)?.samples.bytes, options.signal);
   }
+  }
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   check();
   options.onPointerOutcome?.('unconfirmed'); // Persist intent before a request whose response may be lost.
@@ -174,11 +252,11 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
 }
 
 /** Verify large immutable objects with one bounded range live at a time. */
-async function verifyRemoteHash(store: ObjectStorage, key: string, expectedHash: string, maxBytes: number, expectedBytes?: number, signal?: AbortSignal): Promise<void> {
+async function verifyRemoteHash(store: ObjectStorage, key: string, expectedHash: string, maxBytes: number, expectedBytes?: number, signal?: AbortSignal, requireMetadata = false): Promise<void> {
   signal?.throwIfAborted();
   const head = await store.head(key, signal);
   signal?.throwIfAborted();
-  if (!head || !Number.isSafeInteger(head.size) || head.size < 1 || head.size > maxBytes || (expectedBytes !== undefined && head.size !== expectedBytes)) throw new Error(`Rollback object missing or invalid size: ${key}`);
+  if (!head || !Number.isSafeInteger(head.size) || head.size < 1 || head.size > maxBytes || (expectedBytes !== undefined && head.size !== expectedBytes) || (requireMetadata && head.metadata?.sha256 !== expectedHash)) throw new Error(`Rollback object missing or invalid size or metadata: ${key}`);
   const hash = createHash('sha256');
   for (let offset = 0; offset < head.size; offset += 4 * 1024 * 1024) {
     signal?.throwIfAborted();

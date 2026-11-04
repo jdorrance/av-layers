@@ -1,4 +1,4 @@
-import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type Manifest } from './index.ts';
+import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type LayerId, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { compilePaletteColor, samplePaletteValueInto } from './palette-color.ts';
 
@@ -29,12 +29,24 @@ export function samePoint(a: GeoPoint | null | undefined, b: GeoPoint | null | u
 }
 
 export function coverageSummaryText(build: PinnedBuild): string {
-  return `Coverage ${build.manifest.coverage.id}: ${build.manifest.descriptors.coverageDescription}`;
+  const manifest = build.manifest;
+  const ids = manifest.version === 5 ? manifest.surfaces.map(surface => surface.coverage.id).join(', ') : manifest.coverage.id;
+  return `Coverage ${ids}: ${manifest.descriptors.coverageDescription}`;
+}
+
+export function layerMaxZoom(manifest: PinnedBuild['manifest'], layer: LayerId): number {
+  if (manifest.version !== 5) return manifest.coverage.maxZoom;
+  const surface = manifest.surfaces.find(surface => surface.layers.includes(layer));
+  if (!surface) throw new Error(`No surface owns ${layer}`);
+  return surface.coverage.maxZoom;
+}
+
+function gridSpacing(grid: Manifest['grid']): string {
+  return grid.kind === 'regular-latlon' ? `${grid.dx}° × ${Math.abs(grid.dy)}°` : `${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m`;
 }
 
 export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]> {
   const manifest = build.manifest;
-  const grid = manifest.grid;
   const source = manifest.source as Record<string, unknown>;
   const model = typeof source.model === 'string' ? source.model : build.manifest.model.toUpperCase();
   const native = typeof source.nativeResolutionDeg === 'number' ? `${source.nativeResolutionDeg}° native columns` : 'native model columns';
@@ -46,9 +58,19 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Cycle', manifest.cycle],
     ['Horizon', `${horizonStart} → ${horizonEnd}`],
     ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
-    ['Source', `${model} · ${native}`],
-    ['Display', `z0–${build.manifest.coverage.maxZoom} · ${RASTER_TILE_SIZE} px raster · overzoomed above z${build.manifest.coverage.maxZoom}`],
-    ['Grid', grid.kind === 'regular-latlon' ? `${grid.width} × ${grid.height} · ${grid.dx}° × ${Math.abs(grid.dy)}° regular latitude/longitude` : `${grid.width} × ${grid.height} · ${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m Lambert conformal`],
+    ['Source', `${model} · ${native}`]
+  ];
+  if (manifest.version === 5) {
+    for (const surface of manifest.surfaces) {
+      rows.push([`Surface ${surface.id}`, `${surface.grid.width} × ${surface.grid.height} · ${gridSpacing(surface.grid)} · ${surface.layers.join(', ')} · z0–${surface.coverage.maxZoom}`]);
+    }
+  } else {
+    rows.push(
+      ['Display', `z0–${manifest.coverage.maxZoom} · ${RASTER_TILE_SIZE} px raster · overzoomed above z${manifest.coverage.maxZoom}`],
+      ['Grid', manifest.grid.kind === 'regular-latlon' ? `${manifest.grid.width} × ${manifest.grid.height} · ${gridSpacing(manifest.grid)} regular latitude/longitude` : `${manifest.grid.width} × ${manifest.grid.height} · ${gridSpacing(manifest.grid)} Lambert conformal`]
+    );
+  }
+  rows.push(
     ['Coverage', manifest.descriptors.coverageDescription],
     ['Recipe', `${manifest.recipe.id} · ${manifest.recipe.hash.slice(0, 12)}…`],
     ...manifest.layers.map(layer => {
@@ -56,8 +78,8 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
       return [descriptor.label, `${descriptor.units} · ${descriptor.verticalReference} · ${descriptor.timeSupport} · ${descriptor.methodId}`] as [string, string];
     }),
     ['Expires', manifest.expiresAt]
-  ];
-  for (const patch of manifest.patches ?? []) {
+  );
+  for (const patch of manifest.version === 5 ? [] : manifest.patches ?? []) {
     rows.push([`Refinement ${patch.id}`, `${patch.grid.width} × ${patch.grid.height} · ${patch.method.id}`]);
     for (const layer of patch.layers) {
       const descriptor = patch.descriptors.layers[layer];
@@ -88,14 +110,14 @@ export function formatSupportFlags(support: number): string {
 }
 
 export function formatSeriesSummary(
-  payload: { frames: readonly FrameSample[]; method: unknown; coverage: unknown; expiresAt: string },
+  payload: { frames: readonly FrameSample[]; method: unknown; coverage?: unknown; surfaces?: readonly { id: string }[]; expiresAt: string },
   layers: readonly string[],
   point: GeoPoint
 ): string {
   const method = payload.method as { id?: unknown } | null;
   const coverage = payload.coverage as { id?: unknown } | null;
-  const patches = [...new Set(payload.frames.flatMap(frame => layers.flatMap(layer => frame.layers[layer]?.patchId ? [frame.layers[layer].patchId!] : [])))];
-  return `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)} · ${payload.frames.length} frames × ${layers.length} layers · ${patches.length ? 'base method' : 'method'} ${String(method?.id ?? 'unknown')}${patches.length ? ` · refinement ${patches.join(', ')}` : ''} · coverage ${String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
+  const patches = [...new Set(payload.frames.flatMap(frame => layers.flatMap(layer => { const value = frame.layers[layer]; return value && 'patchId' in value && value.patchId ? [value.patchId] : []; })))];
+  return `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)} · ${payload.frames.length} frames × ${layers.length} layers · ${patches.length ? 'base method' : 'method'} ${String(method?.id ?? 'unknown')}${patches.length ? ` · refinement ${patches.join(', ')}` : ''} · coverage ${payload.surfaces?.map(surface => surface.id).join(', ') ?? String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
 }
 
 /** Pure presentation models shared by the two independent host controllers. */
@@ -136,15 +158,17 @@ export function paletteLegend(palette: PaletteSummary): {
 export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}, patches: Manifest['patches'] = []): { headings: string[]; rows: string[][] } {
   const descriptor = (layer: string, patchId?: string) => patchId ? patches.find(patch => patch.id === patchId)?.descriptors.layers[layer] : descriptors[layer];
   const label = (layer: string) => {
-    const spec = descriptor(layer, payload.frames[0]?.layers[layer]?.patchId);
+    const value = payload.frames[0]?.layers[layer];
+    const spec = descriptor(layer, value && 'patchId' in value ? value.patchId : undefined);
     return spec ? `${spec.label} (${spec.units})` : layer;
   };
   return {
     headings: ['Frame', 'Valid', ...layers.map(label), ...layers.map(layer => `${label(layer)} status/support`)],
     rows: payload.frames.map(frame => [frame.id, frame.validTime, ...layers.map(layer => formatSampleStatus(frame.layers[layer])), ...layers.map(layer => {
       const value = frame.layers[layer];
-      const spec = descriptor(layer, value.patchId);
-      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}${value.patchId && spec ? ` / ${value.patchId} · ${spec.verticalReference} · ${spec.methodId}` : ''}`;
+      const patchId = 'patchId' in value ? value.patchId : undefined;
+      const spec = descriptor(layer, patchId);
+      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}${patchId && spec ? ` / ${patchId} · ${spec.verticalReference} · ${spec.methodId}` : ''}${'surfaceId' in value ? ` / ${value.surfaceId}` : ''}`;
     })])
   };
 }

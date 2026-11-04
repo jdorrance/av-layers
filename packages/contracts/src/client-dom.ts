@@ -57,7 +57,7 @@ export function renderPaletteLegend(container: HTMLElement, build: PinnedBuild, 
 }
 
 export function renderSampleTable(container: HTMLElement, payload: Pick<SamplePayload, 'frames'>, layers: readonly string[], build: PinnedBuild): void {
-  const model = seriesTable(payload, layers, build.manifest.descriptors.layers, build.manifest.patches);
+  const model = seriesTable(payload, layers, build.manifest.descriptors.layers, build.manifest.version === 5 ? [] : build.manifest.patches);
   const table = node('table'), head = node('tr');
   head.append(...model.headings.map(label => node('th', label)));
   table.append(head);

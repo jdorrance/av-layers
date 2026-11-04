@@ -1,7 +1,50 @@
 import { expect, it } from 'vitest';
+import { CELL_BYTES } from './format';
+import { manifestV5Schema } from './publication';
+import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
-import { buildDiagnosticRows, formatSeriesSummary, paletteLegend, seriesTable } from './client-view';
+import { buildDiagnosticRows, formatSeriesSummary, layerMaxZoom, paletteLegend, seriesTable } from './client-view';
 import { PALETTES, paletteSchema } from './layers';
+import { GFS_PRODUCT, TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
+
+function v5Build(): PinnedBuild {
+  const base = fixtureBuild();
+  if (base.manifest.version === 5) throw new Error('fixture requires a legacy manifest');
+  const { version: _version, coverage, grid, samples: _samples, ...rest } = base.manifest;
+  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
+  const prefix = `builds/${base.manifest.model}/${base.manifest.buildId}`;
+  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
+  const descriptors = createWholeDomainDescriptors(GFS_PRODUCT);
+  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
+  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
+    const blockCount = blocks(gridValue), channelCount = base.manifest.frames.length * layers.length;
+    return {
+      id, kind, grid: gridValue, gridHash,
+      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
+      layers,
+      samples: {
+        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
+        channelCount, coverageHash, blockCount, storedCells: blockCount,
+        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
+      },
+      ...(terrain ? { terrain: {
+        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
+        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
+      } } : {})
+    };
+  };
+  return {
+    ...base,
+    manifest: manifestV5Schema.parse({
+      ...rest, version: 5, descriptors,
+      method: { ...rest.method, id: [...new Set(rest.layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
+      surfaces: [
+        surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
+        surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
+      ]
+    })
+  };
+}
 
 it('keeps retained palette snapshots discrete when interpolation is absent', () => {
   const { interpolation: _, ...retained } = PALETTES.lift;
@@ -67,4 +110,31 @@ it('shows the actual terrain reference for refined point values beside base laye
   expect(table.rows[0][4]).toContain(`${patch.id} · terrain-AGL · ${patch.method.id}`);
   expect(table.rows[0][5]).not.toContain(patch.id);
   expect(formatSeriesSummary(payload, ['usable-lift-agl', 'precip-rate'], { lat: 0, lon: 0 })).toContain(`base method ${manifest.method.id} · refinement ${patch.id}`);
+});
+
+it('uses the layer surface max zoom for v5 and the manifest max zoom for legacy builds', () => {
+  const legacy = fixtureBuild();
+  expect(layerMaxZoom(legacy.manifest, 'precip-rate')).toBe(7);
+  const v5 = v5Build();
+  expect(layerMaxZoom(v5.manifest, 'precip-rate')).toBe(7);
+  expect(layerMaxZoom(v5.manifest, 'usable-lift-msl')).toBe(9);
+  expect(layerMaxZoom(v5.manifest, 'usable-lift-agl')).toBe(9);
+});
+
+it('keeps legacy display and grid diagnostics while v5 reports each surface once', () => {
+  const patch = fixturePatch(fixtureManifest());
+  for (const build of [fixtureBuild(), fixtureBuild({ version: 4, patches: [patch] })]) {
+    const rows = buildDiagnosticRows(build);
+    expect(rows).toContainEqual(['Display', 'z0–7 · 256 px raster · overzoomed above z7']);
+    expect(rows).toContainEqual(['Grid', '1440 × 721 · 0.25° × 0.25° regular latitude/longitude']);
+    expect(rows.some(([label]) => label.startsWith('Surface '))).toBe(false);
+  }
+  const v5 = v5Build();
+  const rows = buildDiagnosticRows(v5);
+  expect(rows).toContainEqual(['Usable lift depth (terrain AGL)', `m AGL · terrain-AGL · interval-flux-endpoint-profile · ${TERRAIN_COLUMN_METHOD.id}`]);
+  expect(rows.some(([label]) => label === 'Grid' || label === 'Display')).toBe(false);
+  expect(rows.filter(([label]) => label.startsWith('Surface '))).toEqual([
+    ['Surface gfs-native', '1440 × 721 · 0.25° × 0.25° · precip-rate · z0–7'],
+    ['Surface gfs-fine', '2880 × 1442 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9']
+  ]);
 });

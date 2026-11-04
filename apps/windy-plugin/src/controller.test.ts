@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
-import { createProductDescriptors, ICON_EU_PRODUCT } from '@av/contracts';
+import { createProductDescriptors, ICON_EU_PRODUCT, CELL_BYTES, manifestV5Schema } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
@@ -11,6 +11,41 @@ const expiresAt = '2026-10-31T00:00:00.000Z';
 function frames() { return fixtureManifest().frames.slice(0, 3); }
 function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof frames> } = {}): PinnedBuild {
   return fixtureBuild({ buildId: 'build-1', createdAt: created, expiresAt, frames: frames(), ...overrides });
+}
+
+function v5Pinned(): PinnedBuild {
+  const base = fixtureManifest();
+  const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
+  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
+  const prefix = `builds/${base.model}/${base.buildId}`;
+  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
+  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
+  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
+    const blockCount = blocks(gridValue), channelCount = base.frames.length * layers.length;
+    return {
+      id, kind, grid: gridValue, gridHash,
+      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
+      layers,
+      samples: {
+        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
+        channelCount, coverageHash, blockCount, storedCells: blockCount,
+        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
+      },
+      ...(terrain ? { terrain: {
+        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
+        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
+      } } : {})
+    };
+  };
+  const manifest = manifestV5Schema.parse({
+    ...rest, version: 5,
+    surfaces: [
+      surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
+      surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
+    ]
+  });
+  const templates = Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])) as PinnedBuild['templates'];
+  return { manifest, templates, expiresAtMs: Date.parse(manifest.expiresAt) };
 }
 
 class StubLayer implements HostTileLayer {
@@ -407,3 +442,40 @@ describe('PluginController', () => {
     expect(stub.added).toHaveLength(0);
   });
 });
+
+  it('remounts the v5 tile layer for each surface max zoom while preserving frame, opacity, listeners and state', async () => {
+    const stub = stubHost();
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => v5Pinned(), host: stub.host, now: () => Date.parse(created) });
+    await controller.start();
+    expect(stub.added).toHaveLength(1);
+    expect(stub.added[0].url).toContain('/usable-lift-msl/f003/');
+    expect(stub.added[0].options.maxNativeZoom).toBe(9);
+    controller.setOpacity(0.7);
+    expect(controller.selectFrame('f006').frameId).toBe('f006');
+    expect(stub.added[0].url).toContain('/f006/');
+
+    expect(controller.selectLayer('precip-rate').layerId).toBe('precip-rate');
+    expect(stub.added).toHaveLength(2);
+    expect(stub.removed).toEqual([stub.added[0]]);
+    expect(stub.added[1].options.maxNativeZoom).toBe(7);
+    expect(stub.added[1].url).toContain('/precip-rate/f006/');
+    expect(stub.added[1].opacity).toBe(0.7);
+    expect([...stub.added[0].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+    expect([...stub.added[1].listeners.values()].every(listeners => listeners.size === 1)).toBe(true);
+    expect(stub.listeners.size).toBe(1);
+    const failed = { tile: {} };
+    stub.added[1].emit('tileloadstart', failed);
+    stub.added[1].emit('tileerror', failed);
+    expect(controller.state().message).toContain('Overlay tile failed to load');
+
+    expect(controller.selectLayer('usable-lift-agl').layerId).toBe('usable-lift-agl');
+    expect(stub.added).toHaveLength(3);
+    expect(stub.added[2].options.maxNativeZoom).toBe(9);
+    expect(stub.added[2].url).toContain('/usable-lift-agl/f006/');
+    expect(stub.added[2].opacity).toBe(0.7);
+    expect(controller.state()).toMatchObject({ phase: 'ready', frameId: 'f006', layerId: 'usable-lift-agl', opacity: 0.7, message: null });
+    controller.dispose();
+    expect(stub.removed.at(-1)).toBe(stub.added[2]);
+    expect(stub.listeners.size).toBe(0);
+    expect([...stub.added[2].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
+  });

@@ -200,7 +200,7 @@ describe('read-only worker', () => {
     const spec = await (await call('/openapi.json')).json() as { paths: Record<string, { get: { parameters: { name: string }[]; responses: Record<string, { content?: Record<string, { schema: { type?: string } }> }> } }> };
     for (const path of ['/v1/catalog', '/v1/models/{model}/latest', '/v1/models/{model}/runs/{buildId}/sample', '/v1/models/{model}/runs/{buildId}/provenance', '/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp']) expect(spec.paths[path].get).toBeDefined();
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.parameters.map((p: { name: string }) => p.name)).toEqual(expect.arrayContaining(['lat', 'lon', 'frame', 'layers']));
-    expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['200'].content?.['application/json'].schema.type).toBe('object');
+    expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['200'].content?.['application/json'].schema).toHaveProperty('anyOf');
     expect(spec.paths['/tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp'].get.responses['200'].content?.['image/webp']).toBeDefined();
     expect(spec.paths['/v1/models/{model}/runs/{buildId}/sample'].get.responses['429']).toBeDefined();
   });

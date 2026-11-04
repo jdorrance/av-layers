@@ -60,11 +60,15 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
-    const methods = Object.values(contracts.createProductDescriptors(product).methods);
+    const factor = product.terrainSubdivisionFactor;
+    const methods = Object.values((factor === undefined ? contracts.createProductDescriptors(product) : contracts.createWholeDomainDescriptors(product)).methods);
+    if (factor !== undefined && product.grid.kind !== 'regular-latlon') throw new Error(`Model ${model} requires a regular terrain grid`);
+    const fine = factor !== undefined && product.grid.kind === 'regular-latlon' ? contracts.planWholeDomainGrid(product.grid, factor).fine : undefined;
     lines.push(`### ${product.label} (${product.id})`, '',
       `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,
       `- Grid: ${code(product.grid.kind)}; ${product.grid.width} columns × ${product.grid.height} rows; spherical Earth radius ${product.grid.earthRadiusM} m; periodic longitude: ${product.grid.wrapLongitude}.`,
+      ...(fine ? [`- Terrain subdivision factor: ${code(factor)}; fine grid: ${fine.width} columns × ${fine.height} rows.`] : []),
       `- Bounds [west, south, east, north]: ${code(product.bounds)}.`,
       `- Coverage: ${code(product.coverageId)}. ${product.coverageDescription}`,
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
