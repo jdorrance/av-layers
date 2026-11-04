@@ -17,7 +17,7 @@ Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](
 - `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
 - `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
-- `validate`: `--manifest <string>`.
+- `validate`: `--manifest <string>`, `--receipts-only`.
 
 ## Terrain CLI
 

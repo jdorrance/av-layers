@@ -26,11 +26,11 @@ on:
         type: boolean
         default: false
       resume-run-id:
-        description: Finished run with complete artifacts for every selected model
+        description: Finished authorized run with a resumable receipt bundle for every selected model
         type: string
         default: ''
       retain-full-artifacts:
-        description: Retain complete forecast files even after successful R2 publication
+        description: Retain full forecast payloads in addition to the receipt bundle
         type: boolean
         default: false
       terrain-inputs:

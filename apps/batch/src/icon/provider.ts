@@ -5,6 +5,7 @@ export const iconEuProvider: ResolvableForecastProvider = {
   id: ICON_EU_PRODUCT.source.configurationId,
   provider: 'DWD',
   maxLevels: ICON_EU_PRODUCT.capabilities.maxVerticalLevels,
+  directTargets: true,
   retainedGeometryFields: ICON_EU_PRODUCT.capabilities.maxVerticalLevels + 1,
   async resolveCycle(options) {
     options.signal?.throwIfAborted();
@@ -25,7 +26,7 @@ export const iconEuProvider: ResolvableForecastProvider = {
       get stats() {
         return { ...session.stats };
       },
-      acquire: hour => session.acquire(hour),
+      acquire: (hour, target) => session.acquire(hour, target),
       close: () => session.close()
     };
   }

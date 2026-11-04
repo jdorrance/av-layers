@@ -50,11 +50,27 @@ export function waitFor<T>(promise: Promise<T>, signal?: AbortSignal, discard?: 
   });
 }
 
+interface QueuedRead<T> {
+  key: string;
+  load: (signal: AbortSignal) => Promise<T>;
+  ctx?: WaitContext;
+  consumers: number;
+  started: boolean;
+  settled: boolean;
+  deadline: number;
+  timer?: ReturnType<typeof setTimeout>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+  promise: Promise<T>;
+}
+
 /** Share only completed plain values, never an R2 object, response or readable stream. */
 export class MaterializedReads<T> {
   private pending = new Map<string, { promise: Promise<T>; deadlineError?: Error }>();
+  private queued = new Map<string, QueuedRead<T>>();
+  private queue: QueuedRead<T>[] = [];
   private waiters = 0;
-  constructor(readonly maxPending = 16, readonly timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, readonly maxWaiters = 32) {}
+  constructor(readonly maxPending = 16, readonly timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, readonly maxWaiters = 32, readonly maxQueued = 64) {}
   run(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<T> {
     if (waiterSignal?.aborted) return Promise.reject(waiterSignal.reason);
     const existing = this.pending.get(key);
@@ -64,25 +80,78 @@ export class MaterializedReads<T> {
       this.waiters++; if (ctx?.metrics) ctx.metrics.coalesced++;
       return waitFor(existing.promise, waiterSignal).finally(() => { this.waiters--; });
     }
-    if (this.pending.size >= this.maxPending) return Promise.reject(new ResourceLimitError('Too many concurrent object reads'));
+    const waiting = this.queued.get(key);
+    if (waiting && !waiting.settled) {
+      this.waiters++; waiting.consumers++; if (ctx?.metrics) ctx.metrics.coalesced++;
+      return this.consume(waiting, waiterSignal);
+    }
+    this.waiters++;
+    if (this.pending.size < this.maxPending) return this.own(key, load, ctx, waiterSignal);
+    if (this.queue.length >= this.maxQueued) {
+      this.waiters--;
+      return Promise.reject(new ResourceLimitError('Too many queued object reads'));
+    }
+    return this.enqueue(key, load, ctx, waiterSignal);
+  }
+  private consume(entry: QueuedRead<T>, waiterSignal?: AbortSignal): Promise<T> {
+    return waitFor(entry.promise, waiterSignal).finally(() => this.release(entry));
+  }
+  private release(entry: QueuedRead<T>): void {
+    this.waiters--;
+    entry.consumers--;
+    if (!entry.started && entry.consumers === 0 && !entry.settled) this.drop(entry);
+  }
+  private drop(entry: QueuedRead<T>): void {
+    entry.settled = true;
+    clearTimeout(entry.timer);
+    if (this.queued.get(entry.key) === entry) this.queued.delete(entry.key);
+    const index = this.queue.indexOf(entry);
+    if (index >= 0) this.queue.splice(index, 1);
+    entry.reject(new ResourceLimitError('Object read deadline exceeded'));
+  }
+  private enqueue(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<T> {
+    let resolve!: (value: T) => void, reject!: (error: unknown) => void;
+    const promise = new Promise<T>((success, failure) => { resolve = success; reject = failure; });
+    const entry: QueuedRead<T> = { key, load, ctx, consumers: 1, started: false, settled: false, deadline: Date.now() + this.timeoutMs, resolve, reject, promise };
+    entry.timer = setTimeout(() => { if (!entry.started && !entry.settled) this.drop(entry); }, this.timeoutMs);
+    this.queue.push(entry);
+    this.queued.set(key, entry);
+    ctx?.waitUntil(promise.then(() => undefined, () => undefined));
+    return this.consume(entry, waiterSignal);
+  }
+  private own(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<T> {
+    const entry = this.execute(key, load, ctx);
+    return waitFor(entry.promise, waiterSignal).finally(() => { this.waiters--; });
+  }
+  private execute(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, timeoutMs = this.timeoutMs): { promise: Promise<T>; deadlineError?: Error } {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
+    const entry: { promise: Promise<T>; deadlineError?: Error } = { promise: undefined as unknown as Promise<T> };
     const deadline = new Promise<never>((_, reject) => { timer = setTimeout(() => {
       const error = new ResourceLimitError('Object read deadline exceeded');
       entry.deadlineError = error;
       controller.abort(error);
       reject(error);
-    }, this.timeoutMs); });
+    }, timeoutMs); });
     // R2 get() cannot be cancelled. A caller deadline must not release its
     // owner's admission slot while that underlying operation is still alive.
-    const operation = (async () => load(controller.signal))().finally(() => this.pending.delete(key));
-    this.waiters++;
-    const entry: { promise: Promise<T>; deadlineError?: Error } = {
-      promise: Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); })
-    };
+    const operation = (async () => load(controller.signal))().finally(() => { this.pending.delete(key); this.drain(); });
+    entry.promise = Promise.race([operation, deadline]).catch(error => { controller.abort(error); throw error; }).finally(() => { clearTimeout(timer); });
     this.pending.set(key, entry);
     ctx?.waitUntil(operation.then(() => undefined, () => undefined));
-    return waitFor(entry.promise, waiterSignal).finally(() => { this.waiters--; });
+    return entry;
+  }
+  private drain(): void {
+    while (this.pending.size < this.maxPending && this.queue.length) {
+      const entry = this.queue.shift()!;
+      if (this.queued.get(entry.key) === entry) this.queued.delete(entry.key);
+      if (entry.settled || entry.consumers === 0 || entry.deadline <= Date.now()) { entry.settled = true; clearTimeout(entry.timer); entry.reject(new ResourceLimitError('Object read deadline exceeded')); continue; }
+      entry.started = true;
+      clearTimeout(entry.timer);
+      const owner = this.execute(entry.key, entry.load, entry.ctx, entry.deadline - Date.now());
+      owner.promise.then(value => { if (!entry.settled) { entry.settled = true; entry.resolve(value); } },
+        error => { if (!entry.settled) { entry.settled = true; entry.reject(error); } });
+    }
   }
 }
 
@@ -152,6 +221,7 @@ export async function readObjectJson(object: R2ObjectBody, limit: number, ctx?: 
 // tee branches; it is released only after every branch consumes, cancels or expires.
 let responseBytes = 0;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const CACHED_RESPONSE_BYTES = 'x-av-cached-bytes';
 interface BodyLease { size: number; retain(): void; release(): void }
 const bodyLeases = new WeakMap<ReadableStream<Uint8Array>, BodyLease>();
 export function transferBodyLease(from: ReadableStream<Uint8Array> | null, to: ReadableStream<Uint8Array> | null): void {
@@ -209,6 +279,17 @@ export function boundResponse(response: Response, timeoutMs = DEFAULT_REQUEST_TI
   try { return createBoundedResponse(size, () => response, timeoutMs); }
   catch (error) { void response.body.cancel().catch(() => {}); throw error; }
 }
+/** Cache API streams can lose Content-Length; cache-owned metadata retains the reservation. */
+export function boundCachedResponse(response: Response, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): Response {
+  const value = response.headers.get(CACHED_RESPONSE_BYTES);
+  if (value === null) return boundResponse(response, timeoutMs);
+  try {
+    if (!/^(?:0|[1-9]\d{0,6})$/.test(value)) throw new ResourceLimitError('Invalid cached response size');
+    const headers = new Headers(response.headers);
+    headers.delete(CACHED_RESPONSE_BYTES);
+    return createBoundedResponse(Number(value), () => new Response(response.body, { status: response.status, statusText: response.statusText, headers }), timeoutMs);
+  } catch (error) { void response.body?.cancel().catch(() => {}); throw error; }
+}
 export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): { client: Response; cache: Response } {
   const bounded = boundResponse(response, timeoutMs);
   if (!bounded.body) return { client: bounded, cache: bounded.clone() };
@@ -223,12 +304,15 @@ export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQ
   // Each tee branch has its own reference. The original source keeps its guard
   // until it drains, so neither sibling can release another stream's permit.
   lease.retain(); lease.retain();
-  return { client: wrapResponse(bounded, lease, timeoutMs), cache: wrapResponse(copy, lease, timeoutMs) };
+  const cache = wrapResponse(copy, lease, timeoutMs);
+  cache.headers.set(CACHED_RESPONSE_BYTES, String(lease.size));
+  return { client: wrapResponse(bounded, lease, timeoutMs), cache };
 }
 
 const binaryReads = new WeakMap<R2Bucket, MaterializedReads<Uint8Array>>();
+export const MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST = 4;
 export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   let reads = binaryReads.get(bucket);
-  if (!reads) { reads = new MaterializedReads(8); binaryReads.set(bucket, reads); }
+  if (!reads) { reads = new MaterializedReads(8, DEFAULT_REQUEST_TIMEOUT_MS, 96); binaryReads.set(bucket, reads); }
   return reads.run(key, load, ctx, waiterSignal);
 }

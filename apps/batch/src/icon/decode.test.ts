@@ -76,6 +76,18 @@ it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning 
   }
 });
 
+it('scatters ICON values and missing flags into reusable shared views', () => {
+  const active = Uint32Array.of(0, 1, 2, 3), target = {
+    values: new Float32Array(new SharedArrayBuffer(16)), missing: new Uint8Array(new SharedArrayBuffer(4)).fill(1)
+  };
+  const bytes = simpleField(8, 64, [300, null, 280, 281]);
+  const expected = decodeIconGribField(bytes, active), decoded = decodeIconGribField(bytes, active, target);
+  expect(decoded.values).toBe(target.values); expect(decoded.missing).toBe(target.missing);
+  expect(decoded.values).toEqual(expected.values); expect(decoded.missing).toEqual(expected.missing);
+  decodeIconGribField(simpleField(8, 64, [300, 301, 280, 281]), active, target);
+  expect([...target.missing]).toEqual([0, 0, 0, 0]);
+});
+
 it.each([0, 64] as const)('rejects latitude endpoints contradicting scanning mode %s', scanningMode => {
   const message = simpleField(8, scanningMode, [300, 301, 280, 281]);
   message[16 + 21 + 71] = scanningMode === 64 ? 0 : 64;

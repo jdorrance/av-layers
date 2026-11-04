@@ -106,7 +106,7 @@ function buildSurface(grid: Grid, id: string, kind: 'native' | 'fine', layers: L
 }
 
 export function createV5Fixture() {
-  const buildId = 'v5-fixture-1', prefix = `builds/gfs/${buildId}`;
+  const buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', prefix = `builds/gfs/${buildId}`;
   const cycle = new Date(NOW).toISOString(), expiresAt = new Date(NOW + 86_400_000).toISOString();
   const frames = [1, 2].map(hour => ({ id: `h${String(hour).padStart(3, '0')}`, validTime: new Date(NOW + hour * 3_600_000).toISOString(), intervalStart: new Date(NOW + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(NOW + hour * 3_600_000).toISOString() }));
   const fine = buildSurface(FINE_GRID, 'fine', 'fine', FINE_LAYERS, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {

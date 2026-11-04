@@ -1,12 +1,13 @@
 import { performance } from 'node:perf_hooks';
 import { compilePaletteColor, LAYERS, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
 import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
-import { fieldOffset, MAX_PREPARED_SAMPLES, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, samplingCovered, validateSamplingField, type GridField, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
+import { fieldOffset, MAX_PREPARED_SAMPLES, prepareGridAxis, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, samplingCovered, validateSamplingField, type GridField, type PreparedGridAxis, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
 
 export interface RasterPixels { rgba: Uint8Array; blank: boolean }
 export interface RasterMetrics {
   geometryBytes: number; peakGeometryBytes: number; geometryHits: number; geometryMisses: number;
   prepareMs: number; rasterMs: number; tiles: number; blankTiles: number;
+  mbtilesWriteWallMs?: number; pmtilesConvertWallMs?: number; pmtilesVerifyWallMs?: number; sqliteWorkMs?: number;
 }
 export interface RasterPatch<Mask extends SamplingMask = CoverageMask> {
   id: string;
@@ -53,7 +54,28 @@ function axes(z: number, x: number, y: number) {
   }
   return { lats, lons };
 }
-const geometry = (mask: SamplingMask, z: number, x: number, y: number) => { const { lats, lons } = axes(z, x, y); return prepareGridSampling(mask, lats, lons); };
+function latitudeCoordinates(z: number, y: number): Float64Array {
+  const lats = new Float64Array(512);
+  for (let i = 0; i < 256; i++) {
+    lats[i * 2] = mercatorPoint(z, 0, y, 0, i + 0.25).lat;
+    lats[i * 2 + 1] = mercatorPoint(z, 0, y, 0, i + 0.75).lat;
+  }
+  return lats;
+}
+function longitudeCoordinates(z: number, x: number): Float64Array {
+  const lons = new Float64Array(512);
+  for (let i = 0; i < 256; i++) {
+    lons[i * 2] = mercatorPoint(z, x, 0, i + 0.25, 0).lon;
+    lons[i * 2 + 1] = mercatorPoint(z, x, 0, i + 0.75, 0).lon;
+  }
+  return lons;
+}
+const NO_COORDINATES = new Float64Array(0);
+
+function preparedTileGeometry(mask: SamplingMask, z: number, x: number, y: number): PreparedGridSampling {
+  const { lats, lons } = axes(z, x, y);
+  return prepareGridSampling(mask, lats, lons);
+}
 
 interface CompositeGeometry {
   byteLength: number;
@@ -169,8 +191,12 @@ function raster(field: GridField, mask: SamplingMask, prepared: TileGeometry, la
     };
   }
   const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
-  if (!composite && !base.contributors.some(idx => { const offset = fieldOffset(field, idx, mask.grid.width); return paletteBinIndex(layer, field.values[offset], field.flags[offset], palette.colorCount) >= 0
-    || noLiftVisible && (field.flags[offset] & STATUS_MASK) === STATUS_NO_LIFT; })) {
+  if (!composite && !base.contributors.some(idx => {
+    let offset: number;
+    try { offset = fieldOffset(field, idx, mask.grid.width); } catch { return false; }
+    return paletteBinIndex(layer, field.values[offset], field.flags[offset], palette.colorCount) >= 0
+      || noLiftVisible && (field.flags[offset] & STATUS_MASK) === STATUS_NO_LIFT;
+  })) {
     return { rgba, blank: true };
   }
   const sample: Sample = { value: null, status: 3, support: 0, interpolated: false }, color = new Uint8Array(4);
@@ -193,24 +219,59 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
     for (const patch of patches) if (!patch.layers.length || new Set(patch.layers).size !== patch.layers.length || patch.layers.some(layer => !Object.hasOwn(LAYERS, layer)) || patch.mask.maxZoom !== mask.maxZoom) throw new RangeError('Invalid raster patch layers or zoom');
   }
   const covered = patches.length ? [mask, ...patches.map(patch => patch.mask)].map(item => 'coverage' in item ? (lat: number, lon: number) => samplingCovered(item, lat, lon) : prepareCoverageTester(item)) : [];
-  const cache = new Map<string, TileGeometry>();
-  function prepared(z: number, x: number, y: number) {
-    const key = `${z}/${x}/${y}`, found = cache.get(key);
-    if (found) { stats.geometryHits++; cache.delete(key); cache.set(key, found); return found; }
-    stats.geometryMisses++;
-    const started = performance.now(), result = patches.length ? compositeGeometry(mask, patches, covered, z, x, y) : geometry(mask, z, x, y);
-    stats.prepareMs += performance.now() - started;
-    if (result.byteLength <= budget) {
-      for (const [oldest, entry] of cache) {
-        if (stats.geometryBytes + result.byteLength <= budget) break;
-        stats.geometryBytes -= entry.byteLength;
-        cache.delete(oldest);
+  type CachedGeometry = { kind: 'tile'; geometry: TileGeometry; byteLength: number; axes?: PreparedGridAxis[] } | { kind: 'latitude' | 'longitude'; axis: PreparedGridAxis; byteLength: number };
+  const cache = new Map<string, CachedGeometry>();
+  const axisReferences = new Map<PreparedGridAxis, number>();
+  const entryAxes = (entry: CachedGeometry) => entry.kind === 'tile' ? entry.axes ?? [] : [entry.axis];
+  function remember(key: string, entry: CachedGeometry): void {
+    const axes = entryAxes(entry);
+    if (entry.byteLength + axes.reduce((sum, axis) => sum + axis.byteLength, 0) > budget) return;
+    const addedBytes = () => entry.byteLength + axes.reduce((sum, axis) => sum + (axisReferences.has(axis) ? 0 : axis.byteLength), 0);
+    for (const [oldest, cached] of cache) {
+      if (stats.geometryBytes + addedBytes() <= budget) break;
+      stats.geometryBytes -= cached.byteLength;
+      for (const axis of entryAxes(cached)) {
+        const remaining = axisReferences.get(axis)! - 1;
+        if (remaining) axisReferences.set(axis, remaining);
+        else { axisReferences.delete(axis); stats.geometryBytes -= axis.byteLength; }
       }
-      cache.set(key, result);
-      stats.geometryBytes += result.byteLength;
-      stats.peakGeometryBytes = Math.max(stats.peakGeometryBytes, stats.geometryBytes);
+      cache.delete(oldest);
     }
-    return result;
+    cache.set(key, entry);
+    stats.geometryBytes += entry.byteLength;
+    for (const axis of axes) {
+      if (!axisReferences.has(axis)) stats.geometryBytes += axis.byteLength;
+      axisReferences.set(axis, (axisReferences.get(axis) ?? 0) + 1);
+    }
+    stats.peakGeometryBytes = Math.max(stats.peakGeometryBytes, stats.geometryBytes);
+  }
+  function preparedAxis(kind: 'latitude' | 'longitude', z: number, coordinate: number): PreparedGridAxis {
+    const key = `${kind}/${z}/${coordinate}`, found = cache.get(key);
+    if (found) { cache.delete(key); cache.set(key, found); return (found as Extract<CachedGeometry, { kind: 'latitude' | 'longitude' }>).axis; }
+    const axis = prepareGridAxis(mask, kind === 'latitude' ? latitudeCoordinates(z, coordinate) : longitudeCoordinates(z, coordinate), kind === 'latitude' ? 'row' : 'column');
+    remember(key, { kind, axis, byteLength: 0 });
+    return axis;
+  }
+  function geometry(z: number, x: number, y: number): { geometry: TileGeometry; byteLength: number; axes?: PreparedGridAxis[] } {
+    if (mask.grid.kind !== 'regular-latlon') {
+      const geometry = preparedTileGeometry(mask, z, x, y);
+      return { geometry, byteLength: geometry.byteLength };
+    }
+    const rows = preparedAxis('latitude', z, y), columns = preparedAxis('longitude', z, x);
+    const geometry = prepareGridSampling(mask, NO_COORDINATES, NO_COORDINATES, { rows, columns });
+    return { geometry, byteLength: geometry.byteLength - rows.byteLength - columns.byteLength, axes: [rows, columns] };
+  }
+  function prepared(z: number, x: number, y: number) {
+    const key = `tile/${z}/${x}/${y}`, found = cache.get(key);
+    if (found) { stats.geometryHits++; cache.delete(key); cache.set(key, found); return (found as Extract<CachedGeometry, { kind: 'tile' }>).geometry; }
+    stats.geometryMisses++;
+    const started = performance.now();
+    const result = patches.length
+      ? (() => { const geometry = compositeGeometry(mask, patches, covered, z, x, y); return { geometry, byteLength: geometry.byteLength }; })()
+      : geometry(z, x, y);
+    stats.prepareMs += performance.now() - started;
+    remember(key, { kind: 'tile', ...result });
+    return result.geometry;
   }
 
   function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patchFields?: RasterPatchFields) {
@@ -224,11 +285,11 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
   return {
     metrics: () => ({ ...stats }),
     renderTilePixels: renderRgba,
-    clearGeometry() { cache.clear(); stats.geometryBytes = 0; }
+    clearGeometry() { cache.clear(); axisReferences.clear(); stats.geometryBytes = 0; }
   };
 }
 
 export function renderTileRgba(field: GridField, mask: SamplingMask, layer: LayerId, z: number, x: number, y: number, liftInterpolation?: PaletteColorMode): Uint8Array {
   const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
-  return raster(field, mask, geometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
+  return raster(field, mask, preparedTileGeometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
 }

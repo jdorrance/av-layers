@@ -1,6 +1,18 @@
 import { createHash } from 'node:crypto';
 import type { ObjectStorage } from './storage.js';
 
+export interface ObjectReceipt { key: string; bytes: number; sha256: string; etag: string }
+
+export async function verifyObjectReceipts(store: Pick<ObjectStorage, 'head'>, receipts: readonly ObjectReceipt[], signal?: AbortSignal): Promise<void> {
+  const keys = new Set<string>();
+  for (const receipt of receipts) {
+    if (keys.has(receipt.key) || !Number.isSafeInteger(receipt.bytes) || receipt.bytes < 1 || !/^[a-f0-9]{64}$/.test(receipt.sha256) || !receipt.etag) throw new Error('Invalid object receipt');
+    keys.add(receipt.key);
+    const head = await store.head(receipt.key, signal);
+    if (!head || head.size !== receipt.bytes || head.etag !== receipt.etag || head.metadata?.sha256 !== receipt.sha256) throw new Error(`Remote object receipt mismatch: ${receipt.key}`);
+  }
+}
+
 /** Retries prove every byte of an existing object; they never overwrite immutable keys. */
 export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal, requireDigestMetadata = false): Promise<void> {
   signal?.throwIfAborted();
@@ -22,12 +34,14 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
     if (hash.digest('hex') !== sha) throw new Error(`Immutable object hash mismatch: ${key}`);
     return true;
   };
-  if (await proveExisting()) return;
+  const existing = await proveExisting();
+  if (existing) return;
   signal?.throwIfAborted();
   try { await store.put(key, bytes, { ifNoneMatch: '*' }, contentType, md5.toString('base64'), { sha256: sha }); }
   catch (error) {
     // A timeout can follow a successful create. Reconcile before deciding whether to retry.
-    if (await proveExisting()) return;
+    const existing = await proveExisting();
+    if (existing) return;
     throw error;
   }
   signal?.throwIfAborted();
@@ -36,6 +50,13 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
   if (requireDigestMetadata && head.metadata?.sha256 !== sha) throw new Error(`Immutable object digest metadata mismatch: ${key}`);
   const length = Math.min(bytes.byteLength, 32), tail = await store.get(key, { offset: bytes.byteLength - length, length }, length, signal);
   if (!tail || tail.etag !== etag || !Buffer.from(tail.bytes).equals(bytes.subarray(bytes.byteLength - length))) throw new Error(`R2 tail or ETag mismatch: ${key}`);
+}
+
+export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<ObjectReceipt> {
+  await putImmutable(store, key, bytes, contentType, signal, true);
+  const head = await store.head(key, signal), digest = createHash('sha256').update(bytes).digest('hex');
+  if (!head || head.size !== bytes.length || head.metadata?.sha256 !== digest) throw new Error(`Immutable object receipt mismatch: ${key}`);
+  return { key, bytes: bytes.length, sha256: digest, etag: head.etag };
 }
 
 /** Reservations include the file and an SDK/transport copy; stop admission and drain on failure. */

@@ -2,6 +2,7 @@ import type { IsobaricFrame } from '@av/forecast';
 import type { IdxRecord } from '@azohra/meteo.grib';
 import type { NoaaTransportStats } from './transport.ts';
 import type { FieldSamplingStats } from './sampling.ts';
+import type { NormalizedFrameTarget } from '../provider.js';
 
 export interface NoaaFetchOptions {
   fetchImpl?: typeof fetch;
@@ -59,7 +60,7 @@ export interface GfsAcquisitionStats {
 export interface GfsAcquisitionSession {
   readonly cycle: string;
   readonly stats: GfsAcquisitionStats;
-  acquire(hour: number): Promise<GfsFrameAcquisition>;
+  acquire(hour: number, target?: NormalizedFrameTarget): Promise<GfsFrameAcquisition>;
   close(): Promise<void>;
 }
 

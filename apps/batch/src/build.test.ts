@@ -38,6 +38,7 @@ vi.mock('./gfs/acquire.js', async () => {
 import { acquireGfsFrame, createGfsAcquisitionSession } from './gfs/acquire.js';
 import { discoverGfsRun } from './gfs/discover.js';
 import { buildForecast } from './build.js';
+import { BUILD_BUDGETS } from './capacity.js';
 import { getForecastProvider } from './providers.js';
 import * as renderModule from './render.js';
 import * as summaryModule from './summary.js';
@@ -109,6 +110,17 @@ async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE
 }
 
 describe('build sample acquisition intervals', () => {
+  it('bounds sequential acquisition with the build deadline', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await run(frame);
+      expect(timeout).toHaveBeenCalledWith(expect.any(Number));
+      const duration = timeout.mock.calls[0][0];
+      expect(duration).toBeGreaterThan(0);
+      expect(duration).toBeLessThanOrEqual(BUILD_BUDGETS.elapsedMs);
+      expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    } finally { timeout.mockRestore(); }
+  });
   it('builds the native forecast when no terrain catalog is supplied', async () => {
     const manifest = await run(frame);
     expect(manifest.version).toBe(3);

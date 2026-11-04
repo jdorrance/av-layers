@@ -10,9 +10,14 @@ maintenance serialize.
 Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
 `staging` and `production` GitHub environments with:
 
-- Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit),
-  `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY` scoped to that environment's
-  bucket.
+- Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit + R2 bucket
+  configuration read),
+  `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` with Object Read & Write access
+  to that environment's bucket, plus `GH_CREDENTIAL_ISSUER_TOKEN`, a GitHub App
+  installation token or fine-grained token with Environments write access to this
+  repository. Keep the token current. Prepare creates or updates
+  `FORECAST_GFS_SHARD_CREDENTIAL_KEY` and `FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY`
+  as environment secrets; precreating them is optional.
 - Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
   `TERRAIN_CATALOG_REF` to select a [terrain catalog](#terrain-data). Bucket names come
   from [wrangler.json](../apps/api/wrangler.json).
@@ -23,12 +28,17 @@ per environment:
 ```sh
 pnpm exec wrangler r2 bucket create windy-av-layer-staging
 pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
+pnpm exec wrangler r2 bucket lock add windy-av-layer-staging forecast-builds builds/ --retention-days 7
 pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
+Provision the same `builds/` lock for production. Prepare checks the existing
+bucket lock through the Cloudflare API before issuing credentials; it never
+changes the rule. Keep the rule enabled throughout each build and its retention.
+
 For a new environment, run the Forecast workflow (which commits to R2 before
 the serving check), deploy the API and
-Pages, then [resume that build](#resume-or-promote-a-build) to complete serving
+Pages, then [resume that build](#resume-a-build) to complete serving
 verification.
 
 ## Publish a forecast
@@ -48,27 +58,50 @@ successful run.
 
 Each selected model runs `forecast-terrain` (60m job timeout), `forecast-plan`
 (15m timeout), up to four parallel `forecast-shard` jobs (60m timeout), and
-`forecast` (`build-publish`, 60m timeout) to merge, validate, publish to R2,
+`forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. Terrain preparation has its
 own 50-minute operation budget; forecast elapsed time starts with planning. If a
 shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
-the plan remains within the 50-minute build elapsed-time budget.
+the plan remains within the 50-minute build elapsed-time budget and its environment
+secret has not been rotated by a later same-model build. After rotation, start a
+new build.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
-reporting progress in the job log. Planning requires that cache and stages each
-configured grid's coverage and terrain arrays in the frozen plan artifact. A
-missing cache fails planning immediately. Workers load the arrays locally and
-derive fine fields from the same native weather frames. Assembly requires every
-grid's complete shard set before validating and publishing the build.
+reporting progress in the job log. Planning requires that cache; a missing cache
+fails planning immediately.
+
+The prepare job signs [temporary R2 credentials](https://developers.cloudflare.com/r2/examples/authenticate-r2-temp-credentials/)
+and encrypts them with a fresh per-build AES-256-GCM key in the plan artifact,
+bound to the bucket, model, build ID and deadline. Shards receive only their
+model's environment key. Terrain preparation, planning and publication receive
+the parent R2 credentials. The write credential permits `PutObject` under its build prefix; the
+read credential permits `GetObject` and `HeadObject` under that prefix,
+`coverage/`, and `terrain/prepared/`. Both expire at the plan deadline or after
+one hour, whichever comes first. Protect the encryption key and plan artifact as
+credentials until expiry.
+GitHub reads [environment secrets when a job starts](https://docs.github.com/en/actions/reference/security/secrets#when-github-actions-reads-secrets).
+The `needs: prepare` barrier starts shards after key rotation. The
+per-environment, per-model concurrency lock holds until the model workflow ends,
+preventing another same-model build from rotating its key while shards run.
+Shard GitHub tokens have `contents: read` and cannot download
+artifacts from other runs; current-run artifact delivery uses the Actions runtime.
+
+Planning uploads coverage and prepared terrain to R2 and records their receipts
+in the frozen plan. Workers stage verified terrain from R2 and derive fine lift
+surfaces from the same native weather frames. Assembly requires every grid's
+complete shard set before validating and publishing the build.
 
 Admission requires a source cycle at most **18 hours old**, at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
 Published builds are retained for 7 days.
+Bucket locks retain each object for at least seven days from its upload, so
+cleanup may encounter protected objects for up to the 50-minute build budget
+after build expiry. A locked multi-object delete reports an error and cleanup
+can have partial progress; retry cleanup after the affected objects unlock.
 
-## Resume or promote a build
+## Resume a build
 
-Retry an interrupted upload or promote a retained staging build (`retain-full-artifacts=true`)
-without rebuilding tiles:
+Resume a retained build in its original environment without rebuilding tiles:
 
 ```sh
 gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
@@ -76,8 +109,10 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
 ```
 
 Resume verifies the source workflow run on `main`, checks recipe and coverage
-hashes, uploads any missing R2 objects, commits the pointer, and verifies live
-serving.
+hashes, verifies remote receipts or uploads retained local payloads, commits the
+pointer within the original build deadline, and verifies live serving. After the
+deadline, resume completes maintenance and serving checks for the committed
+latest build.
 
 Refined builds retain `plan.json` with their full artifacts. Resume checks its
 original grid and terrain references against the manifest and recipe; it does
@@ -134,9 +169,6 @@ environment's bucket. Configured whole-domain products require a catalog.
 Catalog selection binds terrain preparation and cache validation; workers use
 the frozen plan. Changes to source data, grid, coverage or preparation method
 select a new terrain cache. Missing or corrupt assets fail the terrain job.
-
-The existing `terrain-inputs` model map remains available for staging prepared
-native-grid arrays alongside configured refinements.
 
 ## Check a failure
 

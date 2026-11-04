@@ -1,15 +1,29 @@
-import { MAX_COVERAGE_DESCRIPTOR_BYTES, assertCoverageBinding, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
+import { MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, assertCoverageBinding, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
 import { SAMPLE_SHARD_TARGET_BYTES, prepareSamplePackLayout, prepareShardedSamplePackLayout, type SamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
 import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
 export interface ResolvedCoverage { descriptor: CoverageDescriptor; mask: CoverageMask; layout: SamplePackLayout }
-export interface ResolvedSparseCoverage { descriptor: SparseCoverageDescriptor; mask: SparseCoverageMask; layout: ShardedSamplePackLayout }
+export interface FrameGroupShard {
+  group: number; firstFrame: number; frameCount: number; blockShard: number;
+  firstBlock: number; blockCount: number; storedCells: number; bytes: number; key: string; sha256: string;
+}
+export interface FrameGroup {
+  group: number; firstFrame: number; frameCount: number; channelCount: number; shards: readonly FrameGroupShard[];
+}
+export interface ResolvedSparseCoverage {
+  descriptor: SparseCoverageDescriptor;
+  mask: SparseCoverageMask;
+  layout: ShardedSamplePackLayout;
+  layouts: ReadonlyMap<number, ShardedSamplePackLayout>;
+  groups: readonly FrameGroup[] | null;
+}
 interface SparseTiles { descriptor: SparseCoverageDescriptor; tiles: Uint8Array }
 const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedCoverage | ResolvedSparseCoverage | SparseTiles>>();
 const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedCoverage | ResolvedSparseCoverage | SparseTiles>>();
 const tileFlights = new WeakMap<R2Bucket, MaterializedReads<SparseTiles>>();
-const COVERAGE_CACHE_BYTES = 8 * 1024 * 1024;
+const COVERAGE_CACHE_BYTES = 24 * 1024 * 1024;
+const MAX_API_SPARSE_BYTES = MAX_SPARSE_COVERAGE_BYTES;
 interface SparseLease { refs: number; loading: boolean; bytes: number; release?: () => void; value?: ResolvedSparseCoverage }
 const sparseLeases = new WeakMap<R2Bucket, Map<string, SparseLease>>();
 export function coverageMemory(bucket: R2Bucket): { cachedBytes: number; leasedBytes: number; leaseRefs: number } {
@@ -27,7 +41,7 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, 
   const prefix = coveragePrefix(hash);
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
   let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, 8 * 1024 * 1024); caches.set(bucket, cache); }
+  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
   let resolved = cache.get(hash) as ResolvedCoverage | undefined;
   if (resolved) countCacheHit(ctx);
   if (!resolved) {
@@ -79,7 +93,7 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
   const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = `${hash}/tiles`;
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
   let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, 8 * 1024 * 1024); caches.set(bucket, cache); }
+  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
   let result = cache.get(cacheKey) as SparseTiles | undefined;
   if (result) countCacheHit(ctx);
   if (!result) {
@@ -112,9 +126,26 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
   return result;
 }
 
+function frameGroups(surface: ForecastSurfaceV5): FrameGroup[] | null {
+  if (surface.samples.format !== 'frame-group-block-shards-v1') return null;
+  const shards = surface.samples.shards;
+  const grouped = new Map<number, { firstFrame: number; frameCount: number; channelCount: number; shards: FrameGroupShard[] }>();
+  for (const shard of shards) {
+    const channelCount = shard.frameCount * surface.layers.length;
+    const group = grouped.get(shard.group);
+    if (!group) grouped.set(shard.group, { firstFrame: shard.firstFrame, frameCount: shard.frameCount, channelCount, shards: [shard] });
+    else {
+      if (group.firstFrame !== shard.firstFrame || group.frameCount !== shard.frameCount) throw new CoverageError('Inconsistent frame group shard');
+      group.shards.push(shard);
+    }
+  }
+  return [...grouped.entries()].sort(([left], [right]) => left - right)
+    .map(([group, value]) => ({ group, ...value, shards: value.shards.slice().sort((left, right) => left.blockShard - right.blockShard) }));
+}
+
 export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastSurfaceV5, ctx?: WaitContext, bounds?: readonly number[], waiterSignal?: AbortSignal): Promise<{ coverage: ResolvedSparseCoverage; release: () => void }> {
   waiterSignal?.throwIfAborted();
-  const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = `${hash}/${surface.samples.channelCount}`;
+  const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = hash;
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
   let leases = sparseLeases.get(bucket);
   if (!leases) { leases = new Map(); sparseLeases.set(bucket, leases); }
@@ -130,7 +161,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
   };
   try {
   let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, 8 * 1024 * 1024); caches.set(bucket, cache); }
+  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
   let resolved = state.value ?? cache.get(cacheKey) as ResolvedSparseCoverage | undefined;
   if (resolved) {
     countCacheHit(ctx);
@@ -145,10 +176,13 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       try {
       const { descriptor, tiles } = await resolveSparseTiles(bucket, surface, bounds, ctx);
       signal.throwIfAborted();
+      if (descriptor.files.sparse.bytes > MAX_API_SPARSE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+      const groups = frameGroups(surface);
+      const channelCounts = [...new Set(groups ? groups.map(group => group.channelCount) : [surface.samples.channelCount])];
       const blocks = (descriptor.files.sparse.bytes - 60) / 72;
-      const blockBytes = 289 * surface.samples.channelCount * 5;
+      const blockBytes = 289 * Math.max(...channelCounts) * 5;
       const maxShards = Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1;
-      const retained = blocks * 80 + 4 + tiles.byteLength + estimateJsonBytes(descriptor) + maxShards * 64 + 2048;
+      const retained = blocks * (72 + 8 * channelCounts.length) + 4 + tiles.byteLength + estimateJsonBytes(descriptor) + maxShards * 64 * channelCounts.length + 2048;
       if (!Number.isSafeInteger(retained) || retained > COVERAGE_CACHE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
       const releaseLoad = reserveAllocation(descriptor.files.sparse.bytes * 2 + retained);
       state.bytes = descriptor.files.sparse.bytes * 2 + retained;
@@ -163,8 +197,9 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
         if (coverage.width !== descriptor.grid.width || coverage.height !== descriptor.grid.height || coverage.wrapLongitude !== descriptor.grid.wrapLongitude || !coverage.blockIds.length) throw new CoverageError('Sparse coverage grid mismatch');
         assertSparseCoverageHalo(coverage);
         const mask: SparseCoverageMask = { grid: descriptor.grid, bounds: descriptor.bounds, maxZoom: descriptor.maxZoom, coverage, tiles };
-        const layout = prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, surface.samples.channelCount);
-        const result = { descriptor, mask, layout };
+        const layouts = new Map(channelCounts.map(count => [count, prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, count)]));
+        const layout = layouts.get(surface.samples.channelCount) ?? layouts.values().next().value!;
+        const result = { descriptor, mask, layout, layouts, groups: null };
         const actual = sparseRetainedBytes(result);
         if (actual > retained) throw new CoverageError('Sparse coverage exceeds serving byte budget');
         signal.throwIfAborted();
@@ -181,17 +216,44 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       }
     }, ctx, waiterSignal) as ResolvedSparseCoverage;
   }
-  const { descriptor, mask, layout } = resolved;
+  const { descriptor, mask } = resolved;
   if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid) || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
   try { assertSampleLayoutBindingV5(surface, { grid: mask.grid, gridHash: descriptor.gridHash, coverageHash: hash, blockIds: mask.coverage.blockIds }); }
   catch { throw new CoverageError('Coverage layout disagrees with publication'); }
-  if (layout.shards.length !== surface.samples.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== surface.samples.shards[i].firstBlock || shard.blockCount !== surface.samples.shards[i].blockCount || shard.byteLength !== surface.samples.shards[i].bytes)) throw new CoverageError('Coverage shard layout disagrees with publication');
-  return { coverage: resolved, release };
+  const groups = frameGroups(surface);
+  const layouts = resolved.layouts as Map<number, ShardedSamplePackLayout>;
+  const channelCounts = groups ? [...new Set(groups.map(group => group.channelCount))] : [surface.samples.channelCount];
+  for (const count of channelCounts) if (!layouts.has(count)) {
+    const blocks = mask.coverage.blockIds.length, blockBytes = 289 * count * 5;
+    const maximum = blocks * 8 + (Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1) * 64;
+    if (sparseRetainedBytes(resolved) + maximum > COVERAGE_CACHE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+    const releaseExtra = reserveAllocation(maximum);
+    try {
+      const added = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, count);
+      const actual = added.indexBytes + added.shards.length * 64;
+      if (actual > maximum) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+      layouts.set(count, added);
+      const previous = state.release;
+      state.release = () => { previous?.(); releaseExtra(); };
+      state.bytes += maximum;
+      cache.set(cacheKey, resolved, sparseRetainedBytes(resolved), Date.now() + 3_600_000);
+    } catch (error) { releaseExtra(); throw error; }
+  }
+  const layout = layouts.get(surface.samples.channelCount) ?? layouts.values().next().value!;
+  if (groups) {
+    for (const group of groups) {
+      const bound = layouts.get(group.channelCount)!;
+      if (bound.shards.length !== group.shards.length || bound.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new CoverageError('Coverage shard layout disagrees with publication');
+    }
+  } else if (layout.shards.length !== surface.samples.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== surface.samples.shards[i].firstBlock || shard.blockCount !== surface.samples.shards[i].blockCount || shard.byteLength !== surface.samples.shards[i].bytes)) throw new CoverageError('Coverage shard layout disagrees with publication');
+  return { coverage: { ...resolved, layout, groups }, release };
   } catch (error) { release(); throw error; }
 }
 
 function sparseRetainedBytes(value: ResolvedSparseCoverage): number {
   const { coverage, tiles } = value.mask;
-  return coverage.blockIds.byteLength + coverage.offsets.byteLength + coverage.output.byteLength + coverage.halo.byteLength
-    + tiles.byteLength + value.layout.indexBytes + value.layout.shards.length * 64 + estimateJsonBytes(value.descriptor) + 2048;
+  let bytes = coverage.blockIds.byteLength + coverage.offsets.byteLength + coverage.output.byteLength + coverage.halo.byteLength
+    + tiles.byteLength + estimateJsonBytes(value.descriptor) + 2048;
+  for (const layout of value.layouts.values()) bytes += layout.indexBytes + layout.shards.length * 64;
+  return bytes;
 }

@@ -34,6 +34,7 @@ export interface RasterJob { id: number; field: number; z: number; x: number; y:
 export interface RasterResult extends RasterPixels { id: number; metrics: RasterMetrics }
 
 function sharedBytes(bytes: Uint8Array): Uint8Array<SharedArrayBuffer> {
+  if (bytes.buffer instanceof SharedArrayBuffer) return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const result = new Uint8Array(new SharedArrayBuffer(bytes.byteLength)); result.set(bytes); return result;
 }
 
@@ -63,16 +64,31 @@ export async function createRasterPool(mask: SamplingMask, targets: readonly { f
   const fieldBytes = (field: GridField) => field.values.byteLength + field.flags.byteLength;
   const sharedInputBytes = targets.reduce((sum, target) => sum + fieldBytes(target.field) + Object.values(target.patches ?? {}).reduce((bytes, field) => bytes + fieldBytes(field), 0), 0) + maskBytes(mask) + patches.reduce((sum, patch) => sum + maskBytes(patch.mask), 0);
   if (!Number.isSafeInteger(sharedInputBytes) || sharedInputBytes > maxSharedInputBytes) throw new RasterCapacityError('Raster shared input byte budget exceeded');
-  const admittedPeakBytes = process.memoryUsage.rss() + sharedInputBytes + count * RASTER_WORKER_RESERVE_BYTES + geometryCacheBytes + maxPending * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES);
+  const copiedCoverages = new Set<SparseCoverage>();
+  const copiedBytes = (view: ArrayBufferView) => view.buffer instanceof SharedArrayBuffer ? 0 : view.byteLength;
+  const copiedCoverageBytes = (coverage: SparseCoverage) => {
+    if (copiedCoverages.has(coverage)) return 0;
+    copiedCoverages.add(coverage);
+    return copiedBytes(coverage.blockIds) + copiedBytes(coverage.offsets) + copiedBytes(coverage.output) + copiedBytes(coverage.halo);
+  };
+  const copiedMaskBytes = (mask: SamplingMask) => copiedBytes(mask.tiles) + ('coverage' in mask ? copiedCoverageBytes(mask.coverage) : copiedBytes(mask.output) + copiedBytes(mask.halo));
+  const copiedFieldBytes = (field: GridField) => copiedBytes(field.values) + copiedBytes(field.flags) + ('coverage' in field ? copiedCoverageBytes((field as PackedGridField).coverage) : 0);
+  const copiedInputBytes = targets.reduce((sum, target) => sum + copiedFieldBytes(target.field) + Object.values(target.patches ?? {}).reduce((bytes, field) => bytes + copiedFieldBytes(field), 0), 0) + copiedMaskBytes(mask) + patches.reduce((sum, patch) => sum + copiedMaskBytes(patch.mask), 0);
+  const admittedPeakBytes = process.memoryUsage.rss() + copiedInputBytes + count * RASTER_WORKER_RESERVE_BYTES + geometryCacheBytes + maxPending * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES);
   if (!Number.isSafeInteger(admittedPeakBytes) || admittedPeakBytes > BUILD_BUDGETS.peakRssBytes) throw new RasterCapacityError('Raster process working-set budget exceeded');
   const sharedCoverages = new Map<SparseCoverage, SparseCoverage>();
   const shareCoverage = (coverage: SparseCoverage): SparseCoverage => {
     const found = sharedCoverages.get(coverage);
     if (found) return found;
-    const result = { ...coverage, blockIds: new Uint32Array(sharedBytes(new Uint8Array(coverage.blockIds.buffer, coverage.blockIds.byteOffset, coverage.blockIds.byteLength)).buffer), offsets: new Uint32Array(sharedBytes(new Uint8Array(coverage.offsets.buffer, coverage.offsets.byteOffset, coverage.offsets.byteLength)).buffer), output: sharedBytes(coverage.output), halo: sharedBytes(coverage.halo) };
+    const blockIds = sharedBytes(new Uint8Array(coverage.blockIds.buffer, coverage.blockIds.byteOffset, coverage.blockIds.byteLength));
+    const offsets = sharedBytes(new Uint8Array(coverage.offsets.buffer, coverage.offsets.byteOffset, coverage.offsets.byteLength));
+    const result = { ...coverage, blockIds: new Uint32Array(blockIds.buffer, blockIds.byteOffset, coverage.blockIds.length), offsets: new Uint32Array(offsets.buffer, offsets.byteOffset, coverage.offsets.length), output: sharedBytes(coverage.output), halo: sharedBytes(coverage.halo) };
     sharedCoverages.set(coverage, result); return result;
   };
-  const shareField = (field: GridField): GridField => ({ values: new Float32Array(sharedBytes(new Uint8Array(field.values.buffer, field.values.byteOffset, field.values.byteLength)).buffer), flags: sharedBytes(field.flags), ...('coverage' in field ? { coverage: shareCoverage((field as PackedGridField).coverage) } : {}) });
+  const shareField = (field: GridField): GridField => {
+    const values = sharedBytes(new Uint8Array(field.values.buffer, field.values.byteOffset, field.values.byteLength));
+    return { values: new Float32Array(values.buffer, values.byteOffset, field.values.length), flags: sharedBytes(field.flags), ...('coverage' in field ? { coverage: shareCoverage((field as PackedGridField).coverage) } : {}) };
+  };
   const shareMask = (mask: SamplingMask): SamplingMask => 'coverage' in mask ? { ...mask, coverage: shareCoverage(mask.coverage), tiles: sharedBytes(mask.tiles) } : { ...mask, output: sharedBytes(mask.output), halo: sharedBytes(mask.halo), tiles: sharedBytes(mask.tiles) };
   const fields = targets.map(({ field }) => shareField(field)), sharedMask = shareMask(mask);
   const sharedPatches = patches.map(patch => ({ ...patch, mask: shareMask(patch.mask) }));
@@ -120,7 +136,7 @@ export async function createRasterPool(mask: SamplingMask, targets: readonly { f
   } catch (error) { await close(); throw error; }
   finally { clearTimeout(deadline); initialization.length = 0; }
   return {
-    sharedInputBytes, admittedPeakBytes, close,
+    sharedInputBytes, copiedInputBytes, admittedPeakBytes, close,
     render(tileIndex: number, field: number, z: number, x: number, y: number): Promise<RasterPixels> {
       return new Promise((resolve, reject) => {
         if (failed) { reject(failed); return; }

@@ -62,7 +62,7 @@ it('retains both current fine masks and native coverage within the cache budget'
     lease.release();
   }
   expect(reads).toBe(coldReads);
-  expect(coverageMemory(bucket).cachedBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+  expect(coverageMemory(bucket).cachedBytes).toBeLessThanOrEqual(24 * 1024 * 1024);
   expect(coverageMemory(bucket).leasedBytes).toBe(0);
   console.log('full coverage receipts', JSON.stringify(receipts));
   let peakCold = 0;
@@ -113,13 +113,13 @@ it('bounds rotating retained masks and coalesces leases until delayed reads sett
       try { const lease = await resolveSparseCoverage(bucket, surface); leases.push(lease); delay(lease); }
       catch (error) { expect(error).toBeInstanceOf(ResourceLimitError); rejected = true; break; }
       peak = Math.max(peak, coverageMemory(bucket).leasedBytes);
-      expect(coverageMemory(bucket).cachedBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(coverageMemory(bucket).cachedBytes).toBeLessThanOrEqual(24 * 1024 * 1024);
       expect(coverageMemory(bucket).leasedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
     }
     expect(rejected).toBe(true);
     expect(leases.length).toBeGreaterThan(1);
     const again = await resolveSparseCoverage(bucket, surfaces[0]);
-    expect(again.coverage).toBe(first.coverage);
+    expect(again.coverage.mask).toBe(first.coverage.mask);
     expect(coverageMemory(bucket).leasedBytes).toBe(peak);
     again.release();
   } finally { for (const gate of gates) gate(); await Promise.all(requests); }

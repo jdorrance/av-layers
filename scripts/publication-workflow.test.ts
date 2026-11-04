@@ -8,14 +8,14 @@ import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { refinementInputSchema } from '../apps/batch/src/refinement/prepare.js';
 import { localPath } from '../apps/batch/src/validate.js';
-const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn() }));
+const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn() }));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
-vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize }));
+vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize, verifyBuildReceipts: fake.verifyReceipts }));
 vi.mock('../apps/batch/src/providers.js', async () => {
   const { validateCycle } = await import('../apps/batch/src/gfs/fields.js');
   return { getForecastProvider: () => ({ async resolveCycle({ cycle, ...options }: { cycle?: string }) { return validateCycle(cycle || (await fake.discover(options)).cycle); } }) };
 });
-vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer }));
+vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer, verifyV5Dependencies: fake.verifyDependencies }));
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
 vi.mock('../apps/batch/src/storage.js', () => ({ r2Storage: fake.storage }));
@@ -25,7 +25,8 @@ vi.mock('node:child_process', async () => {
   const { promisify } = await import('node:util');
   return { execFile: Object.assign(vi.fn(), { [promisify.custom]: fake.gh }) };
 });
-vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories }));
+vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories,
+  stat: async (path: string) => { await fake.readLocal(path); return { isFile: () => true }; } }));
 import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, prepareForecastTerrain, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 const catalogRef = { key: `terrain/catalogs/${'c'.repeat(64)}.json`, sha256: 'c'.repeat(64), bytes: 100 };
@@ -40,6 +41,7 @@ beforeEach(() => {
   fake.fineCoverage.mockResolvedValue({ mask: { coverage: { fixture: true } }, bytes: Uint8Array.of(1) });
   fake.terrain.mockResolvedValue({ key: 'terrain/prepared/fixture/manifest.json' });
   fake.plan.mockResolvedValue({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
+  fake.readPlan.mockResolvedValue({ model: 'gfs', buildId: manifest.buildId });
   fake.verifyServing.mockResolvedValue(undefined);
   fake.shard.mockResolvedValue('output/shards/0/receipt.json');
   fake.finalize.mockImplementation(async (_plan, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
@@ -91,7 +93,7 @@ it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered n
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
-  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), wholeDomain: { catalogRef, storage: {}, cacheOnly: true } });
+  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), store: {}, wholeDomain: { catalogRef, storage: {}, cacheOnly: true } });
 });
 
 it.each(MODEL_IDS)('passes the same global catalog pin for configured %s zones', async model => {
@@ -179,6 +181,17 @@ it('keeps a main-revision check between the completed build and publication', as
   expect(fake.cleanup.mock.invocationCallOrder[0]).toBeGreaterThan(fake.publish.mock.invocationCallOrder[0]);
   expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/publication.json', expect.stringContaining('"validationReused": true'));
 });
+it('persists an unconfirmed intent before publishing and records committed stage timings', async () => {
+  fake.publish.mockImplementationOnce(async (_store, _root, _manifest, options) => {
+    const receipt = fake.write.mock.calls.find(([path]) => String(path).endsWith('/publication.json'));
+    expect(JSON.parse(receipt![1])).toMatchObject({ status: 'publishing', publication: 'unconfirmed', buildId: manifest.buildId });
+    Object.assign(options.timings, { r2UploadWallMs: 12, casCommitWallMs: 3 });
+  });
+  await finalizeAndPublish();
+  const receipts = fake.write.mock.calls.filter(([path]) => String(path).endsWith('/publication.json'));
+  expect(receipts).toHaveLength(2);
+  expect(JSON.parse(receipts[1][1])).toMatchObject({ status: 'committed', publication: 'committed', r2UploadWallMs: 12, casCommitWallMs: 3 });
+});
 it('refuses local or non-main invocation before building or publishing', async () => {
   vi.stubEnv('GITHUB_ACTIONS', 'false');
   await expect(finalizeAndPublish()).rejects.toThrow('workflow on main');
@@ -222,6 +235,14 @@ it('records an ambiguous commit reconciled by publish before deferring cleanup a
   await expect(finalizeAndPublish()).rejects.toThrow('interrupted');
   expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/publication.json', expect.stringContaining('"status": "committed"'));
   expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/maintenance.json', expect.stringContaining('cancelled-after-commit'));
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "committed"'));
+  expect(fake.cleanup).not.toHaveBeenCalled();
+});
+it('records a committed CAS when its deadline expires before cleanup', async () => {
+  fake.readPlan.mockResolvedValueOnce({ model: 'gfs', buildId: manifest.buildId, deadlineAt: new Date(Date.now() + 20).toISOString() });
+  fake.publish.mockImplementationOnce(async () => { await new Promise(resolve => setTimeout(resolve, 40)); });
+  await expect(finalizeAndPublish()).rejects.toThrow();
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/publication.json', expect.stringContaining('"status": "committed"'));
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "committed"'));
   expect(fake.cleanup).not.toHaveBeenCalled();
 });
@@ -315,6 +336,79 @@ it('resumes matching v5 artifacts with measured metrics within budget', async ()
   await resumePublication(revision);
   expect(fake.publish).toHaveBeenCalledOnce();
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
+});
+
+it.each([true, false])('allows expired-deadline recovery only for an authoritative committed build (%s)', async committed => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  plan.deadlineAt = '2000-01-01T00:00:00.000Z';
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  if (committed) fake.pointer.mockResolvedValueOnce({ etag: 'committed', pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
+    retained: [{ buildId: manifest.buildId, cycle: manifest.cycle, expiresAt: manifest.expiresAt, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json` }] } });
+  if (committed) {
+    await resumePublication(revision);
+    expect(fake.publish).toHaveBeenCalledWith({}, 'output', expect.anything(), expect.objectContaining({ committedOnly: true }));
+  } else {
+    await expect(resumePublication(revision)).rejects.toThrow('deadline exceeded');
+    expect(fake.publish).not.toHaveBeenCalled();
+  }
+});
+
+it('resumes frame-group receipts without local sample payloads after remote verification', async () => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  for (const surface of manifest.surfaces) {
+    const shard = surface.samples.shards[0]!;
+    files.delete(localPath('output', shard.key));
+    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards: [{ ...shard, key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g0-b0.bin`, group: 0, firstFrame: 0, frameCount: manifest.frames.length, blockShard: 0 }] };
+  }
+  files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await resumePublication(revision);
+  expect(fake.verifyReceipts).toHaveBeenCalledWith('output', expect.objectContaining({ version: 5 }), {}, expect.any(AbortSignal));
+  expect(fake.verifyDependencies).not.toHaveBeenCalled();
+  expect(fake.publish).toHaveBeenCalledWith({}, 'output', expect.anything(), expect.objectContaining({ receiptsOnly: true }));
+  fake.verifyReceipts.mockRejectedValueOnce(new Error('receipt mismatch'));
+  fake.publish.mockClear();
+  await expect(resumePublication(revision)).rejects.toThrow('receipt mismatch');
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+
+it('resumes frame-group local payloads without remote shard receipts', async () => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  plan.groups = [plan.groups[0].slice(0, 3), plan.groups[0].slice(3)];
+  for (const surface of manifest.surfaces) {
+    const old = surface.samples.shards[0]!, original = files.get(localPath('output', old.key))!;
+    const counts = [3, manifest.frames.length - 3], shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+    let firstFrame = 0;
+    for (const [group, frameCount] of counts.entries()) {
+      const channels = frameCount * surface.layers.length, bytes = Buffer.alloc(old.storedCells * channels * 5);
+      for (let cell = 0; cell < old.storedCells; cell++) original.copy(bytes, cell * channels * 5,
+        (cell * surface.samples.channelCount + firstFrame * surface.layers.length) * 5,
+        (cell * surface.samples.channelCount + firstFrame * surface.layers.length + channels) * 5);
+      const key = `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g${group}-b0.bin`;
+      files.set(localPath('output', key), bytes);
+      shards.push({ ...old, group, firstFrame, frameCount, blockShard: 0, key, bytes: bytes.length, sha256: digest(bytes) });
+      firstFrame += frameCount;
+    }
+    files.delete(localPath('output', old.key));
+    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards };
+  }
+  for (const artifact of manifest.artifacts) {
+    const bytes = Buffer.from('fixture archive');
+    artifact.tilesSha256 = digest(bytes);
+    files.set(localPath('output', artifact.tilesKey), bytes);
+  }
+  files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  fake.verifyReceipts.mockRejectedValueOnce(new Error('missing shard receipts'));
+  await resumePublication(revision);
+  expect(fake.verifyReceipts).not.toHaveBeenCalled();
+  expect(fake.publish).toHaveBeenCalledWith({}, 'output', expect.objectContaining({ version: 5 }), expect.objectContaining({ receiptsOnly: false }));
 });
 
 it.each([
@@ -472,7 +566,7 @@ it('persists cleanup cost observations and preserves unknown deletion progress o
 });
 
 const repository = 'owner/repo';
-const run = { id: 123, path: '.github/workflows/forecast.yml', head_branch: 'main', head_sha: revision, event: 'schedule', status: 'completed', repository: { full_name: repository }, head_repository: { full_name: repository } };
+const run = { id: 123, run_attempt: 2, path: '.github/workflows/forecast.yml', head_branch: 'main', head_sha: revision, event: 'schedule', status: 'completed', repository: { full_name: repository }, head_repository: { full_name: repository } };
 it('accepts completed main publisher runs and returns their immutable source revision', () => {
   expect(forecastArtifactRevision(run, repository, '123')).toBe(revision);
   expect(forecastArtifactRevision({ ...run, event: 'workflow_dispatch' }, repository, '123')).toBe(revision);
@@ -484,6 +578,7 @@ it('rejects lookalike artifacts from forks, other workflows, refs or uncompleted
 });
 it('verifies the completed source workflow before downloading a retained forecast', async () => {
   fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify(run) });
+  fake.readLocal.mockResolvedValueOnce(Buffer.from(JSON.stringify({ runId: '123', attempt: 2, model: 'gfs', environment: 'staging', revision })));
   await expect(downloadForecastArtifact('123')).resolves.toBe(revision);
   expect(fake.gh).toHaveBeenNthCalledWith(1, 'gh', ['api', 'repos/owner/repo/actions/runs/123'], { timeout: 15_000, maxBuffer: 1024 * 1024 });
   expect(fake.gh).toHaveBeenNthCalledWith(2, 'gh', ['run', 'download', '123', '--repo', 'owner/repo', '--name', 'forecast-gfs-123', '--dir', 'output'], { timeout: 300_000, maxBuffer: 1024 * 1024 });
@@ -491,6 +586,31 @@ it('verifies the completed source workflow before downloading a retained forecas
   fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify({ ...run, head_branch: 'feature' }) });
   await expect(downloadForecastArtifact('123')).rejects.toThrow('authorized main forecast');
   expect(fake.gh).toHaveBeenCalledTimes(1);
+});
+
+it('rejects a stale artifact from a previous run attempt', async () => {
+  fake.gh.mockResolvedValueOnce({ stdout: JSON.stringify(run) });
+  fake.readLocal.mockResolvedValueOnce(Buffer.from(JSON.stringify({ runId: '123', attempt: 1, model: 'gfs', environment: 'staging', revision })));
+  await expect(downloadForecastArtifact('123')).rejects.toThrow('run attempt');
+});
+
+it('refuses an expired plan before publication', async () => {
+  fake.readPlan.mockResolvedValueOnce({ model: 'gfs', buildId: manifest.buildId, deadlineAt: '2000-01-01T00:00:00.000Z' });
+  await expect(finalizeAndPublish()).rejects.toThrow('deadline exceeded');
+  expect(fake.publish).not.toHaveBeenCalled();
+});
+
+it('restricts shard writes to conditional immutable build objects', async () => {
+  const storage = { get: vi.fn(), head: vi.fn(), put: vi.fn(), list: vi.fn(), delete: vi.fn() };
+  fake.shard.mockImplementationOnce(async (_plan, _shard, { store }) => {
+    await expect(store.put('catalog/gfs/latest.json', new Uint8Array(1), { ifNoneMatch: '*' })).rejects.toThrow('immutable build key');
+    await expect(store.put(`builds/gfs/${manifest.buildId}/a`, new Uint8Array(1), {})).rejects.toThrow('immutable build key');
+    expect(() => store.get('catalog/gfs/latest.json')).toThrow('cannot read');
+    await expect(store.delete(['x'])).rejects.toThrow('cannot delete');
+    await store.put(`builds/gfs/${manifest.buildId}/a`, new Uint8Array(1), { ifNoneMatch: '*' });
+  });
+  await runForecastShard(0, storage);
+  expect(storage.put).toHaveBeenCalledTimes(1);
 });
 
 it('records planning failure without claiming publication', async () => {
@@ -503,7 +623,7 @@ it('runs a worker without constructing publication storage or resolving another 
   vi.stubEnv('TERRAIN_CATALOG_REF', 'not JSON');
   vi.stubEnv('TERRAIN_INPUTS', 'not JSON');
   await runForecastShard(2);
-  expect(fake.shard).toHaveBeenCalledWith('output/plan.json', 2, { out: 'output', cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
+  expect(fake.shard).toHaveBeenCalledWith('output/plan.json', 2, { out: 'output', cacheDir: '.cache/gfs', signal: expect.any(AbortSignal), store: undefined });
   expect(fake.storage).not.toHaveBeenCalled(); expect(fake.discover).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
 });
 it('cancels the shard and removes its signal handlers', async () => {

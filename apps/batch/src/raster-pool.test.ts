@@ -54,6 +54,24 @@ describe('bounded per-frame raster workers', () => {
     await expect(pool.render(0, 0, 0, 0, 0)).rejects.toThrow('closed');
   }, 20_000);
 
+  it('reuses shared packed fields and sparse masks with offset views', async () => {
+    const { mask, targets } = fixture();
+    const original = sparseCoverageFromDense({ ...mask.grid, gridHash: 'c'.repeat(64), output: mask.output, halo: mask.halo });
+    const bytes = (source: Uint8Array) => { const result = new Uint8Array(new SharedArrayBuffer(source.length + 8), 4, source.length); result.set(source); return result; };
+    const words = (source: Uint32Array) => { const result = new Uint32Array(new SharedArrayBuffer(source.byteLength + 8), 4, source.length); result.set(source); return result; };
+    const coverage = { ...original, blockIds: words(original.blockIds), offsets: words(original.offsets), output: bytes(original.output), halo: bytes(original.halo) };
+    const values = new Float32Array(new SharedArrayBuffer(12 * 4 + 8), 4, 12), flags = new Uint8Array(new SharedArrayBuffer(20), 4, 12);
+    values.set(targets[0].field.values); flags.set(targets[0].field.flags);
+    const packed = { values, flags, coverage }, sparse = { grid: mask.grid, tiles: bytes(mask.tiles), maxZoom: mask.maxZoom, coverage };
+    const pool = await createRasterPool(sparse, [{ field: packed, layer: targets[0].layer }], { workers: 1, geometryCacheBytes: 120_000, maxPending: 1 });
+    try {
+      expect(pool.copiedInputBytes).toBe(0);
+      values.fill(5); flags.fill(0);
+      const expected = createRenderer(sparse, { rasterWorkers: 0 }).renderTileRgba(packed, targets[0].layer, 0, 0, 0);
+      expect((await pool.render(0, 0, 0, 0, 0)).rgba).toEqual(expected);
+    } finally { await pool.close(); }
+  }, 20_000);
+
   it('rejects a process working set exceeding the build budget before allocating worker inputs', async () => {
     const { mask, targets } = fixture();
     await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');

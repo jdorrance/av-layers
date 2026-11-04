@@ -94,6 +94,37 @@ function v5(): ManifestV5 {
 }
 
 describe('v5 forecast publications', () => {
+  it('binds uneven frame groups to complete surface-specific block partitions', () => {
+    const manifest = v5();
+    for (const surface of manifest.surfaces) {
+      const old = surface.samples;
+      const shards = [3, 5].flatMap((frameCount, group) => old.shards.map((shard, blockShard) => ({
+        ...shard, group, firstFrame: group === 0 ? 0 : 3, frameCount, blockShard,
+        bytes: shard.storedCells * frameCount * surface.layers.length * 5,
+        key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g${group}-b${blockShard}.bin`
+      })));
+      surface.samples = { ...old, format: 'frame-group-block-shards-v1', shards };
+    }
+    expect(manifestV5Schema.parse(manifest)).toEqual(manifest);
+    for (const surface of manifest.surfaces) expect(() => assertSampleLayoutBindingV5(surface, {
+      grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3]
+    })).not.toThrow();
+    const invalid = (mutate: (shards: Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']) => void) => {
+      const copy = structuredClone(manifest), samples = copy.surfaces[1].samples;
+      if (samples.format !== 'frame-group-block-shards-v1') throw new Error('Expected grouped samples');
+      mutate(samples.shards);
+      expect(manifestV5Schema.safeParse(copy).success).toBe(false);
+    };
+    invalid(shards => { shards[2].firstFrame++; });
+    invalid(shards => { shards[2].group++; });
+    invalid(shards => { shards[3].blockShard++; });
+    invalid(shards => { shards[2].firstBlock++; });
+    invalid(shards => { shards[2].bytes++; });
+    invalid(shards => { shards[2].key = shards[2].key.replace('/fine/', '/native/'); });
+    invalid(shards => { shards.pop(); });
+    expect(manifestV5Schema.safeParse({ ...manifest, buildId: '../invalid' }).success).toBe(false);
+  });
+
   it('round-trips native rain and fine lift with frame-then-layer channels and shard references', () => {
     const manifest = v5();
     expect(manifestV5Schema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);

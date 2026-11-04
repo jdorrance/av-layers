@@ -139,16 +139,21 @@ const shardSchema = z.strictObject({
   firstBlock: safeNonnegative, blockCount: safePositive, storedCells: safePositive,
   bytes: safePositive.max(64 * 1024 * 1024), key, sha256
 });
+export const frameGroupShardSchema = shardSchema.extend({
+  group: safeNonnegative, firstFrame: safeNonnegative, frameCount: safePositive, blockShard: safeNonnegative
+});
+const sampleV5Base = {
+  blockSize: z.literal(SAMPLE_BLOCK_SIZE), channelOrder: z.literal('frame-then-layer'), channelCount: safePositive,
+  coverageHash: sha256, blockCount: safePositive, storedCells: safePositive
+};
 const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
   coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
   layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  samples: z.strictObject({
-    format: z.literal('cell-major-block-shards-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE),
-    channelOrder: z.literal('frame-then-layer'), channelCount: safePositive,
-    coverageHash: sha256, blockCount: safePositive, storedCells: safePositive,
-    shards: z.array(shardSchema).min(1)
-  }),
+  samples: z.discriminatedUnion('format', [
+    z.strictObject({ ...sampleV5Base, format: z.literal('cell-major-block-shards-v1'), shards: z.array(shardSchema).min(1) }),
+    z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1) })
+  ]),
   terrain: z.strictObject({
     dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
     sha256, verticalDatum: z.string().min(1).max(80), surface: z.string().min(1).max(80),
@@ -200,6 +205,7 @@ export function validateArtifactRecordsV5(manifest: ManifestV5): void {
 }
 
 function validateV5Records(manifest: ManifestV5): void {
+  if (!/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(manifest.buildId)) throw new Error('Invalid build ID');
   const frames = new Set(manifest.frames.map(frame => frame.id)), layers = new Set(manifest.layers);
   if (frames.size !== manifest.frames.length || layers.size !== manifest.layers.length) throw new Error('Duplicate frames or layers');
   const channels = manifest.frames.length * manifest.layers.length;
@@ -233,16 +239,29 @@ function validateV5Records(manifest: ManifestV5): void {
     if (samples.channelCount !== expectedChannels) throw new Error('Invalid channel count');
     const blockSlots = Math.ceil(surface.grid.width / SAMPLE_BLOCK_SIZE) * Math.ceil(surface.grid.height / SAMPLE_BLOCK_SIZE);
     if (!Number.isSafeInteger(blockSlots) || samples.blockCount > blockSlots) throw new Error('Invalid sample block count');
-    let nextBlock = 0, cells = 0;
+    let nextBlock = 0, cells = 0, nextFrame = 0, group = -1, blockShard = 0, groupFirstFrame = 0, groupFrameCount = 0;
     for (let i = 0; i < samples.shards.length; i++) {
-      const shard = samples.shards[i], bytes = shard.storedCells * expectedChannels * CELL_BYTES;
+      const shard = samples.shards[i];
+      let channels = expectedChannels, expectedKey = `${prefix}/surfaces/${surface.id}/samples/${i}.bin`;
+      if (samples.format === 'frame-group-block-shards-v1' && 'group' in shard) {
+        if (shard.group !== group) {
+          if (shard.group !== group + 1 || (group >= 0 && (nextBlock !== samples.blockCount || cells !== samples.storedCells))
+            || shard.firstFrame !== nextFrame) throw new Error('Invalid sample frame group');
+          group = shard.group; groupFirstFrame = shard.firstFrame; groupFrameCount = shard.frameCount;
+          nextFrame += shard.frameCount; nextBlock = 0; cells = 0; blockShard = 0;
+        }
+        if (shard.firstFrame !== groupFirstFrame || shard.frameCount !== groupFrameCount || shard.blockShard !== blockShard++) throw new Error('Invalid sample frame group');
+        channels = shard.frameCount * surface.layers.length;
+        expectedKey = `${prefix}/surfaces/${surface.id}/samples/g${shard.group}-b${shard.blockShard}.bin`;
+      }
+      const bytes = shard.storedCells * channels * CELL_BYTES;
       if (shard.firstBlock !== nextBlock || shard.storedCells < shard.blockCount || shard.storedCells > shard.blockCount * (SAMPLE_BLOCK_SIZE + 1) ** 2
         || !Number.isSafeInteger(bytes) || shard.bytes !== bytes
-        || shard.key !== `${prefix}/surfaces/${surface.id}/samples/${i}.bin` || keys.has(shard.key)) throw new Error('Invalid sample shard');
+        || shard.key !== expectedKey || keys.has(shard.key)) throw new Error('Invalid sample shard');
       nextBlock += shard.blockCount; cells += shard.storedCells; keys.add(shard.key);
       if (!Number.isSafeInteger(nextBlock) || !Number.isSafeInteger(cells)) throw new Error('Sample shard arithmetic overflow');
     }
-    if (nextBlock !== samples.blockCount || cells !== samples.storedCells) throw new Error('Incomplete sample shard ranges');
+    if (nextBlock !== samples.blockCount || cells !== samples.storedCells || (samples.format === 'frame-group-block-shards-v1' && nextFrame !== manifest.frames.length)) throw new Error('Incomplete sample shard ranges');
   }
   if (owned.size !== layers.size || manifest.layers.some(layer => !owned.has(layer))) throw new Error('Incomplete layer ownership');
   if (manifest.artifacts.length !== channels) throw new Error('Invalid artifact count');
@@ -259,8 +278,12 @@ export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding:
   if (!sameGrid(surface.grid, binding.grid) || surface.gridHash !== binding.gridHash || surface.coverage.hash !== binding.coverageHash
     || surface.samples.blockCount !== binding.blockIds.length) throw new Error('Sample layout identity mismatch');
   const { width, height, wrapLongitude } = surface.grid, columns = Math.ceil(width / SAMPLE_BLOCK_SIZE), rows = Math.ceil(height / SAMPLE_BLOCK_SIZE);
-  let previous = -1, nextBlock = 0, totalCells = 0;
+  let previous = -1, nextBlock = 0, totalCells = 0, group = -1;
   for (const shard of surface.samples.shards) {
+    if ('group' in shard && shard.group !== group) {
+      if (group >= 0 && (nextBlock !== binding.blockIds.length || totalCells !== surface.samples.storedCells)) throw new Error('Incomplete sample block ranges');
+      group = shard.group; previous = -1; nextBlock = 0; totalCells = 0;
+    }
     let cells = 0;
     const end = shard.firstBlock + shard.blockCount;
     if (!Number.isSafeInteger(shard.firstBlock) || shard.firstBlock !== nextBlock || !Number.isSafeInteger(shard.blockCount) || shard.blockCount <= 0
@@ -274,8 +297,9 @@ export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding:
       const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
       cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
     }
-    if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * surface.samples.channelCount * CELL_BYTES)
-      || shard.bytes !== cells * surface.samples.channelCount * CELL_BYTES) throw new Error('Sample block size mismatch');
+    const channels = 'frameCount' in shard ? shard.frameCount * surface.layers.length : surface.samples.channelCount;
+    if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * CELL_BYTES)
+      || shard.bytes !== cells * channels * CELL_BYTES) throw new Error('Sample block size mismatch');
     nextBlock = end; totalCells += cells;
   }
   if (nextBlock !== binding.blockIds.length || totalCells !== surface.samples.storedCells) throw new Error('Incomplete sample block ranges');

@@ -74,7 +74,14 @@ describe('multi-model workflow isolation', () => {
     expect(String(record(upload.with).path)).toContain('output/coverage/');
     expect(String(record(upload.with).path)).toContain('output/terrain/');
     const publisherSteps = record(modelJobs['build-publish']).steps as Record<string, unknown>[];
-    const full = publisherSteps.find(step => step.name === 'Upload full build artifacts on failure or explicit request')!;
+    const full = publisherSteps.find(step => step.name === 'Upload full build artifacts on request')!;
+    expect(full.if).toBe("${{ always() && env.RETAIN_FULL_ARTIFACTS == 'true' }}");
+    const resumable = publisherSteps.find(step => step.name === 'Upload resumable build records')!;
+    expect(resumable.if).toBe('always()');
+    const records = String(record(resumable.with).path);
+    expect(records).toContain('output/plan.json');
+    expect(records).toContain('output/shards/*/*.json');
+    expect(records).not.toContain('output/builds/\n');
     const fullPath = String(record(full.with).path);
     expect(fullPath).toContain('output/plan.json');
     expect(fullPath).toContain('output/coverage/');

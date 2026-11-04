@@ -17,6 +17,7 @@ const manifestKey = (model: ModelId, id: string): string => `builds/${model}/${i
 const safeId = (id: string): boolean => /^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(id);
 export const MAX_UPLOAD_ARTIFACT_BYTES = BUILD_BUDGETS.samplePackBytes;
 export const MAX_UPLOAD_RESERVED_BYTES = 2 * MAX_UPLOAD_ARTIFACT_BYTES;
+export const SMOKE_VERIFY_RESERVE_MS = 60_000;
 
 export function buildIdTime(id: string): number {
   if (!safeId(id)) throw new Error('Invalid build ID');
@@ -58,15 +59,17 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
   }
 }
 
-export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild }): Promise<void> {
+export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
   const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
   if (options.validated) assertValidatedBuild(root, manifest, options.validated);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
   const captured = await readPointer(store, manifest.model, options.signal);
   const existing = captured.pointer?.retained.find(item => item.buildId === manifest.buildId);
+  if (options.committedOnly && (!existing || captured.pointer?.latestBuildId !== manifest.buildId)) throw new Error('Recovery requires the committed latest build');
   const alreadyRetained = !!existing;
   if (existing && (existing.manifestKey !== key || existing.cycle !== manifest.cycle || existing.expiresAt !== manifest.expiresAt)) throw new Error('Retained build identity mismatch');
+  if (existing && captured.pointer?.latestBuildId !== manifest.buildId) throw new Error('Retained build is no longer latest');
   const check = (): void => { options.signal?.throwIfAborted(); if (!alreadyRetained) { assertLifetime(manifest, now()); assertUsefulHorizon(manifest, now()); } };
   if (captured.pointer && !alreadyRetained) {
     const latestCycle = Math.max(...captured.pointer.retained.map(item => Date.parse(item.cycle)));
@@ -76,7 +79,14 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (!options.validated) {
+  if (options.receiptsOnly) {
+    if (manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+    const { verifyBuildReceipts } = await import('./parallel.js');
+    const objects = await verifyBuildReceipts(root, manifest, store, options.signal);
+    const product = getProduct(manifest.model);
+    if (!product) throw new Error('No trusted publication recipe');
+    await validateBuild(root, manifest, await loadCoverage(product), undefined, product, { store, objects, signal: options.signal });
+  } else if (!options.validated) {
     if (manifest.version === 5) {
       const product = getProduct(manifest.model);
       if (!product) throw new Error('No trusted publication recipe');
@@ -84,16 +94,17 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     } else await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
   }
   if (manifest.version !== 5) validateArtifactRecords(manifest);
+  const uploadStarted = Date.now();
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
   const files = manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest);
   if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
-  const sized = await Promise.all(files.map(async file => {
+  const sized = options.receiptsOnly ? [] : await Promise.all(files.map(async file => {
     const { size } = await stat(localPath(root, file.key));
     if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
     return { ...file, size };
   }));
-  if (manifest.version === 5) await publishV5Dependencies(store, root, manifest, check, options.signal);
-  else for (const grid of forecastGrids(manifest)) {
+  if (manifest.version === 5 && !options.receiptsOnly) await publishV5Dependencies(store, root, manifest, check, options.signal);
+  else if (manifest.version !== 5) for (const grid of forecastGrids(manifest)) {
     const coverageBytes = await readLocalFile(localPath(root, grid.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
     if (sha256(coverageBytes) !== grid.coverage.hash) throw new Error('Coverage descriptor hash mismatch');
     const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
@@ -120,9 +131,20 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check(); await putImmutable(store, key, content, 'application/json', options.signal);
   const uploadedManifest = await store.get(key, undefined, MAX_MANIFEST_BYTES, options.signal);
   if (!uploadedManifest || !Buffer.from(uploadedManifest.bytes).equals(content)) throw new Error('Manifest readback mismatch');
-  if (alreadyRetained) return;
+  if (options.timings) options.timings.r2UploadWallMs = Date.now() - uploadStarted;
+  if (alreadyRetained) {
+    const current = (await readPointer(store, manifest.model, options.signal)).pointer;
+    const retained = current?.retained.find(item => item.buildId === manifest.buildId);
+    if (current?.latestBuildId !== manifest.buildId || retained?.manifestKey !== key || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Committed latest build changed during validation');
+    if (options.timings) options.timings.casCommitWallMs = 0;
+    return;
+  }
   check();
+  const deadline = Date.parse(manifest.createdAt) + BUILD_BUDGETS.elapsedMs;
+  if (options.deadlineAt !== undefined && Date.parse(options.deadlineAt) !== deadline) throw new Error('Invalid publication deadline');
+  if (now() > deadline - SMOKE_VERIFY_RESERVE_MS) throw new Error('Build exceeds pre-publication deadline');
   retained.unshift({ buildId: manifest.buildId, manifestKey: key, cycle: manifest.cycle, expiresAt: manifest.expiresAt });
+  const casStarted = Date.now();
   try { await casPointer(store, manifest.model, { version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained }, captured.etag); }
   catch (error) {
     // Cancellation/network failure after CAS is ambiguous. Read the authority before reporting failure.
@@ -130,7 +152,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (!reconciled.pointer?.retained.some(item => item.buildId === manifest.buildId && item.manifestKey === key && item.cycle === manifest.cycle && item.expiresAt === manifest.expiresAt)) throw error;
     const committed = await store.get(key, undefined, MAX_MANIFEST_BYTES);
     if (!committed || !Buffer.from(committed.bytes).equals(content)) throw error;
-  }
+  } finally { if (options.timings) options.timings.casCommitWallMs = Date.now() - casStarted; }
 }
 
 async function publishV5Dependencies(store: ObjectStorage, root: string, manifest: ManifestV5, check: () => void, signal?: AbortSignal): Promise<void> {
@@ -180,8 +202,15 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     if (coverage.width !== surface.grid.width || coverage.height !== surface.grid.height || coverage.wrapLongitude !== surface.grid.wrapLongitude) throw new Error('Rollback sparse grid mismatch');
     assertSparseCoverageHalo(coverage);
     assertSampleLayoutBindingV5(surface, { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds });
-    const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, surface.samples.channelCount);
-    if (layout.shards.length !== surface.samples.shards.length || layout.shards.some((item, i) => item.firstBlock !== surface.samples.shards[i].firstBlock || item.blockCount !== surface.samples.shards[i].blockCount || item.byteLength !== surface.samples.shards[i].bytes)) throw new Error('Rollback sample layout mismatch');
+    const groups = surface.samples.format === 'cell-major-block-shards-v1'
+      ? [{ channels: surface.samples.channelCount, shards: surface.samples.shards }]
+      : surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
+        channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => 'group' in shard && shard.group === first.group)
+      }));
+    for (const group of groups) {
+      const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, group.channels);
+      if (layout.shards.length !== group.shards.length || layout.shards.some((item, i) => item.firstBlock !== group.shards[i].firstBlock || item.blockCount !== group.shards[i].blockCount || item.byteLength !== group.shards[i].bytes)) throw new Error('Rollback sample layout mismatch');
+    }
     for (const shard of surface.samples.shards) await verifyRemoteHash(store, shard.key, shard.sha256, shard.bytes, shard.bytes, signal, true);
     if (surface.terrain) {
       const terrain = surface.terrain, head = await store.head(terrain.key, signal);

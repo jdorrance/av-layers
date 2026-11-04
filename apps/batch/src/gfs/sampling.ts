@@ -3,13 +3,14 @@ import { createNodeJ2kDecoderPool } from '@azohra/meteo.grib/j2k-node';
 import { NoaaError } from './errors.ts';
 import type { InspectedGfsField } from './admission.ts';
 
-export function compactNoaaSamples<T extends Float32Array | Float64Array = Float64Array>(values: ArrayLike<number>, mask: ArrayLike<number> | undefined, count: number, destination?: T) {
+export function compactNoaaSamples<T extends Float32Array | Float64Array = Float64Array>(values: ArrayLike<number>, mask: ArrayLike<number> | undefined, count: number, destination?: T, targetMissing?: Uint8Array) {
   if (values.length !== count || (mask && mask.length !== count)) {
     throw new NoaaError('decode', 'Decoded sample or mask count differs from requested cells');
   }
   const compact = destination ?? new Float64Array(count) as T;
   if (compact.length !== count) throw new NoaaError('decode', 'Compaction destination has wrong length');
-  const missing = new Uint8Array(count);
+  const missing = targetMissing ?? new Uint8Array(count);
+  if (missing.length !== count) throw new NoaaError('decode', 'Compaction mask has wrong length');
   let missingCount = 0;
   for (let i = 0; i < count; i++) {
     const value = values[i]!;
@@ -17,7 +18,7 @@ export function compactNoaaSamples<T extends Float32Array | Float64Array = Float
       compact[i] = Number.NaN;
       missing[i] = 1;
       missingCount++;
-    } else compact[i] = value;
+    } else { compact[i] = value; missing[i] = 0; }
   }
   return { values: compact, missing, missingCount };
 }
@@ -34,7 +35,7 @@ export class NoaaFieldSampler {
     if (!Number.isInteger(workerCount) || workerCount < 1 || workerCount > 4) throw new RangeError('Invalid decode worker count');
   }
 
-  async sample<T extends Float32Array | Float64Array = Float64Array>(inspected: InspectedGfsField, indices: Uint32Array, destination?: T) {
+  async sample<T extends Float32Array | Float64Array = Float64Array>(inspected: InspectedGfsField, indices: Uint32Array, destination?: T, missing?: Uint8Array) {
     if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
     const stats = this.stats[String(inspected.packing)] ??= { records: 0, failures: 0, decodeMs: 0, compactMs: 0, sampledValues: 0 };
     const started = performance.now();
@@ -49,7 +50,7 @@ export class NoaaFieldSampler {
       });
       decodedAt = performance.now();
       if (this.closed) throw new NoaaError('decode', 'Field sampler is closed');
-      const result = compactNoaaSamples(sampled.values, sampled.missingMask, indices.length, destination);
+      const result = compactNoaaSamples(sampled.values, sampled.missingMask, indices.length, destination, missing);
       stats.records++;
       stats.sampledValues += indices.length;
       return result;

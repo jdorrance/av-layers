@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, createProductDescriptors, createProductMethodId, createRecipeIdentity, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES } from '@av/contracts';
+import { GFS_GRID, GFS_PRODUCT, ICON_EU_PRODUCT, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -16,7 +16,11 @@ const coverageFixture = vi.hoisted(async () => {
   return { output: bytes.buffer, halo: halo.buffer, tiles: tiles.buffer, manifest: manifest.buffer, hash: sha(manifest) };
 });
 import worker from '../src/index';
-import { prepareSamplePackLayout } from '@av/forecast';
+import { prepareSamplePackLayout, prepareShardedSamplePackLayout } from '@av/forecast';
+import { describeSparseCoverage, loadCoverage } from '../../batch/src/coverage';
+import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from '../../batch/src/whole-domain/coverage';
+import { coverageMemory } from '../src/coverage';
+import { inFlightAllocationBytes } from '../src/resources';
 
 const now = Date.parse('2026-10-30T00:00:00Z');
 const cycle = '2026-10-29T18:00:00Z';
@@ -104,6 +108,123 @@ function stream(bytes: Uint8Array, onRead = () => {}): ReadableStream<Uint8Array
   return new ReadableStream({ pull(controller) { onRead(); controller.enqueue(bytes); controller.close(); } }, { highWaterMark: 0 });
 }
 
+interface SparseShard { bytes: number; sha256: string }
+
+class SparseMemoryBucket extends MemoryBucket {
+  maxInFlight = 0;
+  constructor(private seeded: Map<string, unknown>, private shards: Map<string, SparseShard>) { super(); }
+  override async get(key: string, options?: { range?: { offset: number; length: number } }) {
+    this.reads.push({ key, range: options?.range });
+    this.maxInFlight = Math.max(this.maxInFlight, inFlightAllocationBytes());
+    const shard = this.shards.get(key);
+    if (shard) {
+      if (!options?.range) return null;
+      this.active++; this.maxActive = Math.max(this.maxActive, this.active);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      this.active--;
+      const bytes = new Uint8Array(options.range.length);
+      return { size: shard.bytes, range: options.range, customMetadata: { sha256: shard.sha256 }, body: stream(bytes) };
+    }
+    const value = this.seeded.get(key);
+    if (value === undefined) return null;
+    const bytes = value instanceof Uint8Array ? value : new TextEncoder().encode(JSON.stringify(value));
+    return { size: bytes.byteLength, body: stream(bytes) };
+  }
+}
+
+async function realSurface(product: ProductDefinition, kind: 'fine' | 'native', prefix: string) {
+  const fine = kind === 'fine' ? await loadBundledFineCoverage(product, wholeDomainPlan(product)!) : undefined;
+  const mask = fine?.mask ?? nativeSparseMask(await loadCoverage(product));
+  const description = fine ?? describeSparseCoverage(mask, product);
+  const layers: LayerId[] = kind === 'native' ? ['precip-rate'] : ['usable-lift-msl', 'usable-lift-agl'];
+  const channels = product.frameHours.length * layers.length;
+  const id = kind;
+  const shards: Extract<ForecastSurfaceV5['samples'], { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+  let firstFrame = 0;
+  for (let group = 0; group < 4; group++) {
+    const frameCount = Math.floor(product.frameHours.length * (group + 1) / 4) - firstFrame;
+    const layout = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, frameCount * layers.length);
+    shards.push(...layout.shards.map((shard, blockShard) => ({
+      group, firstFrame, frameCount, blockShard,
+      firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.byteLength / (frameCount * layers.length * 5),
+      bytes: shard.byteLength, key: `${prefix}/surfaces/${id}/samples/g${group}-b${blockShard}.bin`, sha256: 'd'.repeat(64)
+    })));
+    firstFrame += frameCount;
+  }
+  const layout = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, channels);
+  const shardInfo = new Map(shards.map(shard => [shard.key, { bytes: shard.bytes, sha256: shard.sha256 }]));
+  const gridHash = description.descriptor.gridHash;
+  const terrain = kind === 'fine' ? { dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64), verticalDatum: 'EGM2008' as const, surface: 'DSM' as const, gridHash, coverageHash: description.hash, layoutVersion: 1 as const } : undefined;
+  const surface: ForecastSurfaceV5 = {
+    id, kind, grid: mask.grid, gridHash,
+    coverage: { id: product.coverageId, hash: description.hash, maskKey: `coverage/${description.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash },
+    layers,
+    samples: {
+      format: 'frame-group-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer', channelCount: channels,
+      coverageHash: description.hash, blockCount: layout.blockCount, storedCells: layout.storedCells, shards
+    },
+    ...(terrain ? { terrain } : {})
+  };
+  const prefixCoverage = `coverage/${description.hash}`;
+  const objects = new Map<string, unknown>([
+    [`${prefixCoverage}/manifest.json`, description.bytes],
+    [`${prefixCoverage}/sparse.bin`, encodeSparseCoverage(mask.coverage)],
+    [`${prefixCoverage}/tiles.bin`, mask.tiles]
+  ]);
+  let samplePoint: { lat: number; lon: number } | undefined;
+  const grid = mask.grid;
+  if (grid.kind !== 'regular-latlon') throw new Error('Expected regular coverage grid');
+  outer: for (let i = 0; i < layout.blockCount; i++) {
+    const block = layout.block(i);
+    if (block.width !== 17 || block.height !== 17) continue;
+    for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
+      const lat = grid.lat0 + (block.row + y) * grid.dy, lon = grid.lon0 + (block.column + x) * grid.dx;
+      if (isCovered(mask, lat, lon)) { samplePoint = { lat, lon }; break outer; }
+    }
+  }
+  if (!samplePoint) throw new Error('No covered 17x17 sparse block');
+  return { surface, samplePoint, shards, shardInfo, objects };
+}
+
+async function realPublication(product: ProductDefinition, buildId: string) {
+  const prefix = `builds/${product.modelId}/${buildId}`, cycle = new Date(now).toISOString(), expiresAt = new Date(now + 60_000).toISOString();
+  const fine = await realSurface(product, 'fine', prefix);
+  const surfaces: ManifestV5['surfaces'] = [fine.surface];
+  const objects = new Map(fine.objects), shards = new Map(fine.shardInfo);
+  if (product.modelId === 'gfs') {
+    const native = await realSurface(product, 'native', prefix);
+    surfaces.push(native.surface);
+    for (const [key, value] of native.objects) objects.set(key, value);
+    for (const [key, value] of native.shardInfo) shards.set(key, value);
+  }
+  const frames: ManifestV5['frames'] = product.frameHours.map(hour => ({
+    id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(now + hour * 3_600_000).toISOString(),
+    intervalStart: new Date(now + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(now + hour * 3_600_000).toISOString()
+  }));
+  const artifacts: ManifestV5['artifacts'] = frames.flatMap(frame => product.layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'f'.repeat(64) })));
+  const provenanceKey = `${prefix}/provenance.json`, provenance = new TextEncoder().encode(JSON.stringify({ version: 1, model: product.modelId, buildId, cycle, frames: [] }));
+  const manifest = manifestV5Schema.parse({
+    version: 5, model: product.modelId, buildId, cycle, createdAt: cycle, expiresAt,
+    descriptors: createWholeDomainDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
+    method: { id: Object.keys(createWholeDomainDescriptors(product).methods).join('+'), hash: 'a'.repeat(64) }, frames, layers: product.layers, artifacts, surfaces,
+    source: { provider: product.source.modelFamily.toUpperCase(), provenanceKey, provenanceSha256: createHash('sha256').update(provenance).digest('hex') },
+    tool: {}, palettes: ['lift', 'rain'], metrics: {}
+  });
+  const manifestKey = `${prefix}/manifest.json`;
+  objects.set(manifestKey, new TextEncoder().encode(JSON.stringify(manifest)));
+  objects.set(provenanceKey, provenance);
+  objects.set(`catalog/${product.modelId}/latest.json`, { version: 1, model: product.modelId, latestBuildId: buildId, retained: [{ buildId, manifestKey, cycle, expiresAt }] });
+  return { manifest, objects, shards, samplePoint: fine.samplePoint };
+}
+
+async function callSparse(bucket: SparseMemoryBucket, path: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  if (!headers.has('cf-connecting-ip')) headers.set('cf-connecting-ip', '192.0.2.1');
+  const result = await worker.fetch(new Request(`https://api.example${path}`, { ...init, headers }), { BUCKET: bucket as unknown as R2Bucket, SAMPLE_RATE_LIMITER: limiter, AV_RESPONSE_CACHE: 'off' }, ctx);
+  await Promise.all(pending.splice(0));
+  return result;
+}
+
 let bucket: MemoryBucket;
 let cache: MemoryCache;
 type RateLimit = Parameters<typeof worker.fetch>[1]['SAMPLE_RATE_LIMITER']['limit'];
@@ -129,6 +250,27 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('read-only worker', () => {
+  it('serves both real fine coverages concurrently and reuses warm sparse masks', async () => {
+    const publications = await Promise.all([realPublication(GFS_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789abc'), realPublication(ICON_EU_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789def')]);
+    const sparse = new SparseMemoryBucket(new Map(publications.flatMap(item => [...item.objects])), new Map(publications.flatMap(item => [...item.shards])));
+    const paths = publications.map(({ manifest, samplePoint }) => `/v1/models/${manifest.model}/runs/${manifest.buildId}/sample?lat=${samplePoint.lat}&lon=${samplePoint.lon}&frame=${manifest.frames[0].id}&layers=usable-lift-msl`);
+    for (const response of await Promise.all(paths.map(path => callSparse(sparse, path)))) {
+      expect(response.status, await response.clone().text()).toBe(200);
+      await response.arrayBuffer();
+    }
+    const coldReads = sparse.reads.filter(item => item.key.endsWith('/sparse.bin')).length;
+    expect(coldReads).toBe(2);
+    for (const path of [...paths, ...paths]) {
+      const response = await callSparse(sparse, path);
+      expect(response.status, await response.clone().text()).toBe(200);
+      await response.arrayBuffer();
+    }
+    expect(sparse.reads.filter(item => item.key.endsWith('/sparse.bin'))).toHaveLength(coldReads);
+    expect(coverageMemory(sparse as unknown as R2Bucket)).toMatchObject({ leasedBytes: 0 });
+    expect(coverageMemory(sparse as unknown as R2Bucket).cachedBytes).toBeLessThanOrEqual(24 * 1024 * 1024);
+    expect(sparse.maxInFlight).toBeLessThanOrEqual(32 * 1024 * 1024);
+  }, 120_000);
+
   it('bounds outgoing copies for coalesced large provenance waiters before constructing their responses', async () => {
     const pub = publication('build-1');
     const payload = { version: 1, model: 'gfs', buildId: 'build-1', cycle, frames: [{ pad: '' }] };

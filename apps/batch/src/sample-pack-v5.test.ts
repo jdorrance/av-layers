@@ -139,6 +139,19 @@ it('preserves distinct packed values at nonzero offsets in little-endian layout'
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it('writes surface-namespaced frame-group shard keys', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-group-'));
+  try {
+    const g = grid(17, 1, false), coverage = coverageFor(g, [0, 1]);
+    const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 1, 85);
+    const writer = createShardedSamplePackWriter(layout, coverage, { ...target(root), group: 2 });
+    await writer.writeChannel(0, { values: Float32Array.of(3, 7), flags: Uint8Array.of(0, 0), coverage } as GridField);
+    const shards = await writer.finish();
+    expect(shards.map(shard => shard.key)).toEqual(shards.map((_, i) => `builds/gfs/20261104T000000Z/surfaces/fine/samples/g2-b${i}.bin`));
+    expect(() => sampleShardKey('gfs', 'build', 'fine', 0, -1)).toThrow('frame group');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it('retains every channel after LRU eviction across more than 32 shards', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-v5-evict-'));
   try {

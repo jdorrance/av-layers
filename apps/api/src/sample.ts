@@ -1,8 +1,8 @@
-import { MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, STATUS_OUTSIDE, isCovered, isLayerId, type ForecastGrid, type LayerId, type ManifestV5 } from '@av/contracts';
+import { MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, STATUS_OUTSIDE, isCovered, isLayerId, type ForecastGrid, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
 import { refinementCandidate } from '@av/contracts/refinement';
 import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, type Sample } from '@av/forecast';
 import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from './coverage';
-import { binaryRead, countRead, readObjectBytes, waitFor, type WaitContext } from './resources';
+import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObjectBytes, waitFor, type WaitContext } from './resources';
 import { artifact, servedSource, type PublishedManifest } from './publication';
 import { cached, ensureLive, fail, json } from './http';
 
@@ -130,7 +130,7 @@ async function serveSampleV5(request: Request, bucket: R2Bucket, ctx: WaitContex
   return cached(request, m.expiresAt, ctx, async () => {
     const releases: (() => void)[] = [];
     try {
-    const plans = [];
+    const plans: { surface: ForecastSurfaceV5; jobs: { frame: ManifestV5['frames'][number]; layer: LayerId; channel: number }[]; plan: ReturnType<typeof planSample>; packed: ReturnType<typeof planShardedPackedSample> | null; shard: ForecastSurfaceV5['samples']['shards'][number] | undefined }[] = [];
     let rangeBytes = 0;
     for (const surface of m.surfaces) {
       const selected = layers.filter(layer => surface.layers.includes(layer));
@@ -139,31 +139,41 @@ async function serveSampleV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       releases.push(lease.release);
       request.signal.throwIfAborted();
       const coverage = lease.coverage;
-      const jobs = frames.flatMap(frame => selected.map(layer => ({ frame, layer, channel: m.frames.indexOf(frame) * surface.layers.length + surface.layers.indexOf(layer) })));
       const covered = isCovered(coverage.mask, lat, lon);
       const plan = covered ? planSample(surface.grid, lat, lon) : null;
       if (covered && !plan) fail(503, 'publication-invalid', 'Surface coverage lacks sample support');
-      let packed: ReturnType<typeof planShardedPackedSample> | null = null;
-      try { if (plan) packed = planShardedPackedSample(coverage.layout, plan, jobs.map(job => job.channel)); }
-      catch { fail(503, 'publication-invalid', 'Invalid sample layout'); }
-      if (packed) {
-        const shard = surface.samples.shards[packed.shard], { offset, length } = packed.byteRange;
-        if (!shard || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || !Number.isSafeInteger(offset + length) || offset + length > shard.bytes) fail(503, 'publication-invalid', 'Invalid sample range');
-        rangeBytes += length;
+      const groups = coverage.groups ?? [{ firstFrame: 0, frameCount: m.frames.length, channelCount: surface.samples.channelCount, shards: surface.samples.shards }];
+      for (const group of groups) {
+        const jobs = frames.filter(frame => { const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount; })
+          .flatMap(frame => selected.map(layer => ({ frame, layer, channel: (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer) })));
+        if (!jobs.length) continue;
+        let packed: ReturnType<typeof planShardedPackedSample> | null = null;
+        try { if (plan) packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, jobs.map(job => job.channel)); }
+        catch { fail(503, 'publication-invalid', 'Invalid sample layout'); }
+        const shard = packed ? group.shards[packed.shard] : undefined;
+        if (packed) {
+          const { offset, length } = packed.byteRange;
+          if (!shard || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || !Number.isSafeInteger(offset + length) || offset + length > shard.bytes) fail(503, 'publication-invalid', 'Invalid sample range');
+          rangeBytes += length;
+        }
+        plans.push({ surface, jobs, plan, packed, shard });
       }
-      plans.push({ surface, jobs, plan, packed });
     }
     if (rangeBytes > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
     const values = new Map<string, Sample & { surfaceId: string }>();
-    for (const { surface, jobs, plan, packed } of plans) {
+    let next = 0, failure: unknown;
+    const work = async () => { for (;;) {
+      if (failure || next >= plans.length) return;
+      const { surface, jobs, plan, packed, shard } = plans[next++];
+      try {
       let bytes: Uint8Array = new Uint8Array();
       if (packed) {
-        const shard = surface.samples.shards[packed.shard], range = packed.byteRange;
-        bytes = await binaryRead(bucket, `${shard.key}:${shard.sha256}:${range.offset}:${range.length}`, async signal => {
+        const record = shard!, range = packed.byteRange;
+        bytes = await binaryRead(bucket, `${record.key}:${record.sha256}:${range.offset}:${range.length}`, async signal => {
           countRead(ctx);
-          const object = await bucket.get(shard.key, { range });
+          const object = await bucket.get(record.key, { range });
           if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Sample shard missing or invalid');
-          if (object.size !== shard.bytes || object.customMetadata?.sha256 !== shard.sha256 || !object.range || !('offset' in object.range) || object.range.offset !== range.offset || !('length' in object.range) || object.range.length !== range.length) {
+          if (object.size !== record.bytes || object.customMetadata?.sha256 !== record.sha256 || !object.range || !('offset' in object.range) || object.range.offset !== range.offset || !('length' in object.range) || object.range.length !== range.length) {
             void object.body.cancel().catch(() => {});
             fail(503, 'publication-incomplete', 'Sample shard metadata or range mismatch');
           }
@@ -176,7 +186,10 @@ async function serveSampleV5(request: Request, bucket: R2Bucket, ctx: WaitContex
         const value = plan && packed ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), m.descriptors.layers[job.layer]) : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
         values.set(`${job.frame.id}/${job.layer}`, { ...value, surfaceId: surface.id });
       }
-    }
+      } catch (error) { failure ??= error; return; }
+    } };
+    await Promise.all(Array.from({ length: Math.min(plans.length, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST) }, work));
+    if (failure) throw failure;
     const result = {
       version: 5, model: m.model, buildId: m.buildId, lat, lon, method: m.method, source: servedSource(m, origin),
       surfaces: m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })), expiresAt: m.expiresAt,

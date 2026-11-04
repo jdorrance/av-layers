@@ -5,7 +5,7 @@ import { computeFreshness, latestSchema } from './publication';
 
 const expiresAt = '2026-11-02T00:00:00.000Z';
 const created = '2026-11-01T00:00:00.000Z';
-const buildId = 'v5-client-1';
+const buildId = '20261101T000000Z-12345678-1234-4234-8234-123456789abc';
 const prefix = `builds/gfs/${buildId}`;
 const hash = (char: string) => char.repeat(64);
 const gridHash = hash('1');

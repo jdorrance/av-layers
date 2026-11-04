@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { expectedTiles, paletteColor, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
+import { expectedTiles, paletteColor, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { prepareSamplePackLayout, QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
 import { createRenderer, mercatorPoint, renderArchive, renderTile, renderTileRgba } from './render.js';
 import { createSamplePackBuilder } from './sample-pack.js';
@@ -223,6 +223,21 @@ describe('rendered WebP and PMTiles fixtures', () => {
 });
 
 describe('build-owned prepared renderer', () => {
+  it('renders identical RGBA from dense and packed fields on a wrap tile', () => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
+    for (let i = 0; i < 12; i++) setBit(mask.output, i);
+    const dense = { values: Float32Array.from([300, 600, 1500, 2750, 0, 50, 100, 300, 600, 1500, 2750, 0]), flags: Uint8Array.from([STATUS_VALID, STATUS_VALID, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_VALID, STATUS_VALID, STATUS_OUTSIDE, STATUS_VALID, STATUS_VALID, STATUS_NO_LIFT, STATUS_VALID]) };
+    const coverage = sparseCoverageFromDense({ ...grid, gridHash: 'b'.repeat(64), output: mask.output, halo: mask.halo });
+    const packed = { values: new Float32Array(coverage.offsets[coverage.blockIds.length]), flags: new Uint8Array(coverage.offsets[coverage.blockIds.length]), coverage };
+    for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) {
+      const cell = sparseCoverageLookup(coverage, x, y);
+      if (cell) { packed.values[cell.offset] = dense.values[y * grid.width + x]; packed.flags[cell.offset] = dense.flags[y * grid.width + x]; }
+    }
+    const expected = renderTileRgba(dense, mask, 'usable-lift-msl', 1, 0, 0), actual = renderTileRgba(packed, { grid, tiles: mask.tiles, maxZoom: mask.maxZoom, coverage }, 'usable-lift-msl', 1, 0, 0);
+    expect(actual.some(byte => byte !== 0)).toBe(true);
+    expectRgbaEqual(actual, expected, 'dense vs packed usable-lift-msl/1/0/0');
+  });
+
   it('groups layers under one queue and preserves every address and decoded pixel', async () => {
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true }, mask = maskFor(grid, 1);
     for (let i = 0; i < 12; i++) setBit(mask.output, i);
@@ -269,6 +284,16 @@ describe('build-owned prepared renderer', () => {
     const uncached = createRenderer(mask, { geometryCacheBytes: 0 });
     uncached.renderTileRgba(field, 'precip-rate', 1, 0, 0);
     expect(uncached.metrics().geometryBytes).toBe(0);
+  });
+
+  it('includes retained axes when admitting tiles to the cache', () => {
+    const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true };
+    const mask = maskFor(grid, 1);
+    mask.output.fill(255);
+    const field = { values: new Float32Array(12).fill(100), flags: new Uint8Array(12) };
+    const renderer = createRenderer(mask, { geometryCacheBytes: 45_000 });
+    for (let i = 0; i < 2; i++) renderer.renderTileRgba(field, 'usable-lift-msl', 1, 0, 0);
+    expect(renderer.metrics()).toMatchObject({ geometryMisses: 2, geometryHits: 0, geometryBytes: 24_576 });
   });
 
   it('shares an exactly blank payload and keeps the archive writer bounded', async () => {

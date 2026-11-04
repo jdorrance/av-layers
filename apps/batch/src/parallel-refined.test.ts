@@ -17,7 +17,9 @@ const fallback = vi.hoisted(() => ({ legacy: false, compared: 0, filled: 0, mapp
 const metricsHooks = vi.hoisted(() => ({ afterPrepare: undefined as (() => void) | undefined, afterMerge: undefined as (() => void) | undefined, afterValidate: undefined as (() => void) | undefined }));
 vi.mock('./whole-domain/prepare.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./whole-domain/prepare.js')>();
-  return { ...actual, prepareWholeDomain: async (...args: Parameters<typeof actual.prepareWholeDomain>) => {
+  return { ...actual, loadWholeDomainTerrain: async (...args: Parameters<typeof actual.loadWholeDomainTerrain>) => {
+    const result = await actual.loadWholeDomainTerrain(...args); metricsHooks.afterMerge?.(); return result;
+  }, prepareWholeDomain: async (...args: Parameters<typeof actual.prepareWholeDomain>) => {
     const result = await actual.prepareWholeDomain(...args); metricsHooks.afterPrepare?.(); return result;
   } };
 });
@@ -314,7 +316,7 @@ describe('whole-domain parallel receipt integrity', () => {
     expect(manifest.artifacts).toHaveLength(manifest.frames.length * manifest.layers.length);
     expect(manifest.metrics.phasesMs).toMatchObject({ preparationMs: plan.preparation!.elapsedMs, assemblyMs: expect.any(Number), validateMs: expect.any(Number) });
     const phases = manifest.metrics.phasesMs as { assemblyMs: number; validateMs: number };
-    expect(phases.assemblyMs).toBeGreaterThanOrEqual(50);
+    expect(phases.assemblyMs).toBeGreaterThanOrEqual(25);
     expect(phases.validateMs).toBeGreaterThanOrEqual(50);
     expect(manifest.metrics.peakRssBytes).toBeGreaterThanOrEqual(plan.preparation!.peakRssBytes);
     expect(onValidated).toHaveBeenCalledOnce();

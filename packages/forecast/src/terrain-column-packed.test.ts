@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
-import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, TERRAIN_CLEARANCE_METHOD,
+import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, TERRAIN_CLEARANCE_METHOD,
   type CoverageMask, type RegularLatLonGrid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { deriveFrame, FRAME_BRANCH } from './frame.js';
@@ -69,11 +69,33 @@ it.each([
     const actual = packed.derive(frame, packedTerrain, day, { daylightOnly, nativeClearance, probeIndices });
     const asynchronous = await packed.deriveAsync(frame, packedTerrain, day, { daylightOnly, nativeClearance, probeIndices,
       yieldControl: () => new Promise(resolve => setImmediate(resolve)) });
+    const output = Object.fromEntries((['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => [layer, {
+      values: new Float32Array(new SharedArrayBuffer(packedTerrain.valid.length * 4)),
+      flags: new Uint8Array(new SharedArrayBuffer(packedTerrain.valid.length))
+    }])) as { 'usable-lift-msl': { values: Float32Array; flags: Uint8Array }; 'usable-lift-agl': { values: Float32Array; flags: Uint8Array } };
+    const shared = await packed.deriveAsync(frame, packedTerrain, day, { daylightOnly, nativeClearance, probeIndices, output, yieldControl: async () => {} });
+    expect(shared.metrics).toEqual(actual.metrics);
+    expect(shared.probes).toEqual(actual.probes);
     expect(asynchronous.metrics).toEqual(actual.metrics);
     expect(asynchronous.probes).toEqual(actual.probes);
     for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
       expect(new Uint8Array(asynchronous.fields[layer].values.buffer)).toEqual(new Uint8Array(actual.fields[layer].values.buffer));
       expect(asynchronous.fields[layer].flags).toEqual(actual.fields[layer].flags);
+      expect(shared.fields[layer].values).toBe(output[layer].values);
+      expect(shared.fields[layer].flags).toBe(output[layer].flags);
+      expect(new Uint8Array(shared.fields[layer].values.buffer)).toEqual(new Uint8Array(actual.fields[layer].values.buffer));
+      expect(shared.fields[layer].flags).toEqual(actual.fields[layer].flags);
+    }
+    for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) { output[layer].values.fill(NaN); output[layer].flags.fill(STATUS_OUTSIDE); }
+    const parts = Array.from({ length: 3 }, (_, index) => preparePackedTerrainColumns(plan, coverage, active, 3, {
+      clearanceFallback: 'unsupported', maxBytes: 10_000_000, expectedGridHash: gridHash(plan.fine), partition: { index, count: 3 }
+    }).derive(frame, packedTerrain, day, { daylightOnly, nativeClearance, probeIndices, output }));
+    const metrics = { ...parts[0]!.metrics };
+    for (const part of parts.slice(1)) for (const key of Object.keys(metrics) as (keyof typeof metrics)[]) metrics[key] = (metrics[key] ?? 0) + (part.metrics[key] ?? 0);
+    expect(metrics).toEqual(actual.metrics);
+    for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
+      expect(new Uint8Array(output[layer].values.buffer)).toEqual(new Uint8Array(actual.fields[layer].values.buffer));
+      expect(output[layer].flags).toEqual(actual.fields[layer].flags);
     }
     expect(actual.metrics).toEqual(expected.metrics);
     const packedOffset = (index: number) => sparseCoverageLookup(coverage, index % plan.fine.width, Math.floor(index / plan.fine.width))!.offset;

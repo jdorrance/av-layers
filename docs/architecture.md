@@ -80,16 +80,16 @@ parameters in each build manifest. See [science](science.md) for the equations.
 workers for the hosted workflow. The [caller](../.github/workflows/forecast.yml)
 selects models from the registry and invokes the reusable
 [model workflow](../.github/workflows/forecast-model.yml). Each model resolves
-its cycle and frame list before starting workers, then validates and merges
-their output into a complete build. See the
+its cycle and frame list before starting workers, then verifies their immutable
+uploads and receipt partition before publication. See the
 [batch guide](../apps/batch/README.md#parallel-builds) for the worker flow and
 [capacity checks](../apps/batch/src/capacity.ts) for build budgets.
 
 Each layer and frame writes one composited PMTiles archive. Version-5 manifests
 assign each layer to a native or fine surface with sparse coverage and bounded
-sample shards. Point queries read one range per selected surface. Tiles and point
-queries share packed fields and interpolation logic. Legacy version-3/version-4
-readers retain their numeric pack formats.
+sample shards. Point queries read bounded ranges per selected surface and frame
+group. Tiles and point queries share packed fields and interpolation logic.
+Legacy version-3/version-4 readers retain their numeric pack formats.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells

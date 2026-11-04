@@ -167,17 +167,18 @@ it('lazily verifies sparse coverage and binds its canonical sample layout', asyn
     samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
   };
   const results = await Promise.all([resolveSparseCoverage(bucket, surface), resolveSparseCoverage(bucket, surface)]);
-  expect(results[0].coverage).toBe(results[1].coverage);
+  expect(results[0].coverage.mask).toBe(results[1].coverage.mask);
   expect(results[0].coverage.mask.coverage).toEqual(coverage);
   expect(results[0].coverage.layout.storedCells).toBe(9);
   for (const result of results) result.release();
   expect(get).toHaveBeenCalledTimes(3);
   await expect(resolveSparseCoverage(bucket, { ...surface, gridHash: '0'.repeat(64) })).rejects.toThrow('disagrees');
+  if (surface.samples.format !== 'cell-major-block-shards-v1') throw new Error('Expected legacy samples');
   await expect(resolveSparseCoverage(bucket, { ...surface, samples: { ...surface.samples, shards: [{ ...surface.samples.shards[0], bytes: 44 }] } })).rejects.toThrow('disagrees');
   const corrupted = new Map(objects); corrupted.set(`${prefix}/sparse.bin`, Uint8Array.from(description.sparseBytes, (value, i) => i ? value : value ^ 1));
   const badBucket = { get: async (key: string) => { const bytes = corrupted.get(key); return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null; } } as unknown as R2Bucket;
   await expect(resolveSparseCoverage(badBucket, surface)).rejects.toThrow('hash mismatch');
-  const oversized = json({ ...description.descriptor, files: { ...description.descriptor.files, sparse: { ...description.descriptor.files.sparse, bytes: 60 + 72 * 110000 } } });
+  const oversized = json({ ...description.descriptor, files: { ...description.descriptor.files, sparse: { ...description.descriptor.files.sparse, bytes: 60 + 72 * 400000 } } });
   const oversizedHash = hash(oversized), oversizedKey = `coverage/${oversizedHash}/manifest.json`;
   const oversizedGet = vi.fn(async (key: string) => { const data = key === oversizedKey ? oversized : mask.tiles; return { size: data.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(data); controller.close(); } }) }; });
   const oversizedSurface = { ...surface, coverage: { ...surface.coverage, hash: oversizedHash, maskKey: oversizedKey }, samples: { ...surface.samples, coverageHash: oversizedHash } };

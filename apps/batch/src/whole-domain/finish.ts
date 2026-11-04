@@ -9,6 +9,8 @@ import { checkPerformance } from '../capacity.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from '../validate.js';
 import type { WholeDomainFrameResult } from './frames.js';
 import type { WholeDomainPrepared } from './prepare.js';
+import type { ObjectStorage } from '../storage.js';
+import type { ObjectReceipt } from '../immutable-upload.js';
 
 export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   out: string; signal?: AbortSignal;
@@ -17,6 +19,8 @@ export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   identity: { recipe: ManifestV5['recipe']; scienceHash: string; components: Record<string, string> };
   preparation?: { elapsedMs: number; peakRssBytes: number };
   assemblyStartedAt?: number;
+  sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
+  remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
   onValidated?: (result: ValidatedBuild<ManifestV5>, path: string) => Promise<void>;
 }
 
@@ -36,10 +40,13 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     const refinementMethod = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     const surfaces = result.surfaces.map(surface => {
       const layout = surface.layout, channelCount = result.frames.length * surface.layers.length;
-      const samples = { format: 'cell-major-block-shards-v1' as const, blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer' as const,
-        channelCount, coverageHash: surface.coverage.hash, blockCount: layout.blockCount, storedCells: layout.storedCells,
-        shards: surface.shards!.map(shard => ({ firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.storedCells,
-          bytes: shard.bytes, key: shard.key, sha256: shard.sha256 })) };
+      const baseSamples = { blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer' as const,
+        channelCount, coverageHash: surface.coverage.hash, blockCount: layout.blockCount, storedCells: layout.storedCells };
+      const groups = options.sampleGroups?.[surface.id];
+      const samples = groups ? { ...baseSamples, format: 'frame-group-block-shards-v1' as const, shards: groups }
+        : { ...baseSamples, format: 'cell-major-block-shards-v1' as const,
+          shards: surface.shards!.map(shard => ({ firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.storedCells,
+            bytes: shard.bytes, key: shard.key, sha256: shard.sha256 })) };
       return { id: surface.id, kind: surface.kind, grid: surface.grid, gridHash: surface.gridHash,
         coverage: { ...surface.coverage }, layers: [...surface.layers], samples,
         ...(surface.terrain ? { terrain: { dataId: surface.terrain.dataId, key: surface.terrain.ref.key, sha256: surface.terrain.ref.sha256,
@@ -60,7 +67,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     };
     const tValidate = Date.now();
     phase = 'validate';
-    const validated = await validateBuild(root, manifestV5Schema.parse(base), options.mask, undefined, product);
+    const validated = await validateBuild(root, manifestV5Schema.parse(base), options.mask, undefined, product, options.remote);
     const completed = finalizeValidatedMetrics(root, validated, {
       ...result.metrics, elapsedMs: Date.now() - started,
       peakRssBytes: Math.max(result.metrics.peakRssBytes, options.preparation?.peakRssBytes ?? 0, process.resourceUsage().maxRSS * 1024),
