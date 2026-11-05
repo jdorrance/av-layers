@@ -222,6 +222,72 @@ export function frameTileUrl(template: string, frame: string): string {
   return template.split('{frame}').join(encodeURIComponent(frame));
 }
 
+export interface ViewportTile { z: number; x: number; y: number }
+
+/** Enumerate at most 64 visible XYZ tiles for one world-width viewport. */
+export function viewportTiles(bounds: { west: number; south: number; east: number; north: number }, zoom: number): ViewportTile[] {
+  if (!Object.values(bounds).every(Number.isFinite) || !Number.isInteger(zoom) || zoom < 0 || zoom > 30 || bounds.north <= bounds.south) return [];
+  const n = 2 ** zoom, east = bounds.east < bounds.west ? bounds.east + 360 : bounds.east;
+  if (east <= bounds.west) return [];
+  const x0 = Math.floor((bounds.west + 180) / 360 * n), x1 = Math.min(Math.ceil((east + 180) / 360 * n) - 1, x0 + n - 1);
+  const yAt = (latitude: number) => Math.max(0, Math.min(n - 1, Math.floor((1 - Math.asinh(Math.tan(Math.max(-85.05112878, Math.min(85.05112878, latitude)) * Math.PI / 180)) / Math.PI) * n / 2)));
+  const tiles: ViewportTile[] = [], y1 = yAt(bounds.south);
+  for (let y = yAt(bounds.north); y <= y1 && tiles.length < 64; y++) {
+    for (let x = x0; x <= x1 && tiles.length < 64; x++) tiles.push({ z: zoom, x, y });
+  }
+  return tiles;
+}
+
+/** Plan bounded idle tile warming in forecast-step, layer-toggle, then pan order. */
+export function planViewportPrefetch(options: {
+  build: PinnedBuild;
+  activeLayer: LayerId;
+  activeFrame: string;
+  viewportTiles: readonly ViewportTile[];
+}): string[] {
+  const { build, activeLayer, activeFrame } = options, manifest = build.manifest;
+  const frameIndex = manifest.frames.findIndex(frame => frame.id === activeFrame);
+  if (frameIndex < 0 || !manifest.layers.includes(activeLayer)) return [];
+  const urls = new Set<string>();
+  const [west, south, east, north] = manifest.descriptors.bounds;
+  function normalize(tile: ViewportTile, layer: LayerId): ViewportTile | undefined {
+    if (![tile.z, tile.x, tile.y].every(Number.isSafeInteger) || tile.z < 0 || tile.z > 30) return;
+    const maxZoom = layerMaxZoom(manifest, layer), z = Math.min(tile.z, maxZoom), scale = 2 ** (tile.z - z), width = 2 ** z;
+    let x = Math.floor(tile.x / scale);
+    const y = Math.floor(tile.y / scale);
+    const grid = manifest.version === 5 ? manifest.surfaces.find(surface => surface.layers.includes(layer))!.grid : manifest.grid;
+    if (grid.wrapLongitude) x = ((x % width) + width) % width;
+    if (x < 0 || x >= width || y < 0 || y >= width) return;
+    return { z, x, y };
+  }
+  const viewport = options.viewportTiles.slice(0, 64).flatMap(tile => { const valid = normalize(tile, activeLayer); return valid ? [valid] : []; });
+  function add(layer: LayerId, frame: string | undefined, tile: ViewportTile): void {
+    if (!frame || urls.size >= 64 || !build.templates[layer] || !manifest.layers.includes(layer)) return;
+    const valid = normalize(tile, layer);
+    if (!valid) return;
+    const { z, x, y } = valid, width = 2 ** z;
+    const tileWest = x / width * 360 - 180, tileEast = (x + 1) / width * 360 - 180;
+    const latitude = (row: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * row / width))) * 180 / Math.PI;
+    const overlapsLongitude = west <= east ? tileEast > west && tileWest < east : tileEast > west || tileWest < east;
+    if (!overlapsLongitude || latitude(y) <= south || latitude(y + 1) >= north) return;
+    const template = frameTileUrl(build.templates[layer], frame);
+    urls.add(template.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y)));
+  }
+  const frame = (offset: number) => manifest.frames[frameIndex + offset]?.id;
+  for (const offset of [1, -1]) for (const tile of viewport) add(activeLayer, frame(offset), tile);
+  const sibling = activeLayer === 'usable-lift-agl' ? 'usable-lift-msl' : activeLayer === 'usable-lift-msl' ? 'usable-lift-agl' : undefined;
+  if (sibling) for (const tile of viewport) add(sibling, activeFrame, tile);
+  for (const tile of viewport) add(activeLayer, frame(2), tile);
+  const visible = new Set(viewport.map(tile => `${tile.z}/${tile.x}/${tile.y}`));
+  for (const tile of viewport) {
+    for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]) {
+      const neighbor = normalize({ z: tile.z, x: tile.x + dx, y: tile.y + dy }, activeLayer);
+      if (neighbor && !visible.has(`${neighbor.z}/${neighbor.x}/${neighbor.y}`)) add(activeLayer, activeFrame, neighbor);
+    }
+  }
+  return [...urls];
+}
+
 export function previewRasterSource(template: string, frame: string, maxNativeZoom: number, attribution: string): PreviewRasterSource {
   if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0) throw new RangeError('maxNativeZoom must be a non-negative integer');
   return {

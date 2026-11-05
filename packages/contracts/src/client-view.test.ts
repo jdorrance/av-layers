@@ -4,7 +4,7 @@ import { CELL_BYTES } from './format';
 import { manifestV5Schema } from './publication';
 import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
-import { buildDiagnosticRows, formatSeriesSummary, layerMaxZoom, paletteLegend, seriesTable } from './client-view';
+import { buildDiagnosticRows, formatSeriesSummary, layerMaxZoom, paletteLegend, planViewportPrefetch, seriesTable, viewportTiles } from './client-view';
 import { PALETTES, paletteSchema } from './layers';
 import { TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
 
@@ -138,4 +138,65 @@ it('keeps legacy display and grid diagnostics while v5 reports each surface once
     ['Surface gfs-native', '1440 × 721 · 0.25° × 0.25° · precip-rate · z0–7'],
     ['Surface gfs-fine', '2880 × 1442 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9']
   ]);
+});
+
+it('orders viewport prefetch by forecast step, sibling layer, then perimeter', () => {
+  const build = v5Build(), activeLayer = 'usable-lift-agl' as const;
+  const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] });
+  const tile = (layer: string, frame: string, x = 3, y = 3) => `https://api.test/tiles/${build.manifest.model}/${build.manifest.buildId}/${layer}/${frame}/3/${x}/${y}.webp`;
+  expect(urls.slice(0, 5)).toEqual([
+    tile(activeLayer, 'f009'), tile(activeLayer, 'f003'), tile('usable-lift-msl', 'f006'), tile(activeLayer, 'f012'), tile(activeLayer, 'f006', 2, 2)
+  ]);
+  expect(urls).toHaveLength(12);
+  expect(new Set(urls).size).toBe(urls.length);
+  expect(urls).not.toContain(tile(activeLayer, 'f006'));
+});
+it('uses owning surface zooms for overzoomed viewport prefetches', () => {
+  const build = v5Build(), viewportTiles = [{ z: 9, x: 256, y: 256 }];
+  const rain = planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'f006', viewportTiles });
+  expect(rain[0]).toContain('/precip-rate/f009/7/64/64.webp');
+  expect(rain.every(url => !url.includes('usable-lift'))).toBe(true);
+  expect(rain).not.toContain(`https://api.test/tiles/${build.manifest.model}/${build.manifest.buildId}/precip-rate/f006/7/64/64.webp`);
+  const lift = planViewportPrefetch({ build, activeLayer: 'usable-lift-agl', activeFrame: 'f006', viewportTiles });
+  expect(lift[0]).toContain('/usable-lift-agl/f009/9/256/256.webp');
+});
+it('filters bounds and invalid tile coordinates and wraps only longitude-wrapping surfaces', () => {
+  const build = v5Build();
+  build.manifest.descriptors.bounds = [-1, -1, 1, 1];
+  expect(planViewportPrefetch({ build, activeLayer: 'usable-lift-agl', activeFrame: 'f006', viewportTiles: [{ z: 5, x: 0, y: 0 }] })).toEqual([]);
+  build.manifest.descriptors.bounds = [-180, -85, 180, 85];
+  const options = { build, activeLayer: 'usable-lift-agl' as const, activeFrame: 'f006', viewportTiles: [{ z: 2, x: -1, y: 1 }] };
+  expect(planViewportPrefetch(options)[0]).toContain('/2/3/1.webp');
+  if (build.manifest.version !== 5) throw new Error('requires surfaces');
+  build.manifest.surfaces.find(surface => surface.layers.includes(options.activeLayer))!.grid.wrapLongitude = false;
+  expect(planViewportPrefetch(options)).toEqual([]);
+  expect(planViewportPrefetch({ ...options, viewportTiles: [{ z: 2, x: 0, y: -1 }, { z: 2, x: 1.5, y: 0 }, { z: NaN, x: 0, y: 0 }] })).toEqual([]);
+});
+it('bounds prefetch URL count and omits frames beyond the timeline', () => {
+  const build = fixtureBuild();
+  const viewportTiles = Array.from({ length: 40 }, (_, x) => ({ z: 7, x, y: 60 }));
+  const urls = planViewportPrefetch({ build, activeLayer: 'usable-lift-msl', activeFrame: 'f006', viewportTiles });
+  expect(urls).toHaveLength(64);
+  expect(urls.slice(0, 40).every(url => url.includes('/f009/'))).toBe(true);
+  const last = planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'f024', viewportTiles: [{ z: 3, x: 3, y: 3 }] });
+  expect(last[0]).toContain('/f021/');
+  expect(last.every(url => url.includes('/f021/') || url.includes('/f024/'))).toBe(true);
+  expect(planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'missing', viewportTiles })).toEqual([]);
+});
+
+it('keeps wrapped perimeter tiles outside the visible set at world zoom', () => {
+  const build = fixtureBuild();
+  const urls = planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'f006', viewportTiles: [{ z: 0, x: 0, y: 0 }] });
+  expect(urls).toHaveLength(3);
+  expect(urls.every(url => !url.includes('/f006/'))).toBe(true);
+});
+
+it('enumerates bounded viewport tiles across the antimeridian and at the poles', () => {
+  const wrapped = viewportTiles({ west: 170, south: -5, east: -170, north: 5 }, 2);
+  expect(new Set(wrapped.map(tile => tile.x))).toEqual(new Set([3, 4]));
+  expect(wrapped.every(tile => tile.y >= 0 && tile.y < 4)).toBe(true);
+  expect(viewportTiles({ west: -180, south: -90, east: 180, north: 90 }, 0)).toEqual([{ z: 0, x: 0, y: 0 }]);
+  expect(viewportTiles({ west: -180, south: -90, east: 180, north: 90 }, 10)).toHaveLength(64);
+  expect(viewportTiles({ west: NaN, south: 0, east: 1, north: 1 }, 2)).toEqual([]);
+  expect(viewportTiles({ west: 0, south: 0, east: 1, north: 1 }, -1)).toEqual([]);
 });
