@@ -1,8 +1,7 @@
 # Phase 2 client and UI cutover
 
-Connect the map clients and Windgrams to one pinned AV build, preserve existing
-forecast display contracts, then retire the duplicated GFS, RRFS and ICON-EU
-builders after production parity.
+Connect the preview and Windy clients to one pinned AV build, including the full
+native point horizon and the map prefix.
 
 ```sh
 pnpm test
@@ -10,9 +9,8 @@ pnpm verify
 ```
 
 Phase 1 owns wire schemas, profile coordinates, fields and serving limits.
-[Architecture](architecture.md) owns the workspace map. Windgrams lives in the
-[sibling repository](https://github.com/jdorrance/windgrams/blob/main/README.md); its changes need a coordinated
-PR and its own checks. Keep each milestone independently deployable.
+[Architecture](architecture.md) owns the workspace map. Keep each milestone
+independently deployable.
 
 ## Milestone 2A: Shared client and raster delivery
 
@@ -56,15 +54,18 @@ Keep the lean 18 native and two fine scalar channels. Profiles retain every
 covered native cell and nullable P/H/T slot. Compute mixed-layer LCL, effective cloud limit and BL top
 wind on demand from each profile and its emitted thermal top; use shared pure
 helpers and preserve the model-PBL fallback for stable columns. These values
-remain available to Windgrams without additional scalar channels.
+remain available through the profile API without additional scalar channels.
 
 On click, fetch a bounded diurnal selection containing lift MSL/AGL,
 precipitation, thermal velocity, LCL, 10 m and boundary-layer wind components,
 and cloud cover. Render the selected frame summary and a keyboard-accessible
 chart: known terrain floor, usable-lift bar and LCL marker. Unknown floors use
 ceiling markers and an explicit unknown label. Selecting a chart frame
-updates the map from the cached series. Preserve missing values and diagnostic
-support in labels; absence of cloud flags alone cannot establish a blue regime.
+updates the map from the cached series. Offer the full native point horizon
+through bounded frame pages. Keep point time and displayed map time explicit
+when a selected native frame falls beyond the map prefix. Preserve missing
+values and diagnostic support in labels; absence of cloud flags alone cannot
+establish a blue regime.
 
 Use the shared soaring view function for scalar wind and sink-threshold
 calculations. Add terse labels for cumulus, overdevelopment and cloud capping.
@@ -88,69 +89,24 @@ memory before enabling it.
 Review UX, accessibility, forecast meaning, render churn and retained memory.
 Run client tests and browser checks before proceeding.
 
-## Milestone 2C: Windgrams profile and regional adapters
+## Milestone 2C: Production validation
 
-Add one transport adapter in
-[`@windgrams/data-client`](https://github.com/jdorrance/windgrams/blob/main/packages/data-client/README.md).
-Extend published profile types and renderers to preserve nullable native rows and independent field gaps.
-Accept arbitrary coordinates and route configured AV models through a pinned
-latest response and profile endpoint.
+Run root checks and browser tests for point selection, units, keyboard controls,
+map replacement failures, paging and cancellation. Verify full native point
+horizons and explicit absence of fine lift beyond the map prefix. Point times
+outside that prefix preserve the displayed map and identify its separate time.
 
-Map `cycle` to run reference time and use the manifest generation timestamp for
-capture time. Preserve surface field units, precipitation interval meaning,
-nulls, source availability, vertical resolution and diagnostic support. Retain
-native model elevation independently of fine terrain.
-Compute shared derived views once. Validate serialized output with
-[`parsePublishedProfileJson`](https://github.com/jdorrance/windgrams/blob/main/packages/contracts/src/published-lift.ts).
+Measure 32-point batches and profile reads with cold and warm caches against the
+serving limits. Verify old retained URLs, nighttime observations, adjacent native
+cells, response digests, conditional requests and sample-only raster rejection.
+Record actual full-build RSS and elapsed time before declaring each model ready.
 
-The current
-[`RegionalDataset`](https://github.com/jdorrance/windgrams/blob/main/packages/data-client/src/dataset-types.ts)
-exposes native-cell grids, hourly arrays and cell-index profiles. Its sampling
-selects one cell. AV sampling interpolates surfaces. Define the smallest live
-regional interface required by current callers, including sampling semantics,
-selected coordinates, time and field status, before adapting those callers.
-Preserve existing saved-dataset readers.
+Review the PR again after checks pass, merge, then verify production endpoints
+and rendered views. Correct failures and repeat the affected checks.
 
-Render lift and precipitation through AV tile templates. Populate point
-comparison tables and route cross-sections with bounded multi-point requests,
-coalesced by build/frame/field selection. Load a clicked profile on demand for
-the existing windgram and sounding views. Expose unavailable fields and gaps.
-Keep outstanding requests and cached profiles bounded.
+## Deferred consumer cutover
 
-Verify Blanchard and Aparan adapter fixtures, model switching, height inspection,
-sounding scrubbing, point tables, routes and missing coverage in browser tests.
-Review contract parity and sampling semantics independently.
-
-## Milestone 2D: Offline parity and production cutover
-
-Windgrams snapshots verify exact file bytes against an inventory of sizes and
-SHA-256 digests. AV multi-point/profile ETags hash response bodies. Save a versioned
-AV snapshot inventory retaining build identity, selected points, route and scope. Preserve atomic saves, resume, cancellation,
-quota handling and reopening without network access.
-
-Run the Windgrams root checks in its README, including consumer, browser and
-build checks. Measure 32-point batches and profile reads with cold
-and warm caches against the existing serving limits. Keep configured limits
-until measurements justify a change.
-
-Primary preview browser QA on 2026-11-05 passed synthetic GFS startup, point
-click, chart/keyboard frame selection, imperial units, lazy source tables,
-failed-overlay retention/recovery and pending-point cancellation on model reload.
-One cached series request supplied those point interactions; absent native
-measurements stayed unknown. The synthetic fixture exposes one model.
-
-Deploy both adapters with the old builders available. Verify production point
-windgrams, soundings, maps, tables, routes and offline reopening against pinned
-builds; record model, cycle, endpoint and parity evidence.
-
-Then retire the matching jobs in
-[`refresh-rrfs.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-rrfs.yml),
-[`refresh-dwd.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-dwd.yml) and the GFS
-portion of
-[`refresh-noaa-cloud.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-noaa-cloud.yml).
-Update Pages artifact collection and provider health together. Retain the other
-model, terrain and observation workflows; this cutover serves GFS, ICON-EU and RRFS.
-Document and exercise rollback before deleting duplicated acquisition code.
-
-Review the PRs again after checks pass, merge coordinated changes, and verify
-production endpoints and rendered views before declaring the phase complete.
+Windgrams adapters, offline snapshots, activation and retirement of its duplicated
+weather acquisitions are deferred. Its terrain and observation producers remain
+unchanged. The separate [consumer PR](https://github.com/jdorrance/windgrams/pull/15)
+stays draft for that later work.

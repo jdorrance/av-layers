@@ -91,7 +91,7 @@ function writerBuffers(layout: ShardedSamplePackLayout) {
     chunk: Math.min(sectionBytes, Math.floor(MAX_WRITE_CHUNK_BYTES / layout.recordBytes) * layout.recordBytes) };
 }
 
-/** Binary scratch retained by one serialized writer, including its final transpose. */
+/** Reusable block and chunk buffers retained by one serialized writer. */
 export function samplePackWriterBufferBytes(layout: ShardedSamplePackLayout): number {
   const buffers = writerBuffers(layout);
   return buffers.block + buffers.chunk;

@@ -1,5 +1,5 @@
-import { DEFAULT_MODEL, type ModelId } from '@av/contracts';
-import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, pointSeriesSelection, type GeoPoint, type RasterTileProtocol } from '@av/contracts/client';
+import { DEFAULT_MODEL, renderedFrames, type ModelId } from '@av/contracts';
+import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, type GeoPoint, type RasterTileProtocol, type PointSeriesLoader, type PointHorizon } from '@av/contracts/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -19,9 +19,12 @@ let previousController: PluginController | null = null;
 let paneOpen = false;
 let pointListening = false;
 let pointAbort: AbortController | null = null;
+let pointLoader: PointSeriesLoader | null = null;
+let pointHorizon: PointHorizon = 'day';
 
 function clearPoint(): void {
   pointAbort?.abort(); pointAbort = null; panel?.clearPoint();
+  pointLoader?.dispose(); pointLoader = null;
 }
 
 const pointClick = (point: GeoPoint): void => { void loadPoint(normalizePoint(point.lat, point.lon)); };
@@ -37,14 +40,22 @@ async function loadPoint(point: GeoPoint): Promise<void> {
   const active = controller, build = active?.currentBuild;
   if (!paneOpen || !active || !build || active.state().phase !== 'ready' || active.checkExpiry()) return;
   clearPoint();
-  const pending = new AbortController(); pointAbort = pending;
+  pointLoader = api.pointSeries(build, point);
   panel?.loadPoint(point);
+  await loadPointRange();
+}
+
+async function loadPointRange(): Promise<void> {
+  const active = controller, build = active?.currentBuild, loader = pointLoader;
+  if (!paneOpen || !active || !build || !loader || active.state().phase !== 'ready' || active.checkExpiry()) return;
+  pointAbort?.abort();
+  const pending = new AbortController(); pointAbort = pending;
+  panel?.pointLoading();
   try {
-    const selection = pointSeriesSelection(build);
-    const payload = await api.sample(build, { ...point, ...selection, signal: pending.signal });
-    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || !paneOpen || active.checkExpiry()) return;
+    const payload = await loader.load(pointHorizon, pending.signal);
+    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
     panel?.renderPoint(payload, build, active.state().frameId, id => {
-      if (paneOpen && controller === active && active.currentBuild === build) active.selectFrame(id);
+      if (paneOpen && controller === active && active.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
     });
   } catch (error) {
     if (pending.signal.aborted || controller !== active || !paneOpen) return;
@@ -99,6 +110,7 @@ function ensurePanel(): PluginPanel {
         controller?.setOpacity(opacity);
         previousController?.setOpacity(opacity);
       },
+      onPointHorizon: horizon => { pointHorizon = horizon; void loadPointRange(); },
       onBack: () => {
         onclose();
         bcast.emit('rqstClose', __pluginConfig.name);

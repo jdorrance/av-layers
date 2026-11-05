@@ -19,7 +19,7 @@ import { sparseTerrainRefSchema, validateSparsePreparedTerrain } from './terrain
 import { stagePreparedTerrain, stageSparsePreparedTerrain } from './terrain/staging.js';
 import { loadRefinements, prepareRefinements, refinementInputSchema } from './refinement/prepare.js';
 import type { ObjectStorage } from './storage.js';
-import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
+import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
 import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
 import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
@@ -402,7 +402,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       frames: totalFrames, mapFrames: mapFrameCount({ ...options.product, frameHours: plan.groups.flat() }), groupFrames: Math.max(...plan.groups.map(group => group.length)), nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length,
       columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
-    const layouts = wholeDomainSampleLayouts({ product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
+    const layouts = wholeDomainSampleGroupLayouts({ product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
       nativeActive: whole.acquisitionActive.length, fine: whole.fine.mask, nativeMaskBytes: 0, frames: totalFrames, mapFrames: mapFrameCount({ ...options.product, frameHours: plan.groups.flat() }), groupFrames: Math.max(...plan.groups.map(group => group.length)), maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
       auxiliarySurfaceFields: options.provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: options.provider.auxiliaryLevelFields ?? 0,
       nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length, columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });

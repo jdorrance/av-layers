@@ -10,7 +10,7 @@ import { createRenderer } from '../render.js';
 import { summarizeFields } from '../summary.js';
 import { fileSha256, localPath } from '../validate.js';
 import { forecastFrame, matchesFrameIntervals, type BuildStamp, type ForecastInputs, type FrameBuildOptions } from '../frame-build.js';
-import { admitWholeDomain, wholeDomainSampleLayouts, type WholeDomainCapacity } from './capacity.js';
+import { admitWholeDomain, wholeDomainSampleGroupLayouts, type WholeDomainCapacity } from './capacity.js';
 import { writeFrameProvenance } from '../frame-provenance.js';
 import { createShardedSamplePackWriter } from '../sample-pack-v5.js';
 import type { ShardedSamplePackShard } from '../sample-pack-v5.js';
@@ -100,7 +100,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const mapFrames = mapFrameCount({ ...product, frameHours: hours });
     const capacity = admitWholeDomain({ ...capacityInput, frames: hours.length, mapFrames });
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
-    const layouts = wholeDomainSampleLayouts({ ...capacityInput, frames: hours.length, mapFrames });
+    const layouts = wholeDomainSampleGroupLayouts({ ...capacityInput, frames: hours.length, mapFrames });
     const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
       createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
         surfaceId: options.surfaceTarget?.(surface) ?? surface, ...(options.sampleGroup === undefined ? {} : { group: options.sampleGroup }) }, { signal });

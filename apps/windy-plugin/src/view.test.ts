@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
+import { fixturePointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { ApiClient } from '@av/contracts/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -41,7 +43,7 @@ class FakeElement {
   }
 }
 
-const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn() });
+const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn(), onPointHorizon: vi.fn() });
 
 function installDom(active: FakeElement | null = null): { activeElement: FakeElement | null } {
   const document = {
@@ -87,8 +89,8 @@ it('associates visible labels with the model and opacity controls', () => {
   const panel = new PluginPanel(callbacks());
   const nodes = visit(panel.root as unknown as FakeElement);
   const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
-  expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity', 'av-units']);
-  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity', 'Units']);
+  expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity', 'av-units', 'av-point-horizon']);
+  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity', 'Units', 'Point horizon']);
   expect(nodes.find(node => node.className === 'av-notice')?.role).toBe('status');
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
@@ -179,4 +181,43 @@ it('leaves the opacity slider alone while it is being dragged', () => {
   document.activeElement = null;
   panel.renderState({ ...ready, opacity: 0.9 });
   expect(input.value).toBe('0.9');
+});
+
+it('inspects the full point forecast independently of an unchanged Windy map frame', async () => {
+  installDom();
+  const build = fixturePointBuild(), m = build.manifest;
+  if (m.version !== 5) throw new Error('Expected v5');
+  const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
+  const point = { lat: 32.9, lon: -117.25 }, loader = api.pointSeries(build, point), handlers = callbacks(), chooseFrame = vi.fn();
+  const panel = new PluginPanel(handlers), mapId = m.frames[m.mapFrameCount! - 1].id;
+  const state = { ...ready, buildId: m.buildId, frameId: mapId };
+  panel.renderState(state); panel.loadPoint(point);
+  panel.renderPoint(await loader.load('day'), build, mapId, chooseFrame);
+  let nodes = visit(panel.root as unknown as FakeElement);
+  const horizon = nodes.find(element => element.id === 'av-point-horizon')!;
+  horizon.value = 'forecast'; horizon.dispatchEvent(new Event('change'));
+  expect(handlers.onPointHorizon).toHaveBeenCalledWith('forecast');
+  panel.renderPoint(await loader.load('forecast'), build, mapId, chooseFrame);
+  nodes = visit(panel.root as unknown as FakeElement);
+  const chart = nodes.find(element => element.className === 'av-point-chart')!;
+  expect(chart.children).toHaveLength(m.frames.length);
+  chart.children.at(-1)!.dispatchEvent(new Event('click'));
+  expect(chooseFrame).toHaveBeenCalledWith(m.frames.at(-1)!.id);
+  panel.renderState({ ...state, opacity: 0.75 });
+  const time = nodes.find(element => element.className === 'av-point-time')!;
+  expect(time.textContent).toContain(`Point: ${m.frames.at(-1)!.validTime.slice(0, 10)}`);
+  expect(time.textContent).toContain(`Map: ${m.frames[m.mapFrameCount! - 1].validTime.slice(0, 10)}`);
+  const units = nodes.find(element => element.id === 'av-units')!;
+  units.value = 'imperial'; units.dispatchEvent(new Event('change'));
+  const summary = nodes.find(element => element.className === 'av-point-values')!.textContent;
+  expect(summary).toContain('Native top 8202 ft'); expect(summary).toContain('Cloud 0%');
+  expect(summary).toContain('MSL —'); expect(summary).toContain('Terrain unknown'); expect(summary).not.toContain('Blue');
+  expect(nodes.find(element => element.className === 'av-point-legend')!.textContent).toContain('Heights MSL');
+  panel.renderState({ ...state, frameId: null });
+  expect(time.textContent).toContain(`Point: ${m.frames.at(-1)!.validTime.slice(0, 10)}`);
+  expect(time.textContent).toContain('Map: unavailable');
+  panel.renderPoint(await loader.load('forecast'), build, null, chooseFrame);
+  nodes = visit(panel.root as unknown as FakeElement);
+  expect(nodes.find(element => element.className === 'av-point-time')!.textContent).toContain('Map: unavailable');
 });

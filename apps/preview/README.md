@@ -22,9 +22,12 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
-Click the map for a diurnal lift chart and point summary. Chart hours and the
-arrow keys select map frames from the cached series. Point units switch between
-metres/m/s and feet/knots; missing terrain remains unknown.
+Click the map for a point chart and choose 24 hours or Full forecast. Both ranges
+share cached scalar pages. Chart times within the map horizon select raster
+frames; later point times retain the map frame and show both UTC times.
+Heights use MSL. Native thermal tops have separate markers from usable lift;
+missing fine lift and terrain stay unknown. Units include metres/m/s or
+feet/knots, with vertical lift in ft/min for imperial displays.
 
 ## Source layout
 

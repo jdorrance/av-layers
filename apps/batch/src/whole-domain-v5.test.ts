@@ -12,7 +12,7 @@ import { describeSparseCoverage } from './coverage.js';
 import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
+import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
 import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
 import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, checkPerformance } from './capacity.js';
@@ -927,7 +927,7 @@ describe('whole-domain v5 production', () => {
       frames: product.frameHours.length, nativeLayers: 1, fineLayers: 2, columns, terrainBytes: active.length * 5, maxLevels: 3, retainedGeometryFields: 0 };
     const admitted = admitWholeDomain(input);
     expect(admitted.violations).toEqual([]);
-    const layouts = wholeDomainSampleLayouts(input);
+    const layouts = wholeDomainSampleGroupLayouts(input);
     expect(admitted.workingSet.packBuffers).toBe(samplePackWriterBufferBytes(layouts.native!) + samplePackWriterBufferBytes(layouts.fine!));
     vi.mocked(rasterWorkerCount).mockReturnValueOnce(3);
     const threaded = admitWholeDomain(input), nativeCells = plan.native.width * plan.native.height, activeBytes = active.byteLength;

@@ -224,7 +224,7 @@ it.each([
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
-  expect(selects).toHaveLength(2);
+  expect(selects).toHaveLength(3);
   expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual(PRODUCTS.map(product => [product.modelId, false, product.label]));
   const opacity = elements.find(element => element.id === 'av-opacity')!;
   opacity.value = '0.4';
@@ -257,7 +257,7 @@ it.each([
     return new Promise((_resolve, reject) => pointSignal?.addEventListener('abort', () => reject(pointSignal?.reason)));
   });
   click({ lat: point.lat + 0.01, lon: point.lon });
-  expect(pointSignal?.aborted).toBe(false);
+  await vi.waitFor(() => expect(pointSignal?.aborted).toBe(false));
   app.$destroy();
   expect(pointSignal?.aborted).toBe(true);
   expect(singleclick.off).toHaveBeenCalledTimes(1);

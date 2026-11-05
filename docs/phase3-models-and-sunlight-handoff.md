@@ -91,6 +91,7 @@ and seven-day retention project 1.52 TB across the three models. Admission and
 assembly enforce the aggregate numeric-byte budget in
 [`BUILD_BUDGETS`](../apps/batch/src/capacity.ts); publication and cleanup receipts
 record actual bytes, including replaced builds awaiting expiry.
+Bucket-level storage capacity is managed operationally from those receipts.
 
 Staging currently serves a legacy GFS build and lacks the global catalog and
 prepared terrain. Rollout reuses production's pinned catalog and its immutable

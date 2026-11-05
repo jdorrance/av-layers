@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
+import { fixturePointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 import { type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
@@ -289,6 +290,7 @@ it('preserves a loaded build across BFCache restoration and renews its raster ge
   const links = ui('meta').children.flatMap(child => child.children);
   expect(links.some(link => link.href === manifest.source.provenanceUrl)).toBe(true);
   const currentSource = sourceId();
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   page('pagehide', true); page('pageshow', true);
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(sourceId()).not.toBe(currentSource);
@@ -317,7 +319,7 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
     return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
   });
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
-  expect(sampleSignal?.aborted).toBe(false);
+  await vi.waitFor(() => expect(sampleSignal?.aborted).toBe(false));
   page('pagehide', true);
   expect(sampleSignal?.aborted).toBe(true);
   page('pageshow', true);
@@ -389,7 +391,7 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
     return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(sampleSignal?.reason)));
   });
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   map().emit('error', { error: new GPUInitializationError('Context recreation failed') });
   await vi.advanceTimersByTimeAsync(0);
   expect(sampleSignal?.aborted).toBe(true);
@@ -476,7 +478,8 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   })));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
-  expect(ui('point-status').textContent).toContain('coverage gfs-native, gfs-fine');
+  expect(ui('point-status').textContent).toContain(`${published.frames.length} frames`);
+  expect(ui('point-status').textContent).not.toContain(published.method.id);
   const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
   expect(chart.children).toHaveLength(published.frames.length);
   expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('MSL 2000 m');
@@ -538,4 +541,36 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
   expect(ui('point-body').children[0]).toBe(series);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
+  const pointBuild = fixturePointBuild(), published = pointBuild.manifest;
+  if (published.version !== 5) throw new Error('Expected v5');
+  fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
+    ? v5Latest(published) : fixturePointSample(pointBuild, String(input)))));
+  await start();
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  const mapUrl = raster(), mapTime = ui('time').value;
+  ui('point-horizon').value = 'forecast'; ui('point-horizon').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('point-status').textContent).toContain(`${published.frames.length} frames`));
+  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
+  expect(chart.children).toHaveLength(published.frames.length);
+  chart.children.at(-1)!.dispatchEvent(new Event('click'));
+  await vi.advanceTimersByTimeAsync(16);
+  expect(raster()).toBe(mapUrl); expect(ui('time').value).toBe(mapTime);
+  const time = series.children.find(child => child.className === 'av-point-time')!.textContent;
+  expect(time).toContain(`Point: ${published.frames.at(-1)!.validTime.slice(0, 10)}`);
+  expect(time).toContain(' · Map: ');
+  const summary = series.children.find(child => child.className === 'av-point-values')!.textContent;
+  expect(summary).toContain('Native top 2500 m'); expect(summary).toContain('MSL —');
+  expect(summary).toContain('Terrain unknown'); expect(summary).toContain('Cloud 0%'); expect(summary).not.toContain('Blue');
+  const lastPlot = chart.children.at(-1)!.children[0];
+  expect(lastPlot.children.some(child => child.className === 'av-point-native-top')).toBe(true);
+  expect(lastPlot.children.some(child => child.className === 'av-point-terrain' || child.className === 'av-point-lift-bar')).toBe(false);
+  const requests = fetchMock.mock.calls.length;
+  ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')!.children).toHaveLength(published.mapFrameCount!));
+  expect(fetchMock).toHaveBeenCalledTimes(requests);
 });

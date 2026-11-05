@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" href="data:," />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="build-deployment" content="%VITE_BUILD_REVISION%" />
     <title>Aviation Forecast Layers preview</title>
@@ -38,6 +39,7 @@
         <p id="point-summary"></p>
         <p id="point-status"></p>
         <label class="point-units">Units <select id="point-units"><option value="metric">m · m/s</option><option value="imperial">ft · kt</option></select></label>
+        <label class="point-units">Point horizon <select id="point-horizon"><option value="day">24 hours</option><option value="forecast">Full forecast</option></select></label>
         <div id="point-body" tabindex="-1"></div>
         <details><summary>Build details</summary><dl id="meta"></dl></details>
       </div>

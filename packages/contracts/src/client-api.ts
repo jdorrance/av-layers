@@ -1,5 +1,6 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, renderedLayers, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId, type ProfileResponse, type MultiPointSampleResponse, profileResponseSchema, multiPointSampleResponseSchema, MAX_SAMPLE_POINTS, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, gridToGeographic } from './index.ts';
-import type { GeoPoint, PinnedBuild, SamplePayload } from './client-types.ts';
+import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
+import { createPointSeriesLoader } from './client-point.ts';
 import { refinementCandidate } from './refinement.ts';
 
 export interface RequestOptions {
@@ -205,6 +206,20 @@ export class ApiClient {
       templates,
       expiresAtMs: expiryTime(manifestRaw.expiresAt)
     };
+  }
+
+  pointSeries(build: PinnedBuild, point: GeoPoint): PointSeriesLoader {
+    validatePoint(point);
+    const location = { ...point };
+    const pinned = build.manifest, { model, buildId, cycle, expiresAt } = pinned;
+    const methodId = pinned.method.id, methodHash = pinned.method.hash;
+    return createPointSeriesLoader(build,
+      (frames, layers, signal) => this.sample(build, { ...location, frames, layers, signal }),
+      () => {
+        if (build.manifest !== pinned || pinned.model !== model || pinned.buildId !== buildId || pinned.cycle !== cycle || pinned.expiresAt !== expiresAt
+          || pinned.method.id !== methodId || pinned.method.hash !== methodHash) throw new InvalidApiResponseError('Point series pinned build changed');
+        assertNotExpired(expiresAt, this.now());
+      });
   }
 
   async sample(build: PinnedBuild, request: SampleRequest): Promise<SamplePayload> {

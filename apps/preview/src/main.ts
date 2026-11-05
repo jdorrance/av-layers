@@ -7,16 +7,17 @@ import {
   ApiClient,
   activePalettes,
   assertNotExpired,
-  formatSeriesSummary,
+  pointSeriesLabel,
   forecastHorizonNotice,
   formatBuildFreshness,
   normalizePoint,
   samePoint,
-  pointSeriesSelection,
   watchBuildExpiry,
   type GeoPoint,
   type PinnedBuild,
-  type SamplePayload,
+  type PointSeries,
+  type PointSeriesLoader,
+  type PointHorizon,
   type UnitSystem
 } from '@av/contracts/client';
 import './style.css';
@@ -48,6 +49,7 @@ const pointSummary = element<HTMLParagraphElement>('point-summary');
 const pointStatus = element<HTMLParagraphElement>('point-status');
 const pointBody = element<HTMLDivElement>('point-body');
 const pointUnits = element<HTMLSelectElement>('point-units');
+const pointHorizonSelect = element<HTMLSelectElement>('point-horizon');
 const meta = element<HTMLDListElement>('meta');
 
 const ARMENIA: [[number, number], [number, number]] = [[43.45, 38.84], [46.63, 41.3]];
@@ -217,6 +219,9 @@ function startPreview(): void {
   let clicked: GeoPoint | null = null;
   let pointOpen = false;
   let pointUnitSystem: UnitSystem = 'metric';
+  let pointHorizon: PointHorizon = 'day';
+  let pointFrameId: string | null = null;
+  let pointLoader: PointSeriesLoader | null = null;
   let updatePointSeries: ReturnType<typeof renderPointSeries> | null = null;
   let pointInterrupted = false;
   let ignoreNextMapClick = false;
@@ -290,6 +295,7 @@ function startPreview(): void {
     pointInterrupted = false;
     seriesAbort?.abort();
     seriesAbort = null;
+    pointLoader?.dispose(); pointLoader = null; pointFrameId = null;
     pointCard.hidden = true;
     pointSummary.textContent = '';
     pointStatus.textContent = '';
@@ -465,7 +471,8 @@ function startPreview(): void {
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
-    updatePointSeries?.(selectedFrame, pointUnitSystem);
+    pointFrameId = selectedFrame;
+    updatePointSeries?.(pointFrameId, pointUnitSystem, selectedFrame);
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
     if (history !== 'none') writeUrl(history);
@@ -545,48 +552,47 @@ function startPreview(): void {
     else if (model === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
   }
 
-  function showPoint(point: GeoPoint, payload: SamplePayload): void {
+  function showPoint(point: GeoPoint, payload: PointSeries): void {
     const place = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     pointSummary.textContent = place;
     if (build) {
       const requestedBuild = build;
-      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: selectedFrame, unitSystem: pointUnitSystem, onFrame(id) {
+      if (!payload.frames.some(frame => frame.id === pointFrameId)) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
+      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: selectedFrame, unitSystem: pointUnitSystem, onFrame(id) {
         if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
+        pointFrameId = id;
+        updatePointSeries?.(id, pointUnitSystem, selectedFrame);
         selectIndex(renderedFrames(build.manifest).findIndex(frame => frame.id === id), 'push');
       } });
       pointBody.tabIndex = 0;
-      pointStatus.textContent = formatSeriesSummary(payload, Object.keys(payload.frames[0]?.layers ?? {}), point);
+      pointStatus.textContent = pointSeriesLabel(payload);
     }
   }
 
   async function openPoint(point: GeoPoint): Promise<void> {
     if (!build || expired || mapFailed || !ensureLive()) return;
+    pointLoader?.dispose();
+    pointLoader = api.pointSeries(build, point);
+    pointFrameId = selectedFrame;
+    clicked = { ...point };
+    pointOpen = true; pointInterrupted = false; pointCard.hidden = false;
+    pointBody.replaceChildren(); updatePointSeries = null; pointBody.tabIndex = -1;
+    await loadPointRange();
+  }
+
+  async function loadPointRange(): Promise<void> {
+    if (!build || !clicked || !pointLoader || !pointOpen || !ensureLive()) return;
     seriesAbort?.abort();
     const requestAbort = new AbortController();
     seriesAbort = requestAbort;
     const requestedBuild = build;
-    const requestedPoint = { ...point };
-    clicked = requestedPoint;
-    pointOpen = true;
-    pointInterrupted = false;
-    pointCard.hidden = false;
-    pointBody.replaceChildren();
-    updatePointSeries = null;
-    pointBody.tabIndex = -1;
+    const requestedPoint = { ...clicked }, requestedLoader = pointLoader;
     pointSummary.textContent = `${requestedPoint.lat.toFixed(3)}°, ${requestedPoint.lon.toFixed(3)}°`;
-    pointStatus.textContent = 'Loading point…';
+    pointStatus.textContent = pointHorizon === 'forecast' ? 'Loading full point forecast…' : 'Loading point…';
     renderBuildDiagnostics(meta, requestedBuild);
     try {
-      const { layers, frames } = pointSeriesSelection(requestedBuild);
-      const payload = await api.sample(requestedBuild, {
-        lat: requestedPoint.lat,
-        lon: requestedPoint.lon,
-        frames,
-        layers,
-        signal: requestAbort.signal
-      });
-      if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
-      assertNotExpired(payload.expiresAt);
+      const payload = await requestedLoader.load(pointHorizon, requestAbort.signal);
+      if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
       showPoint(requestedPoint, payload);
     } catch (error) {
       if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint)) {
@@ -663,7 +669,12 @@ function startPreview(): void {
   pointUnits.value = pointUnitSystem;
   pointUnits.addEventListener('change', () => {
     pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
-    updatePointSeries?.(selectedFrame, pointUnitSystem);
+    updatePointSeries?.(pointFrameId, pointUnitSystem, selectedFrame);
+  });
+  pointHorizonSelect.value = pointHorizon;
+  pointHorizonSelect.addEventListener('change', () => {
+    pointHorizon = pointHorizonSelect.value === 'forecast' ? 'forecast' : 'day';
+    void loadPointRange();
   });
   document.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button')) return;
@@ -728,6 +739,7 @@ function startPreview(): void {
     }
     removeOverlay(true);
     if (event.persisted) return;
+    pointLoader?.dispose(); pointLoader = null;
     disposeExpiry();
     if (!mapFailed) { overlay.destroy(); map.remove(); }
   });
