@@ -17,4 +17,18 @@ export interface GeoPoint {
   lon: number;
 }
 
+export type PointHorizon = 'day' | 'forecast';
+
+/** A bounded cached view assembled from validated scalar pages. */
+export interface PointSeries {
+  layers: readonly LayerId[];
+  frames: readonly FrameSample[];
+}
+
+/** Create per build/location; later loads supersede pending work, and close calls dispose. */
+export interface PointSeriesLoader {
+  load(horizon: PointHorizon, signal?: AbortSignal): Promise<PointSeries>;
+  dispose(): void;
+}
+
 export type LatestPayload = z.infer<typeof latestSchema>;

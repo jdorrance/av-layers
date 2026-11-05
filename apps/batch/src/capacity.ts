@@ -39,7 +39,7 @@ export interface CapacityScenario {
   retentionDays?: number;
 }
 
-/** Count covered levels and project deeper levels for an explicit capacity scenario. */
+/** Count v3/v4 single-pack storage and project coverage for an explicit scenario. */
 export function estimateCapacity(mask: CoverageMask, product: ProductDefinition, storedCells: number, scenario: CapacityScenario = {}, refinement: { gridCells: number; storedCells: number } = { gridCells: 0, storedCells: 0 }) {
   const frames = scenario.frames ?? product.frameHours.length, layers = scenario.layers ?? product.layers.length;
   const models = scenario.models ?? 1, nativeZoom = scenario.nativeZoom ?? product.maxNativeZoom;
@@ -76,7 +76,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   };
 }
 
-/** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
+/** Prepare v3/v4 geometry/counts and reject resource growth before acquiring weather. */
 export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: FrameResources & { retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
   mask = coverageAtZoom(mask, product.maxNativeZoom);
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');

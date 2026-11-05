@@ -217,7 +217,7 @@ it('enumerates bounded viewport tiles across the antimeridian and at the poles',
   expect(viewportTiles({ west: 0, south: 0, east: 1, north: 1 }, -1)).toEqual([]);
 });
 
-it('bounds the shared diurnal request to published fields and scalar values', () => {
+it('selects the shared diurnal fields independently of wire page size', () => {
   const build = v5Build();
   const native: import('./product').LayerId[] = ['thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
   build.manifest.layers.push(...native);
@@ -226,7 +226,7 @@ it('bounds the shared diurnal request to published fields and scalar values', ()
   expect(selected.frames.length * selected.layers.length).toBeLessThanOrEqual(build.manifest.descriptors.maxSampleValues);
   expect(selected.layers.some(layer => layer.includes('80m'))).toBe(false);
   build.manifest.descriptors.maxSampleValues = 20;
-  expect(pointSeriesSelection(build).frames).toHaveLength(2);
+  expect(pointSeriesSelection(build).frames).toEqual(selected.frames);
 });
 
 it('recovers terrain only when fine lift values share one uninterpolated basis', () => {

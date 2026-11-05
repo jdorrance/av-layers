@@ -1,4 +1,4 @@
-import { DEFAULT_OPACITY, populateModelOptions, type PinnedBuild, type GeoPoint, type SamplePayload, type UnitSystem } from '@av/contracts/client';
+import { DEFAULT_OPACITY, populateModelOptions, pointSeriesLabel, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
 import { renderPointSeries } from '@av/contracts/client/dom';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
@@ -7,6 +7,7 @@ export interface PanelCallbacks {
   onModel(model: string): void;
   onOpacity(opacity: number): void;
   onBack(): void;
+  onPointHorizon(horizon: PointHorizon): void;
 }
 
 const STYLE_ID = 'av-windy-plugin-style';
@@ -55,8 +56,10 @@ export class PluginPanel {
   private readonly pointStatus = node('p', 'av-muted');
   private readonly pointBody = node('div');
   private readonly units = node('select');
+  private readonly pointHorizon = node('select');
   private unitSystem: UnitSystem = 'metric';
   private pointFrameId: string | null = null;
+  private mapFrameId: string | null = null;
   private updatePoint: ReturnType<typeof renderPointSeries> | null = null;
   private renderedBuildId: string | null = null;
 
@@ -104,12 +107,17 @@ export class PluginPanel {
     const unitsLabel = node('label', undefined, 'Units'); unitsLabel.htmlFor = this.units.id;
     this.units.addEventListener('change', () => {
       this.unitSystem = this.units.value === 'imperial' ? 'imperial' : 'metric';
-      this.updatePoint?.(this.pointFrameId, this.unitSystem);
+      this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
     });
+    this.pointHorizon.id = 'av-point-horizon';
+    this.pointHorizon.add(new Option('24 hours', 'day')); this.pointHorizon.add(new Option('Full forecast', 'forecast'));
+    this.pointHorizon.value = 'day';
+    const pointHorizonLabel = node('label', undefined, 'Point horizon'); pointHorizonLabel.htmlFor = this.pointHorizon.id;
+    this.pointHorizon.addEventListener('change', () => callbacks.onPointHorizon(this.pointHorizon.value === 'forecast' ? 'forecast' : 'day'));
     this.point.hidden = true;
     this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
     this.pointStatus.role = 'status';
-    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, this.pointBody);
+    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, pointHorizonLabel, this.pointHorizon, this.pointBody);
     this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
 
@@ -154,7 +162,11 @@ export class PluginPanel {
     if (state.phase === 'expired') this.setStatus('Expired build — overlay removed');
     if (state.phase === 'ready' && state.buildId) this.setStatus(`Pinned build ${state.buildId}`);
     if (state.phase === 'error') this.setStatus('No viewable build');
-    if (state.phase === 'ready') { this.pointFrameId = state.frameId; this.updatePoint?.(state.frameId, this.unitSystem); }
+    if (state.phase === 'ready') {
+      if (state.frameId !== null && this.mapFrameId !== state.frameId) this.pointFrameId = state.frameId;
+      this.mapFrameId = state.frameId;
+      this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
+    }
     if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') this.clearPoint();
   }
 
@@ -164,10 +176,17 @@ export class PluginPanel {
     this.pointStatus.textContent = 'Loading point…';
   }
 
-  renderPoint(payload: SamplePayload, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void): void {
-    this.pointFrameId = frameId;
-    this.pointStatus.textContent = `${payload.frames.length} forecast hours · ${build.manifest.model}`;
-    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId, unitSystem: this.unitSystem, onFrame });
+  pointLoading(): void { this.pointStatus.textContent = 'Loading point forecast…'; }
+
+  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void): void {
+    this.mapFrameId = frameId;
+    if (!payload.frames.some(frame => frame.id === this.pointFrameId)) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
+    this.pointStatus.textContent = pointSeriesLabel(payload);
+    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: frameId, unitSystem: this.unitSystem, onFrame: id => {
+      this.pointFrameId = id;
+      this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
+      onFrame(id);
+    } });
   }
 
   pointError(message: string): void { this.pointStatus.textContent = message; }

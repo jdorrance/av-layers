@@ -34,7 +34,7 @@ pnpm --filter @av/api build
 `/profile?lat=...&lon=...` returns the nearest covered native cell's full levels,
 measured surface pressure and point-derived cloud/wind diagnostics. `frame`
 selects times; `layers` selects scalar inputs. Omitted dependencies produce null derived values.
-Point routes default to the first frame; callers select bounded frame pages for
+V5 point routes default to the first frame; callers select bounded frame pages for
 complete timelines. See the [OpenAPI spec](../../docs/reference/openapi.json)
 for request limits and response schemas.
 

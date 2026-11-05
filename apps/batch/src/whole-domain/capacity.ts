@@ -29,11 +29,11 @@ export interface WholeDomainCapacityInput {
   terrainBytes: number;
 }
 
-export function wholeDomainSampleLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout | null } {
-  const frames = input.groupFrames ?? input.frames;
-  const fineFrames = Math.min(input.mapFrames ?? input.frames, frames);
+export function wholeDomainSampleGroupLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout | null } {
+  const groupFrames = input.groupFrames ?? input.frames;
+  const fineFrames = Math.min(input.mapFrames ?? input.frames, groupFrames);
   const fine = fineFrames ? prepareShardedSamplePackLayout(input.plan.fine, input.fine.coverage.blockIds, fineFrames * input.fineLayers, MAX_V5_SHARD_BYTES) : null;
-  const native = input.nativeLayers ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, frames * input.nativeLayers, MAX_V5_SHARD_BYTES) : null;
+  const native = input.nativeLayers ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, groupFrames * input.nativeLayers, MAX_V5_SHARD_BYTES) : null;
   return { native, fine };
 }
 
@@ -57,7 +57,7 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   const maxLevels = input.maxLevels ?? 256, retainedGeometryFields = input.retainedGeometryFields ?? 257;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(retainedGeometryFields) || retainedGeometryFields < 0 || retainedGeometryFields > 257) throw new Error('Invalid provider capacity');
   const fineActive = fine.coverage.offsets[fine.coverage.blockIds.length]!;
-  const layouts = wholeDomainSampleLayouts(input);
+  const layouts = wholeDomainSampleGroupLayouts(input);
   const nativeSampleBytes = (layouts.native?.storedCells ?? 0) * frames * nativeLayers * CELL_BYTES, fineSampleBytes = (layouts.fine?.storedCells ?? 0) * mapFrames * fineLayers * CELL_BYTES;
   const nativeSampleOnly = input.product.layers.filter(layer => layerSurface(layer) === 'native' && LAYERS[layer].delivery === 'samples-only').length;
   const renderedNativeLayers = nativeLayers - nativeSampleOnly;

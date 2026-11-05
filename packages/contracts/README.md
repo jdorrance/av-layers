@@ -28,6 +28,9 @@ bounded frame receipts; retained version-1 receipts stay inline.
 
 `ApiClient` point requests default to the first v5 frame. Select frame pages for
 complete timelines; explicit `all` selections retain the serving budgets.
+`ApiClient.pointSeries(build, point)` shares cached scalar pages between the
+24-hour and full-forecast views. [client-point.ts](src/client-point.ts) bounds
+paging and owns cancellation; the map keeps its rendered frame prefix.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
 positive-weight native donor support. [sparse-coverage.ts](src/sparse-coverage.ts)
