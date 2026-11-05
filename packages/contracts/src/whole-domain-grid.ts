@@ -1,16 +1,19 @@
-import { gridSchema, regularLatLonGridSchema, snapGridCoordinate, type RegularLatLonGrid } from './geometry.js';
+import { gridSchema, snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
 
 const MAX_UINT32_CELLS = 0xffffffff;
 
-export interface WholeDomainGrid {
+export interface WholeDomainGrid<T extends Grid = Grid> {
   readonly k: number;
-  readonly native: RegularLatLonGrid;
-  readonly fine: RegularLatLonGrid;
+  readonly native: T;
+  readonly fine: T;
 }
 
-export function planWholeDomainGrid(rawNative: RegularLatLonGrid, k: number): WholeDomainGrid {
+export function planWholeDomainGrid(rawNative: RegularLatLonGrid, k: number): WholeDomainGrid<RegularLatLonGrid>;
+export function planWholeDomainGrid(rawNative: LambertConformalGrid, k: number): WholeDomainGrid<LambertConformalGrid>;
+export function planWholeDomainGrid(rawNative: Grid, k: number): WholeDomainGrid;
+export function planWholeDomainGrid(rawNative: Grid, k: number): WholeDomainGrid {
   if (!Number.isSafeInteger(k) || k < 1) throw new RangeError('Whole-domain subdivision factor must be a positive integer');
-  const native = regularLatLonGridSchema.parse(rawNative);
+  const native = gridSchema.parse(rawNative);
   const nativeCells = native.width * native.height;
   if (!Number.isSafeInteger(nativeCells) || nativeCells >= MAX_UINT32_CELLS) throw new RangeError('Whole-domain native grid exceeds the admitted index space');
   const width = native.wrapLongitude ? native.width * k : (native.width - 1) * k + 1;
@@ -19,9 +22,9 @@ export function planWholeDomainGrid(rawNative: RegularLatLonGrid, k: number): Wh
       || !Number.isSafeInteger(width * height) || width * height >= MAX_UINT32_CELLS) {
     throw new RangeError('Whole-domain fine grid exceeds the admitted index space');
   }
-  const dx = native.dx / k, dy = native.dy / k;
-  if (!Number.isFinite(dx) || !Number.isFinite(dy) || dx === 0 || dy === 0) throw new RangeError('Whole-domain fine spacing underflows');
-  const fine = gridSchema.parse({ ...native, width, height, dx, dy }) as RegularLatLonGrid;
+  const spacing = native.kind === 'regular-latlon' ? { dx: native.dx / k, dy: native.dy / k } : { dxM: native.dxM / k, dyM: native.dyM / k };
+  if (Object.values(spacing).some(step => !Number.isFinite(step) || step === 0)) throw new RangeError('Whole-domain fine spacing underflows');
+  const fine = gridSchema.parse({ ...native, width, height, ...spacing });
   return { k, native, fine };
 }
 

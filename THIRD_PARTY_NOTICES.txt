@@ -141,6 +141,11 @@ checksum and attribute mapping are recorded by packages/contracts/coverage.
 GFS source data remain subject to the provider's terms;
 this repository does not relicense source data.
 
+NOAA RRFS operational data
+Dataset and attribution: https://registry.opendata.aws/noaa-rrfs-ops/
+NOAA/NODD distributes these source data under CC0-1.0. Forecast lift fields
+are derived by this project; NOAA supplies the meteorological inputs.
+
 Copernicus DEM GLO-90 (2021 AWS distribution)
 Data attribution: DLR e.V. (2010–2014), Airbus Defence and Space GmbH
 (2014–2018); supplied under Copernicus by the European Union and ESA.

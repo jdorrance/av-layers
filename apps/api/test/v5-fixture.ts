@@ -27,10 +27,9 @@ const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('h
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const stream = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
 
-export const NATIVE_GRID: Grid = gridSchema.parse({
+const NATIVE_GRID: Grid = gridSchema.parse({
   kind: 'regular-latlon', width: 32, height: 18, lon0: -180, lat0: 17, dx: 11.25, dy: -1, wrapLongitude: true, earthRadiusM: 6371229
 });
-export const FINE_GRID: Grid = planWholeDomainGrid(NATIVE_GRID as Extract<Grid, { kind: 'regular-latlon' }>, 2).fine;
 const BOUNDS: [number, number, number, number] = [-180, -2, 180, 18];
 const FINE_LAYERS: LayerId[] = ['usable-lift-msl', 'usable-lift-agl'];
 const NATIVE_LAYERS: LayerId[] = ['precip-rate'];
@@ -39,7 +38,7 @@ export const finePoint = (x: number, y: number) => ({ lat: 17 - 0.5 * y, lon: -1
 export const nativePoint = (x: number, y: number) => ({ lat: 17 - y, lon: -180 + 11.25 * x });
 export const commonPoint = { lat: 9, lon: -180 };
 
-function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) => boolean): SparseCoverageMask {
+function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) => boolean, bounds: ProductDefinition['bounds']): SparseCoverageMask {
   const output = new Uint8Array(Math.ceil(grid.width * grid.height / 8));
   const halo = new Uint8Array(output.length);
   const set = (bits: Uint8Array, x: number, y: number) => {
@@ -55,7 +54,7 @@ function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) =
     }
   }
   return {
-    grid, bounds: BOUNDS, maxZoom, tiles: new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8)),
+    grid, bounds, maxZoom, tiles: new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8)),
     coverage: sparseCoverageFromDense({ width: grid.width, height: grid.height, wrapLongitude: grid.wrapLongitude, gridHash: hash(new TextEncoder().encode(canonicalGridJson(grid))), output, halo })
   };
 }
@@ -63,7 +62,7 @@ function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) =
 interface SurfaceFixture { surface: ForecastSurfaceV5; layout: ShardedSamplePackLayout; bytes: Uint8Array; objects: Map<string, Uint8Array>; shardSha: Map<string, string> }
 
 function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 'native' | 'fine', layers: LayerId[], frameCount: number, active: (x: number, y: number) => boolean, value: (channel: number, x: number, y: number) => { value: number; flags: number }, prefix: string, masterZoom: number): SurfaceFixture {
-  const mask = denseMask(grid, masterZoom, active);
+  const mask = denseMask(grid, masterZoom, active, product.bounds);
   const description = describeSparseCoverage(mask, product);
   const coveragePrefix = `coverage/${description.hash}`;
   const channelCount = frameCount * layers.length;
@@ -104,19 +103,19 @@ function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 
   return { surface, layout, bytes, objects, shardSha: new Map([[shardKey, shardSha]]) };
 }
 
-interface FixtureOptions { product?: ProductDefinition; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[] }
+interface FixtureOptions { product?: ProductDefinition; grid?: Grid; bounds?: ProductDefinition['bounds']; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[] }
 
-export function createV5Fixture({ product: base = INDEXED_PRODUCT, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2] }: FixtureOptions = {}) {
-  const product: ProductDefinition = { ...base, grid: NATIVE_GRID, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds: BOUNDS, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
+export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE_GRID, bounds = BOUNDS, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2] }: FixtureOptions = {}) {
+  const product: ProductDefinition = { ...base, grid, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
   const model = product.modelId, prefix = `builds/${model}/${buildId}`;
   const cycle = new Date(NOW).toISOString(), expiresAt = new Date(NOW + 86_400_000).toISOString();
   const frames = frameHours.map(hour => ({ id: `h${String(hour).padStart(3, '0')}`, validTime: new Date(NOW + hour * 3_600_000).toISOString(), intervalStart: new Date(NOW + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(NOW + hour * 3_600_000).toISOString() }));
-  const fine = buildSurface(product, FINE_GRID, 'fine', 'fine', FINE_LAYERS, frames.length, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {
+  const fine = buildSurface(product, planWholeDomainGrid(grid, 2).fine, 'fine', 'fine', FINE_LAYERS, frames.length, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {
     const layer = channel % 2, frame = Math.floor(channel / 2);
     if (layer === 0) return x === 4 && y === 17 ? { value: 0, flags: 1 } : { value: 310.25 + frame * 10 + (y === 17 ? 10 : 0), flags: 4 };
     return x === 5 && y === 17 ? { value: 0, flags: 2 } : { value: 610.25 + frame * 10, flags: 8 };
   }, prefix, maxZoom);
-  const native = buildSurface(product, NATIVE_GRID, 'native', 'native', NATIVE_LAYERS, frames.length, (_x, y) => y >= 8 && y <= 10, channel => ({ value: 7 + channel, flags: 0 }), prefix, maxZoom);
+  const native = buildSurface(product, grid, 'native', 'native', NATIVE_LAYERS, frames.length, (_x, y) => y >= 8 && y <= 10, channel => ({ value: 7 + channel, flags: 0 }), prefix, maxZoom);
   const layers = [...product.layers], surfaces = product.layers.includes('precip-rate') ? [fine.surface, native.surface] : [fine.surface];
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
   const descriptors = createWholeDomainDescriptors(product);

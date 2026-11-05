@@ -1,7 +1,7 @@
-import { INDEXED_PRODUCT, SPLIT_PRODUCT, INDEXED_GRID } from '../../../tests/model-fixtures';
+import { INDEXED_PRODUCT, INDEXED_GRID } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCTS, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { PRODUCTS, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, gridToGeographic, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -174,16 +174,14 @@ async function realSurface(product: ProductDefinition, kind: 'fine' | 'native', 
   ]);
   let samplePoint: { lat: number; lon: number } | undefined;
   const grid = mask.grid;
-  if (grid.kind !== 'regular-latlon') throw new Error('Expected regular coverage grid');
   outer: for (let i = 0; i < layout.blockCount; i++) {
     const block = layout.block(i);
-    if (block.width !== 17 || block.height !== 17) continue;
     for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
-      const lat = grid.lat0 + (block.row + y) * grid.dy, lon = grid.lon0 + (block.column + x) * grid.dx;
-      if (isCovered(mask, lat, lon)) { samplePoint = { lat, lon }; break outer; }
+      const point = gridToGeographic(grid, block.column + x, block.row + y);
+      if (point && isCovered(mask, point.lat, point.lon)) { samplePoint = point; break outer; }
     }
   }
-  if (!samplePoint) throw new Error('No covered 17x17 sparse block');
+  if (!samplePoint) throw new Error('No covered sparse cell');
   return { surface, samplePoint, shards, shardInfo, objects };
 }
 
@@ -251,8 +249,8 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('read-only worker', () => {
-  it('serves both real fine coverages concurrently and reuses warm sparse masks', async () => {
-    const publications = await Promise.all([realPublication(INDEXED_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789abc'), realPublication(SPLIT_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789def')]);
+  it('serves configured real fine coverages concurrently and reuses warm sparse masks', async () => {
+    const publications = await Promise.all(PRODUCTS.map(product => realPublication(product, '20261030T000000Z-12345678-1234-4234-8234-123456789abc')));
     const sparse = new SparseMemoryBucket(new Map(publications.flatMap(item => [...item.objects])), new Map(publications.flatMap(item => [...item.shards])));
     const paths = publications.map(({ manifest, samplePoint }) => `/v1/models/${manifest.model}/runs/${manifest.buildId}/sample?lat=${samplePoint.lat}&lon=${samplePoint.lon}&frame=${manifest.frames[0].id}&layers=usable-lift-msl`);
     for (const response of await Promise.all(paths.map(path => callSparse(sparse, path)))) {
@@ -260,7 +258,7 @@ describe('read-only worker', () => {
       await response.arrayBuffer();
     }
     const coldReads = sparse.reads.filter(item => item.key.endsWith('/sparse.bin')).length;
-    expect(coldReads).toBe(2);
+    expect(coldReads).toBe(PRODUCTS.length);
     for (const path of [...paths, ...paths]) {
       const response = await callSparse(sparse, path);
       expect(response.status, await response.clone().text()).toBe(200);

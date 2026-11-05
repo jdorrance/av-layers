@@ -1,7 +1,7 @@
 import { INDEXED_GRID, SPLIT_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { getBit } from './coverage.js';
-import { geographicToGrid, gridToGeographic, snapGridCoordinate, type RegularLatLonGrid } from './geometry.js';
+import { geographicToGrid, gridToGeographic, snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
 
 import { assertWholeDomainDonorsActive, planWholeDomainGrid, wholeDomainDonorSupport } from './whole-domain-grid.js';
 
@@ -19,7 +19,7 @@ const indices = (bits: Uint8Array, cells: number): number[] => {
   return result;
 };
 
-function referenceDonors(grid: RegularLatLonGrid, fine: RegularLatLonGrid, target: number): number[] {
+function referenceDonors(grid: Grid, fine: Grid, target: number): number[] {
   const x = target % fine.width, y = (target - x) / fine.width;
   const geographic = gridToGeographic(fine, x, y)!;
   const located = geographicToGrid(grid, geographic.lat, geographic.lon)!;
@@ -35,7 +35,7 @@ function referenceDonors(grid: RegularLatLonGrid, fine: RegularLatLonGrid, targe
   return [...result].sort((a, b) => a - b);
 }
 
-function expectMatchesReference(grid: RegularLatLonGrid, k: number): ReturnType<typeof planWholeDomainGrid> {
+function expectMatchesReference(grid: Grid, k: number): ReturnType<typeof planWholeDomainGrid> {
   const plan = planWholeDomainGrid(grid, k);
   const cells = grid.width * grid.height;
   for (let target = 0; target < plan.fine.width * plan.fine.height; target++) {
@@ -46,6 +46,13 @@ function expectMatchesReference(grid: RegularLatLonGrid, k: number): ReturnType<
 }
 
 describe('whole-domain fine grid', () => {
+  it('preserves projected coordinates, signed metres and donors across the entire fine lattice', () => {
+    const grid: LambertConformalGrid = { kind: 'lambert-conformal', width: 5, height: 3, earthRadiusM: 6371229,
+      centralMeridianDeg: -97.5, latitudeOfOriginDeg: 38.5, standardParallel1Deg: 38.5, standardParallel2Deg: 38.5,
+      x0M: -6000, y0M: -3000, dxM: 3000, dyM: 3000, wrapLongitude: false };
+    const plan = expectMatchesReference(grid, 2);
+    expect(plan.fine).toEqual({ ...grid, width: 9, height: 5, dxM: 1500, dyM: 1500 });
+  });
   it('derives configured wrap and regional dimensions with signed native spacing', () => {
     const gfs = planWholeDomainGrid(INDEXED_GRID, 10);
     expect(gfs.fine).toMatchObject({ width: 14400, height: 7201, dx: 0.025, dy: -0.025, lon0: -180, lat0: 90, wrapLongitude: true, earthRadiusM: INDEXED_GRID.earthRadiusM });

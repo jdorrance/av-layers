@@ -9,16 +9,14 @@ point queries. See [data](data.md) for output units and status meanings.
 
 ## Input fields
 
-- **GFS** ([fields.ts](../apps/batch/src/indexed-grib/fields.ts), [gfs.json](../packages/contracts/config/models.json)):
-  model terrain, surface pressure, 2 m temperature and specific humidity,
-  sensible and latent heat flux, precipitation rate, and
-  isobaric-level geopotential height and temperature (`pressureLevelsHpa`).
-- **ICON-EU** ([icon/README.md](../apps/batch/src/split-grib/README.md), [icon-eu.json](../packages/contracts/config/models.json)):
-  DWD's 0.0625° regular latitude/longitude grid, surface fields (`HSURF`, `PS`,
-  `T_2M`, `QV_2M`, `ASHFL_S`, `ALHFL_S`), static half-level heights `HHL`
-  (`45..75`, midpoint-averaged into full-level heights and verified against
-  `HSURF` at half-level `75`), and per-column pressure `P` and temperature `T`
-  on model levels `45..74`.
+[models.json](../packages/contracts/config/models.json) selects source grids,
+fields, levels and intervals. The [indexed adapter](../apps/batch/src/indexed-grib/README.md)
+supplies GFS and RRFS isobaric heights and temperatures; the
+[split adapter](../apps/batch/src/split-grib/README.md) supplies ICON-EU per-column
+pressure and temperature. Full-level heights average adjacent half levels;
+the bottom half level must match model terrain. All sources provide terrain,
+surface pressure, 2 m temperature and specific humidity, and sensible and latent
+heat flux. Indexed sources also supply precipitation accumulations.
 
 Specific humidity converts to mixing ratio via $r = q / (1 - q)$. Below-ground
 profile levels are screened before column derivation; levels with missing
@@ -30,20 +28,25 @@ missingness mask.
 across each cell's trailing interval and valid time using
 [`@av/solar/grid`](../packages/solar/src/grid.ts) (`minimumSolarElevationDeg = -0.833°`).
 Dark cells emit `STATUS_NO_LIFT` on lift layers and `STATUS_UNAVAILABLE` on
-`precip-rate`. For `regional-daylight` products (ICON-EU),
+`precip-rate`. For `regional-daylight` products,
 [daylight frame selection](../packages/forecast/src/daylight.ts) also filters out
 candidate forecast hours before acquisition when no covered output cell is sunlit
 at the interval start, midpoint, or end.
 
 ## Statistical windows
 
-The [GFS](../apps/batch/src/indexed-grib/intervals.ts) and
-[ICON](../apps/batch/src/split-grib/acquire.ts) adapters verify continuous statistical
+The [indexed](../apps/batch/src/indexed-grib/intervals.ts) and
+[split](../apps/batch/src/split-grib/acquire.ts) adapters verify continuous statistical
 windows in GRIB2 metadata and pass them to
 [`@av/forecast/intervals`](../packages/forecast/src/intervals.ts):
 
 - For two means sharing start $a$, the trailing `[t1, t2]` mean is
   $\frac{(t_2 - a)\,\overline{X}_{[a,t_2]} - (t_1 - a)\,\overline{X}_{[a,t_1]}}{t_2 - t_1}$.
+- GFS recovers hourly fluxes and precipitation from its configured reset windows.
+- RRFS selects preceding-hour mean `SHTFL` and `LHTFL` and preceding-hour
+  accumulated `APCP` directly. [NOAA's surface inventory](https://www.nco.ncep.noaa.gov/pmb/products/rrfs/rrfs.t06z.2dfld.3km.f004.conus.grib2.shtml)
+  also lists instantaneous fluxes and run-total precipitation; decoded windows
+  must match the requested trailing interval.
 - ICON-EU `ASHFL_S` and `ALHFL_S` are run-averaged (`0..h`) downward fluxes;
   differencing consecutive hours and negating yields the preceding-hour upward
   flux (`f001` negates its `0..1h` mean directly).
@@ -51,6 +54,23 @@ windows in GRIB2 metadata and pass them to
   clamp to `0`; larger negative rates become `unavailable`.
 - Lift pairs the trailing-interval surface heat fluxes with the valid-time
   temperature profile.
+
+## RRFS and Windgrams
+
+RRFS uses [NOAA's CONUS Lambert output](https://www.nco.ncep.noaa.gov/pmb/products/rrfs/)
+through the shared indexed adapter and dry-column solver. Its supplied surface
+pressure and preceding-hour heat-flux means feed the existing terrain-column
+calculation. Historical Windgrams RRFS profiles used instantaneous heat fluxes.
+
+An 84-hour replay of the archived `rrfs-blanchard-published.json` profile
+(2026-10-23 06Z) compared Windgrams 2.3 calculations with the same pressure,
+humidity, convective depth, unrounded velocity, 1.2 m/s sink and no cloud cap.
+The maximum velocity difference was $1.11\times10^{-16}$ m/s; usable depths
+matched exactly. Windgrams' own depth policy differed in 43 hours through its
+model-PBL fallback. The archive contains rounded inputs; this replay checks
+equation agreement. Production retains the parcel crossing, below-ground
+support and sink rules below. Windgrams' model-PBL and heat-flux depth fallbacks,
+pressure estimation and cloud caps describe its separate diagnostic policies.
 
 ## Lift depth and usable top
 
@@ -105,8 +125,8 @@ type. The calculation applies no vertical-datum transformation.
 
 Production uses [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts)
 to reconstruct an environmental profile at each DEM cell from native donors.
-[Method descriptors](../packages/contracts/src/methods.ts) select the isobaric
-pressure axis for GFS or per-column model-level pressures for ICON-EU. Surface
+[Method descriptors](../packages/contracts/src/methods.ts) select the configured
+isobaric or per-column model-level pressure axis. Surface
 excess is evaluated at each native ground: $\delta_i=T_{2m,i}-E_i(h_i)$.
 The transferred excess is $\delta_0=\sum_i w_i\delta_i$ using the original
 horizontal weights. The solver lifts a parcel from $E(h_f)+\delta_0$.

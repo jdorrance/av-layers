@@ -51,8 +51,8 @@ pnpm forecast --model icon-eu --out output --cache-dir .cache/icon-eu \
 
 `capacity` reports configured whole-domain sparse storage and working-set
 admission. `input:proof`
-downloads and validates one frame. Both models accept `--cycle YYYY-MM-DDTHH:00:00Z`
-(`00`, `06`, `12`, or `18` UTC) or discover the latest complete upstream run
+downloads and validates one frame. `--cycle YYYY-MM-DDTHH:00:00Z` selects a
+configured UTC cycle; otherwise providers discover the latest complete run
 automatically. See the [CLI reference](reference.md#batch-cli) for all flags.
 
 To view a completed build locally:

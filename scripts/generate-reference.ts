@@ -64,8 +64,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     if (!product) throw new Error(`Model ${model} has no product`);
     const factor = product.terrainSubdivisionFactor;
     const methods = Object.values((factor === undefined ? contracts.createProductDescriptors(product) : contracts.createWholeDomainDescriptors(product)).methods);
-    if (factor !== undefined && product.grid.kind !== 'regular-latlon') throw new Error(`Model ${model} requires a regular terrain grid`);
-    const fine = factor !== undefined && product.grid.kind === 'regular-latlon' ? contracts.planWholeDomainGrid(product.grid, factor).fine : undefined;
+    const fine = factor === undefined ? undefined : contracts.planWholeDomainGrid(product.grid, factor).fine;
     lines.push(`### ${product.label} (${product.id})`, '',
       `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,

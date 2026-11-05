@@ -396,7 +396,9 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   };
 }
 
-/** Locate one geographic pair and record its covered cell, fractions and contributors. */
+function locatedSampleCache() { return { nearest: -1, output: false, quad: -1, contributed: 0 }; }
+
+/** Locate one admitted geographic pair and record its covered cell, fractions and contributors. */
 function prepareLocatedSample(
   grid: Grid,
   geometry: GridGeometry | null,
@@ -409,22 +411,28 @@ function prepareLocatedSample(
   fractionX: Float64Array,
   fractionY: Float64Array,
   covered: Uint8Array,
-  contributorSet: Set<number>
+  contributorSet: Set<number>,
+  cache: ReturnType<typeof locatedSampleCache>
 ): void {
-  if (!withinGeographicBounds(lat, lon, mask.bounds)) return;
   const located = locate(grid, geometry, lat, lon);
   if (!located) return;
   const { column, row, fractionX: fx, fractionY: fy } = located;
   const upperColumn = grid.wrapLongitude ? (column + 1) % grid.width : column + 1, upperRow = row + 1;
   const nearestColumn = fx < 0.5 ? column : fx > 0.5 ? upperColumn : Math.min(column, upperColumn);
   const nearestRow = fy <= 0.5 ? row : Math.min(grid.height - 1, upperRow);
-  if (!outputAt(mask, nearestColumn, nearestRow)) return;
+  const nearest = nearestRow * grid.width + nearestColumn;
+  if (nearest !== cache.nearest) { cache.nearest = nearest; cache.output = outputAt(mask, nearestColumn, nearestRow); }
+  if (!cache.output) return;
   covered[index >> 3] |= 1 << (index & 7);
   lowerX[index] = column; lowerY[index] = row; fractionX[index] = fx; fractionY[index] = fy;
-  for (const [dx, dy] of QUAD_OFFSETS) {
-    if ((dx && fx === 0) || (dy && fy === 0)) continue;
-    contributorSet.add((dy === 0 ? row : upperRow) * grid.width + (dx === 0 ? column : upperColumn));
-  }
+  const quad = row * grid.width + column;
+  if (cache.quad !== quad) { cache.quad = quad; cache.contributed = 0; }
+  const needed = (fx === 0 ? 5 : 15) & (fy === 0 ? 3 : 15), added = needed & ~cache.contributed;
+  if (added & 1) contributorSet.add(quad);
+  if (added & 2) contributorSet.add(row * grid.width + upperColumn);
+  if (added & 4) contributorSet.add(upperRow * grid.width + column);
+  if (added & 8) contributorSet.add(upperRow * grid.width + upperColumn);
+  cache.contributed |= needed;
 }
 
 /** Projected coordinates are not separable. Retain only four numbers per requested coordinate. */
@@ -434,9 +442,13 @@ function prepareProjectedSampling(mask: SamplingMask, latitudes: Float64Array, l
   const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
-  for (let index = 0; index < total; index++) {
-    const x = index % width, y = (index - x) / width;
-    prepareLocatedSample(grid, geometry, mask, latitudes[y], longitudes[x], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
+  const cache = locatedSampleCache();
+  const allowedColumns = Uint8Array.from(longitudes, lon => Number(withinGeographicBounds(mask.bounds?.[1] ?? 0, lon, mask.bounds)));
+  for (let y = 0; y < height; y++) {
+    if (!withinGeographicBounds(latitudes[y], mask.bounds?.[0] ?? 0, mask.bounds)) continue;
+    for (let x = 0; x < width; x++) if (allowedColumns[x]) {
+      prepareLocatedSample(grid, geometry, mask, latitudes[y], longitudes[x], y * width + x, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
+    }
   }
   return preparedFromCells(mask, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
 }
@@ -450,8 +462,10 @@ export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array
   const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
+  const cache = locatedSampleCache();
   for (let index = 0; index < total; index++) {
-    prepareLocatedSample(grid, geometry, mask, latitudes[index], longitudes[index], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet);
+    if (!withinGeographicBounds(latitudes[index], longitudes[index], mask.bounds)) continue;
+    prepareLocatedSample(grid, geometry, mask, latitudes[index], longitudes[index], index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
   }
   return preparedFromCells(mask, total, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
 }

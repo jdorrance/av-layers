@@ -121,13 +121,13 @@ describe('bounded per-frame raster workers', () => {
   }, 20_000);
 
   it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
-    const product = { ...SPLIT_PRODUCT, execution: { ...SPLIT_PRODUCT.execution, workers: 3 } };
+    const product = { ...INDEXED_PRODUCT, execution: { ...INDEXED_PRODUCT.execution, workers: 3 } };
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
     const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,
       nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,
       nativeLayers: 0, fineLayers: 2, terrainBytes: 0,
-      columns: { byteLength: 0, workspaceBufferBytes: nativeActive * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
+      columns: { byteLength: 0, workspaceBufferBytes: Math.min(4, nativeActive) * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
     let low = 0, high = nativeCells;
     while (low < high) {
       const middle = Math.ceil((low + high) / 2), capacity = admit(middle);

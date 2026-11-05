@@ -315,6 +315,73 @@ def regeneration_command(args: argparse.Namespace) -> str:
     return shlex.join(command)
 
 
+def write_projected_masks(settings, args):
+    """Serialize the shared sparse rasterizer's native (k=1) view as dense coverage."""
+    import struct
+    from build_fine_masks import build_hierarchy
+    from grid_geometry import ProjectedFootprints
+
+    coverage, grid = settings['coverage'], settings['grid']
+    if coverage['interpolationHaloCells'] != 1:
+        raise ValueError('Projected coverage requires one interpolation halo cell')
+    result = build_hierarchy(settings, 1, args.source)
+    sparse = result['sparseBytes']
+    count = struct.unpack_from('<I', sparse, 20)[0]
+    width, height = grid['width'], grid['height']
+    columns = (width + 15) // 16
+    dense = [bytearray((width * height + 7) // 8) for _ in range(2)]
+    for i in range(count):
+        bid = struct.unpack_from('<I', sparse, 60 + i * 8)[0]
+        for layer in range(2):
+            start = 60 + count * 8 + layer * count * 32 + i * 32
+            bits = int.from_bytes(sparse[start:start + 32], 'little')
+            while bits:
+                bit = bits & -bits
+                local = bit.bit_length() - 1
+                col, row = bid % columns * 16 + local % 16, bid // columns * 16 + local // 16
+                index = row * width + col
+                dense[layer][index >> 3] |= 1 << (index & 7)
+                bits ^= bit
+    output, halo = map(bytes, dense)
+    bounds = tuple(coverage[key] for key in ('west', 'south', 'east', 'north'))
+    geometry = ProjectedFootprints(grid, bounds)
+    tests = []
+    for name, lat, lon, expected in coverage['probes']:
+        x, y = geometry.nearest(lat, lon)
+        inside = bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3] and -.5 <= x < width - .5 and -.5 <= y < height - .5
+        index = math.floor(y + .5) * width + math.floor(x + .5) if inside else 0
+        observed = bool(inside and output[index >> 3] & (1 << (index & 7)))
+        tests.append({'name': name, 'lat': lat, 'lon': lon, 'expectedOutput': expected, 'observedOutput': observed, 'withinFootprint': inside})
+    if any(test['expectedOutput'] != test['observedOutput'] for test in tests):
+        raise SystemExit('Projected coverage test failures: ' + ', '.join(test['name'] for test in tests if test['expectedOutput'] != test['observedOutput']))
+    payloads = {'output': output, 'halo': halo, 'tiles': result['tilesBytes']}
+    descriptor = {'version': 1, 'id': coverage['id'], 'grid': grid, 'bounds': list(bounds), 'policy': coverage['description'],
+                  'maxZoom': coverage['maxNativeZoom'], 'supportHaloCells': 1,
+                  'sampleLayout': {'format': 'cell-major-blocks-v1', 'blockSize': 16},
+                  'files': {name: {'bytes': len(data), 'sha256': sha256_bytes(data)} for name, data in payloads.items()}}
+    tile_counts, offset = {}, 0
+    for zoom in range(coverage['maxNativeZoom'] + 1):
+        tile_counts[str(zoom)] = sum(bool(payloads['tiles'][index >> 3] & (1 << (index & 7))) for index in range(offset, offset + 4**zoom))
+        offset += 4**zoom
+    receipt = {'source': result['source'], 'grid': grid,
+               'output': {**descriptor['files']['output'], 'counts': {'activeCells': sum(byte.bit_count() for byte in output)}},
+               'halo': {**descriptor['files']['halo'], 'counts': {'haloOnlyCells': sum(byte.bit_count() for byte in halo)}},
+               'tiles': {**descriptor['files']['tiles'], 'countsByZoom': tile_counts}, 'tests': {'cases': tests},
+               'regeneration': {'command': regeneration_command(args), 'toolingSha256': sha256_file(Path(__file__)),
+                                'rasterizerSha256': sha256_file(Path(__file__).with_name('build_fine_masks.py')),
+                                'geometrySha256': sha256_file(Path(__file__).with_name('grid_geometry.py')),
+                                'tilesSha256': sha256_file(Path(__file__).with_name('tile_pyramid.py')),
+                                'GEOS': geos_version_string, 'PROJ': proj_version_str}}
+    args.output.mkdir(parents=True, exist_ok=True)
+    for name, data in payloads.items():
+        write_atomic(args.output / f'{name}.bin', data)
+    write_atomic(args.output / 'manifest.json', json.dumps(descriptor, separators=(',', ':')).encode())
+    write_atomic(args.output / 'source.json', json.dumps(receipt, indent=2).encode())
+    print(json.dumps({'output': str(args.output), 'activeCells': receipt['output']['counts']['activeCells'],
+                      'haloOnlyCells': receipt['halo']['counts']['haloOnlyCells'], 'tileCounts': tile_counts,
+                      'files': descriptor['files']}, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -337,6 +404,13 @@ def main() -> None:
     coverage["maxNativeZoom"] = max_native_zoom()
     if args.output is None:
         args.output = Path("packages/contracts") / settings["coverageDir"]
+    if not args.allow_local_libs and (
+        geos_version_string != "3.13.1" or proj_version_str != "9.5.1"
+    ):
+        raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1 (or --allow-local-libs)")
+    if grid['kind'] == 'lambert-conformal':
+        write_projected_masks(settings, args)
+        return
     if grid["kind"] != "regular-latlon":
         raise SystemExit("This generator requires a regular-latlon grid")
     if grid["dx"] <= 0 or grid["dy"] >= 0 or not math.isclose(grid["dx"], -grid["dy"]):
@@ -347,11 +421,6 @@ def main() -> None:
         raise SystemExit("This generator requires wrapping grids to start at -180 and cover 360 degrees")
     if coverage["maxNativeZoom"] < 2:
         raise SystemExit("Coverage regression probes require zoom 2")
-
-    if not args.allow_local_libs and (
-        geos_version_string != "3.13.1" or proj_version_str != "9.5.1"
-    ):
-        raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1 (or --allow-local-libs)")
 
     policy_id = coverage["id"]
     lon_min_bound, lon_max_bound = coverage["west"], coverage["east"]

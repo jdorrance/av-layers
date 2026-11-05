@@ -1,6 +1,6 @@
 # Forecast builder
 
-Downloads GFS or ICON-EU weather data and builds map tiles, point sample packs,
+Downloads configured weather sources and builds map tiles, point sample packs,
 and a build manifest.
 
 Run from the repository root:
@@ -11,13 +11,13 @@ pnpm forecast --model gfs --out output --cache-dir .cache/gfs \
 ```
 
 Writes the completed build under `output/builds/gfs/` and prints the manifest
-path. Pass `--model icon-eu` for regional ICON-EU lift and `--cycle` to select a
-specific UTC run. See [development](../../docs/development.md#build-a-real-forecast)
+path. `--model` selects a [configured source](../../packages/contracts/config/models.json)
+and `--cycle` selects a UTC run. See [development](../../docs/development.md#build-a-real-forecast)
 to preview the build locally.
 
-Configured GFS and ICON-EU builds require `--terrain-catalog-ref PATH` for
+Configured builds require `--terrain-catalog-ref PATH` for
 whole-domain lift surfaces. Use `--terrain-store-dir PATH` for a local terrain
-store; otherwise terrain comes from R2. GFS precipitation retains its native
+store; otherwise terrain comes from R2. Precipitation retains its native
 surface. See [terrain setup](../../docs/development.md#terrain-refinement).
 
 Estimate build resources from the bundled sparse coverage, or verify a single

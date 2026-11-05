@@ -6,6 +6,8 @@ import functools
 import math
 from pathlib import Path
 import subprocess
+from grid_geometry import ProjectedFootprints
+from shapely.geometry import box
 
 
 @functools.cache
@@ -40,6 +42,7 @@ def build_tiles(output, grid, bounds, max_zoom):
     columns = (grid['width'] + 15) // 16
     x_boundaries = [-180 + x * 360 / n for x in range(n + 1)]
     y_boundaries = [-math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n)))) for y in range(n + 1)]
+    projected = ProjectedFootprints(grid, bounds) if grid['kind'] == 'lambert-conformal' else None
 
     def indices(boundaries, lo, hi):
         return max(0, bisect.bisect_left(boundaries, lo) - 1), min(n - 1, bisect.bisect_right(boundaries, hi) - 1)
@@ -61,13 +64,21 @@ def build_tiles(output, grid, bounds, max_zoom):
                 stop = col + 1
                 while stop < bw and bits & (1 << stop):
                     stop += 1
-                for west, south, east, north in _footprints(grid, bounds, bx * 16 + col, bx * 16 + stop - 1, by * 16 + row, by * 16 + end - 1):
+                indices_range = (bx * 16 + col, bx * 16 + stop - 1, by * 16 + row, by * 16 + end - 1)
+                footprints = [projected.geographic(part) for part in projected.footprints(*indices_range)] if projected else _footprints(grid, bounds, *indices_range)
+                for part in footprints:
+                    west, south, east, north = part.bounds if projected else part
                     if -north > y_boundaries[-1] or -south < y_boundaries[0]:
                         continue
                     x0, x1 = indices(x_boundaries, west, east)
                     y0, y1 = indices(y_boundaries, -north, -south)
                     for y in range(y0, y1 + 1):
-                        finest[y * n + x0:y * n + x1 + 1] = b'\1' * (x1 - x0 + 1)
+                        if projected:
+                            for x in range(x0, x1 + 1):
+                                if part.intersects(box(x_boundaries[x], -y_boundaries[y + 1], x_boundaries[x + 1], -y_boundaries[y])):
+                                    finest[y * n + x] = 1
+                        else:
+                            finest[y * n + x0:y * n + x1 + 1] = b'\1' * (x1 - x0 + 1)
                 col = stop
             row = end
     levels = [None] * (max_zoom + 1)

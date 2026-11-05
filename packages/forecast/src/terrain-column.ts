@@ -246,25 +246,30 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
   const partition = options.partition;
   if (partition && (!Number.isSafeInteger(partition.index) || !Number.isSafeInteger(partition.count) || partition.count < 1 || partition.index < 0 || partition.index >= partition.count)) throw new RangeError('Invalid terrain column partition');
   const byteLength = sourceActiveIndices.length * 4 + (target.width + target.height) * 12 +
-    (source.width + source.height) * 8 + Math.ceil(source.width * source.height / 8) + 64;
-  const workspaceBufferBytes = (partition ? Math.min(4, sourceActiveIndices.length) : sourceActiveIndices.length) * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
+    (source.width + source.height) * 8 + Math.ceil(source.width * source.height / 8) + 96;
+  const workspaceBufferBytes = Math.min(4, sourceActiveIndices.length) * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
   const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
   const outputBufferBytes = targetCount * 10;
   const admittedBytes = byteLength + workspaceBufferBytes + workspaceObjectBudgetBytes + outputBufferBytes;
   if (!Number.isSafeInteger(admittedBytes) || admittedBytes > options.maxBytes) throw new RangeError('Packed terrain column byte budget exceeded');
   const activeIndices = sourceActiveIndices.slice(), xCoordinates = new Float64Array(target.width), yCoordinates = new Float64Array(target.height);
-  for (let x = 0; x < target.width; x++) {
-    const longitude = target.lon0 + x * target.dx;
-    const wrapped = ((longitude + 180) % 360 + 360) % 360 - 180;
-    let value = snapGridCoordinate((wrapped - source.lon0) / source.dx);
-    if (source.wrapLongitude) value = snapGridCoordinate(((value % source.width) + source.width) % source.width);
-    xCoordinates[x] = Number.isFinite(value) && (source.wrapLongitude || (value >= 0 && value <= source.width - 1)) ? value : NaN;
-  }
-  for (let y = 0; y < target.height; y++) {
-    const latitude = target.lat0 + y * target.dy;
-    const value = snapGridCoordinate((latitude - source.lat0) / source.dy);
-    yCoordinates[y] = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(value) &&
-      value >= 0 && value <= source.height - 1 ? value : NaN;
+  if (source.kind === 'regular-latlon' && target.kind === 'regular-latlon') {
+    for (let x = 0; x < target.width; x++) {
+      const longitude = target.lon0 + x * target.dx;
+      const wrapped = ((longitude + 180) % 360 + 360) % 360 - 180;
+      let value = snapGridCoordinate((wrapped - source.lon0) / source.dx);
+      if (source.wrapLongitude) value = snapGridCoordinate(((value % source.width) + source.width) % source.width);
+      xCoordinates[x] = Number.isFinite(value) && (source.wrapLongitude || (value >= 0 && value <= source.width - 1)) ? value : NaN;
+    }
+    for (let y = 0; y < target.height; y++) {
+      const latitude = target.lat0 + y * target.dy;
+      const value = snapGridCoordinate((latitude - source.lat0) / source.dy);
+      yCoordinates[y] = Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(value) &&
+        value >= 0 && value <= source.height - 1 ? value : NaN;
+    }
+  } else {
+    for (let x = 0; x < target.width; x++) xCoordinates[x] = snapGridCoordinate(x / expected.k);
+    for (let y = 0; y < target.height; y++) yCoordinates[y] = snapGridCoordinate(y / expected.k);
   }
   const xNext = new Uint32Array(target.width), yNext = new Uint32Array(target.height);
   const xHeads = new Uint32Array(source.width * 2), yHeads = new Uint32Array(source.height * 2);
@@ -296,10 +301,10 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
     }
   }
   const slots = new Uint32Array(4), weights = new Float64Array(4), quadSlots = new Uint32Array(4);
-  const localSlots = partition ? new Uint32Array(4) : null, localIndices = partition ? new Uint32Array(4) : activeIndices;
+  const localSlots = new Uint32Array(4), localIndices = new Uint32Array(4);
   const traversal: ColumnTraversal = {
     targetCount, outputCells: targetCount, slots, weights, compactSlots: localSlots, donorIndices: localIndices,
-    donorCount: partition ? Math.min(4, activeIndices.length) : activeIndices.length, coverage,
+    donorCount: Math.min(4, activeIndices.length), coverage,
     initializeOutput: !partition,
     outsideCount: !partition || partition.index === 0 ? target.width * target.height - targetCount : 0,
     createCursor() {
@@ -320,16 +325,14 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
               while (lo < hi) { const mid = (lo + hi) >>> 1; if (activeIndices[mid]! < global) lo = mid + 1; else hi = mid; }
               quadSlots[position] = activeIndices[lo] === global ? lo : 0xffffffff;
             }
-            if (localSlots) {
-              let next = 0;
-              for (let position = 0; position < 4; position++) {
-                const compact = quadSlots[position]!;
-                if (compact === 0xffffffff) continue;
-                let slot = 0;
-                while (slot < next && localSlots[slot] !== compact) slot++;
-                if (slot === next) { localSlots[next] = compact; localIndices[next] = activeIndices[compact]!; next++; }
-                quadSlots[position] = slot;
-              }
+            let next = 0;
+            for (let position = 0; position < 4; position++) {
+              const compact = quadSlots[position]!;
+              if (compact === 0xffffffff) continue;
+              let slot = 0;
+              while (slot < next && localSlots[slot] !== compact) slot++;
+              if (slot === next) { localSlots[next] = compact; localIndices[next] = activeIndices[compact]!; next++; }
+              quadSlots[position] = slot;
             }
             for (let subset = 3; subset >= 0; subset--) {
               for (let yp = yHeads[y0 * 2 + (subset >> 1)]!; yp; yp = yNext[yp - 1]!) {

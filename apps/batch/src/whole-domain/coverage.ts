@@ -19,7 +19,6 @@ export function wholeDomainPlan(product: ProductDefinition): WholeDomainGrid | u
   const k = product.terrainSubdivisionFactor;
   if (k === undefined) return undefined;
   if (!Number.isSafeInteger(k) || k < 1 || k > 64) throw new Error('Product terrain subdivision factor is invalid');
-  if (product.grid.kind !== 'regular-latlon') throw new Error('Whole-domain subdivision requires a regular latitude/longitude grid');
   return planWholeDomainGrid(product.grid, k);
 }
 
