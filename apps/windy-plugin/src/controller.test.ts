@@ -480,6 +480,37 @@ it('clears errors belonging to a retired frame when the replacement commits', as
   controller.dispose();
 });
 
+it('reports the actual displayed frame through loading and failed raster swaps', async () => {
+  const stub = stubHost(), build = pinned();
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
+  await controller.start();
+  const layer = stub.added[0], first = layer.url, next = build.manifest.frames[1].id;
+  expect(controller.state().displayedFrameId).toBeNull();
+  layer.statusListener?.('ready', first);
+  expect(controller.state().displayedFrameId).toBe(build.manifest.frames[0].id);
+  controller.selectFrame(next);
+  layer.statusListener?.('loading', first);
+  expect(controller.state()).toMatchObject({ frameId: next, displayedFrameId: build.manifest.frames[0].id });
+  layer.statusListener?.('error', first);
+  expect(controller.state()).toMatchObject({ frameId: next, displayedFrameId: build.manifest.frames[0].id });
+  layer.statusListener?.('ready', layer.url);
+  expect(controller.state().displayedFrameId).toBe(next);
+  layer.statusListener?.('loading', '');
+  expect(controller.state().displayedFrameId).toBeNull();
+  controller.dispose();
+});
+
+it.each(['model', 'build'])('rejects displayed frame identity from another %s', async identity => {
+  const stub = stubHost(), build = pinned();
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
+  await controller.start();
+  const layer = stub.added[0];
+  const foreign = identity === 'model' ? layer.url.replace('/gfs/', '/icon-eu/') : layer.url.replace('/build-1/', '/other-build/');
+  layer.statusListener?.('ready', foreign);
+  expect(controller.state().displayedFrameId).toBeNull();
+  controller.dispose();
+});
+
 it('freezes host timeline changes during model handover while preserving expiry', async () => {
   const stub = stubHost(Date.parse('2026-10-30T03:00:00Z'));
   let now = Date.parse(created);

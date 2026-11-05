@@ -59,6 +59,7 @@ export class PluginPanel {
   private readonly pointHorizon = node('select');
   private unitSystem: UnitSystem = 'metric';
   private pointFrameId: string | null = null;
+  private selectedFrameId: string | null = null;
   private mapFrameId: string | null = null;
   private updatePoint: ReturnType<typeof renderPointSeries> | null = null;
   private renderedBuildId: string | null = null;
@@ -163,8 +164,9 @@ export class PluginPanel {
     if (state.phase === 'ready' && state.buildId) this.setStatus(`Pinned build ${state.buildId}`);
     if (state.phase === 'error') this.setStatus('No viewable build');
     if (state.phase === 'ready') {
-      if (state.frameId !== null && this.mapFrameId !== state.frameId) this.pointFrameId = state.frameId;
-      this.mapFrameId = state.frameId;
+      if (state.frameId !== null && this.selectedFrameId !== state.frameId) this.pointFrameId = state.frameId;
+      this.selectedFrameId = state.frameId;
+      this.mapFrameId = state.displayedFrameId;
       this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
     }
     if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') this.clearPoint();
@@ -179,10 +181,9 @@ export class PluginPanel {
   pointLoading(): void { this.pointStatus.textContent = 'Loading point forecast…'; }
 
   renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void): void {
-    this.mapFrameId = frameId;
     if (!payload.frames.some(frame => frame.id === this.pointFrameId)) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
     this.pointStatus.textContent = pointSeriesLabel(payload);
-    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: frameId, unitSystem: this.unitSystem, onFrame: id => {
+    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, onFrame: id => {
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
       onFrame(id);

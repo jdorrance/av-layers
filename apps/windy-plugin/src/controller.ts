@@ -61,6 +61,7 @@ export interface ControllerState {
   buildId: string | null;
   model: ModelId;
   frameId: string | null;
+  displayedFrameId: string | null;
   layerId: LayerId | null;
   opacity: number;
   badge: string;
@@ -154,17 +155,23 @@ export class PluginController {
   }
 
   get displayedForecast(): string | null {
-    if (!this.displayedUrl) return null;
-    const parts = this.displayedUrl.split('/');
-    return `${parts.at(-7)} ${parts.at(-4)} ${parts.at(-5)}`;
+    const displayed = this.displayedSelection();
+    return displayed ? `${displayed.model} ${displayed.frame} ${displayed.layer}` : null;
+  }
+
+  private displayedSelection() {
+    const parts = this.displayedUrl?.split('/');
+    return parts ? { model: parts.at(-7), buildId: parts.at(-6), layer: parts.at(-5), frame: parts.at(-4) } : null;
   }
 
   state(): ControllerState {
+    const displayed = this.displayedSelection(), manifest = this.build?.manifest;
     return {
       phase: this.phase,
       buildId: this.build?.manifest.buildId ?? null,
       model: this.options.model,
       frameId: this.frameId,
+      displayedFrameId: manifest && displayed?.model === manifest.model && displayed.buildId === manifest.buildId ? displayed.frame ?? null : null,
       layerId: this.layerId,
       opacity: this.opacity,
       badge: this.badge,
