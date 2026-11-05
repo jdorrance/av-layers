@@ -31,6 +31,7 @@ import urllib.request
 import zipfile
 from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
+from tile_pyramid import build_tiles as build_cell_tiles, max_native_zoom
 
 try:
     import shapefile  # type: ignore
@@ -296,10 +297,6 @@ def pack_bits(bits: bytearray) -> bytes:
     return bytes(out)
 
 
-def tile_lat(y: int, n: int) -> float:
-    return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
-
-
 def write_atomic(path: Path, data: bytes) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_bytes(data)
@@ -335,6 +332,7 @@ def main() -> None:
     settings = json.loads(args.config.resolve().read_text())
     grid = settings["grid"]
     coverage = settings["coverage"]
+    coverage["maxNativeZoom"] = max_native_zoom()
     if args.output is None:
         args.output = Path("packages/contracts") / settings["coverageDir"]
     if grid["kind"] != "regular-latlon":
@@ -501,45 +499,27 @@ def main() -> None:
         return halo
 
     def build_tiles(active: bytearray):
-        boxes = []
+        blocks = {}
+        columns = (width + 15) // 16
         for idx, is_active in enumerate(active):
             if not is_active:
                 continue
             row, col = divmod(idx, width)
-            lat = lat0 + row * dy
-            y0 = max(lat_min, lat - cell_half)
-            y1 = min(lat_max, lat + cell_half)
-            for x0, x1 in cell_lon_intervals(col):
-                a = max(lon_min_bound, x0)
-                b = min(lon_max_bound, x1)
-                if b > a:
-                    boxes.append(box(a, y0, b, y1))
-        tree = STRtree(boxes)
-        bits = bytearray(tile_total_bits)
+            bid = (row // 16) * columns + col // 16
+            mask = blocks.setdefault(bid, bytearray(32))
+            local = (row % 16) * 16 + col % 16
+            mask[local >> 3] |= 1 << (local & 7)
+        bits = build_cell_tiles(blocks, grid, (lon_min_bound, lat_min, lon_max_bound, lat_max), tile_zooms[-1])
         counts = {}
         active_tiles = []
         for z in tile_zooms:
             n = 2**z
             offset = tile_offsets[str(z)]
-            count = 0
-            for x in range(n):
-                t_lon_min = -180.0 + x * 360.0 / n
-                t_lon_max = -180.0 + (x + 1) * 360.0 / n
-                if t_lon_max < lon_min_bound or t_lon_min > lon_max_bound:
-                    continue
-                for y in range(n):
-                    t_lat_max = tile_lat(y, n)
-                    t_lat_min = tile_lat(y + 1, n)
-                    if t_lat_max < lat_min or t_lat_min > lat_max:
-                        continue
-                    probe = box(t_lon_min, t_lat_min, t_lon_max, t_lat_max)
-                    if len(tree.query(probe)) > 0:
-                        bits[offset + y * n + x] = 1
-                        count += 1
-                        if z == 5:
-                            active_tiles.append(f"{z}/{x}/{y}")
-            counts[str(z)] = count
-        return pack_bits(bits), counts, active_tiles
+            covered = lambda index: bits[index >> 3] & (1 << (index & 7))
+            counts[str(z)] = sum(bool(covered(offset + index)) for index in range(n * n))
+            if z == 5:
+                active_tiles = [f"{z}/{x}/{y}" for x in range(n) for y in range(n) if covered(offset + y * n + x)]
+        return bits, counts, active_tiles
 
     def nearest_cell(lat: float, lon: float) -> tuple[int, int, float, float]:
         row = int(math.floor((lat0 - lat) / -dy + 0.5))

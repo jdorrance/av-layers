@@ -374,8 +374,8 @@
       "sha256": "bea9a151189fe07ca44ce65e84ff1dfd3579804dee0da3e392b360b17908e543"
     },
     "tiles": {
-      "bytes": 43691,
-      "sha256": "92911b3ea857625e8e0f1d33fb01876e394d5c39fa3fcb0bb9977ca4ad1e4ed5"
+      "bytes": 174763,
+      "sha256": "c3d1db5f8f0c5715bab0a4d4a29c25af4a8e416971ff47624b7804559070cc54"
     }
   },
   "generator": {
@@ -400,5 +400,18 @@
       "--output",
       "packages/contracts/coverage/fine"
     ]
+  },
+  "tilePyramid": {
+    "coverage": "coverage/fine",
+    "geometrySha256": "bea9a151189fe07ca44ce65e84ff1dfd3579804dee0da3e392b360b17908e543",
+    "previousZoom": 9,
+    "maxZoom": 10,
+    "previousTilesSha256": "92911b3ea857625e8e0f1d33fb01876e394d5c39fa3fcb0bb9977ca4ad1e4ed5",
+    "tilesSha256": "c3d1db5f8f0c5715bab0a4d4a29c25af4a8e416971ff47624b7804559070cc54",
+    "bytes": 174763,
+    "priorLevelsIdentical": true,
+    "generator": "scripts/masks/tile_pyramid.py",
+    "generatorSha256": "f37b56b33929dd3816eacf54ea55ae045b026c03a0acb03c124236350c5f9aa5",
+    "geographyRegenerated": false
   }
 }

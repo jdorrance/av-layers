@@ -376,7 +376,7 @@ function refinedResumePlan(): BuildPlan {
 
 function digest(data: Uint8Array | string): string { return createHash('sha256').update(data).digest('hex'); }
 
-function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
+function v5ResumeFixture(metrics?: Record<string, unknown>, execution?: { zoom: number; workers: number; masterZoom: number }): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
   const base = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')) as Manifest;
   const grid = { kind: 'regular-latlon' as const, width: 34, height: 17, earthRadiusM: 6371229, lon0: -10, lat0: 10, dx: 0.1, dy: -0.1, wrapLongitude: false };
   const gridHash = digest(canonicalGridJson(grid)), blockCount = 3;
@@ -384,9 +384,11 @@ function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: Manifes
   for (let block = 0; block < blockCount; block++) output[block * 32] = 1;
   const coverage = createSparseCoverage({ width: grid.width, height: grid.height, wrapLongitude: grid.wrapLongitude, gridHash,
     blockIds: Uint32Array.of(0, 2, 3), offsets: Uint32Array.of(0, 1, 2, 3), output, halo: new Uint8Array(output.length) });
-  const sparse = encodeSparseCoverage(coverage), tiles = Uint8Array.of(1, 2, 3);
+  const maxZoom = execution?.masterZoom ?? 7, renderZoom = execution?.zoom ?? maxZoom;
+  const sparse = encodeSparseCoverage(coverage), tiles = new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8));
+  tiles.set([1, 2, 3]);
   const descriptor = Buffer.from(JSON.stringify({ version: 2, id: 'fine', grid, gridHash, bounds: base.descriptors.bounds,
-    policy: 'fixture', maxZoom: 7, supportHaloCells: 1, sampleLayout: { format: 'cell-major-block-shards-v1', blockSize: 16 },
+    policy: 'fixture', maxZoom, supportHaloCells: 1, sampleLayout: { format: 'cell-major-block-shards-v1', blockSize: 16 },
     files: { sparse: { bytes: sparse.length, sha256: digest(sparse) }, tiles: { bytes: tiles.length, sha256: digest(tiles) } } }));
   const coverageHash = digest(descriptor), maskKey = `coverage/${coverageHash}/manifest.json`, prefix = `coverage/${coverageHash}`;
   const terrainDataId = 'd'.repeat(64);
@@ -396,7 +398,7 @@ function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: Manifes
     const channelCount = base.frames.length * layers.length, storedCells = 3;
     const bytes = Buffer.alloc(storedCells * channelCount * 5, 1);
     const shard = { firstBlock: 0, blockCount, storedCells, bytes: bytes.byteLength, sha256: digest(bytes), key: `builds/${base.model}/${base.buildId}/surfaces/${id}/samples/0.bin` };
-    return { id, kind: id, grid, gridHash, coverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: 7, gridHash }, layers,
+    return { id, kind: id, grid, gridHash, coverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: renderZoom, gridHash }, layers,
       samples: { format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const, channelCount,
         coverageHash, blockCount, storedCells, shards: [shard] },
       ...(id === 'fine' ? { terrain: { dataId: terrainDataId, key: terrainKey, sha256: terrainSha, verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const } } : {}),
@@ -404,7 +406,7 @@ function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: Manifes
   };
   const native = surface('native', ['precip-rate']), fine = surface('fine', ['usable-lift-msl', 'usable-lift-agl']);
   const { file: nativeFile, ...nativeSurface } = native, { file: fineFile, ...fineSurface } = fine;
-  const counts = Array.from({ length: fineSurface.coverage.maxZoom + 1 }, (_, z) => expectedTiles({ tiles, maxZoom: fineSurface.coverage.maxZoom }, z).length);
+  const counts = Array.from({ length: renderZoom + 1 }, (_, z) => expectedTiles({ tiles, maxZoom }, z).length);
   const coveredTiles = counts.reduce((sum, count) => sum + count, 0);
   metrics = { renderer: { native: { tiles: coveredTiles * base.frames.length * native.layers.length },
     fine: { tiles: coveredTiles * base.frames.length * fine.layers.length } },
@@ -416,7 +418,8 @@ function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: Manifes
   const plan: BuildPlan = { version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
     createdAt: manifest.createdAt, coverageHash, providerId: 'fixture-provider', recipe: structuredClone(manifest.recipe),
     groups: [manifest.frames.map(frame => Number(frame.id.slice(1)))],
-    wholeDomain: { k: 10, nativeCoverageHash: coverageHash, fineCoverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: 7, gridHash },
+    ...(execution ? { execution: { zoom: execution.zoom, workers: execution.workers } } : {}),
+    wholeDomain: { k: 10, nativeCoverageHash: coverageHash, fineCoverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom, gridHash },
       terrain: { key: terrainKey, sha256: terrainSha, bytes: terrainBytes.length, arrayBytes: 15 } } };
   const files = new Map<string, Buffer>([
     [localPath('output', maskKey), descriptor], [localPath('output', `${prefix}/sparse.bin`), Buffer.from(sparse)],
@@ -434,6 +437,42 @@ it('validates matching v5 frozen plan, coverage, terrain and shard bytes', async
   await expect(assertV5ResumeIdentity(manifest, plan, 'output')).resolves.toBeUndefined();
   expect(fake.identity).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gfs' }), plan.wholeDomain!.nativeCoverageHash,
     undefined, [], undefined, expect.objectContaining({ k: 10, fineCoverageHash: plan.wholeDomain!.fineCoverage.hash }));
+  expect(fake.identity.mock.calls[0][0]).toBe(getProduct('gfs'));
+});
+
+it.each([8, 9])('resumes receipt-only z%i output using the frozen execution and a z10 master', async zoom => {
+  const { manifest, plan, files } = v5ResumeFixture(undefined, { zoom, workers: 1, masterZoom: 10 });
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output', undefined, true)).resolves.toBeUndefined();
+  expect(fake.identity).toHaveBeenCalledWith(expect.objectContaining({ maxNativeZoom: zoom, execution: expect.objectContaining({ workers: 1 }) }),
+    plan.wholeDomain!.nativeCoverageHash, undefined, [], undefined, expect.anything());
+  expect(fake.readLocal.mock.calls.some(([path]) => path.includes('/samples/'))).toBe(false);
+});
+
+it('keeps exact zoom binding for legacy plans without injecting execution defaults', async () => {
+  const { manifest, plan, files } = v5ResumeFixture(undefined, { zoom: 9, workers: 1, masterZoom: 10 });
+  delete plan.execution;
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output')).rejects.toThrow('coverage or terrain identity differs');
+  expect(fake.identity).not.toHaveBeenCalled();
+});
+
+it.each(['zoom', 'tile bytes'])('rejects nonnumeric resume coverage %s despite a matching descriptor digest', async defect => {
+  const { manifest, plan, files } = v5ResumeFixture(undefined, { zoom: 9, workers: 1, masterZoom: 10 });
+  const descriptor = JSON.parse(files.get(localPath('output', manifest.surfaces[0].coverage.maskKey))!.toString());
+  if (defect === 'zoom') descriptor.maxZoom = '10';
+  else descriptor.files.tiles.bytes = String(descriptor.files.tiles.bytes);
+  const bytes = Buffer.from(JSON.stringify(descriptor)), hash = digest(bytes), key = `coverage/${hash}/manifest.json`;
+  for (const surface of manifest.surfaces) {
+    surface.coverage.hash = hash; surface.coverage.maskKey = key; surface.samples.coverageHash = hash;
+    if (surface.terrain) surface.terrain.coverageHash = hash;
+  }
+  plan.wholeDomain!.nativeCoverageHash = hash;
+  Object.assign(plan.wholeDomain!.fineCoverage, { hash, maskKey: key });
+  files.set(localPath('output', key), bytes);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(assertV5ResumeIdentity(manifest, plan, 'output')).rejects.toThrow();
+  expect(fake.identity).toHaveBeenCalledOnce();
 });
 
 it('resumes matching v5 artifacts with measured metrics within budget', async () => {

@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -117,7 +117,7 @@ export async function manifest(
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.layers.some(layer => !product.layers.includes(layer))
       || (m.version === 5 ? false
-        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > product.maxNativeZoom || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid)))) {
+        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > MAX_NATIVE_ZOOM || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid)))) {
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
   if (m.version === 5) {
@@ -131,7 +131,7 @@ export async function manifest(
       const expected = surface.kind === 'native' ? plan.native : plan.fine;
       const gridHash = await sha256(new TextEncoder().encode(canonicalGridJson(expected)));
       if (!sameGrid(surface.grid, expected) || surface.gridHash !== gridHash || surface.coverage.gridHash !== gridHash
-          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > product.maxNativeZoom) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
+          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > MAX_NATIVE_ZOOM) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
     }
   }
   const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;

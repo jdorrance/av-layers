@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
-import { GFS_PRODUCT, LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, liftRenderStyle } from '@av/contracts';
+import { FORECAST_CONFIG_PATH, GFS_PRODUCT, LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, PRODUCTS, liftRenderStyle } from '@av/contracts';
 import { sha256 } from './terrain/contract.js';
 import { buildIdentity, readProducerSourceState } from './identity.js';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
@@ -79,7 +79,9 @@ async function sourceFixture(interpolation: 'step' | 'linear-rgb'): Promise<stri
     await mkdir(join(root, directory), { recursive: true });
   }
   await writeFile(join(root, 'packages/contracts/src/layers.ts'), `export const liftInterpolation = '${interpolation}';\n`);
-  for (const model of ['gfs', 'icon-eu']) await writeFile(join(root, `packages/contracts/config/${model}.json`), '{}\n');
+  for (const path of new Set([FORECAST_CONFIG_PATH, ...PRODUCTS.map(product => product.configPath)])) {
+    await writeFile(join(root, path), '{}\n');
+  }
   await writeFile(join(root, 'apps/batch/pmtiles.json'), '{}\n');
   await writeFile(join(root, 'pnpm-lock.yaml'), 'lock\n');
   await writeFile(join(root, 'package.json'), '{}\n');
@@ -104,4 +106,17 @@ it('changes the render recipe for a lift interpolation source change while scien
     expect(liftRenderStyle('linear-rgb')).toBe(LIFT_RENDER_STYLE);
     expect(liftRenderStyle('step')).not.toBe(liftRenderStyle('linear-rgb'));
   } finally { await Promise.all([rm(step, { recursive: true, force: true }), rm(linear, { recursive: true, force: true })]); }
+});
+
+it('binds global forecast settings into the recipe independently of science', async () => {
+  const root = await sourceFixture('linear-rgb');
+  try {
+    const before = await buildIdentity(GFS_PRODUCT, 'a'.repeat(64), undefined, [], root);
+    await writeFile(join(root, FORECAST_CONFIG_PATH), '{"parallelism":{"jobs":1,"workers":0}}\n');
+    const after = await buildIdentity(GFS_PRODUCT, 'a'.repeat(64), undefined, [], root);
+    expect(after.components.contracts).not.toBe(before.components.contracts);
+    expect(after.components.configuration).toBe(before.components.configuration);
+    expect(after.recipe.hash).not.toBe(before.recipe.hash);
+    expect(after.scienceHash).toBe(before.scienceHash);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

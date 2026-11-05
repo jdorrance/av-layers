@@ -120,7 +120,7 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
     }, ctx) as SparseTiles;
   }
   const descriptor = result.descriptor;
-  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash
+  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash
       || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid)
       || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
   return result;
@@ -217,7 +217,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
     }, ctx, waiterSignal) as ResolvedSparseCoverage;
   }
   const { descriptor, mask } = resolved;
-  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid) || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
+  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid) || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
   try { assertSampleLayoutBindingV5(surface, { grid: mask.grid, gridHash: descriptor.gridHash, coverageHash: hash, blockIds: mask.coverage.blockIds }); }
   catch { throw new CoverageError('Coverage layout disagrees with publication'); }
   const groups = frameGroups(surface);

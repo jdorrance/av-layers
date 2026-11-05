@@ -60,7 +60,7 @@ export async function loadBundledFineCoverage(product: ProductDefinition, plan: 
   catch (error) { throw new Error(`Fine coverage is missing: ${directory}/manifest.json`, { cause: error }); }
   const bytes = new Uint8Array(manifest.buffer, manifest.byteOffset, manifest.byteLength);
   const descriptor = sparseCoverageDescriptorSchema.parse(parseBoundedJson(bytes));
-  if (descriptor.gridHash !== digest(canonicalGridJson(plan.fine)) || !sameGrid(descriptor.grid, plan.fine) || descriptor.id !== product.coverageId || JSON.stringify(descriptor.bounds) !== JSON.stringify(product.bounds) || descriptor.maxZoom !== product.maxNativeZoom) throw new Error('Fine coverage does not match the configured whole-domain grid');
+  if (descriptor.gridHash !== digest(canonicalGridJson(plan.fine)) || !sameGrid(descriptor.grid, plan.fine) || descriptor.id !== product.coverageId || JSON.stringify(descriptor.bounds) !== JSON.stringify(product.bounds) || descriptor.maxZoom < product.maxNativeZoom) throw new Error('Fine coverage does not match the configured whole-domain grid');
   const sparseBytes = await readLocalFile(`${directory}/sparse.bin`, MAX_SPARSE_COVERAGE_BYTES, descriptor.files.sparse.bytes);
   if (sparseBytes.byteLength !== descriptor.files.sparse.bytes || digest(sparseBytes) !== descriptor.files.sparse.sha256) throw new Error('Fine sparse coverage integrity mismatch');
   const tiles = await readLocalFile(`${directory}/tiles.bin`, MAX_COVERAGE_BITSET_BYTES, descriptor.files.tiles.bytes);

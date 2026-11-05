@@ -24,7 +24,6 @@
     "id": "soaring-land-v1",
     "description": "Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.",
     "west": -180, "south": -55, "east": 180, "north": 65,
-    "maxNativeZoom": 9,
     "seaBufferMeters": 50000,
     "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
     "excludedContinents": ["Africa"],

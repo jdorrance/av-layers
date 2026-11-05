@@ -59,7 +59,7 @@ export async function prepareWholeDomain(options: {
   const fine = options.wholeDomain.fine ?? await loadBundledFineCoverage(options.product, plan);
   if (options.wholeDomain.fine) {
     const expected = describeSparseCoverage(fine.mask, options.product);
-    if (!sameGrid(fine.mask.grid, plan.fine) || fine.mask.maxZoom !== options.product.maxNativeZoom ||
+    if (!sameGrid(fine.mask.grid, plan.fine) || fine.mask.maxZoom < options.product.maxNativeZoom ||
         fine.hash !== expected.hash || !Buffer.from(fine.bytes).equals(expected.bytes) ||
         JSON.stringify(fine.descriptor) !== JSON.stringify(expected.descriptor)) throw new Error('Fine coverage descriptor mismatch');
   }
@@ -86,9 +86,9 @@ export async function loadFrozenWholeDomain(options: {
   const fineRead = await readSparseCoverage(out, frozen.fineCoverage.hash);
   const native = { ...nativeRead, hash: frozen.nativeCoverageHash };
   const fine = { ...fineRead, hash: frozen.fineCoverage.hash };
-  if (!sameGrid(fine.mask.grid, plan.fine) || fine.descriptor.gridHash !== frozen.fineCoverage.gridHash || fine.descriptor.id !== frozen.fineCoverage.id || fine.descriptor.id !== product.coverageId || JSON.stringify(fine.descriptor.bounds) !== JSON.stringify(product.bounds) || fine.mask.maxZoom !== frozen.fineCoverage.maxZoom || fine.mask.maxZoom !== product.maxNativeZoom || frozen.fineCoverage.maskKey !== `coverage/${fine.hash}/manifest.json`) throw new Error('Frozen fine coverage differs from its plan');
+  if (!sameGrid(fine.mask.grid, plan.fine) || fine.descriptor.gridHash !== frozen.fineCoverage.gridHash || fine.descriptor.id !== frozen.fineCoverage.id || fine.descriptor.id !== product.coverageId || JSON.stringify(fine.descriptor.bounds) !== JSON.stringify(product.bounds) || fine.mask.maxZoom !== frozen.fineCoverage.maxZoom || fine.mask.maxZoom < product.maxNativeZoom || frozen.fineCoverage.maskKey !== `coverage/${fine.hash}/manifest.json`) throw new Error('Frozen fine coverage differs from its plan');
   const nativeGridHash = createHash('sha256').update(canonicalGridJson(plan.native)).digest('hex');
-  if (!sameGrid(native.mask.grid, plan.native) || native.descriptor.gridHash !== nativeGridHash || native.mask.coverage.gridHash !== nativeGridHash || native.mask.maxZoom !== product.maxNativeZoom || JSON.stringify(describeSparseCoverage(native.mask, product).descriptor) !== JSON.stringify(native.descriptor)) throw new Error('Frozen native coverage differs from its plan');
+  if (!sameGrid(native.mask.grid, plan.native) || native.descriptor.gridHash !== nativeGridHash || native.mask.coverage.gridHash !== nativeGridHash || native.mask.maxZoom < product.maxNativeZoom || JSON.stringify(describeSparseCoverage(native.mask, product).descriptor) !== JSON.stringify(native.descriptor)) throw new Error('Frozen native coverage differs from its plan');
   const nativeMask = denseMask(native.mask);
   const { required, active } = acquisitionSupport(plan, fine.mask.coverage, nativeMask);
   const layers = wholeDomainSurfaceLayers(product);

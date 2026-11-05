@@ -164,6 +164,16 @@ export function isTileCovered(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>, z: 
   if (!Number.isInteger(z) || z < 0 || z > mask.maxZoom || z > 24 || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) return false;
   return getBit(mask.tiles, (4 ** z - 1) / 3 + y * 2 ** z + x);
 }
+/** Select rendered levels without changing the immutable coverage or its cell layout. */
+export function coverageAtZoom<T extends Pick<CoverageMask, 'tiles' | 'maxZoom'>>(mask: T, zoom: number): T {
+  if (!Number.isSafeInteger(zoom) || !Number.isSafeInteger(mask.maxZoom) || zoom < 0 || zoom > mask.maxZoom || mask.maxZoom > MAX_NATIVE_ZOOM) throw new RangeError('Invalid coverage zoom');
+  const bits = (4 ** (zoom + 1) - 1) / 3, bytes = Math.ceil(bits / 8);
+  if (mask.tiles.byteLength < bytes) throw new RangeError('Incomplete coverage pyramid');
+  if (zoom === mask.maxZoom) return mask;
+  const tiles = Uint8Array.from(mask.tiles.subarray(0, bytes));
+  if (bits % 8) tiles[bytes - 1] &= (1 << (bits % 8)) - 1;
+  return { ...mask, maxZoom: zoom, tiles };
+}
 export function expectedTiles(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>, z: number): { z: number; x: number; y: number }[] {
   if (!Number.isInteger(z) || z < 0 || z > mask.maxZoom || z > 24) return [];
   const span = 2 ** z, total = span * span, result: { z: number; x: number; y: number }[] = [];

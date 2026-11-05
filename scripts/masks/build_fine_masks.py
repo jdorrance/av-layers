@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import bisect
 import hashlib
 import json
 import math
@@ -15,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_masks
+from tile_pyramid import build_tiles, max_native_zoom
 
 BLOCK_SIZE = 16
 MASK_BYTES = 32
@@ -114,51 +114,6 @@ def add_halo(output, width, height, wrap):
     return blocks
 
 
-def build_tiles(output, grid, bounds, max_zoom):
-    n = 1 << max_zoom
-    finest = bytearray(n * n)
-    columns = (grid['width'] + 15) // 16
-    x_boundaries = [-180 + x * 360 / n for x in range(n + 1)]
-    y_boundaries = [-build_masks.tile_lat(y, n) for y in range(n + 1)]
-    def indices(boundaries, lo, hi):
-        return max(0, bisect.bisect_left(boundaries, lo) - 1), min(n - 1, bisect.bisect_right(boundaries, hi) - 1)
-    for bid, mask in output.items():
-        bx, by = bid % columns, bid // columns
-        bw, bh = min(16, grid['width'] - bx * 16), min(16, grid['height'] - by * 16)
-        r = 0
-        while r < bh:
-            bits = int.from_bytes(mask[r * 2:r * 2 + 2], 'little')
-            end = r + 1
-            while end < bh and int.from_bytes(mask[end * 2:end * 2 + 2], 'little') == bits:
-                end += 1
-            c = 0
-            while c < bw:
-                if not bits & (1 << c):
-                    c += 1
-                    continue
-                stop = c + 1
-                while stop < bw and bits & (1 << stop):
-                    stop += 1
-                for geom in footprint(grid, bounds, bx * 16 + c, bx * 16 + stop - 1, by * 16 + r, by * 16 + end - 1):
-                    west, south, east, north = geom.bounds
-                    if -north > y_boundaries[-1] or -south < y_boundaries[0]:
-                        continue
-                    x0, x1 = indices(x_boundaries, west, east)
-                    y0, y1 = indices(y_boundaries, -north, -south)
-                    for y in range(y0, y1 + 1):
-                        finest[y * n + x0:y * n + x1 + 1] = b'\1' * (x1 - x0 + 1)
-                c = stop
-            r = end
-    levels = [None] * (max_zoom + 1)
-    levels[max_zoom] = finest
-    for z in range(max_zoom - 1, -1, -1):
-        side = 1 << z
-        child = levels[z + 1]
-        levels[z] = bytearray(any(child[(2 * y + dy) * (side * 2) + 2 * x + dx] for dy in (0, 1) for dx in (0, 1))
-                              for y in range(side) for x in range(side))
-    return build_masks.pack_bits(bytearray().join(levels))
-
-
 def build_hierarchy(settings, k, source):
     coverage = settings['coverage']
     fine = fine_grid(settings['grid'], k)
@@ -166,7 +121,7 @@ def build_hierarchy(settings, k, source):
     bounds = (coverage['west'], coverage['south'], coverage['east'], coverage['north'])
     if not (-180 <= bounds[0] < bounds[2] <= 180 and -90 <= bounds[1] < bounds[3] <= 90):
         raise ValueError('Expected non-crossing coverage bounds')
-    if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= 10:
+    if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= max_native_zoom():
         raise ValueError('Invalid maximum native zoom')
     grid_hash = hashlib.sha256(canonical_grid_json(fine).encode()).hexdigest()
     with build_masks.tempfile.TemporaryDirectory(prefix='fine-mask-') as tmp:
@@ -253,6 +208,7 @@ def main():
     if build_masks.geos_version_string != '3.13.1' or build_masks.proj_version_str != '9.5.1':
         raise SystemExit('Mask generation requires GEOS 3.13.1 and PROJ 9.5.1')
     settings = json.loads(args.config.read_text())
+    settings['coverage']['maxNativeZoom'] = max_native_zoom()
     output = args.output or Path('packages/contracts') / settings['coverageDir'] / 'fine'
     result = build_hierarchy(settings, args.k, args.source)
     output.mkdir(parents=True, exist_ok=True)

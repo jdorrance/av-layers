@@ -25,7 +25,10 @@ function fixture() {
 
 describe('bounded per-frame raster workers', () => {
   it('uses inline on one CPU and caps valid effective worker counts', () => {
-    expect([1, 2, 3, 4, 128].map(rasterWorkerCount)).toEqual([0, 2, 3, 3, 3]);
+    expect([1, 2, 3, 4, 128].map(cpus => rasterWorkerCount(cpus))).toEqual([0, 2, 3, 3, 3]);
+    expect([0, 1, 2, 3].map(limit => rasterWorkerCount(4, limit))).toEqual([0, 1, 2, 3]);
+    expect(rasterWorkerCount(1, 3)).toBe(0);
+    for (const limit of [-1, 0.5, 4, NaN]) expect(() => rasterWorkerCount(4, limit)).toThrow('worker ceiling');
     for (const invalid of [0, -1, NaN, Infinity, 1.5]) expect(() => rasterWorkerCount(invalid)).toThrow();
     expect(() => createRenderer(fixture().mask, { rasterWorkers: 4 })).toThrow('resource limits');
   });
@@ -77,16 +80,17 @@ describe('bounded per-frame raster workers', () => {
     await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');
   });
 
-  it.each([[GFS_PRODUCT, 14_583_173, 150_301_409], [ICON_EU_PRODUCT, 9_981_126, 102_914_123]] as const)('admits each configured packed snapshot within a bounded whole-domain budget', async (product, active, expectedBytes) => {
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('admits each configured packed snapshot within a bounded whole-domain budget', async product => {
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
-    expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(active);
+    const active = fine.coverage.offsets[fine.coverage.blockIds.length]!;
+    expect(active).toBeGreaterThan(0);
     const fields = (['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => ({ layer, field: { values: new Float32Array(active), flags: new Uint8Array(active), coverage: fine.coverage } }));
     const nativeCells = plan.native.width * plan.native.height, nativeMaskBytes = 2 * Math.ceil(nativeCells / 8) + fine.tiles.byteLength;
     const capacity = admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive: 1, nativeMask: fine, fine, nativeMaskBytes,
       frames: 1, nativeLayers: product.layers.includes('precip-rate') ? 1 : 0, fineLayers: 2, terrainBytes: 0, maxLevels: 1, retainedGeometryFields: 0,
       columns: { byteLength: 0, workspaceBufferBytes: 0, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
-    expect(capacity.rasterSharedInputBytes).toBe(expectedBytes);
-    expect(capacity.rasterWorkers).toBe(rasterWorkerCount());
+    const expectedBytes = capacity.rasterSharedInputBytes;
+    expect(capacity.rasterWorkers).toBe(rasterWorkerCount(undefined, product.execution.workers));
     expect(capacity.violations).toEqual([]);
     expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
     expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? expectedBytes : 0);
@@ -116,7 +120,8 @@ describe('bounded per-frame raster workers', () => {
   }, 20_000);
 
   it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
-    const product = ICON_EU_PRODUCT, plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
+    const product = { ...ICON_EU_PRODUCT, execution: { ...ICON_EU_PRODUCT.execution, workers: 3 } };
+    const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
     const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,
       nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,

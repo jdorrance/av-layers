@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { GFS_PRODUCT, ICON_EU_PRODUCT, MAX_NATIVE_ZOOM, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
 import { createApp } from '../src/index';
-import { NOW, commonPoint, createV5Fixture } from './v5-fixture';
+import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture } from './v5-fixture';
 
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const upgrades = [
@@ -61,7 +61,7 @@ describe('retained v5 zoom compatibility', () => {
     }
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('rejects a cached $modelId manifest above its configured maximum', async product => {
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('retains cached $modelId builds after decreasing the configured zoom', async product => {
     const fixture = createV5Fixture({ product, maxZoom: product.maxNativeZoom });
     const path = `/v1/models/${product.modelId}/latest?expand=manifest`;
     const accepted = await fixture.request(path);
@@ -69,14 +69,54 @@ describe('retained v5 zoom compatibility', () => {
     await accepted.body?.cancel();
     const limited = createApp({ products: { [product.modelId]: { ...fixture.product, maxNativeZoom: product.maxNativeZoom - 1 } } });
     const response = await limited.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ manifest: { buildId: fixture.buildId } });
+    expect(fixture.get.mock.calls.some(([, options]) => options?.range)).toBe(false);
+    const retainedSample = await limited.fetch(new Request(`https://api.test/v1/models/${product.modelId}/runs/${fixture.buildId}/sample?lat=${commonPoint.lat}&lon=${commonPoint.lon}&frame=all`,
+      { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+    expect(retainedSample.status).toBe(200);
+    expect(sampleResponseV5Schema.parse(await retainedSample.json()).frames[0].layers['usable-lift-msl'].value).toBe(310.25);
+  });
+
+  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('serves distinct $modelId zooms and sample layouts from one immutable master', async product => {
+    const older = createV5Fixture({ product, maxZoom: MAX_NATIVE_ZOOM, renderZoom: 6 });
+    const current = createGroupedV5Fixture({ product, maxZoom: MAX_NATIVE_ZOOM, renderZoom: 8, groups: [[1], [2]],
+      buildId: '20261101T000000Z-00000000-0000-0000-0000-000000000002' });
+    expect(current.manifest.surfaces.map(surface => surface.coverage.hash)).toEqual(older.manifest.surfaces.map(surface => surface.coverage.hash));
+    for (const [key, bytes] of older.objects) if (!key.startsWith('catalog/')) current.objects.set(key, bytes);
+    for (const [key, sha] of older.shardSha) current.shardSha.set(key, sha);
+    current.objects.set(`catalog/${product.modelId}/latest.json`, json({ version: 1, model: product.modelId, latestBuildId: current.buildId,
+      retained: [older.manifest, current.manifest].map(({ buildId, cycle, expiresAt }) => ({ buildId, cycle, expiresAt, manifestKey: `builds/${product.modelId}/${buildId}/manifest.json` })) }));
+    for (const expected of [older.manifest, current.manifest, older.manifest]) {
+      const root = `/v1/models/${product.modelId}/runs/${expected.buildId}`;
+      const response = await current.request(`${root}/sample?lat=${commonPoint.lat}&lon=${commonPoint.lon}&frame=all`);
+      expect(response.status).toBe(200);
+      const sample = sampleResponseV5Schema.parse(await response.json());
+      expect(sample.buildId).toBe(expected.buildId);
+      expect(sample.frames.map(frame => frame.layers['usable-lift-msl'].value)).toEqual([310.25, 320.25]);
+      const layer = expected.layers[0], frame = expected.frames[0].id, zoom = expected.surfaces[0].coverage.maxZoom;
+      const tilejson = await current.request(`${root}/layers/${layer}/${frame}/tilejson.json`);
+      expect(tilejson.status).toBe(200); expect(await tilejson.json()).toMatchObject({ maxzoom: zoom });
+      const tile = await current.request(`/tiles/${product.modelId}/${expected.buildId}/${layer}/${frame}/${zoom}/0/0.webp`);
+      expect(tile.status).toBe(200); await tile.body?.cancel();
+      const beyond = await current.request(`/tiles/${product.modelId}/${expected.buildId}/${layer}/${frame}/${zoom + 1}/0/0.webp`);
+      expect(beyond.status).toBe(400); await beyond.body?.cancel();
+    }
+  });
+
+  it('rejects a manifest above the hard wire zoom limit', async () => {
+    const fixture = createV5Fixture({ maxZoom: MAX_NATIVE_ZOOM });
+    fixture.manifest.surfaces[0].coverage.maxZoom = MAX_NATIVE_ZOOM + 1;
+    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, json(fixture.manifest));
+    const response = await fixture.request('/v1/models/gfs/latest?expand=manifest');
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ title: 'publication-invalid' });
     expect(fixture.get.mock.calls.some(([, options]) => options?.range)).toBe(false);
   });
 
-  it.each(upgrades)('keeps descriptor zoom binding for lower-zoom $product.modelId manifests', async ({ product, olderZoom }) => {
+  it.each(upgrades)('rejects a $product.modelId descriptor below its rendered zoom', async ({ product, olderZoom }) => {
     const fixture = createV5Fixture({ product, maxZoom: olderZoom });
-    fixture.manifest.surfaces[0].coverage.maxZoom--;
+    fixture.manifest.surfaces[0].coverage.maxZoom++;
     fixture.objects.set(`builds/${product.modelId}/${fixture.buildId}/manifest.json`, json(fixture.manifest));
     const latest = await fixture.request(`/v1/models/${product.modelId}/latest?expand=manifest`);
     expect(latest.status).toBe(200);

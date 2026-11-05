@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "soaring-land-v1",
   "kind": "coverage-mask",
-  "maxZoom": 9,
+  "maxZoom": 10,
   "crs": "EPSG:4326",
   "source": {
     "dataset": "Natural Earth 1:50m Admin 0 Countries",
@@ -433,7 +433,8 @@
       6,
       7,
       8,
-      9
+      9,
+      10
     ],
     "offsets": {
       "0": 0,
@@ -445,7 +446,8 @@
       "6": 1365,
       "7": 5461,
       "8": 21845,
-      "9": 87381
+      "9": 87381,
+      "10": 349525
     },
     "tileCounts": {
       "0": 1,
@@ -457,10 +459,11 @@
       "6": 4096,
       "7": 16384,
       "8": 65536,
-      "9": 262144
+      "9": 262144,
+      "10": 1048576
     },
-    "totalBits": 349525,
-    "bytes": 43691,
+    "totalBits": 1398101,
+    "bytes": 174763,
     "countsByZoom": {
       "0": 1,
       "1": 4,
@@ -471,7 +474,8 @@
       "6": 708,
       "7": 2235,
       "8": 7680,
-      "9": 27916
+      "9": 27916,
+      "10": 106110
     },
     "activeZ5Tiles": [
       "5/0/8",
@@ -708,7 +712,7 @@
       "5/31/20",
       "5/31/21"
     ],
-    "sha256": "132f830012601dfc823b2d45cc6a02166ae0e69d7b18c76c67fce6396cd754fe"
+    "sha256": "2a596fa787e4d8cd65ac59c73b8fff48f6f472d62fe2355f44f16eeb14b5c98d"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.353553,
@@ -1069,5 +1073,18 @@
     },
     "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/gfs.json --output packages/contracts/coverage --source output/evidence/next-zoom/ne_50m_admin_0_countries.zip",
     "scheduledBuildGIS": false
+  },
+  "tilePyramid": {
+    "coverage": "coverage",
+    "geometrySha256": "68b4299e250ad0526b97a7aaa1d0e9f0e81237ae71839f25d480769c72726f59",
+    "previousZoom": 9,
+    "maxZoom": 10,
+    "previousTilesSha256": "132f830012601dfc823b2d45cc6a02166ae0e69d7b18c76c67fce6396cd754fe",
+    "tilesSha256": "2a596fa787e4d8cd65ac59c73b8fff48f6f472d62fe2355f44f16eeb14b5c98d",
+    "bytes": 174763,
+    "priorLevelsIdentical": true,
+    "generator": "scripts/masks/tile_pyramid.py",
+    "generatorSha256": "f37b56b33929dd3816eacf54ea55ae045b026c03a0acb03c124236350c5f9aa5",
+    "geographyRegenerated": false
   }
 }

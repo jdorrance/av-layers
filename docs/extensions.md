@@ -5,6 +5,10 @@ Follow [development](development.md) for setup and
 
 ## Change existing settings
 
+[forecast.json](../packages/contracts/config/forecast.json) owns job and worker
+parallelism, per-model zoom, schedules and shard targets. Edit it, run
+`pnpm docs:generate`, then `pnpm capacity --model MODEL` and `pnpm verify`.
+
 Edit [gfs.json](../packages/contracts/config/gfs.json) or
 [icon-eu.json](../packages/contracts/config/icon-eu.json) for model settings;
 [product.ts](../packages/contracts/src/product.ts) validates shared fields.
@@ -24,7 +28,8 @@ Then run `pnpm docs:generate` and rebuild forecast data.
 
 ## Add a weather model
 
-1. Add `packages/contracts/config/<model>.json`, call `defineProduct` in
+1. Add `packages/contracts/config/<model>.json` and its entry in
+   [forecast.json](../packages/contracts/config/forecast.json), resolve both through `settings`, call `defineProduct` in
    [products.ts](../packages/contracts/src/products.ts), and include it in
    `PRODUCTS`.
 2. Create `apps/batch/src/<model>/` with a `provider.ts` implementing
@@ -38,8 +43,7 @@ Then run `pnpm docs:generate` and rebuild forecast data.
    accounting.
 4. Add unit and integration tests for decoding, metadata verification, flux/rate
    interval recovery, missingness, and session cleanup.
-5. Update the `model` choice options in `forecast.yml`, `health.yml`, and
-   `maintenance.yml` (enforced by [workflow-models.test.ts](../scripts/workflow-models.test.ts)),
+5. Run `pnpm docs:generate` to update workflow model choices and schedules,
    and record attribution in [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt).
 
 Verify offline and with live upstream data:

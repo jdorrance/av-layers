@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { createWholeDomainDescriptors, encodeBoundedJson, expectedTiles, manifestV5Schema, MAX_MANIFEST_BYTES,
+import { createWholeDomainDescriptors, encodeBoundedJson, manifestV5Schema, MAX_MANIFEST_BYTES,
   MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE,
   type ManifestV5 } from '@av/contracts';
 import type { BuildStamp, ForecastInputs } from '../frame-build.js';
@@ -15,13 +15,27 @@ import type { ObjectReceipt } from '../immutable-upload.js';
 export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   out: string; signal?: AbortSignal;
   prepared: WholeDomainPrepared;
-  result: WholeDomainFrameResult;
+  result: Omit<WholeDomainFrameResult, 'metrics'> & {
+    metrics: Pick<WholeDomainFrameResult['metrics'], 'phasesMs' | 'renderer' | 'peakRssBytes'>;
+  };
   identity: { recipe: ManifestV5['recipe']; scienceHash: string; components: Record<string, string> };
   preparation?: { elapsedMs: number; peakRssBytes: number };
   assemblyStartedAt?: number;
   sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
   remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
   onValidated?: (result: ValidatedBuild<ManifestV5>, path: string) => Promise<void>;
+}
+
+function rendererTotals(metrics: WholeDomainFrameResult['metrics']['renderer']) {
+  const renderers = 'shards' in metrics ? metrics.shards : [metrics];
+  if (!Array.isArray(renderers) || !renderers.length) throw new Error('Missing renderer metrics');
+  const result = { native: { tiles: 0 }, fine: { tiles: 0 } };
+  for (const renderer of renderers) for (const kind of ['native', 'fine'] as const) {
+    const count = renderer?.[kind]?.tiles;
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid renderer tile count');
+    result[kind].tiles += count;
+  }
+  return result;
 }
 
 export async function finishWholeDomain(options: FinishWholeDomainOptions): Promise<string> {
@@ -34,6 +48,8 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
     const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle: result.cycle, provider: provider.provider,
       temporalApproximation: 'interval flux with endpoint profile', frames: result.receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
+    if (!('shards' in result.metrics.renderer)) await writeFile(localPath(root, `${prefix}/diagnostics.json`),
+      encodeBoundedJson({ ...result.metrics, capacity: result.capacity }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
     await mkdir(dirname(provenancePath), { recursive: true });
     await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });
     const descriptors = createWholeDomainDescriptors(product);
@@ -69,10 +85,10 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     phase = 'validate';
     const validated = await validateBuild(root, manifestV5Schema.parse(base), options.mask, undefined, product, options.remote);
     const completed = finalizeValidatedMetrics(root, validated, {
-      ...result.metrics, elapsedMs: Date.now() - started,
+      elapsedMs: Date.now() - started,
+      renderer: rendererTotals(result.metrics.renderer),
       peakRssBytes: Math.max(result.metrics.peakRssBytes, options.preparation?.peakRssBytes ?? 0, process.resourceUsage().maxRSS * 1024),
       phasesMs: { ...result.metrics.phasesMs, ...(options.preparation ? { preparationMs: options.preparation.elapsedMs } : {}), assemblyMs: tValidate - assemblyStartedAt, validateMs: Date.now() - tValidate },
-      tiles: Array.from({ length: prepared.fine.mask.maxZoom + 1 }, (_, zoom) => expectedTiles(prepared.fine.mask, zoom).length),
       active: prepared.acquisitionActive.length, capacity: result.capacity,
       packing: { nativeIndexBytes: result.surfaces.find(s => s.id === 'native')?.layout.indexBytes ?? 0,
         fineIndexBytes: result.surfaces.find(s => s.id === 'fine')?.layout.indexBytes ?? 0 }

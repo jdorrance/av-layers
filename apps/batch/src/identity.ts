@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createProductDescriptors, createRecipeIdentity, PRODUCTS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type ProductDefinition } from '@av/contracts';
+import { createProductDescriptors, createRecipeIdentity, FORECAST_CONFIG_PATH, PRODUCTS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type ProductDefinition } from '@av/contracts';
 import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
 import { refinementInputSchema, type RefinementInput } from './refinement/prepare.js';
 
@@ -53,7 +53,7 @@ export interface BuildIdentity {
 export interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
 
 export async function buildIdentity(product: ProductDefinition, coverageHash: string, terrain?: PreparedTerrainRef, refinements: readonly RefinementInput[] = [], root = ROOT, wholeDomain?: WholeDomainIdentityInput): Promise<BuildIdentity> {
-  const contractConfigSettings = [...new Set(PRODUCTS.map(p => p.configPath))].sort();
+  const contractConfigSettings = [...new Set([FORECAST_CONFIG_PATH, ...PRODUCTS.map(p => p.configPath)])].sort();
   const groups = {
     adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
     science: {

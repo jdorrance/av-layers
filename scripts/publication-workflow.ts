@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -254,8 +254,11 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
   validateArtifactRecordsV5(manifest);
   const frozen = plan.wholeDomain;
   if (!frozen) throw new Error('Resume whole-domain plan lacks frozen inputs');
-  const product = getProduct(manifest.model);
-  if (!product) throw new Error('Resume product is not registered');
+  const registered = getProduct(manifest.model);
+  if (!registered) throw new Error('Resume product is not registered');
+  const product = plan.execution ? { ...registered, maxNativeZoom: plan.execution.zoom,
+    execution: { ...registered.execution, workers: plan.execution.workers } } : registered;
+  if (plan.execution && manifest.surfaces.some(surface => surface.coverage.maxZoom !== plan.execution!.zoom)) throw new Error('Resume surface zoom differs from frozen execution');
   const factor = product.terrainSubdivisionFactor;
   if (factor === undefined || frozen.k !== factor) throw new Error('Resume whole-domain subdivision factor differs');
   const native = manifest.surfaces.find(surface => surface.kind === 'native');
@@ -264,7 +267,8 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
   if (fine.length !== 1) throw new Error('Resume v5 manifest requires one fine surface');
   const surface = fine[0]!, terrain = surface.terrain!;
   if (surface.coverage.id !== frozen.fineCoverage.id || surface.coverage.hash !== frozen.fineCoverage.hash
-      || surface.coverage.maskKey !== frozen.fineCoverage.maskKey || surface.coverage.maxZoom !== frozen.fineCoverage.maxZoom
+      || surface.coverage.maskKey !== frozen.fineCoverage.maskKey
+      || (plan.execution ? surface.coverage.maxZoom > frozen.fineCoverage.maxZoom : surface.coverage.maxZoom !== frozen.fineCoverage.maxZoom)
       || surface.gridHash !== frozen.fineCoverage.gridHash || terrain.key !== frozen.terrain.key || terrain.sha256 !== frozen.terrain.sha256) {
     throw new Error('Resume whole-domain coverage or terrain identity differs');
   }
@@ -275,15 +279,18 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
     signal?.throwIfAborted();
     const descriptorBytes = await readLocalFile(localPath(root, current.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
     if (sha256(descriptorBytes) !== current.coverage.hash) throw new Error('Resume coverage descriptor hash mismatch');
-    const descriptor = record(parseBoundedJson(descriptorBytes), 'Resume coverage descriptor');
-    if (descriptor.gridHash !== current.gridHash || descriptor.maxZoom !== current.coverage.maxZoom) throw new Error('Resume coverage descriptor binding mismatch');
-    const files = record(descriptor.files, 'Resume coverage files'), sparseFile = record(files.sparse, 'Resume sparse coverage'), tilesFile = record(files.tiles, 'Resume tiles coverage');
+    const descriptor = sparseCoverageDescriptorSchema.parse(parseBoundedJson(descriptorBytes));
+    if (descriptor.id !== current.coverage.id || descriptor.gridHash !== current.gridHash || !sameGrid(descriptor.grid, current.grid)
+        || JSON.stringify(descriptor.bounds) !== JSON.stringify(manifest.descriptors.bounds)
+        || (plan.execution ? descriptor.maxZoom < current.coverage.maxZoom : descriptor.maxZoom !== current.coverage.maxZoom)
+        || (current.kind === 'fine' && descriptor.maxZoom !== frozen.fineCoverage.maxZoom)) throw new Error('Resume coverage descriptor binding mismatch');
+    const { sparse: sparseFile, tiles: tilesFile } = descriptor.files;
     const prefix = dirname(current.coverage.maskKey);
-    const sparse = await readLocalFile(localPath(root, `${prefix}/sparse.bin`), MAX_SPARSE_COVERAGE_BYTES, sparseFile.bytes as number);
+    const sparse = await readLocalFile(localPath(root, `${prefix}/sparse.bin`), MAX_SPARSE_COVERAGE_BYTES, sparseFile.bytes);
     if (sha256(sparse) !== sparseFile.sha256) throw new Error('Resume sparse coverage hash mismatch');
     const coverage = decodeSparseCoverage(new Uint8Array(sparse.buffer, sparse.byteOffset, sparse.byteLength), current.gridHash);
     if (coverage.width !== current.grid.width || coverage.height !== current.grid.height || coverage.blockIds.length !== current.samples.blockCount) throw new Error('Resume sparse coverage layout mismatch');
-    const tiles = await readLocalFile(localPath(root, `${prefix}/tiles.bin`), MAX_COVERAGE_BITSET_BYTES, tilesFile.bytes as number);
+    const tiles = await readLocalFile(localPath(root, `${prefix}/tiles.bin`), MAX_COVERAGE_BITSET_BYTES, tilesFile.bytes);
     if (sha256(tiles) !== tilesFile.sha256) throw new Error('Resume tile coverage hash mismatch');
     for (const shard of receiptsOnly ? [] : current.samples.shards) {
       signal?.throwIfAborted();

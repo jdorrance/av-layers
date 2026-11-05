@@ -40,6 +40,11 @@ encoded coverage to its grid and validates its halo.
 
 ## Configuration
 
+[forecast.json](config/forecast.json) owns job and worker parallelism, per-model
+zoom, schedules and shard targets. [products.ts](src/products.ts) resolves worker
+defaults and validates each registered model. Run `pnpm docs:generate` after
+editing it to update workflow schedules, model choices and the reference.
+
 [gfs.json](config/gfs.json) and [icon-eu.json](config/icon-eu.json) configure
 each model's grid, forecast hours, layers, vertical coordinate, daylight policy,
 and coverage mask; [products.ts](src/products.ts) loads them with

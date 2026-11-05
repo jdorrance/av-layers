@@ -1,9 +1,29 @@
 import { expect, it } from 'vitest';
-import { assertSparseCoverageHalo, isCovered, prepareCoverageTester, setBit, type CoverageMask } from './coverage.js';
+import { assertSparseCoverageHalo, coverageAtZoom, expectedTiles, isCovered, isTileCovered, prepareCoverageTester, setBit, type CoverageMask } from './coverage.js';
 import { prepareGridGeometry, type Grid } from './geometry.js';
 import { sparseCoverageFromDense } from './sparse-coverage.js';
 import fixture from './fixtures/lambert.json';
 import { GFS_GRID } from './products.js';
+
+it('selects rendered levels while preserving immutable cells and clearing prefix padding', () => {
+  const master: CoverageMask = { grid: GFS_GRID, output: Uint8Array.of(1), halo: Uint8Array.of(2), tiles: Uint8Array.of(255, 255, 31), maxZoom: 2 };
+  for (const [zoom, bytes] of [[0, [1]], [1, [31]]] as const) {
+    const view = coverageAtZoom(master, zoom);
+    expect(view.tiles).toEqual(Uint8Array.from(bytes));
+    expect(view.grid).toBe(master.grid); expect(view.output).toBe(master.output); expect(view.halo).toBe(master.halo);
+    for (let level = 0; level <= zoom; level++) expect(expectedTiles(view, level)).toEqual(expectedTiles(master, level));
+    expect(expectedTiles(view, zoom + 1)).toEqual([]);
+    expect(isTileCovered(view, zoom + 1, 0, 0)).toBe(false);
+  }
+  expect(master.tiles).toEqual(Uint8Array.of(255, 255, 31));
+  expect(coverageAtZoom(master, 2)).toBe(master);
+  for (const zoom of [-1, 1.5, NaN, 3]) expect(() => coverageAtZoom(master, zoom)).toThrow('coverage zoom');
+  expect(() => coverageAtZoom({ ...master, tiles: Uint8Array.of(1) }, 2)).toThrow('Incomplete');
+  const buffered = { ...master, tiles: Buffer.from(master.tiles) };
+  expect(coverageAtZoom(buffered, 0).tiles).toEqual(Uint8Array.of(1));
+  expect(buffered.tiles).toEqual(Buffer.from([255, 255, 31]));
+  expect(expectedTiles(coverageAtZoom(buffered, 1), 1)).toHaveLength(4);
+});
 
 it('compiled coverage preserves exact direct ownership at grid edges, half-cell ties, bounds and wrap', () => {
   for (const grid of [GFS_GRID, { ...GFS_GRID, width: 3, height: 3, lon0: 10, lat0: 40, dx: 1, dy: -1, wrapLongitude: false }, fixture.grid] as Grid[]) {

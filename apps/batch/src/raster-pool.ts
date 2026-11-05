@@ -2,13 +2,13 @@ import { availableParallelism } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
-import { createSparseCoverage, MAX_TILE_BYTES, RASTER_TILE_SIZE, type LayerId, type PaletteInterpolation, type SparseCoverage } from '@av/contracts';
+import { createSparseCoverage, MAX_MODEL_WORKERS, MAX_TILE_BYTES, RASTER_TILE_SIZE, type LayerId, type PaletteInterpolation, type SparseCoverage } from '@av/contracts';
 import { validateSamplingField, type GridField, type PackedGridField, type SamplingMask } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { validateRasterPatchFields, type RasterMetrics, type RasterPixels, type RasterPatch, type RasterPatchFields } from './raster.js';
 export type { RasterMetrics, RasterPixels } from './raster.js';
 
-export const MAX_RASTER_WORKERS = 3;
+export const MAX_RASTER_WORKERS = MAX_MODEL_WORKERS;
 export const MAX_RASTER_SHARED_INPUT_BYTES = 64 * 1024 * 1024;
 export const RASTER_WORKER_RESOURCE_LIMITS = Object.freeze({
   maxOldGenerationSizeMb: 64,
@@ -25,9 +25,10 @@ export const RASTER_WORKER_RESERVE_BYTES =
   1024 *
   1024;
 export class RasterCapacityError extends RangeError {}
-export function rasterWorkerCount(cpus = availableParallelism()): number {
+export function rasterWorkerCount(cpus = availableParallelism(), ceiling = MAX_RASTER_WORKERS): number {
   if (!Number.isSafeInteger(cpus) || cpus < 1) throw new RangeError('Invalid available CPU count');
-  return cpus === 1 ? 0 : Math.min(MAX_RASTER_WORKERS, cpus);
+  if (!Number.isSafeInteger(ceiling) || ceiling < 0 || ceiling > MAX_RASTER_WORKERS) throw new RangeError('Invalid worker ceiling');
+  return cpus === 1 ? 0 : Math.min(ceiling, cpus);
 }
 export interface RasterWorkerData { mask: SamplingMask; fields: GridField[]; layers: LayerId[]; geometryCacheBytes: number; patches: RasterPatch<SamplingMask>[]; patchFields: RasterPatchFields[]; liftInterpolation?: PaletteInterpolation }
 export interface RasterJob { id: number; field: number; z: number; x: number; y: number }

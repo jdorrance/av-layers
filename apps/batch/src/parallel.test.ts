@@ -2,13 +2,13 @@ import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { LIFT_STEP_RENDER_STYLE, liftRenderStyle, PALETTES, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { encodeBoundedJson, LIFT_STEP_RENDER_STYLE, liftRenderStyle, MAX_MANIFEST_BYTES, PALETTES, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
-import { buildShard, createBuildPlan, finalizeBuild, MAX_FORECAST_SHARDS, type BuildPlan } from './parallel.js';
+import { buildShard, createBuildPlan, finalizeBuild, MAX_FORECAST_SHARDS, readBuildPlan, type BuildPlan } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
-import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
+import { assertValidatedBuild, localPath, sha256, validateBuild } from './validate.js';
 import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
 
 // Keep real rasterization, encoding and archive validation, without starting workers for one tile.
@@ -347,15 +347,31 @@ describe('forecast hour-group builds', () => {
   });
 
   it.each([
-    { modelId: 'gfs', hours: Array.from({ length: 24 }, (_, i) => i + 1), groups: [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] },
-    { modelId: 'icon-eu', hours: [1, ...Array.from({ length: 16 }, (_, i) => i + 9)], groups: [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] }
-  ])('bounds the full $modelId $hours.length-frame timeline across ordered groups', async ({ modelId, hours, groups }) => {
-    const configured = { ...product, modelId, frameHours: hours, intervalHours: 1 };
+    { hours: [1, 2, 3, 4, 5, 6], shards: 3 },
+    { hours: [1, 9, 10, 11, 12, 17, 18], shards: 4 },
+    { hours: [1, 2, 3, 4], shards: 8 }
+  ])('partitions the configured timeline with shard target $shards', async ({ hours, shards }) => {
+    const configured = { ...product, frameHours: hours, intervalHours: 1, execution: { ...product.execution, shards } };
     const out = await temporaryRoot(), source = fixtureProvider();
     const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider });
-    expect(planned.groups).toEqual(groups);
+    expect(planned.groups).toHaveLength(Math.min(shards, hours.length));
     expect(planned.groups.flat()).toEqual(hours);
+    const sizes = planned.groups.map(group => group.length);
+    expect(Math.min(...sizes)).toBeGreaterThan(0);
+    expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
     expect(source.open).not.toHaveBeenCalled();
+  });
+
+  it('preserves receipt hashes for plans that omit execution settings', async () => {
+    const out = await temporaryRoot(), source = fixtureProvider();
+    const old = await createBuildPlan({ out, cycle: CYCLE, product, mask, provider: source.provider });
+    delete old.execution;
+    await writeFile(join(out, 'plan.json'), encodeBoundedJson(old, MAX_MANIFEST_BYTES));
+    const parsed = await readBuildPlan(join(out, 'plan.json'));
+    expect(Object.hasOwn(parsed, 'execution')).toBe(false);
+    const path = await buildShard({ out, plan: parsed, shard: 0, product, mask, provider: source.provider });
+    const receipt = JSON.parse(await readFile(path, 'utf8'));
+    expect(receipt.planHash).toBe(sha256(encodeBoundedJson(old, MAX_MANIFEST_BYTES)));
   });
 
   it.each([0, -1, 1.5, MAX_FORECAST_SHARDS + 1])('rejects an unbounded or invalid shard count %s before acquisition', async shards => {

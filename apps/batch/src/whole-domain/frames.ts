@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { assertWholeDomainDonorsActive, type LayerId, type Manifest } from '@av/contracts';
+import { assertWholeDomainDonorsActive, coverageAtZoom, type LayerId, type Manifest } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
 import { createNormalizedFrameTarget, type ForecastProvider } from '../provider.js';
 import type { NormalizedFrame } from '@av/forecast/inputs';
@@ -105,8 +105,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const diagnosticCells = mask.grid.width * mask.grid.height;
     const diagnostics = { ceilingMslM: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), buoyancyM2S3: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), branch: new Uint8Array(new SharedArrayBuffer(diagnosticCells)) };
     const rendererOptions = { signal, rasterWorkers: capacity.rasterWorkers, rasterSharedInputBytes: capacity.rasterSharedInputBytes };
-    const nativeRenderer = createRenderer(mask, rendererOptions);
-    const fineRenderer = createRenderer(prepared.fine.mask, rendererOptions);
+    const nativeRenderer = createRenderer(coverageAtZoom(mask, product.maxNativeZoom), rendererOptions);
+    const fineRenderer = createRenderer(coverageAtZoom(prepared.fine.mask, product.maxNativeZoom), rendererOptions);
     const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: WholeDomainFrameResult['receipts'] = [], summaries: Record<string, Record<string, unknown>> = {};
     const fineCells = prepared.fine.mask.coverage.offsets[prepared.fine.mask.coverage.blockIds.length]!;
     const fineOutput = Object.fromEntries((['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => [layer, {
@@ -207,7 +207,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const surfaces: WholeDomainSurfaceResult[] = [];
     const coverageFor = (surface: 'native' | 'fine') => {
       const info = surface === 'native' ? prepared.native : prepared.fine;
-      return { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: info.mask.maxZoom, gridHash: info.descriptor.gridHash };
+      return { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash };
     };
     for (const surface of ['native', 'fine'] as const) {
       const layout = surface === 'native' ? layouts.native : layouts.fine, selected = surface === 'native' ? shards.native : shards.fine;

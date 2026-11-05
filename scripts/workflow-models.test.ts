@@ -1,12 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { MODEL_IDS } from '@av/contracts';
-import { selectWorkflowModels } from './workflow-models.js';
+import { FORECAST_PARALLELISM, MODEL_IDS, PRODUCTS } from '@av/contracts';
+import { allocateWorkflowModels, forecastWorkflowMatrix, selectWorkflowModels } from './workflow-models.js';
+import { projectWorkflow, workflowArtifacts } from './generate-workflows.js';
 import { terrainCatalogInput } from './terrain-inputs.js';
 
 const record = (value: unknown): Record<string, unknown> => {
@@ -33,13 +34,60 @@ describe('workflow model selection', () => {
     expect(() => selectWorkflowModels(value)).toThrow('Unknown forecast model');
   });
 
+  it('selects only configured models for each literal trigger, including shared schedules', () => {
+    const models = [
+      { modelId: 'first', execution: { parallelism: 2, schedule: ['17 5 * * *', '31 12 * * *'] } },
+      { modelId: 'second', execution: { parallelism: 2, schedule: ['23 6 * * *', '31 12 * * *'] } },
+      { modelId: 'manual', execution: { parallelism: 1, schedule: [] } }
+    ];
+    expect(selectWorkflowModels('all', '17 5 * * *', models)).toEqual(['first']);
+    expect(selectWorkflowModels('all', '23 6 * * *', models)).toEqual(['second']);
+    expect(selectWorkflowModels('all', '31 12 * * *', models)).toEqual(['first', 'second']);
+    expect(selectWorkflowModels('all', undefined, models)).toEqual(['first', 'second', 'manual']);
+    expect(selectWorkflowModels('manual', '', models)).toEqual(['manual']);
+    expect(() => selectWorkflowModels('all', '59 23 * * *', models)).toThrow('Unknown forecast schedule');
+  });
+
+  it('keeps delayed scheduled selection tied to the trigger rather than the runner clock', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-05T10:00:00Z'));
+      const models = [{ modelId: 'delayed-model', execution: { parallelism: 1, schedule: ['17 5 * * *'] } }];
+      expect(selectWorkflowModels('all', '17 5 * * *', models)).toEqual(['delayed-model']);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('writes the selected models as a runner output for the matrix', () => {
     const root = mkdtempSync(join(tmpdir(), 'av-workflow-models-')), output = join(root, 'github-output');
     try {
       execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url))], {
-        env: { ...process.env, MODEL_SELECTION: 'icon-eu', GITHUB_OUTPUT: output }
+        env: { ...process.env, MODEL_SELECTION: 'icon-eu', GITHUB_OUTPUT: output, GITHUB_EVENT_NAME: 'schedule', MODEL_SCHEDULE: '41 * * * *' }
       });
       expect(readFileSync(output, 'utf8')).toBe('models=["icon-eu"]\n');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('writes the allocated forecast matrix and preserves manual all selection', () => {
+    const root = mkdtempSync(join(tmpdir(), 'av-forecast-models-')), output = join(root, 'github-output');
+    try {
+      execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), '--forecast'], {
+        env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: '', GITHUB_OUTPUT: output }
+      });
+      const values = Object.fromEntries(readFileSync(output, 'utf8').trim().split('\n').map(line => {
+        const offset = line.indexOf('=');
+        return [line.slice(0, offset), JSON.parse(line.slice(offset + 1))];
+      }));
+      expect(values).toEqual({ matrix: forecastWorkflowMatrix() });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects an unknown scheduled trigger before emitting a forecast matrix', () => {
+    const root = mkdtempSync(join(tmpdir(), 'av-invalid-schedule-')), output = join(root, 'github-output');
+    try {
+      expect(() => execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), '--forecast'], {
+        env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: 'not-a-configured-trigger', GITHUB_OUTPUT: output }, stdio: 'pipe'
+      })).toThrow('Unknown forecast schedule');
+      expect(existsSync(output)).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -48,6 +96,67 @@ describe('workflow model selection', () => {
     expect(model.type).toBe('choice');
     expect(model.options).toEqual(name === 'maintenance' ? MODEL_IDS : ['all', ...MODEL_IDS]);
     expect(model.default).toBe(name === 'maintenance' ? MODEL_IDS[0] : 'all');
+  });
+});
+
+describe('global forecast job allocation', () => {
+  const requests = [{ model: 'gfs', parallelism: 12 }, { model: 'icon-eu', parallelism: 8 }];
+  it('preserves current model limits and fairly shares a smaller budget', () => {
+    expect(allocateWorkflowModels(requests, 20).map(model => model.parallelism)).toEqual([12, 8]);
+    expect(allocateWorkflowModels(requests, 10).map(model => model.parallelism)).toEqual([5, 5]);
+    expect(allocateWorkflowModels([{ model: 'small', parallelism: 2 }, { model: 'large', parallelism: 8 }], 7).map(model => model.parallelism)).toEqual([2, 5]);
+    expect(allocateWorkflowModels(requests).reduce((sum, model) => sum + model.parallelism, 0)).toBeLessThanOrEqual(FORECAST_PARALLELISM.jobs);
+  });
+
+  it('reserves the same shares for overlapping distinct schedules and manual runs', () => {
+    const models = requests.map((model, i) => ({ modelId: model.model, execution: { parallelism: model.parallelism, schedule: [i ? '23 6 * * *' : '17 5 * * *'] } }));
+    const gfs = forecastWorkflowMatrix('all', '17 5 * * *', models, 10);
+    const icon = forecastWorkflowMatrix('all', '23 6 * * *', models, 10);
+    expect(gfs.include).toEqual([{ model: 'gfs', parallelism: 5 }]);
+    expect(icon.include).toEqual([{ model: 'icon-eu', parallelism: 5 }]);
+    expect(forecastWorkflowMatrix('gfs', undefined, models, 10)).toEqual(gfs);
+    expect([...gfs.include, ...icon.include].reduce((sum, model) => sum + model.parallelism, 0)).toBe(10);
+    expect(() => allocateWorkflowModels(models.map(model => ({ model: model.modelId, parallelism: 1 })), 1)).toThrow('registered model');
+  });
+
+  it('bounds every possible active model subset, even at the matrix limit', () => {
+    for (const count of [1, 2, 3, 256]) for (const jobs of [1, 2, 7, 20, 256].filter(jobs => jobs >= count)) {
+      const limits = Array.from({ length: count }, (_, i) => ({ model: `model-${i}`, parallelism: 1 + i % 13 }));
+      const allocations = allocateWorkflowModels(limits, jobs);
+      expect(allocations).toHaveLength(count);
+      allocations.forEach((model, i) => {
+        expect(model.parallelism).toBeGreaterThanOrEqual(1);
+        expect(model.parallelism).toBeLessThanOrEqual(limits[i].parallelism);
+      });
+      expect(allocations.reduce((sum, model) => sum + model.parallelism, 0)).toBeLessThanOrEqual(jobs);
+    }
+  });
+
+  it('rejects invalid budgets, duplicate models and oversized matrices', () => {
+    for (const jobs of [0, -1, 0.5, 257, Infinity, NaN]) expect(() => allocateWorkflowModels(requests, jobs)).toThrow('parallelism');
+    for (const parallelism of [0, -1, 0.5, 257]) expect(() => allocateWorkflowModels([{ model: 'invalid', parallelism }], 20)).toThrow('parallelism');
+    expect(() => allocateWorkflowModels([], 20)).toThrow('parallelism');
+    expect(() => allocateWorkflowModels([requests[0], requests[0]], 20)).toThrow('parallelism');
+    expect(() => allocateWorkflowModels(Array.from({ length: 257 }, (_, i) => ({ model: `model-${i}`, parallelism: 1 })), 20)).toThrow('parallelism');
+  });
+});
+
+describe('generated workflow projections', () => {
+  it('projects differing model schedules and choices while retaining executable jobs', () => {
+    const models = PRODUCTS.map((product, i) => ({ ...product, execution: { ...product.execution, schedule: [i ? '23 6 * * *' : '17 5 * * *', '31 12 * * *'] } }));
+    const source = readFileSync(new URL('../.github/workflows/forecast.yml', import.meta.url), 'utf8');
+    const projected = projectWorkflow(source, 'forecast', models), parsed = record(parseYaml(projected));
+    expect(record(parsed.on).schedule).toEqual([{ cron: '17 5 * * *' }, { cron: '31 12 * * *' }, { cron: '23 6 * * *' }]);
+    expect(parsed.jobs).toEqual(workflow('forecast').jobs);
+    expect(projectWorkflow(projected, 'forecast', models)).toBe(projected);
+    const manual = record(parseYaml(projectWorkflow(source, 'forecast', models.map(product => ({ ...product, execution: { ...product.execution, schedule: [] } })))));
+    expect(record(manual.on).schedule).toBeUndefined();
+  });
+
+  it('includes workflow projection drift in the existing reference check', async () => {
+    const artifacts = await workflowArtifacts();
+    expect(Object.keys(artifacts)).toEqual(['.github/workflows/forecast.yml', '.github/workflows/health.yml', '.github/workflows/maintenance.yml']);
+    for (const [path, expected] of Object.entries(artifacts)) expect(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')).toBe(expected);
   });
 });
 
@@ -116,8 +225,9 @@ describe('multi-model workflow isolation', () => {
     expect(job.needs).toBe('select');
     expect(record(job.strategy)['fail-fast']).toBe(false);
     expect(record(job.strategy)['max-parallel']).toBeUndefined();
-    expect(record(record(job.strategy).matrix).model).toBe('${{ fromJSON(needs.select.outputs.models) }}');
+    expect(record(job.strategy).matrix).toBe('${{ fromJSON(needs.select.outputs.matrix) }}');
     expect(record(job.with).model).toBe('${{ matrix.model }}');
+    expect(record(job.with).parallelism).toBe('${{ matrix.parallelism }}');
     expect(record(job.concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}", 'cancel-in-progress': false });
     expect(workflow('forecast-model').concurrency).toBeUndefined();
     expect(record(workflow('maintenance').concurrency)).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}", 'cancel-in-progress': false });

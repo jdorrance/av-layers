@@ -33,12 +33,21 @@ describe('coverage integrity', () => {
       expect(await readCoverage(root, hash)).toEqual(mask);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
-  it('rejects a product with a different grid, domain or native zoom', async () => {
+  it('rejects incompatible grids, domains and targets above the coverage ceiling', async () => {
+    const mask = await loadCoverage(GFS_PRODUCT);
     for (const product of [
       { ...GFS_PRODUCT, grid: { ...GFS_GRID, width: 4 } },
       { ...GFS_PRODUCT, bounds: [-180, -50, 180, 65] as const },
-      { ...GFS_PRODUCT, maxNativeZoom: 6 }
+      { ...GFS_PRODUCT, maxNativeZoom: mask.maxZoom + 1 }
     ]) await expect(loadCoverage(product)).rejects.toThrow('trusted product');
+  });
+  it('reuses immutable coverage and its identity across rendered zoom targets', async () => {
+    const original = await loadCoverage(GFS_PRODUCT), hash = describeCoverage(original, GFS_PRODUCT).hash;
+    for (const maxNativeZoom of [0, original.maxZoom]) {
+      const configured = { ...GFS_PRODUCT, maxNativeZoom }, mask = await loadCoverage(configured);
+      expect(mask).toEqual(original);
+      expect(describeCoverage(mask, configured).hash).toBe(hash);
+    }
   });
   it('rejects a modified output, halo or tile bitset during validation', async () => {
     const original = await loadCoverage(GFS_PRODUCT), hash = describeCoverage(original, GFS_PRODUCT).hash;

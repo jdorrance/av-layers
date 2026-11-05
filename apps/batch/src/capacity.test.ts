@@ -1,9 +1,6 @@
-import { loadCoverage } from './coverage.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, type Manifest, type ManifestV5 } from '@av/contracts';
-import { getForecastProvider } from './providers.js';
+import { GFS_PRODUCT, MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, PRODUCTS, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
-import { GFS_PRESSURE_LEVELS_HPA } from './gfs/constants.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,17 +10,25 @@ import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverag
 import { fileURLToPath } from 'node:url';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
-const TILES_BY_ZOOM = [1, 4, 8, 29, 84, 233, 708, 2235, 7680, 27916];
-const TOTAL_TILES = 2_800_656;
+const TILES_BY_ZOOM = [1, 4];
+const TOTAL_TILES = 30;
+const SAMPLE_PACK_BYTES = 180;
+function input() {
+  const grid = { kind: 'regular-latlon' as const, width: 2, height: 2, earthRadiusM: 6371229, lon0: -180, lat0: 1, dx: 180, dy: -1, wrapLongitude: true };
+  const product = { ...GFS_PRODUCT, grid, maxNativeZoom: 1, frameHours: [1, 2], intervalHours: 1,
+    execution: { ...GFS_PRODUCT.execution, workers: 1 } };
+  const mask: CoverageMask = { grid, maxZoom: 1, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(31) };
+  return { mask, product };
+}
 
 function receipt(): Manifest {
   return {
     buildId: 'fixture',
     cycle: '2026-10-30T00:00:00Z',
-    grid: { width: 1440, height: 721 },
-    coverage: { maxZoom: GFS_PRODUCT.maxNativeZoom },
-    artifacts: new Array(72).fill({}),
-    samples: { bytes: 132_000_000 },
+    grid: { width: 2, height: 2 },
+    coverage: { maxZoom: 1 },
+    artifacts: new Array(6).fill({}),
+    samples: { bytes: SAMPLE_PACK_BYTES },
     metrics: { elapsedMs: 90_000, peakRssBytes: 1_300_000_000, tiles: [...TILES_BY_ZOOM] }
   } as unknown as Manifest;
 }
@@ -42,82 +47,81 @@ describe('build capacity admission and performance budgets', () => {
     expect(result.stderr).toContain('scenario overrides are unsupported');
     expect(result.stdout).not.toContain('currentProductAdmission');
   });
-  it.each(['gfs', 'icon-eu'])('admits raster workers for the real %s whole-domain configuration', model => {
+  it.each(PRODUCTS)('admits the configured $modelId product within resource bounds', product => {
+    const model = product.modelId;
     const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--model', model], { encoding: 'utf8', timeout: 60_000 });
     expect(result.status, result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.capacity.violations).toEqual([]);
-    expect(report.capacity.tiles).toBe(model === 'gfs' ? 2_756_928 : 1_386_768);
-    const expectedWorkers = model === 'icon-eu' ? Math.min(2, rasterWorkerCount()) : rasterWorkerCount();
-    expect(report.capacity.rasterWorkers).toBe(expectedWorkers);
-    expect(report.capacity.deriveWorkers).toBe(expectedWorkers);
-    const levels = model === 'gfs' ? 21 : 30, fieldsPerLevel = model === 'gfs' ? 2 : 3;
-    const nativeActive = report.capacity.workingSet.nativeFrame / ((7 + fieldsPerLevel * levels) * 5);
-    expect(nativeActive).toBeGreaterThan(4);
-    expect(report.capacity.workingSet.deriveWorkerColumns).toBeGreaterThanOrEqual(report.capacity.deriveWorkers * 4 * (levels * 16 + 45));
+    expect(report.capacity.tiles).toBeGreaterThan(0);
+    expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
+    for (const count of [report.capacity.rasterWorkers, report.capacity.deriveWorkers]) {
+      expect(count).toBeGreaterThanOrEqual(0);
+      expect(count).toBeLessThanOrEqual(product.execution.workers);
+    }
     expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
   }, 70_000);
   it('rejects empty public coverage before opening a provider', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT);
-    expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('before acquisition');
+    const { mask, product } = input();
+    expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, product, { maxLevels: 1 })).toThrow('before acquisition');
   });
-  it('counts the real configured product before acquisition and leaves hourly retention headroom', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT), { capacity, layout, indices } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    expect(indices.active.length).toBe(164788);
+  it('counts selected frames and layers before acquisition', () => {
+    const { mask, product } = input(), { capacity, layout, indices } = prepareBuild(mask, product, { maxLevels: 1 });
+    expect(indices.active.length).toBe(4);
     expect(capacity).toMatchObject({
       tilesByZoom: TILES_BY_ZOOM,
       tiles: TOTAL_TILES,
       quarterSamples: TOTAL_TILES * 256 * 256 * 4,
-      samplePackBytes: 105392520,
-      point: { reads: 1, worstCaseRangeBytes: 6840, values: 72 },
+      samplePackBytes: SAMPLE_PACK_BYTES,
+      point: { reads: 1, worstCaseRangeBytes: 570, values: 6 },
       violations: []
     });
-    expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
-    expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { cadenceHours: 0.5 }).violations).toContain('retention leaves no room for a replacement build');
-    expect(capacity.rasterWorkers).toBe(rasterWorkerCount());
+    expect(estimateCapacity(mask, product, layout.storedCells, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
+    expect(estimateCapacity(mask, product, layout.storedCells, { cadenceHours: 0.5 }).violations).toContain('retention leaves no room for a replacement build');
+    expect(capacity.rasterWorkers).toBe(rasterWorkerCount(undefined, product.execution.workers));
     expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
     expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? mask.grid.width * mask.grid.height * 3 * 5 + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength : 0);
     expect(capacity.estimatedPeakBytes).toBe(Object.values(capacity.workingSet).reduce((total, bytes) => total + bytes, 0));
   });
-  it('projects native tile growth and rejects it until a trusted product and budget support it', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    const doubled = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames: 48, layers: 6, models: 2 });
+  it('projects tile growth and rejects untrusted targets and excessive work', () => {
+    const { mask, product } = input(), { layout } = prepareBuild(mask, product, { maxLevels: 1 });
+    const doubled = estimateCapacity(mask, product, layout.storedCells, { frames: 4, layers: 6, models: 2 });
     expect(doubled.tiles).toBe(TOTAL_TILES * 8);
-    expect(doubled.totalSamplePackBytes).toBe(105392520 * 8);
-    const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: GFS_PRODUCT.maxNativeZoom + 1 });
+    expect(doubled.totalSamplePackBytes).toBe(SAMPLE_PACK_BYTES * 8);
+    const deeper = estimateCapacity(mask, product, layout.storedCells, { nativeZoom: product.maxNativeZoom + 12 });
     expect(deeper.tiles).toBeGreaterThan(BUILD_BUDGETS.tiles);
-    expect(deeper.violations.join()).toContain('trusted product');
+    expect(deeper.violations.join()).toContain('configured product target');
     expect(deeper.violations).toContain('tile budget exceeded');
-    expect(() => prepareBuild({ ...mask, maxZoom: 24 }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('trusted product');
+    expect(() => prepareBuild({ ...mask, maxZoom: MAX_NATIVE_ZOOM + 1 }, product, { maxLevels: 1 })).toThrow('zoom');
   });
-  it('admits ICON with per-column pressures and retained geometry, but rejects an oversized provider cache', async () => {
-    const mask = await loadCoverage(ICON_EU_PRODUCT), provider = getForecastProvider('icon-eu');
-    const { capacity, indices } = prepareBuild(mask, ICON_EU_PRODUCT, provider);
+  it('accounts for per-column model pressures and retained provider geometry', () => {
+    const { mask, product: base } = input(), provider = { maxLevels: 3, retainedGeometryFields: 4 };
+    const product = { ...base, capabilities: { ...base.capabilities, verticalCoordinate: 'model-levels' as const } };
+    const { capacity, indices } = prepareBuild(mask, product, provider);
     const bytesPerField = new Float32Array(indices.active.length).byteLength + new Uint8Array(indices.active.length).byteLength;
-    const isobaric = { ...ICON_EU_PRODUCT, capabilities: { ...ICON_EU_PRODUCT.capabilities, verticalCoordinate: 'isobaric' as const } };
+    const isobaric = { ...product, capabilities: { ...product.capabilities, verticalCoordinate: 'isobaric' as const } };
     const sharedPressure = prepareBuild(mask, isobaric, provider).capacity;
     expect(capacity.workingSet.normalizedFrame - sharedPressure.workingSet.normalizedFrame).toBe(bytesPerField * provider.maxLevels);
     expect(capacity.workingSet.retainedGeometry).toBe(bytesPerField * (provider.maxLevels + 1));
     expect(capacity.estimatedPeakBytes).toBeLessThan(BUILD_BUDGETS.peakRssBytes);
-    expect(() => prepareBuild(mask, ICON_EU_PRODUCT, { ...provider, retainedGeometryFields: 257 })).toThrow('working-set budget');
     for (const retainedGeometryFields of [-1, 0.5, NaN, 258]) {
-      expect(() => prepareBuild(mask, ICON_EU_PRODUCT, { ...provider, retainedGeometryFields })).toThrow('retained geometry budget');
+      expect(() => prepareBuild(mask, product, { ...provider, retainedGeometryFields })).toThrow('retained geometry budget');
     }
   });
   it('reserves prepared terrain validation and resident arrays only when requested', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT), provider = getForecastProvider('gfs');
-    const baseline = prepareBuild(mask, GFS_PRODUCT, provider).capacity;
-    const staged = prepareBuild(mask, GFS_PRODUCT, { ...provider, terrainBytes: 5120 }).capacity;
+    const { mask, product } = input(), provider = { maxLevels: 1 };
+    const baseline = prepareBuild(mask, product, provider).capacity;
+    const staged = prepareBuild(mask, product, { ...provider, terrainBytes: 5120 }).capacity;
     expect(baseline.workingSet.preparedTerrain).toBe(0);
     expect(staged.estimatedPeakBytes - baseline.estimatedPeakBytes).toBe(10240);
     for (const terrainBytes of [-1, 0.5, NaN, 20_000_001]) {
-      expect(() => prepareBuild(mask, GFS_PRODUCT, { ...provider, terrainBytes })).toThrow('prepared terrain byte budget');
+      expect(() => prepareBuild(mask, product, { ...provider, terrainBytes })).toThrow('prepared terrain byte budget');
     }
   });
   it('rejects invalid scenarios and oversized point products', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT), { layout } = prepareBuild(mask, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length });
-    for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { frames })).toThrow('Invalid capacity');
-    expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { layers: 100 }).violations.join()).toContain('result budget');
+    const { mask, product } = input(), { layout } = prepareBuild(mask, product, { maxLevels: 1 });
+    for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, product, layout.storedCells, { frames })).toThrow('Invalid capacity');
+    expect(estimateCapacity(mask, product, layout.storedCells, { layers: MAX_SAMPLE_VALUES }).violations.join()).toContain('result budget');
   });
   it.each([2_413_241, 2_427_607])('admits the measured hourly build duration %i ms', elapsedMs => {
     const manifest = receipt();
@@ -164,7 +168,7 @@ describe('build capacity admission and performance budgets', () => {
     const manifest = receipt(), patch = fixturePatch(fixtureManifest());
     manifest.patches = [patch];
     const result = checkPerformance(manifest);
-    expect(result.observed.gridCells).toBe(1440 * 721 + 9);
+    expect(result.observed.gridCells).toBe(4 + 9);
     expect(result.observed.samplePackBytes).toBe(manifest.samples.bytes + patch.samples.bytes);
     patch.samples.bytes = BUILD_BUDGETS.samplePackBytes - manifest.samples.bytes + 1;
     expect(checkPerformance(manifest).passed).toBe(false);

@@ -2,7 +2,7 @@ import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import z from 'zod';
 import { resolveProductFrameHours } from '@av/forecast';
-import { assertSampleLayoutBindingV5, CELL_BYTES, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
+import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
 import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild, type PreparedBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
@@ -20,13 +20,13 @@ import { stagePreparedTerrain, stageSparsePreparedTerrain } from './terrain/stag
 import { loadRefinements, prepareRefinements, refinementInputSchema } from './refinement/prepare.js';
 import type { ObjectStorage } from './storage.js';
 import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
-import { buildWholeDomainFrames, type WholeDomainFrameResult, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
-import { finishWholeDomain } from './whole-domain/finish.js';
+import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
+import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 
-export const MAX_FORECAST_SHARDS = 12;
+export const MAX_FORECAST_SHARDS = MAX_SAMPLE_VALUES;
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
 const objectReceiptSchema = z.strictObject({ key: z.string().min(1), bytes: z.number().int().positive().max(BUILD_BUDGETS.samplePackBytes), sha256: digestSchema, etag: z.string().min(1) });
 const timestampSchema = manifestSchema.shape.createdAt.refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
@@ -47,6 +47,7 @@ const planSchema = z.strictObject({
   dependencies: z.array(objectReceiptSchema).min(1).optional(),
   preparation: preparationSchema.optional(),
   recipe: manifestSchema.shape.recipe.strict().extend({ source: manifestSchema.shape.recipe.shape.source.strict() }),
+  execution: z.strictObject({ zoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM), workers: z.number().int().min(0).max(MAX_MODEL_WORKERS) }).optional(),
   groups: z.array(z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES)).min(1).max(MAX_FORECAST_SHARDS)
 }).superRefine((plan, ctx) => {
   if ((plan.version === 2) !== (plan.wholeDomain !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only version 2 plans carry whole-domain inputs' });
@@ -109,7 +110,7 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
     if (surface.channelCount !== frames.length * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
     if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard))) throw new Error('Forecast shard surface key mismatch');
     const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
-      coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: info.mask.maxZoom, gridHash: info.descriptor.gridHash },
+      coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
       layers: layers[id],
       samples: { format: 'cell-major-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer',
         channelCount: surface.channelCount, coverageHash: info.hash, blockCount: binding.blockIds.length,
@@ -154,7 +155,8 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadlineSignal]) : deadlineSignal };
   const { product, provider, mask } = options, root = resolve(options.out);
   if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
-  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? (product.modelId === 'icon-eu' ? 8 : MAX_FORECAST_SHARDS));
+  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? product.execution.shards);
+  const execution = { zoom: product.maxNativeZoom, workers: product.execution.workers };
   if (product.terrainSubdivisionFactor !== undefined) {
     const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
     const capacity = admitWholeDomain({ product, plan: prepared.plan, nativeBlocks: prepared.native.mask.coverage.blockIds,
@@ -184,7 +186,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
       }, prepared.plan.fine, prepared.fine.mask.coverage, prepared.fine.bytes, options.signal);
     }
     const plan = planSchema.parse({ version: 2, model: product.modelId, ...stamp, deadlineAt, cycle: new Date(options.cycle).toISOString(),
-      coverageHash: prepared.native.hash, providerId: provider.id, recipe: identity.recipe, groups, wholeDomain: frozen, preparation, ...(dependencies.length ? { dependencies } : {}) });
+      coverageHash: prepared.native.hash, providerId: provider.id, recipe: identity.recipe, execution, groups, wholeDomain: frozen, preparation, ...(dependencies.length ? { dependencies } : {}) });
     options.signal?.throwIfAborted();
     await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
     return plan;
@@ -200,7 +202,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
     prepareBuild(mask, product, { ...provider, terrainBytes: terrain?.arrayBytes, refinements: loaded });
   }
   const identity = await buildIdentity(product, coverageHash, terrain, refinements);
-  const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, deadlineAt, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, groups,
+  const plan = planSchema.parse({ version: 1, model: product.modelId, ...stamp, deadlineAt, cycle: new Date(options.cycle).toISOString(), coverageHash, providerId: provider.id, recipe: identity.recipe, execution, groups,
     ...(terrain ? { terrain } : {}), ...(refinements.length ? { refinements } : {}) });
   options.signal?.throwIfAborted();
   await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
@@ -208,10 +210,13 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
 }
 
 async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOptions, 'out' | 'signal'>, resume = false) {
-  const { product, provider, mask } = inputs;
+  const { provider, mask } = inputs;
+  let { product } = inputs;
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) throw new Error('Invalid forecast plan', { cause: parsed.error });
   plan = parsed.data;
+  if (plan.execution) product = { ...product, maxNativeZoom: plan.execution.zoom,
+    execution: { ...product.execution, workers: plan.execution.workers } };
   if (plan.model !== product.modelId || plan.providerId !== provider.id
       || !plan.buildId.startsWith(plan.createdAt.replace(/[-:]/g, '').slice(0, 15) + 'Z-')
       || !same(plan.groups, partition(resolveProductFrameHours(product, mask, plan.cycle), plan.groups.length))) {
@@ -227,14 +232,14 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
     const identity = await buildIdentity(product, plan.coverageHash, undefined, [], undefined,
       { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain });
     if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
-    return { plan, prepared, identity };
+    return { plan, prepared, identity, product };
   }
   if (plan.coverageHash !== describeCoverage(mask, product).hash) throw new Error('Forecast plan coverage changed');
   const identity = await buildIdentity(product, plan.coverageHash, plan.terrain, plan.refinements);
   if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
   const refinements = plan.refinements ? await loadRefinements({ inputs: plan.refinements, out: resolve(inputs.out), baseMask: mask, signal: inputs.signal }) : [];
   const prepared = prepareBuild(mask, product, { ...provider, terrainBytes: plan.terrain?.arrayBytes, refinements });
-  return { plan, prepared, identity };
+  return { plan, prepared, identity, product };
 }
 
 /** One job owns one group; completion is recorded only after its pack and archives finish. */
@@ -245,6 +250,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
   const { shard } = options, root = resolve(options.out);
   options.signal?.throwIfAborted();
   const admitted = await admitPlan(options.plan, options), { plan, prepared } = admitted;
+  options = { ...options, product: admitted.product };
   if (!Number.isSafeInteger(shard) || shard < 0 || shard >= plan.groups.length) throw new Error('Invalid forecast shard');
   await mkdir(localPath(root, 'shards'), { recursive: true });
   const prefix = `shards/${shard}`;
@@ -262,7 +268,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       for (const artifact of result.artifacts) {
         const coverage = artifact.layer === 'precip-rate' ? whole.native : whole.fine;
         if (await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
-        await validateArchive(localPath(root, artifact.tilesKey), coverage.mask);
+        await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
       }
       const objects: ObjectReceipt[] = [];
       if (options.store) {
@@ -325,6 +331,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const root = resolve(options.out);
   options.signal?.throwIfAborted();
   const admitted = await admitPlan(options.plan, options), { plan, prepared, identity } = admitted;
+  options = { ...options, product: admitted.product };
   const entries = await readdir(localPath(root, 'shards'), { withFileTypes: true });
   const expected = plan.groups.map((_, i) => String(i));
   if (entries.some(entry => !entry.isDirectory()) || !same(entries.map(entry => entry.name).sort(), expected.sort())) throw new Error('Missing or extra forecast shard directories');
@@ -366,18 +373,17 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       }
       sampleGroups[id] = shards;
       surfaces.push({ id, kind: id, grid: id === 'native' ? whole.plan.native : whole.plan.fine, gridHash: info.descriptor.gridHash,
-        coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: info.mask.maxZoom, gridHash: info.descriptor.gridHash },
+        coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: options.product.maxNativeZoom, gridHash: info.descriptor.gridHash },
         layers: [...layers], layout, shards, ...(id === 'fine' ? { terrain: { dataId: terrainData.descriptor.dataId, verticalDatum: terrainData.descriptor.source.verticalDatum,
         surface: terrainData.descriptor.source.surface, ref: whole.terrain, layoutVersion: 1 as const } } : {}) });
     }
     const phasesMs = { acquireMs: 0, deriveMs: 0, packMs: 0, renderMs: 0 };
     for (const receipt of receipts) for (const key of Object.keys(phasesMs) as (keyof typeof phasesMs)[]) phasesMs[key] += receipt.metrics.phasesMs[key];
     const frames = plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours));
-    const result: WholeDomainFrameResult = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
+    const result: FinishWholeDomainOptions['result'] = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
       receipts: receipts.flatMap(receipt => receipt.provenance), surfaces, capacity,
-      metrics: { frames: Object.assign({}, ...receipts.map(receipt => receipt.metrics.frames)), phasesMs,
-        renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) }, acquisition: { shards: receipts.map(receipt => receipt.metrics.acquisition) },
-        elapsedMs: Date.now() - Date.parse(plan.createdAt), peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
+      metrics: { phasesMs, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
+        peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
     const objects = options.store ? receipts.flatMap(receipt => {
       if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
       return receipt.objects;
@@ -452,15 +458,16 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
   const receipts: WholeDomainReceipt[] = [];
   for (let shard = 0; shard < plan.groups.length; shard++) {
     const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES), MAX_PROVENANCE_JSON_TOKENS));
-    assertWholeDomainReceipt(receipt, plan, shard, inputs.product, whole);
+    assertWholeDomainReceipt(receipt, plan, shard, admitted.product, whole);
     if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
     receipts.push(receipt);
   }
-  if (!same(manifest.frames, plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, inputs.product.intervalHours)))
+  if (!same(manifest.frames, plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, admitted.product.intervalHours)))
       || !same(manifest.artifacts, receipts.flatMap(receipt => receipt.artifacts))) throw new Error('Manifest forecast receipt mismatch');
   const provenance = getProvenanceReference(manifest), provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
   if (sha256(provenanceBytes) !== provenance.sha256 || !same(parseProvenance(parseBoundedJson(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest).frames, receipts.flatMap(receipt => receipt.provenance))) throw new Error('Manifest provenance receipt mismatch');
-  if (!same(manifest.surfaces.map(surface => surface.id), receipts[0].surfaces.map(surface => surface.id))) throw new Error('Manifest surface receipt mismatch');
+  if (!same(manifest.surfaces.map(surface => surface.id), receipts[0].surfaces.map(surface => surface.id))
+      || manifest.surfaces.some(surface => surface.coverage.maxZoom !== admitted.product.maxNativeZoom)) throw new Error('Manifest surface receipt mismatch');
   for (const surface of manifest.surfaces) {
     if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Receipt build requires grouped samples');
     let firstFrame = 0;
