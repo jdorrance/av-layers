@@ -53,7 +53,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
-Global forecast parallelism: 40 shard jobs; default workers 3.
+Forecast trigger budget: 20 shard jobs; default workers 3.
 
 ### GFS (gfs-soaring)
 

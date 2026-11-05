@@ -35,15 +35,16 @@ it('uses literal cron triggers for distinct/shared schedules and keeps manual se
   } finally { vi.useRealTimers(); }
 });
 
-it.each([false, true])('writes the runner output with forecast=%s, leaving health independent of cron', forecast => {
+it.each([undefined, '', ...new Set(PRODUCTS.flatMap(product => product.execution.schedule))])('writes the runner output for cron=%s, leaving health independent', schedule => {
+  const forecast = schedule !== undefined;
   const root = mkdtempSync(join(tmpdir(), 'av-workflow-models-')), output = join(root, 'github-output');
   try {
     execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), ...(forecast ? ['--forecast'] : [])], {
-      env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? '' : '41 * * * *', GITHUB_OUTPUT: output }
+      env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', GITHUB_OUTPUT: output }
     });
-    const models = selectWorkflowModels();
+    const models = selectWorkflowModels('all', schedule);
     expect(readFileSync(output, 'utf8')).toBe(forecast
-      ? `matrix=${JSON.stringify({ include: models })}\n`
+      ? `matrix=${JSON.stringify({ include: models })}\nmodel-parallelism=${schedule ? models.length : 1}\n`
       : `models=${JSON.stringify(models.map(model => model.model))}\n`);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

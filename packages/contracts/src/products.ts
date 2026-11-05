@@ -15,8 +15,11 @@ export const MODEL_IDS: readonly string[] = Object.freeze(PRODUCTS.map(product =
 if (new Set(MODEL_IDS).size !== PRODUCTS.length || new Set(PRODUCTS.map(product => product.id)).size !== PRODUCTS.length) {
   throw new Error('Model and product IDs must be unique');
 }
-if (PRODUCTS.reduce((jobs, product) => jobs + product.execution.parallelism, 0) > FORECAST_PARALLELISM.jobs) {
-  throw new Error('Combined model parallelism exceeds the forecast job budget');
+const schedules = new Set(PRODUCTS.flatMap(product => product.execution.schedule));
+if (PRODUCTS.some(product => product.execution.parallelism > FORECAST_PARALLELISM.jobs) ||
+    [...schedules].some(schedule => PRODUCTS.filter(product => product.execution.schedule.includes(schedule))
+      .reduce((jobs, product) => jobs + product.execution.parallelism, 0) > FORECAST_PARALLELISM.jobs)) {
+  throw new Error('Forecast trigger parallelism exceeds the job budget');
 }
 
 export function getProduct(modelId: string): ModelDefinition | undefined {

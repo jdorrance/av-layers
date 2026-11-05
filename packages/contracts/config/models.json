@@ -1,6 +1,6 @@
 {
   "defaultModel": "gfs",
-  "parallelism": {"jobs": 40, "workers": 3},
+  "parallelism": {"jobs": 20, "workers": 3},
   "models": [
     {
       "modelId": "gfs",
