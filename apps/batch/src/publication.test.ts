@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_PROVENANCE_BYTES, RETENTION_DAYS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
+import { BUILD_BUDGETS } from './capacity.js';
 import { writeCoverage } from './coverage.js';
 import type { ObjectStorage } from './storage.js';
 
@@ -539,7 +540,8 @@ describe('immutable publication', () => {
   it('recovers an expired-deadline committed build without permitting a new CAS', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });
-    const options = { authority, now: () => now + 51 * 60_000, deadlineAt: new Date(Date.parse(manifest.createdAt) + 50 * 60_000).toISOString(), committedOnly: true };
+    const deadline = Date.parse(manifest.createdAt) + BUILD_BUDGETS.elapsedMs;
+    const options = { authority, now: () => deadline + 60_000, deadlineAt: new Date(deadline).toISOString(), committedOnly: true };
     await expect(publish(store, root, manifest, options)).resolves.toBeUndefined();
     store.objects.delete('catalog/gfs/latest.json');
     await expect(publish(store, root, manifest, options)).rejects.toThrow('Recovery requires');
