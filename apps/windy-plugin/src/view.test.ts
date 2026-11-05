@@ -64,7 +64,7 @@ function visit(element: FakeElement): FakeElement[] {
 }
 
 const ready: ControllerState = {
-  phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
+  phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', displayedFrameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
   badge: 'Host frame f003', message: null, notice: null, horizonNotice: null
 };
 
@@ -191,7 +191,7 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
   const point = { lat: 32.9, lon: -117.25 }, loader = api.pointSeries(build, point), handlers = callbacks(), chooseFrame = vi.fn();
   const panel = new PluginPanel(handlers), mapId = m.frames[m.mapFrameCount! - 1].id;
-  const state = { ...ready, buildId: m.buildId, frameId: mapId };
+  const state = { ...ready, buildId: m.buildId, frameId: mapId, displayedFrameId: mapId };
   panel.renderState(state); panel.loadPoint(point);
   panel.renderPoint(await loader.load('day'), build, mapId, chooseFrame);
   let nodes = visit(panel.root as unknown as FakeElement);
@@ -214,10 +214,32 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   expect(summary).toContain('Native top 8202 ft'); expect(summary).toContain('Cloud 0%');
   expect(summary).toContain('MSL —'); expect(summary).toContain('Terrain unknown'); expect(summary).not.toContain('Blue');
   expect(nodes.find(element => element.className === 'av-point-legend')!.textContent).toContain('Heights MSL');
-  panel.renderState({ ...state, frameId: null });
+  panel.renderState({ ...state, frameId: null, displayedFrameId: null });
   expect(time.textContent).toContain(`Point: ${m.frames.at(-1)!.validTime.slice(0, 10)}`);
   expect(time.textContent).toContain('Map: unavailable');
   panel.renderPoint(await loader.load('forecast'), build, null, chooseFrame);
   nodes = visit(panel.root as unknown as FakeElement);
   expect(nodes.find(element => element.className === 'av-point-time')!.textContent).toContain('Map: unavailable');
+});
+
+it('keeps selected point time separate from pending and failed Windy raster replacements', async () => {
+  installDom();
+  const build = fixturePointBuild(), m = build.manifest;
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(m.createdAt) });
+  const panel = new PluginPanel(callbacks()), first = m.frames[0], second = m.frames[1];
+  const state = { ...ready, buildId: m.buildId, frameId: second.id, displayedFrameId: null };
+  panel.renderState(state);
+  panel.renderPoint(await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), build, second.id, vi.fn());
+  const time = visit(panel.root as unknown as FakeElement).find(element => element.className === 'av-point-time')!;
+  const stamp = (value: string) => value.slice(0, 16).replace('T', ' ');
+  expect(time.textContent).toBe(`Point: ${stamp(second.validTime)} UTC · Map: unavailable`);
+  panel.renderState({ ...state, displayedFrameId: first.id, notice: 'Loading selected forecast.' });
+  const split = `Point: ${stamp(second.validTime)} UTC · Map: ${stamp(first.validTime)} UTC`;
+  expect(time.textContent).toBe(split);
+  panel.renderState({ ...state, displayedFrameId: first.id, message: 'Forecast replacement failed.' });
+  expect(time.textContent).toBe(split);
+  panel.renderState({ ...state, displayedFrameId: second.id });
+  expect(time.textContent).toBe(`Point and map: ${stamp(second.validTime)} UTC`);
+  panel.renderState(state);
+  expect(time.textContent).toContain('Map: unavailable');
 });

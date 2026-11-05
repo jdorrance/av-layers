@@ -24,8 +24,8 @@ every selected level throughout the published horizon.
   samples and every tile layer use the prefix.
 - Nest profile shards by frame group, retaining full block/byte/digest metadata.
   Real coverage/layout measurements with current capacity metrics: GFS 144
-  frames uses 158,840 bytes/10,224 structural tokens; ICON-EU 48 uses
-  121,694/7,661; RRFS 48 uses 216,032/13,188. RRFS has 432 profile shards across
+  frames uses 175,006 bytes/11,566 structural tokens; ICON-EU 48 uses
+  134,054/8,446; RRFS 48 uses 216,032/13,188. RRFS has 432 profile shards across
   small groups. Its conservative decoded estimate is 837,330 bytes; retained
   V8 parse heap measures 236,707 bytes. Admit manifests at 16,384 tokens while
   retaining existing byte, container, cache and process budgets.
@@ -81,10 +81,17 @@ Live 2026-11-05 inventories contain all 120 configured GFS fields at
 hourly support through 120 and three-hour support from 123; ICON-EU 48/47
 recovers trailing-hour flux/precipitation and RRFS 48 directly supplies 47–48.
 Admission with real coverage, provider arrays and 24-hour map prefixes peaks at
-2,045,746,176 bytes for GFS, 2,128,640,761 for ICON-EU and 2,040,005,669 for RRFS;
+2,047,103,276 bytes for GFS, 2,129,563,330 for ICON-EU and 2,040,005,669 for RRFS;
 RRFS uses one input frame. Profile output totals 12.73/10.86/27.47 GB respectively.
 These totals include auxiliary fields, shared diagnostics, writer buffers and a 256 MiB runtime
 reserve. Record actual worker RSS and elapsed time before changing a limit.
+
+GFS uses 72 frame groups and ICON-EU uses 24, with parallelism fixed at 12/8.
+Both now assign two map frames per job. Six-frame ICON groups measured 21–28
+minutes of build work plus 5–7 minutes of validation/upload, at 1.945–2.069 GB
+peak RSS. GFS completed only two to four map frames in 31–40 minutes.
+Tile and numeric totals stay fixed. Verify the new grouping through publication
+before closing the gate.
 
 Numeric packs total 20.79/15.95/35.88 GB per build. The configured daily cadence
 and seven-day retention project 1.52 TB across the three models. Admission and
@@ -98,14 +105,14 @@ prepared terrain. Rollout reuses production's pinned catalog and its immutable
 upload/validation gate before changing the retained pointer.
 
 Gate per model: live input proof, numerical parity, measured memory/elapsed time,
-verified immutable publication and production browser parity. Retire its duplicate Windgrams
-acquisition after that gate; preserve remaining terrain and observation producers.
+verified immutable publication and production browser parity. Windgrams consumer
+changes and acquisition retirement remain deferred.
 
 ## Completion
 
 After each milestone, independently review numerical contracts, compatibility,
 security and performance; remove duplicate owners and unreachable paths.
-Run root checks, all three model proofs and relevant browser checks in both
-repositories. Include measured budgets and migration evidence in the PR.
+Run root checks, all three model proofs and AV client browser checks. Include
+measured budgets and publication evidence in the PR.
 After review and green CI, merge and verify the deployed revision, manifests,
 map-window boundaries and extended samples/profiles in production.

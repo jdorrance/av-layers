@@ -419,6 +419,11 @@ function startPreview(): void {
     tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
     if (displayed) renderRibbon(displayed.layer, displayed.build);
     else { legend.hidden = true; legendBody.replaceChildren(); }
+    updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
+  }
+
+  function displayedPointFrame(): string | null {
+    return overlayState.displayed?.build === build ? overlayState.displayed.frame : null;
   }
 
   function expireView(): void {
@@ -472,7 +477,7 @@ function startPreview(): void {
     requestedTime = frame.validTime;
     updateTimeUi();
     pointFrameId = selectedFrame;
-    updatePointSeries?.(pointFrameId, pointUnitSystem, selectedFrame);
+    updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
     if (history !== 'none') writeUrl(history);
@@ -558,10 +563,10 @@ function startPreview(): void {
     if (build) {
       const requestedBuild = build;
       if (!payload.frames.some(frame => frame.id === pointFrameId)) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
-      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: selectedFrame, unitSystem: pointUnitSystem, onFrame(id) {
+      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, onFrame(id) {
         if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
         pointFrameId = id;
-        updatePointSeries?.(id, pointUnitSystem, selectedFrame);
+        updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());
         selectIndex(renderedFrames(build.manifest).findIndex(frame => frame.id === id), 'push');
       } });
       pointBody.tabIndex = 0;
@@ -669,7 +674,7 @@ function startPreview(): void {
   pointUnits.value = pointUnitSystem;
   pointUnits.addEventListener('change', () => {
     pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
-    updatePointSeries?.(pointFrameId, pointUnitSystem, selectedFrame);
+    updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
   });
   pointHorizonSelect.value = pointHorizon;
   pointHorizonSelect.addEventListener('change', () => {

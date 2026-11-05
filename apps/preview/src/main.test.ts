@@ -61,6 +61,7 @@ class Window extends EventTarget {
 }
 class GPUInitializationError extends Error {}
 let initializationError: Error | null = null;
+let autoLoadRaster = true;
 const setWorkerUrl = vi.fn();
 const maps: MapMock[] = [];
 const map = () => maps.at(-1)!;
@@ -103,7 +104,10 @@ class MapMock {
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
   getSource(id: string): unknown { return this.sources.get(id); }
   removeSource(id: string): void { this.sources.delete(id); }
-  addLayer(layer: { id: string; source?: string }): void { this.layers.set(layer.id, layer); this.emit('sourcedata', { sourceId: layer.source, tile: {} }); this.emit('render'); }
+  addLayer(layer: { id: string; source?: string }): void {
+    this.layers.set(layer.id, layer);
+    if (autoLoadRaster) { this.emit('sourcedata', { sourceId: layer.source, tile: {} }); this.emit('render'); }
+  }
   getLayer(id: string): unknown { return this.layers.get(id); }
   removeLayer(id: string): void { this.layers.delete(id); }
   remove(): void { this.removed = true; }
@@ -188,7 +192,7 @@ async function start(): Promise<void> {
 }
 beforeEach(() => {
   vi.resetModules();
-  maps.length = 0; protocols.clear(); initializationError = null; setWorkerUrl.mockClear();
+  maps.length = 0; protocols.clear(); initializationError = null; autoLoadRaster = true; setWorkerUrl.mockClear();
   vi.stubEnv('AV_API_BASE', 'https://api.test');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
@@ -573,4 +577,34 @@ it('pages the full native point forecast while later point times keep the raster
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')!.children).toHaveLength(published.mapFrameCount!));
   expect(fetchMock).toHaveBeenCalledTimes(requests);
+});
+
+it('labels the displayed raster through pending, failed and successful point-time replacements', async () => {
+  const pointBuild = fixturePointBuild(), published = pointBuild.manifest;
+  if (published.version !== 5) throw new Error('Expected v5');
+  fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
+    ? v5Latest(published) : fixturePointSample(pointBuild, String(input)))));
+  autoLoadRaster = false;
+  await start();
+  await selectFrame(0);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  const series = ui('point-body').children[0], time = series.children.find(child => child.className === 'av-point-time')!;
+  const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
+  expect(time.textContent).toContain(`Point: ${stamp(0)} UTC · Map: unavailable`);
+  const first = sourceId();
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render');
+  expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
+  await selectFrame(1);
+  const pending = [...map().layers.keys()].find(id => id !== first)!;
+  expect(time.textContent).toBe(`Point: ${stamp(1)} UTC · Map: ${stamp(0)} UTC`);
+  map().emit('error', { sourceId: pending });
+  expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
+  expect(time.textContent).toBe(`Point: ${stamp(1)} UTC · Map: ${stamp(0)} UTC`);
+  expect(map().getSource(first)).toBeDefined();
+  await selectFrame(2);
+  const replacement = [...map().layers.keys()].find(id => id !== first)!;
+  expect(time.textContent).toBe(`Point: ${stamp(2)} UTC · Map: ${stamp(0)} UTC`);
+  map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render');
+  expect(time.textContent).toBe(`Point and map: ${stamp(2)} UTC`);
 });
