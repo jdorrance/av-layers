@@ -11,7 +11,7 @@ pnpm verify
 
 Phase 1 owns wire schemas, profile coordinates, fields and serving limits.
 [Architecture](architecture.md) owns the workspace map. Windgrams lives in the
-[sibling repository](../../windgrams/README.md); its changes need a coordinated
+[sibling repository](https://github.com/jdorrance/windgrams/blob/main/README.md); its changes need a coordinated
 PR and its own checks. Keep each milestone independently deployable.
 
 ## Milestone 2A: Shared client and raster delivery
@@ -89,7 +89,7 @@ Run client tests and browser checks before proceeding.
 ## Milestone 2C: Windgrams profile and regional adapters
 
 Add one transport adapter in
-[`@windgrams/data-client`](../../windgrams/packages/data-client/README.md).
+[`@windgrams/data-client`](https://github.com/jdorrance/windgrams/blob/main/packages/data-client/README.md).
 Keep windgram and Skew-T renderers on their existing published profile types.
 Resolve launch coordinates through the site catalogue and route configured AV
 models through a pinned latest response and profile endpoint.
@@ -99,10 +99,10 @@ capture time. Preserve surface field units, precipitation interval meaning,
 nulls, source availability, vertical resolution and diagnostic support. Retain
 native model elevation independently of launch elevation and fine terrain.
 Compute shared derived views once. Validate serialized output with
-[`parsePublishedProfileJson`](../../windgrams/packages/contracts/src/published-lift.ts).
+[`parsePublishedProfileJson`](https://github.com/jdorrance/windgrams/blob/main/packages/contracts/src/published-lift.ts).
 
 The current
-[`RegionalDataset`](../../windgrams/packages/data-client/src/dataset-types.ts)
+[`RegionalDataset`](https://github.com/jdorrance/windgrams/blob/main/packages/data-client/src/dataset-types.ts)
 exposes native-cell grids, hourly arrays and cell-index profiles. Its sampling
 selects one cell. AV sampling interpolates surfaces. Define the smallest live
 regional interface required by current callers, including sampling semantics,
@@ -143,10 +143,10 @@ windgrams, soundings, maps, tables, routes and offline reopening against pinned
 builds; record model, cycle, endpoint and parity evidence.
 
 Then retire the matching jobs in
-[`refresh-rrfs.yml`](../../windgrams/.github/workflows/refresh-rrfs.yml),
-[`refresh-dwd.yml`](../../windgrams/.github/workflows/refresh-dwd.yml) and the GFS
+[`refresh-rrfs.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-rrfs.yml),
+[`refresh-dwd.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-dwd.yml) and the GFS
 portion of
-[`refresh-noaa-cloud.yml`](../../windgrams/.github/workflows/refresh-noaa-cloud.yml).
+[`refresh-noaa-cloud.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-noaa-cloud.yml).
 Update Pages artifact collection and provider health together. Retain the other
 model and observation workflows; this cutover serves GFS, ICON-EU and RRFS.
 Document and exercise rollback before deleting duplicated acquisition code.

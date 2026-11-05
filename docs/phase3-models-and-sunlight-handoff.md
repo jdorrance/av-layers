@@ -97,7 +97,7 @@ acquisition after that gate; preserve remaining observation producers.
   by the horizon radius, then derive normals, horizon angles, sky-view factor
   and relief in bounded blocks. Preserve EGM2008 heights and account for
   latitude, tile seams and missing DEM cells.
-- Inspect the existing [solar contract](../../windgrams/packages/providers/src/internal/solar/types.ts)
+- Inspect the existing [solar contract](https://github.com/jdorrance/windgrams/blob/main/packages/providers/src/internal/solar/types.ts)
   and its encoding before porting. Preserve the current 18-azimuth,
   0.3-degree format first. An encoding change needs versioned readers and parity.
 - Bind generation identity to catalog data/digest, area, resolution, algorithm
