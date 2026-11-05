@@ -71,8 +71,9 @@ when the point horizon grows. Test legacy manifests, expiry and paged profiles.
 - Admit acquisition, decode and publication costs for the complete covered
   native grid. Stream profile records and bound overlapping acquisition work.
   Profile coverage and level selection remain the published model contract.
-- Stage extended builds, compare existing map-window results, then verify the
-  final profile hour and point-derived diagnostics through both clients.
+- Validate extended immutable payloads and readback before pointer CAS. Compare
+  existing map-window results, then verify the final profile hour and point
+  diagnostics through both clients.
 
 Live 2026-11-05 inventories contain all 120 configured GFS fields at
 27/120/123/384 and all 165 RRFS fields at 48. Encoded GFS windows recover
@@ -82,8 +83,12 @@ Admission with real coverage, provider arrays and 24-hour map prefixes peaks at
 2,029,864,374 bytes for GFS, 2,126,844,658 for ICON-EU and 2,037,802,519 for RRFS;
 RRFS uses one input frame. Profile output totals 12.73/10.86/27.47 GB respectively.
 
+Staging currently serves a legacy GFS build and lacks the global catalog and
+prepared terrain. Rollout reuses production's pinned catalog and its immutable
+upload/validation gate before changing the retained pointer.
+
 Gate per model: live input proof, numerical parity, measured memory/elapsed time,
-complete staging publication and browser parity. Retire its duplicate windgrams
+verified immutable publication and production browser parity. Retire its duplicate windgrams
 acquisition after that gate; preserve remaining observation producers.
 
 ## Milestone 3: Versioned solar terrain

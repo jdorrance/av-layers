@@ -437,11 +437,12 @@ export function parseProvenance(
   return provenance;
 }
 
-export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'model' | 'buildId' | 'cycle'>, frame: Manifest['frames'][number]) {
+export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'model' | 'buildId' | 'cycle'> & Partial<Pick<Manifest, 'layers'>>, frame: Manifest['frames'][number]) {
   const value = frameProvenanceSchema.parse(raw);
+  const requiresPrecipitation = identity.layers?.includes('precip-rate') || (value.intervals as { precipitationWindow?: unknown } | null)?.precipitationWindow !== undefined;
   if (value.model !== identity.model || value.buildId !== identity.buildId || value.cycle !== identity.cycle
       || JSON.stringify(value.frame) !== JSON.stringify(frameSchema.parse(frame)) || Date.parse(frame.validTime) !== Date.parse(identity.cycle) + value.hour * 3_600_000
-      || !matchesFrameIntervals(value.intervals, frame, (value.intervals as { precipitationWindow?: unknown } | null)?.precipitationWindow !== undefined)) {
+      || !matchesFrameIntervals(value.intervals, frame, requiresPrecipitation)) {
     throw new Error('Provenance frame does not match manifest');
   }
   return value;

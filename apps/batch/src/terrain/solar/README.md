@@ -25,6 +25,10 @@ tile and relief hashes, launch physics and legacy index fields against that
 independent implementation. Irradiance lives in
 [@av/solar](../../../../../packages/solar/README.md).
 
+Compression fixes gzip's OS byte at 255 across hosts. Parity fixtures normalize
+that header byte in the original builder's files; their payload and CRC bytes
+remain exact.
+
 ```sh
 pnpm test apps/batch/src/terrain/solar packages/solar
 ```

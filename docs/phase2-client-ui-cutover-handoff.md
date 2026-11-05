@@ -132,6 +132,12 @@ build checks. Measure 32-point launch/route queries and profile reads with cold
 and warm caches against the existing serving limits. Keep configured limits
 until measurements justify a change.
 
+Primary preview browser QA on 2026-11-05 passed synthetic GFS startup, point
+click, chart/keyboard frame selection, imperial units, lazy source tables,
+failed-overlay retention/recovery and pending-point cancellation on model reload.
+One cached series request supplied those point interactions; absent native
+measurements stayed unknown. The synthetic fixture exposes one model.
+
 Deploy both adapters with the old builders available. Verify production launch
 windgrams, soundings, maps, tables, routes and offline reopening against pinned
 builds; record model, cycle, endpoint and parity evidence.

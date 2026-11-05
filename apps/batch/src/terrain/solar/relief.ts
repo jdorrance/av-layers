@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { SOLAR_TERRAIN_FORMAT } from '@av/contracts';
-import { gzipSync } from 'node:zlib';
+import { gzipSolar } from './gzip.ts';
 import { MAX_ZOOM, round } from './constants.ts';
 import { sampleGrid, xToLon, yToLat } from './grid.ts';
 import type { TerrainDomain, ElevationGrid, ReliefFrame, ReliefProduct } from './types.ts';
@@ -61,7 +61,7 @@ export function encodeRelief(frame: ReliefFrame, generation: string): ReliefProd
     const prev = k % width === 0 ? (k === 0 ? 0 : values[k - width]) : values[k - 1];
     bytes.writeUInt16LE((values[k] - prev) & 0xffff, k * 2);
   }
-  const body = gzipSync(bytes, { level: 9 });
+  const body = gzipSolar(bytes);
   return {
     body,
     meta: {

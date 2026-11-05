@@ -2,12 +2,27 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, forecastObjects, forecastObjectsV5, manifestSchema, manifestV5Schema, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, forecastObjects, forecastObjectsV5, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
 
 function refined(): Manifest {
   const manifest = fixtureManifest();
   return manifestSchema.parse({ ...manifest, version: 4, patches: [fixturePatch(manifest)] });
 }
+
+it('requires advertised precipitation support when API and rollback verify a frame receipt', () => {
+  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const identity = { model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle };
+  const window = { start: frame.intervalStart, end: frame.intervalEnd };
+  const chunk = { version: 1, ...identity, frame, hour: (Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000,
+    intervals: { profileTime: frame.validTime, fluxWindow: window }, receipt: {} };
+  expect(() => parseFrameProvenance(chunk, manifest, frame)).toThrow('does not match');
+  expect(parseFrameProvenance(chunk, identity, frame)).toEqual(chunk);
+  expect(parseFrameProvenance(chunk, { ...identity, layers: ['usable-lift-msl'] }, frame)).toEqual(chunk);
+  const complete = { ...chunk, intervals: { ...chunk.intervals, precipitationWindow: window } };
+  expect(parseFrameProvenance(complete, manifest, frame)).toEqual(complete);
+  const invalid = { ...complete, intervals: { ...complete.intervals, precipitationWindow: { ...window, start: frame.intervalEnd } } };
+  for (const binding of [identity, manifest]) expect(() => parseFrameProvenance(invalid, binding, frame)).toThrow('does not match');
+});
 
 describe('refined forecast publications', () => {
   it('round-trips v3 and v4 without changing the public model, frame axis or raster archive paths', () => {

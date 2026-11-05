@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
+import { gzipSolar } from './gzip.ts';
 import { solarSiteSchema, solarTerrainSourceSchema, solarTerrainIndexSchema, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SOLAR_ASSET_BYTES } from '@av/contracts';
 import { BUILD_BUDGETS } from '../../capacity.ts';
 import { SCHEMA_VERSION, ALGORITHM_VERSION, DEFAULT_RADIUS_KM, DEFAULT_MAX_DISTANCE_KM, MAX_ZOOM, MIN_ZOOM, TILE_SIZE, AZIMUTHS_DEG, DEG, HORIZON_CELLS, HORIZON_BORDER, HORIZON_STEP_DEG, round } from './constants.ts';
@@ -109,7 +109,7 @@ export function startSolarTerrain(site: SolarSite, { coarse, sources, radiusKm =
           const { bytes: raw, valid } = encodeTile(level, horizonGrid, x, y);
           if (valid === 0) continue;
           rawBytes += raw.length;
-          const body = gzipSync(raw, { level: 9 }), columns = objects.get(level.z) ?? new Map<number, [number, number, string][]>();
+          const body = gzipSolar(raw), columns = objects.get(level.z) ?? new Map<number, [number, number, string][]>();
           if (body.length > MAX_SOLAR_ASSET_BYTES) throw new Error('Solar tile exceeds asset byte budget');
           objects.set(level.z, columns);
           const rows = columns.get(x) ?? [];

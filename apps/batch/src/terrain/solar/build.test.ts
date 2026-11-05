@@ -9,7 +9,7 @@ import parity from './parity.json';
 const sha = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const generatedAt = '2026-11-05T00:00:00Z';
 
-// Windgrams' original whole-domain builder supplies the independent physics/encoding fixtures.
+// Original Windgrams outputs, with only the gzip OS byte canonicalized to 255.
 describe('solar terrain compatibility', () => {
   for (const name of ['flat', 'plane', 'ridge', 'missing', 'seam'] as const) it(`preserves ${name} normals, horizons, tiles and relief`, () => {
     const { site, fine, ...options } = solarFixture(name), build = startSolarTerrain(site, options), tiles: TerrainTile[] = [];
