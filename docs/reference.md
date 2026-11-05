@@ -64,7 +64,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–9.
-- Execution: 12 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
+- Execution: 72 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72,75,78,81,84,87,90,93,96,99,102,105,108,111,114,117,120,123,126,129,132,135,138,141,144,147,150,153,156,159,162,165,168,171,174,177,180,183,186,189,192,195,198,201,204,207,210,213,216,219,222,225,228,231,234,237,240,243,246,249,252,255,258,261,264,267,270,273,276,279,282,285,288,291,294,297,300,303,306,309,312,315,318,321,324,327,330,333,336,339,342,345,348,351,354,357,360,363,366,369,372,375,378,381,384]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
 - Source interval changes at hour 123 to 3 hours.
@@ -83,7 +83,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
 - Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–10.
-- Execution: 8 target shards; at most 8 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
+- Execution: 24 target shards; at most 8 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `model-levels`; maximum levels: 30.

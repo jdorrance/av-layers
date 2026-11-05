@@ -145,7 +145,7 @@
         }
       },
       "terrainSubdivisionFactor": 10,
-      "execution": {"zoom": 9, "shards": 12, "parallelism": 12, "schedule": ["17 5,17 * * *"]}
+      "execution": {"zoom": 9, "shards": 72, "parallelism": 12, "schedule": ["17 5,17 * * *"]}
     },
     {
       "modelId": "icon-eu",
@@ -269,7 +269,7 @@
         }
       },
       "terrainSubdivisionFactor": 5,
-      "execution": {"zoom": 10, "shards": 8, "parallelism": 8, "schedule": ["17 5,17 * * *"]}
+      "execution": {"zoom": 10, "shards": 24, "parallelism": 8, "schedule": ["17 5,17 * * *"]}
     },
     {
       "modelId": "rrfs",
