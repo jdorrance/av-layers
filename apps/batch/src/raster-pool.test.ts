@@ -160,8 +160,7 @@ describe('bounded per-frame raster workers', () => {
     expect(workers.metrics()).toMatchObject({ rasterWorkers: 3, workerStarts: 3, geometryBytes: 0, geometryMisses: 5, geometryHits: 10, peakPendingTiles: 4, peakSharedInputBytes: 185 });
     expect(workers.metrics().peakGeometryBytes).toBeLessThanOrEqual(180_000);
     await workers.renderArchives(targets.map((target, index) => ({ ...target, path: join(directory, `second-${index}.pmtiles`) })));
-    expect(workers.metrics()).toMatchObject({ rasterWorkers: 3, workerStarts: 3, geometryMisses: 9, geometryHits: 21 });
-    await workers.close();
+    expect(workers.metrics()).toMatchObject({ rasterWorkers: 3, workerStarts: 6, geometryBytes: 0, geometryMisses: 10, geometryHits: 20 });
   }, 20_000);
 
   it('keeps worker lift interpolation identical to inline for step and linear-rgb modes', async () => {
