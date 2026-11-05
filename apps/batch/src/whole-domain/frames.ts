@@ -67,8 +67,6 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   let acquisition: Awaited<ReturnType<ForecastProvider['open']>> | undefined;
   let nativeWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let fineWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
-  let nativeRenderer: ReturnType<typeof createRenderer> | undefined;
-  let fineRenderer: ReturnType<typeof createRenderer> | undefined;
   let prefetch: Promise<{ frame: NormalizedFrame; workMs: number }> | undefined;
   let derivePool: Awaited<ReturnType<typeof createWholeDomainDerivePool>> | undefined;
   let packing: Promise<void> | undefined;
@@ -107,8 +105,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const diagnosticCells = mask.grid.width * mask.grid.height;
     const diagnostics = { ceilingMslM: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), buoyancyM2S3: new Float32Array(new SharedArrayBuffer(diagnosticCells * 4)), branch: new Uint8Array(new SharedArrayBuffer(diagnosticCells)) };
     const rendererOptions = { signal, rasterWorkers: capacity.rasterWorkers, rasterSharedInputBytes: capacity.rasterSharedInputBytes };
-    nativeRenderer = createRenderer(coverageAtZoom(mask, product.maxNativeZoom), rendererOptions);
-    fineRenderer = createRenderer(coverageAtZoom(prepared.fine.mask, product.maxNativeZoom), rendererOptions);
+    const nativeRenderer = createRenderer(coverageAtZoom(mask, product.maxNativeZoom), rendererOptions);
+    const fineRenderer = createRenderer(coverageAtZoom(prepared.fine.mask, product.maxNativeZoom), rendererOptions);
     const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: WholeDomainFrameResult['receipts'] = [], summaries: Record<string, Record<string, unknown>> = {};
     const fineCells = prepared.fine.mask.coverage.offsets[prepared.fine.mask.coverage.blockIds.length]!;
     const fineOutput = Object.fromEntries((['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => [layer, {
@@ -236,7 +234,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     throw error;
   } finally {
     await Promise.allSettled([prefetch, packing]);
-    const results = await Promise.allSettled([nativeRenderer?.close(), fineRenderer?.close(), nativeWriter?.close(), fineWriter?.close(), derivePool?.close(), acquisition?.close()]);
+    const results = await Promise.allSettled([nativeWriter?.close(), fineWriter?.close(), derivePool?.close(), acquisition?.close()]);
     if (!failed) for (const result of results) if (result.status === 'rejected') throw result.reason;
   }
 }

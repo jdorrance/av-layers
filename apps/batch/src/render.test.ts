@@ -362,7 +362,6 @@ describe('build-owned prepared renderer', () => {
     const spy = vi.spyOn(rasterPools, 'createRasterPool').mockImplementation(async () => {
       initializing(); await init;
       return { sharedInputBytes: 0, copiedInputBytes: 0, admittedPeakBytes: 0,
-        async setTargets() {},
         async render() { return { rgba: new Uint8Array(256 * 256 * 4), blank: true }; },
         async close() { draining(); await closed; } };
     });
@@ -372,11 +371,10 @@ describe('build-owned prepared renderer', () => {
       await initialized;
       expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).toThrow('owns the renderer');
       expect(renderer.metrics().geometryBytes).toBe(0);
-      allowInit(); await work;
-      const closeWork = renderer.close();
-      await closing;
+      allowInit(); await closing;
+      expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).toThrow('owns the renderer');
       expect(renderer.metrics().geometryBytes).toBe(0);
-      allowClose(); await closeWork;
+      allowClose(); await work;
       expect(() => renderer.renderTilePixels(field, 'usable-lift-msl', 0, 0, 0)).not.toThrow();
     } finally {
       allowInit(); allowClose();

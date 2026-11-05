@@ -75,24 +75,13 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
   // Reserve one raw tile plus the admitted maximum encoded tile per queued job.
   const pendingTileBytes = RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES;
   let renderingArchives = false;
-  let pool: Awaited<ReturnType<typeof createRasterPool>> | undefined;
-  const workerMetrics = new Map<number, RasterMetrics>();
-
-  async function closePool(): Promise<void> {
-    const activePool = pool;
-    pool = undefined;
-    workerMetrics.clear();
-    if (activePool) {
-      try { await activePool.close(); }
-      finally { stats.geometryBytes = 0; }
-    }
-  }
 
   async function writeMbtiles(paths: readonly string[], targets: readonly ArchiveTarget[]): Promise<void> {
     const databases: DatabaseSync[] = [];
     type Encoded = { bytes: Buffer } | { error: unknown };
     const pending: Promise<Encoded>[] = [];
-    let hasFailure = false, firstFailure: unknown, keepPool = false;
+    let pool: Awaited<ReturnType<typeof createRasterPool>> | undefined;
+    let hasFailure = false, firstFailure: unknown;
     let next = 0;
     const jobs = tiles.length * targets.length;
     const refill = () => {
@@ -113,36 +102,25 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
       if (rasterWorkers) {
         workerArchiveActive = true;
         rasterizer.clearGeometry();
+        const workerMetrics = new Map<number, RasterMetrics>(), started = performance.now();
+        let count = rasterWorkers;
+        for (; count > 0; count--) try {
+          pool = await createRasterPool(mask, targets, { patches: options.patches, liftInterpolation: options.liftInterpolation, workers: count, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, maxSharedInputBytes: options.rasterSharedInputBytes, onMetrics(worker, metrics) {
+          const before = workerMetrics.get(worker);
+          for (const key of ['geometryHits', 'geometryMisses', 'prepareMs', 'rasterMs', 'tiles', 'blankTiles'] as const) stats[key] += metrics[key] - (before?.[key] ?? 0);
+          workerMetrics.set(worker, metrics);
+          stats.geometryBytes = [...workerMetrics.values()].reduce((sum, item) => sum + item.geometryBytes, 0);
+          stats.peakGeometryBytes = Math.max(stats.peakGeometryBytes, stats.geometryBytes);
+          } });
+          break;
+        } catch (error) {
+          if (options.rasterSharedInputBytes === undefined || !(error instanceof RasterCapacityError)) throw error;
+        }
+        stats.rasterWorkers = count;
         if (pool) {
-          try {
-            await pool.setTargets(targets);
-            stats.peakSharedInputBytes = Math.max(stats.peakSharedInputBytes, pool.sharedInputBytes);
-          } catch (error) {
-            await closePool();
-            if (options.rasterSharedInputBytes === undefined || !(error instanceof RasterCapacityError)) throw error;
-          }
-        }
-        if (!pool) {
-          const started = performance.now();
-          let count = rasterWorkers;
-          for (; count > 0; count--) try {
-            pool = await createRasterPool(mask, targets, { patches: options.patches, liftInterpolation: options.liftInterpolation, workers: count, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, maxSharedInputBytes: options.rasterSharedInputBytes, onMetrics(worker, metrics) {
-              const before = workerMetrics.get(worker);
-              for (const key of ['geometryHits', 'geometryMisses', 'prepareMs', 'rasterMs', 'tiles', 'blankTiles'] as const) stats[key] += metrics[key] - (before?.[key] ?? 0);
-              workerMetrics.set(worker, metrics);
-              stats.geometryBytes = [...workerMetrics.values()].reduce((sum, item) => sum + item.geometryBytes, 0);
-              stats.peakGeometryBytes = Math.max(stats.peakGeometryBytes, stats.geometryBytes);
-            } });
-            break;
-          } catch (error) {
-            if (options.rasterSharedInputBytes === undefined || !(error instanceof RasterCapacityError)) throw error;
-          }
-          stats.rasterWorkers = count;
-          if (pool) {
-            stats.workerStarts += count; stats.workerStartupMs += performance.now() - started;
-            stats.peakSharedInputBytes = Math.max(stats.peakSharedInputBytes, pool.sharedInputBytes);
-          } else workerArchiveActive = false;
-        }
+          stats.workerStarts += count; stats.workerStartupMs += performance.now() - started;
+          stats.peakSharedInputBytes = Math.max(stats.peakSharedInputBytes, pool.sharedInputBytes);
+        } else workerArchiveActive = false;
       }
       const bounds = (mask.bounds ?? [-180, -85.051129, 180, 85.051129]).join(',');
       const inserts = paths.map((path, index) => {
@@ -163,16 +141,15 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
         stats.sqliteMs += elapsed; stats.sqliteWorkMs += elapsed;
       }
       for (const db of databases) db.exec('COMMIT');
-      keepPool = Boolean(pool && 'setTargets' in pool);
     } finally {
-      try { if (!keepPool) await closePool(); }
+      try { await pool?.close(); }
       finally {
         try { await Promise.all(pending); }
         finally {
           try { for (const db of databases) db.close(); }
           finally {
             if (rasterWorkers) rasterizer.clearGeometry();
-            if (pool || !keepPool) stats.geometryBytes = 0;
+            if (pool) stats.geometryBytes = 0;
             workerArchiveActive = false;
           }
         }
@@ -222,8 +199,7 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
     renderTilePixels: renderRgba,
     renderTileRgba: (field: GridField, layer: LayerId, z: number, x: number, y: number, patches?: RasterPatchFields) => renderRgba(field, layer, z, x, y, patches).rgba,
     renderArchives,
-    renderArchive: (path: string, field: GridField, layer: LayerId, patches?: RasterPatchFields) => renderArchives([{ path, field, layer, patches }]),
-    close: closePool
+    renderArchive: (path: string, field: GridField, layer: LayerId, patches?: RasterPatchFields) => renderArchives([{ path, field, layer, patches }])
   };
 }
 
