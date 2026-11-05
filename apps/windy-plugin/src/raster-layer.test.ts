@@ -35,7 +35,7 @@ function fixture() {
   return { layer, map, api, create, natives, handlers, emit, complete, move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'render'); } };
 }
 
-it('loads hidden staging tiles and commits only successful render readiness', () => {
+it('loads hidden staging tiles and commits only successful render readiness', async () => {
   const f = fixture(), statuses = vi.fn();
   f.layer.onStatus(statuses); f.layer.addTo(f.map);
   const first = f.natives[0];
@@ -52,18 +52,21 @@ it('loads hidden staging tiles and commits only successful render readiness', ()
   f.emit('render'); // Settled alone does not prove successful tiles.
   expect(f.map.removeLayer).not.toHaveBeenCalledWith(first);
   f.complete(replacement);
+  await Promise.resolve();
   expect(f.map.removeLayer).toHaveBeenCalledWith(first);
   expect(statuses).toHaveBeenLastCalledWith('ready', url('f006'));
   f.layer.remove();
 });
 
-it('retains the committed layer on failed or superseded staging generations', () => {
+it('retains the committed layer on failed or superseded staging generations', async () => {
   const f = fixture(), statuses = vi.fn();
   f.layer.onStatus(statuses); f.layer.addTo(f.map); f.complete();
   const first = f.natives[0];
   f.layer.setUrl(url('f006'));
   const failed = f.natives[1], late = failed.listeners.get('data')!;
   failed.listeners.get('error')?.({ tile: {} });
+  expect(f.map.removeLayer).not.toHaveBeenCalledWith(failed);
+  failed.listeners.get('error')?.({});
   expect(f.map.removeLayer).toHaveBeenCalledWith(failed);
   expect(f.map.removeLayer).not.toHaveBeenCalledWith(first);
   expect(statuses).toHaveBeenLastCalledWith('error', url('f003'));
@@ -74,6 +77,7 @@ it('retains the committed layer on failed or superseded staging generations', ()
   f.move(true); f.complete();
   expect(f.map.removeLayer).not.toHaveBeenCalledWith(first);
   f.move(false);
+  await Promise.resolve();
   expect(f.map.removeLayer).toHaveBeenCalledWith(first);
   expect(f.api.addProtocol).toHaveBeenCalledTimes(1);
   expect(f.api.removeProtocol).not.toHaveBeenCalled();
@@ -138,10 +142,30 @@ it.each(['commit', 'failure', 'freeze'] as const)('preserves prefetched target b
     await interactive;
     if (outcome === 'commit') f.complete();
     else if (outcome === 'freeze') f.layer.freeze();
-    else f.natives.at(-1)!.listeners.get('error')?.({ tile: {} });
+    else f.natives.at(-1)!.listeners.get('error')?.({});
     expect(requests.some(request => request !== target && request.signal.aborted)).toBe(true);
     expect(requests.filter(request => request.url === target.url)).toHaveLength(1);
   } finally { f.layer.remove(); await interactive?.catch(() => {}); }
+});
+
+it('commits a viewport that loaded some tiles and reports the tiles that failed', async () => {
+  const f = fixture(), errors = vi.fn();
+  f.layer.on('tileerror', errors);
+  f.layer.addTo(f.map); f.complete();
+  f.layer.setUrl(url('f006'));
+  const next = f.natives.at(-1)!, bad = {};
+  next.listeners.get('error')?.({ tile: bad });
+  expect(f.map.removeLayer).not.toHaveBeenCalledWith(next);
+  expect(errors).not.toHaveBeenCalled();
+  next.loading = false;
+  next.listeners.get('data')?.({ tile: {} });
+  f.emit('render');
+  expect(errors).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(next.setOpacity).toHaveBeenCalledWith(0.5);
+  expect(errors).toHaveBeenCalledWith({ tile: bad });
+  expect(f.map.removeLayer).toHaveBeenCalledWith(f.natives[0]);
+  f.layer.remove();
 });
 
 it('bounds handover to the frozen committed slot and one replacement slot', () => {

@@ -63,7 +63,7 @@ function visit(element: FakeElement): FakeElement[] {
 
 const ready: ControllerState = {
   phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
-  badge: 'Host frame f003', message: null, horizonNotice: null
+  badge: 'Host frame f003', message: null, notice: null, horizonNotice: null
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -89,6 +89,7 @@ it('associates visible labels with the model and opacity controls', () => {
   const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
   expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity']);
   expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity']);
+  expect(nodes.find(node => node.className === 'av-notice')?.role).toBe('status');
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
 });

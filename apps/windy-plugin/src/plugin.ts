@@ -1,6 +1,6 @@
 import { DEFAULT_MODEL, type ModelId } from '@av/contracts';
 import { ApiClient, createRasterTileProtocol, formatBuildFreshness, type RasterTileProtocol } from '@av/contracts/client';
-import { PluginController, type WindyHost } from './controller';
+import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
 
@@ -85,7 +85,10 @@ function renderController(ui: PluginPanel, active: PluginController): void {
   const state = active.state();
   if (state.phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild);
   ui.renderState(state);
-  if (previousController?.displayedForecast) ui.setError(`${state.message ?? `Loading ${state.model}.`} Showing ${previousController.displayedForecast}.`);
+  if (previousController?.displayedForecast) {
+    const base = state.notice ?? (state.phase === 'loading' ? `Loading ${state.model}.` : null);
+    ui.setNotice([base, `Showing ${previousController.displayedForecast}.`].filter(Boolean).join(' '));
+  }
   if (state.phase === 'ready' && state.buildId && active.currentBuild) {
     ui.setStatus(formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
   }
@@ -111,6 +114,7 @@ async function startController(model: ModelId): Promise<void> {
   const ui = ensurePanel();
   ui.setVisible(true);
   ui.setError(null);
+  ui.setNotice(null);
   ui.setStatus('Loading latest immutable build…');
   const activeController = new PluginController({
     model,
@@ -119,10 +123,16 @@ async function startController(model: ModelId): Promise<void> {
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
     onState: state => {
       if (controller !== activeController) {
-        if (previousController === activeController && controller) renderController(ui, controller);
+        if (previousController === activeController && controller) {
+          const expired = state.phase === 'expired';
+          const expiredMessage = state.message;
+          if (expired) previousController = null;
+          renderController(ui, controller);
+          if (expired && expiredMessage) ui.setError(expiredMessage);
+        }
         return;
       }
-      if (state.phase === 'ready' && state.message === null && previousController === previous) {
+      if (forecastCommitted(state) && previousController === previous) {
         previousController = null; previous?.dispose();
         const oldBuildId = previous?.currentBuild?.manifest.buildId;
         if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);

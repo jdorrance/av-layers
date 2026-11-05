@@ -121,10 +121,11 @@ function modelButton(id: string): Element {
   if (!button) throw new Error(`Missing model button ${id}`);
   return button;
 }
-function selectFrame(index: number): void {
+async function selectFrame(index: number): Promise<void> {
   ui('time').value = String(index);
   ui('time').dispatchEvent(new Event('input'));
   vi.advanceTimersByTime(16);
+  await Promise.resolve();
 }
 function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
 
@@ -203,6 +204,8 @@ it('keeps the incomplete-map warning until every failed tile recovers or leaves 
   const id = sourceId(), a = {}, b = {}, c = {};
   map().emit('error', { sourceId: id, tile: a });
   map().emit('error', { sourceId: id, tile: c });
+  expect(ui('tile-error').className).toBe('toast error');
+  expect(ui('tile-error').textContent).toContain('Overlay tile failed to load — forecast display may be incomplete.');
   map().emit('sourcedata', { sourceId: id, tile: b, isSourceLoaded: true });
   expect(ui('tile-error').hidden).toBe(false);
   map().emit('sourcedata', { sourceId: id, isSourceLoaded: true });
@@ -219,7 +222,7 @@ it('keeps source-level errors through unrelated successes and ignores events fro
   map().emit('error', { sourceId: oldSource });
   map().emit('sourcedata', { sourceId: oldSource, tile: {}, isSourceLoaded: true });
   expect(ui('tile-error').hidden).toBe(false);
-  selectFrame(1);
+  await selectFrame(1);
   expect(sourceId()).not.toBe(oldSource);
   expect(ui('tile-error').hidden).toBe(true);
   map().emit('error', { sourceId: oldSource, tile: {} });
@@ -346,7 +349,7 @@ it('makes point values keyboard-scrollable only while the card is open', async (
 it('keeps one session protocol during selection and recreates it after BFCache suspension', async () => {
   await start();
   const scheme = [...protocols.keys()][0];
-  selectFrame(1);
+  await selectFrame(1);
   expect(protocols.size).toBe(1); expect(protocols.has(scheme)).toBe(true);
   page('pagehide', true); expect(protocols.size).toBe(0);
   page('pageshow', true); expect(protocols.size).toBe(1); expect(protocols.has(scheme)).toBe(false);
@@ -356,10 +359,10 @@ it('retains the committed overlay after staging mount failure and permits retry'
   await start();
   const active = sourceId();
   vi.spyOn(map(), 'addLayer').mockImplementationOnce(layer => { map().layers.set(layer.id, layer); throw new Error('GPU context unavailable'); });
-  selectFrame(1);
+  await selectFrame(1);
   expect(protocols.size).toBe(1); expect(map().sources.has(active)).toBe(true);
   expect(ui('error').textContent).toContain('GPU context unavailable');
-  selectFrame(0);
+  await selectFrame(0);
   expect(protocols.size).toBe(1); expect(ui('error').hidden).toBe(true);
 });
 
@@ -447,9 +450,11 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
   expect(map().layers.get(sourceId())?.paint?.['raster-opacity']).toBe(0.7);
   ui('ref-msl').dispatchEvent(new Event('click'));
+  await Promise.resolve();
   expect(source().maxzoom).toBe(9);
   expect(source().tiles[0]).toContain('/usable-lift-msl/');
   ui('ref-agl').dispatchEvent(new Event('click'));
+  await Promise.resolve();
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
 
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({

@@ -13,6 +13,11 @@ apply to the combined work across all grids selected by a request.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
+- **Client tile transport:** preview and Windy share `createRasterTileProtocol`.
+  It keeps 4 requests active, at most 2 of them prefetch, and queues 64. The
+  compressed tile cache is 48 MiB including entry overhead. Build expiry drops
+  that build's cache. Palette responses stay revalidatable. Build-specific tile,
+  manifest, provenance, and TileJSON responses stay immutable until `expiresAt`.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
   concurrent cold loads. Successful static product validation follows manifest
   and product identity; retained-entry binding and expiry run on every request.

@@ -340,7 +340,7 @@ app.get('/v1/palettes/:asset', async c => {
   const palette = PALETTES[id];
   const expiry = new Date(Date.now() + 86400000).toISOString();
   const bytes = new TextEncoder().encode(format === 'json' ? JSON.stringify(palette) : paletteSvg(palette));
-  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes));
+  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes), false);
 });
 
 const tileParamSchema = z.object({ model: param, buildId: param, layer: param, frame: param, z: param, x: param, y: param });

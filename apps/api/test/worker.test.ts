@@ -473,6 +473,7 @@ describe('read-only worker', () => {
       const path = `/v1/palettes/lift.${extension}`;
       const result = await call(path, { headers: { 'if-none-match': '"palette-lift-v2"' } });
       expect(result.status).toBe(200);
+      expect(result.headers.get('cache-control')).toMatch(/^public, max-age=\d+$/);
       const text = await result.text(), etag = `"${createHash('sha256').update(text).digest('hex')}"`;
       expect(result.headers.get('etag')).toBe(etag);
       if (extension === 'json') {

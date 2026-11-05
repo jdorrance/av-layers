@@ -14,8 +14,8 @@ pnpm verify
 
 Milestones 1–3 are implemented in this branch. [Measurement results](tile-serving-performance-results.json) own the recorded timings, byte counts, fixture scope, and browser checks.
 
-- Both clients keep a committed overlay visible while a replacement loads, use one session protocol, and prefetch viewport candidates after idle. Replacement errors retain the committed selection; expiry clears both slots.
-- The client default is four active requests with the existing queue bound. In a local synthetic Worker workload with 40 ms injected HTTP delay, the 32-tile viewport median fell from 738 ms at two requests to 371 ms at four. Warm client repeats made zero additional network requests.
+- Both clients keep a committed overlay visible while a replacement loads, use one session protocol, and prefetch viewport candidates after idle. A tile that fails stays in the staging image and the committed frame remains. A source failure, or a settled viewport with no successful tiles, releases only the staging slot. Expiry clears both slots.
+- The client default is four active requests, at most two of them prefetch, with the existing queue of 64. In a local synthetic Worker workload with 40 ms injected HTTP delay, the 32-tile viewport median fell from 738 ms at two requests to 371 ms at four. The same run was 194 ms at eight and 155 ms at twelve, with no failures and 1460 cached bytes. Concurrency stays at four because the Worker tile-read pool is four. Warm client repeats made zero additional network requests.
 - Worker product validation and PMTiles range reads coalesce within the existing serving limits. Retained-entry and expiry checks precede cached delivery. Catalog, latest, and retained-run discovery use short edge caching with browser revalidation (§6.1). Batch output and published tile formats remain unchanged.
 - Phase 2 remains an evaluated data-tile prototype. On 48 native ICON-EU tile/frame pairs, the 25 m candidate used 0.90× the raster bytes and changed 7.44% of layer-pixels. The 1 m candidate used 2.78× the bytes and changed 0.30%. Both ran at encoder effort 1 against raster effort 4. Preserve the raster path until a candidate passes the forecast, storage, build-time, and browser gates in §7.
 - Renderable coarse-parent pinning, coarse-byte warm-up, and publication prewarming await their measurement gates. Current idle prefetch covers adjacent frames, sibling lift, and the viewport perimeter.
@@ -30,7 +30,7 @@ pnpm exec node --import tsx scripts/tile-data-bench.ts /path/to/manifest.json 1 
 
 ## 1. Serving Paths & Baseline Measurements
 
-Measure these client and Worker paths during panning, zooming, timeline scrubbing, and layer switching. Record request counts, cancellations, decode time, blank-overlay duration, and storage reads before selecting new limits.
+Measure these client and Worker paths during panning, zooming, timeline scrubbing, and layer switching. Record request counts, cancellations, decode time, blank-overlay duration, and storage reads before selecting new limits. Rows 1–3 describe the client before milestones 1–3. The implementation section records the current overlay and transport behavior.
 
 | # | Bottleneck | Exact Source Location | Root Cause & User-Visible Symptom |
 | :- | :--- | :--- | :--- |
@@ -71,14 +71,14 @@ Inspect these files before editing:
 
 ### 4.1 Upgrade `createRasterTileProtocol` (`packages/contracts/src/client-raster.ts`)
 
-Currently, `createRasterTileProtocol` ([packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts#L14)) hardcodes `maxActive = 2`, uses FIFO `queued.shift()`, creates a random UUID scheme on every overlay update, has no in-memory tile cache, and does not coalesce duplicate requests for the same URL.
+`createRasterTileProtocol` ([packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts)) admits 4 requests, queues 64, and leaves interactive capacity while prefetch is active. `maxPrefetchActive` defaults to `Math.min(2, Math.max(1, maxActive - 2))`. One scheme lasts for the mounted map. Identical URLs coalesce, and compressed tiles stay in a 48 MiB cache until build expiry or pressure. Expired entries leave the cache when the next tile is admitted.
 
 #### Required Changes
 1. **Concurrency, Queue Depth & Priority Scheduling:**
    - Benchmark `maxActive = 2` against candidates up to `12`, retaining existing option bounds. Measure the current `maxQueued = 64` before considering `256`. Select the smallest limits that improve viewport completion without increasing failures or exceeding the measured browser-memory budget (§8).
    - Separate interactive viewport loads from background prefetch loads via two priority lanes:
      - **Interactive lane (`priority: 'interactive'`):** Dispatched in **LIFO + zoom-coarseness order** (most recent camera request first, with coarser `z` breaking ties so parent fallback tiles complete before high-zoom children).
-     - **Prefetch lane (`priority: 'prefetch'`):** Dispatched when capacity remains and `activePrefetch < maxPrefetchActive` (default `Math.min(4, maxActive)`). Interactive work takes priority over queued prefetch work.
+     - **Prefetch lane (`priority: 'prefetch'`):** Dispatched when capacity remains and `activePrefetch < maxPrefetchActive` (default `Math.min(2, Math.max(1, maxActive - 2))`). Interactive work takes priority over queued prefetch work.
 2. **In-Memory Byte-Bounded Tile LRU Cache & In-Flight Coalescing:**
    - Keep an in-memory LRU inside `createRasterTileProtocol` bounded by `maxCacheBytes`, accounting for payload, URL, and entry storage:
      - Key by canonical tile URL (`https://.../tiles/{model}/{buildId}/{layer}/{frame}/{z}/{x}/{y}.webp`).
@@ -93,8 +93,8 @@ Currently, `createRasterTileProtocol` ([packages/contracts/src/client-raster.ts]
 
 ### 5.1 Non-Destructive Double-Buffered Overlay Updates in `apps/preview/src/main.ts`
 
-#### Problem
-In [apps/preview/src/main.ts](../apps/preview/src/main.ts#L302), `updateOverlay()` calls `removeOverlay()` on every frame or reference change, destroying the active MapLibre raster source and layer before the replacement frame's tiles have loaded.
+#### Implemented behavior
+`RasterOverlay.select` mounts the requested frame in a hidden staging source. A successful render raises that source and retires the previous one on the next microtask. `removeOverlay()` runs when the build expires and when the map is torn down. Loading copy uses the status toast. A failed replacement uses the alert toast and keeps the committed frame on screen.
 
 #### Required Fix
 1. **Single Session-Lived `RasterTileProtocol` per Mounted Map:**
@@ -136,7 +136,7 @@ Filter all candidate `(z, x, y)` coordinates against `build.manifest.descriptors
 ### 6.1 Reuse Successful Validation & Add `immutable` (`apps/api/src/publication.ts`, `apps/api/src/http.ts`)
 
 1. **Use Response-Specific Cache Policies:**
-   - [http.ts](../apps/api/src/http.ts) owns the policies. Successful build-specific responses use expiry-bounded `public, max-age=..., immutable`.
+   - [http.ts](../apps/api/src/http.ts) owns the policies. Successful build-specific responses use expiry-bounded `public, max-age=..., immutable`. Palette responses use `public, max-age` and stay revalidatable because the palette URL is stable.
    - Successful `/v1/catalog`, `/v1/models/:model/latest` (including `expand=manifest`), and retained-run lists use `public, max-age=0, s-maxage=..., must-revalidate`. Store their bounded bodies through `caches.default`; [Cloudflare honors `s-maxage` separately from browser freshness](https://developers.cloudflare.com/cache/concepts/cache-control/).
    - Compute each discovery response's deadline from the remaining pointer-cache lifetime and live build expiries. Catalog responses use the earliest participating deadline, including unavailable-model pointers. Cache keys distinguish pointer contents and representation. Keep publication validation before cached delivery.
    - Browser requests revalidate discovery metadata. Refreshing an edge response preserves the pointer's existing deadline. Health, invalid requests, expired builds, rate limits, and operational errors remain uncached.

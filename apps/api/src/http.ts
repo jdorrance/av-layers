@@ -28,9 +28,11 @@ function ttl(expiresAt: string): number {
   return Math.max(0, Math.min(IMMUTABLE_TTL, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)));
 }
 
-function cacheControl(expiresAt?: string, edgeUntil?: number): string {
+function cacheControl(expiresAt?: string, edgeUntil?: number, immutable = true): string {
   if (edgeUntil !== undefined) return `public, max-age=0, s-maxage=${Math.max(0, Math.floor((edgeUntil - Date.now()) / 1000))}, must-revalidate`;
-  return expiresAt ? `public, max-age=${ttl(expiresAt)}, immutable` : 'no-store';
+  if (!expiresAt) return 'no-store';
+  const header = `public, max-age=${ttl(expiresAt)}`;
+  return immutable ? `${header}, immutable` : header;
 }
 
 export function ensureLive(expiresAt: string): void {
@@ -47,11 +49,11 @@ export function query(url: URL, allowed: string[]): void {
   }
 }
 
-export function response(body: BodyInit | null, type: string, expiresAt?: string, etag?: string): Response {
+export function response(body: BodyInit | null, type: string, expiresAt?: string, etag?: string, immutable = true): Response {
   if (expiresAt) ensureLive(expiresAt);
   const headers = new Headers({
     'content-type': type,
-    'cache-control': cacheControl(expiresAt)
+    'cache-control': cacheControl(expiresAt, undefined, immutable)
   });
   let size = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? body.byteLength : 1024 * 1024;
   if (typeof body === 'string') {

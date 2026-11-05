@@ -55,6 +55,7 @@ interface Slot {
   url: string;
   successful: boolean;
   pending: Set<object>;
+  failed: Set<object>;
   bindings: [SourceEventName, (event: RasterSourceEvent) => void][];
 }
 
@@ -73,12 +74,24 @@ export class WindyRasterLayer implements HostTileLayer {
   private frozen = false;
   private readonly render = (): void => {
     const next = this.staging;
-    if (!next || !next.successful || next.pending.size || next.native.isLoading() || this.map?.maplibreMap.isMoving()) return;
+    if (!next || this.map?.maplibreMap.isMoving()) return;
     if (this.build && this.build.expiresAtMs <= Date.now()) return;
+    if (next.pending.size || next.native.isLoading()) return;
+    if (!next.successful) { if (next.failed.size > 0) this.abandon(next); return; }
     next.native.setOpacity(this.options.opacity);
     const previous = this.active;
     this.active = next; this.staging = null;
-    this.move(); this.drop(previous); this.setStatus('ready');
+    this.move();
+    const failed = [...next.failed];
+    queueMicrotask(() => {
+      if (this.active !== next) return;
+      this.drop(previous);
+      this.setStatus('ready');
+      for (const tile of failed) {
+        this.listeners.get('tileloadstart')?.forEach(callback => callback({ tile }));
+        this.listeners.get('tileerror')?.forEach(callback => callback({ tile }));
+      }
+    });
   };
   private readonly move = (): void => { this.prefetchAbort?.abort(); this.prefetchAbort = null; };
   private readonly idle = (): void => { this.render(); this.prefetch(); };
@@ -154,19 +167,19 @@ export class WindyRasterLayer implements HostTileLayer {
       this.map.maplibreMap.setPaintProperty(styleId, 'raster-fade-duration', 0);
       const source = native.source();
       if (!source) throw new Error('Windy raster source is unavailable');
-      const slot: Slot = { native, source, url: this.url, successful: false, pending: new Set(), bindings: [] };
+      const slot: Slot = { native, source, url: this.url, successful: false, pending: new Set(), failed: new Set(), bindings: [] };
       this.staging = slot;
       for (const [nativeEvent, event] of [['dataloading', 'tileloadstart'], ['data', 'tileload'], ['error', 'tileerror'], ['dataabort', 'tileunload']] as const) {
         const listener = (value: RasterSourceEvent): void => {
           if (this.active !== slot && this.staging !== slot) return;
-          if (!value.tile) { if (nativeEvent === 'error') { if (this.staging === slot) { this.staging = null; this.drop(slot); this.move(); } this.setStatus('error'); } return; }
+          if (!value.tile) { if (nativeEvent === 'error' && this.staging === slot) this.abandon(slot); return; }
           if (nativeEvent === 'dataloading') slot.pending.add(value.tile);
           else slot.pending.delete(value.tile);
-          if (nativeEvent === 'data') slot.successful = true;
-          if (nativeEvent === 'error') {
-            if (this.staging === slot) { this.staging = null; this.drop(slot); this.move(); this.setStatus('error'); return; }
-          }
+          if (nativeEvent === 'data') { slot.successful = true; slot.failed.delete(value.tile); }
+          if (nativeEvent === 'error') slot.failed.add(value.tile);
+          if (this.staging === slot && nativeEvent === 'error') { this.consider(slot); return; }
           this.listeners.get(event)?.forEach(callback => callback({ tile: value.tile! }));
+          if (this.staging === slot) this.consider(slot);
         };
         slot.bindings.push([nativeEvent, listener]); source.on(nativeEvent, listener);
       }
@@ -176,6 +189,14 @@ export class WindyRasterLayer implements HostTileLayer {
       throw error;
     }
     this.setStatus('loading');
+  }
+  private consider(slot: Slot): void {
+    if (this.staging !== slot || this.map?.maplibreMap.isMoving() || slot.pending.size || slot.native.isLoading()) return;
+    if (!slot.successful && slot.failed.size > 0) this.abandon(slot);
+  }
+  private abandon(slot: Slot): void {
+    if (this.staging !== slot) return;
+    this.staging = null; this.drop(slot); this.move(); this.setStatus('error');
   }
   private setStatus(status: 'loading' | 'ready' | 'error'): void {
     this.status = status; this.statusListener?.(status, this.active?.url ?? '');

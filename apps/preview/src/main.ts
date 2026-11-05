@@ -203,7 +203,7 @@ function startPreview(): void {
   let opacity = initialOpacity;
   let expired = false;
   let mapFailed = false;
-  let overlayState: OverlayState = { displayed: null, requested: null, error: false };
+  let overlayState: OverlayState = { displayed: null, requested: null, incomplete: false, replacementFailed: false };
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
     updateOverlayStatus();
@@ -398,12 +398,15 @@ function startPreview(): void {
   }
 
   function updateOverlayStatus(): void {
-    const { displayed, requested, error } = overlayState;
+    const { displayed, requested, incomplete, replacementFailed } = overlayState;
     const showing = displayed ? `Showing ${displayed.build.manifest.model} ${displayed.frame} ${displayed.layer}.` : 'No forecast displayed.';
     const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
     const olderBuild = displayed && displayed.build !== build;
-    tileErrorBox.hidden = !error && !pending && !pendingModel && !olderBuild;
-    tileErrorBox.textContent = error ? `Forecast replacement failed. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
+    const alert = replacementFailed || incomplete;
+    tileErrorBox.className = alert ? 'toast error' : 'toast status';
+    tileErrorBox.role = alert ? 'alert' : 'status';
+    tileErrorBox.hidden = !alert && !pending && !pendingModel && !olderBuild;
+    tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
     if (displayed) renderRibbon(displayed.layer, displayed.build);
     else { legend.hidden = true; legendBody.replaceChildren(); }
   }

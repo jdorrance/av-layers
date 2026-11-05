@@ -20,6 +20,7 @@ const CSS = `
 .av-controls{display:grid;grid-template-columns:62px 1fr auto;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
 .av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
 .av-readout{min-width:36px;text-align:right;font-variant-numeric:tabular-nums;color:#e6edf0}
+.av-notice{margin:6px 0;padding:6px 8px;background:#14202a;border:1px solid #2f4a5c;color:#d5e7ef;border-radius:4px;font-size:11px}
 .av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
 .av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
 `;
@@ -45,6 +46,7 @@ export class PluginPanel {
   private readonly opacityInput = node('input');
   private readonly opacityReadout = node('span', 'av-readout', '50%');
   private readonly status = node('p', 'av-muted');
+  private readonly notice = node('p', 'av-notice');
   private readonly error = node('p', 'av-error');
   private readonly horizonNotice = node('p', 'av-warning');
   private renderedBuildId: string | null = null;
@@ -75,6 +77,8 @@ export class PluginPanel {
       this.opacityReadout.textContent = percent(opacity);
       callbacks.onOpacity(opacity);
     });
+    this.notice.hidden = true;
+    this.notice.role = 'status';
     this.error.hidden = true;
     this.error.role = 'alert';
     this.horizonNotice.hidden = true;
@@ -85,7 +89,7 @@ export class PluginPanel {
     const opacityLabel = node('label', undefined, 'Opacity');
     opacityLabel.htmlFor = this.opacityInput.id;
     controls.append(modelLabel, this.modelSelect, node('span'), opacityLabel, this.opacityInput, this.opacityReadout);
-    this.root.append(header, this.status, this.horizonNotice, controls, this.error);
+    this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error);
   }
 
   setVisible(visible: boolean): void {
@@ -95,6 +99,11 @@ export class PluginPanel {
 
   setStatus(text: string): void {
     this.status.textContent = text;
+  }
+
+  setNotice(message: string | null): void {
+    this.notice.hidden = message === null;
+    this.notice.textContent = message ?? '';
   }
 
   setError(message: string | null): void {
@@ -111,6 +120,7 @@ export class PluginPanel {
 
   renderState(state: ControllerState): void {
     this.setError(state.message);
+    this.setNotice(state.notice);
     this.horizonNotice.hidden = state.horizonNotice === null;
     this.horizonNotice.textContent = state.horizonNotice ?? '';
     if (document.activeElement !== this.opacityInput) {

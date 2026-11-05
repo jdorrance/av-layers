@@ -10,7 +10,7 @@ function fixture() {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
-  let loaded = false;
+  const loaded = new Set<string>();
   const map = {
     on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
     off: (name: string, listener: (event: never) => void) => handlers.get(name)?.delete(listener),
@@ -21,7 +21,7 @@ function fixture() {
     getLayer: (id: string) => opacity.has(id),
     removeLayer: (id: string) => opacity.delete(id),
     setPaintProperty: (id: string, _property: string, value: number) => opacity.set(id, value),
-    isSourceLoaded: () => loaded,
+    isSourceLoaded: (id: string) => loaded.has(id),
     getZoom: () => 0,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   };
@@ -29,61 +29,85 @@ function fixture() {
   const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
   const emit = (name: string, event: object = {}) => { for (const handler of handlers.get(name) ?? []) handler(event as never); };
   const stage = () => [...sources.keys()].at(-1)!;
-  const complete = (sourceId = stage()) => { loaded = true; emit('sourcedata', { sourceId, tile: {} }); emit('render'); };
-  return { overlay, emit, complete, stage, opacity, sources, states, setLoaded: (value: boolean) => { loaded = value; } };
+  const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); await Promise.resolve(); };
+  return { overlay, emit, complete, stage, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z')); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-it('waits beyond 150 ms and retains the committed frame until successful replacement rendering', () => {
+it('waits beyond 150 ms and retains the committed frame until successful replacement rendering', async () => {
   const f = fixture(), b = build();
-  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); f.complete();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
   const old = f.stage();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
   expect(f.opacity.get(old)).toBe(0.7); expect(f.opacity.get(f.stage())).toBe(0);
   vi.advanceTimersByTime(1000); f.emit('render');
   expect(f.sources.has(old)).toBe(true);
-  f.complete();
+  await f.complete();
   expect(f.sources.has(old)).toBe(false);
   expect(f.states.at(-1)?.displayed?.frame).toBe(b.manifest.frames[1].id);
   f.overlay.destroy();
 });
 
-it('keeps old imagery on error and ignores success events from superseded sources', () => {
+it('keeps old imagery on a source failure and ignores success events from superseded sources', async () => {
   const f = fixture(), b = build();
-  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); f.complete();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
   const committed = f.stage();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id); const superseded = f.stage();
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[1].id);
-  f.complete(superseded);
+  await f.complete(superseded);
   expect(f.sources.has(committed)).toBe(true);
-  f.emit('error', { sourceId: f.stage(), tile: {}, error: new Error('offline') });
+  f.emit('error', { sourceId: f.stage(), error: new Error('offline') });
   expect(f.sources.size).toBe(1); expect(f.opacity.get(committed)).toBe(0.7);
-  expect(f.states.at(-1)?.error).toBe(true);
+  expect(f.states.at(-1)?.replacementFailed).toBe(true);
   f.overlay.destroy();
 });
 
-it('rechecks camera readiness and expires old imagery while a new model is loading', () => {
+it('keeps partial staging imagery when one tile fails and commits it with the remaining tiles', async () => {
+  const f = fixture(), b = build();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
+  const committed = f.stage();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
+  const staging = f.stage(), tile = {};
+  f.emit('error', { sourceId: staging, tile, error: new Error('offline') });
+  expect(f.sources.has(staging)).toBe(true);
+  expect(f.states.at(-1)?.replacementFailed).toBe(false);
+  f.markLoaded(staging);
+  f.emit('error', { sourceId: staging, tile: {}, error: new Error('settled empty') });
+  expect(f.sources.has(staging)).toBe(false);
+  expect(f.states.at(-1)?.replacementFailed).toBe(true);
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
+  const retry = f.stage();
+  f.emit('error', { sourceId: retry, tile, error: new Error('offline') });
+  await f.complete(retry);
+  expect(f.sources.has(committed)).toBe(false);
+  expect(f.states.at(-1)?.incomplete).toBe(true);
+  expect(f.states.at(-1)?.replacementFailed).toBe(false);
+  f.overlay.destroy();
+});
+
+it('rechecks camera readiness and expires old imagery while a new model is loading', async () => {
   const f = fixture(), b = build();
   b.expiresAtMs = Date.now() + 1000;
-  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); f.complete();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[0].id);
-  f.emit('movestart'); f.complete();
+  f.emit('movestart'); await f.complete();
   expect(f.sources.size).toBe(2);
-  f.emit('moveend'); f.emit('render'); expect(f.sources.size).toBe(1);
+  f.emit('moveend'); f.emit('render'); await Promise.resolve(); expect(f.sources.size).toBe(1);
   vi.advanceTimersByTime(1001); expect(f.sources.size).toBe(0);
   f.overlay.destroy();
 });
 
-it('allows a healthy replacement to finish after the displayed source reports an error', () => {
+it('allows a healthy replacement to finish after the displayed source reports an error', async () => {
   const f = fixture(), b = build();
-  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); f.complete();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
   const old = f.stage();
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[0].id); const next = f.stage();
   f.emit('error', { sourceId: old, tile: {}, error: new Error('old viewport failed') });
   expect(f.sources.has(next)).toBe(true);
-  f.complete(next);
-  expect(f.states.at(-1)?.error).toBe(false);
+  await f.complete(next);
+  expect(f.states.at(-1)?.incomplete).toBe(false);
+  expect(f.states.at(-1)?.replacementFailed).toBe(false);
   expect(f.sources.has(old)).toBe(false);
   f.overlay.destroy();
 });
@@ -98,7 +122,7 @@ it.each(['commit', 'failure'] as const)('preserves target prefetch through selec
   const f = fixture(), b = build();
   let interactive: Promise<unknown> | null = null;
   try {
-    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); f.complete(); f.emit('idle');
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete(); f.emit('idle');
     expect(requests.length).toBeGreaterThan(0);
     const target = requests[0];
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
@@ -111,8 +135,8 @@ it.each(['commit', 'failure'] as const)('preserves target prefetch through selec
     const bytes = new Uint8Array([82,73,70,70,4,0,0,0,87,69,66,80]);
     target.resolve(new Response(bytes, { headers: { 'content-type': 'image/webp', 'content-length': '12', 'cache-control': 'public, max-age=3600' } }));
     await interactive;
-    if (outcome === 'commit') f.complete();
-    else f.emit('error', { sourceId: f.stage(), tile: {}, error: new Error('decode failed') });
+    if (outcome === 'commit') await f.complete();
+    else f.emit('error', { sourceId: f.stage(), error: new Error('decode failed') });
     expect(requests.some(request => request !== target && request.signal.aborted)).toBe(true);
     expect(requests.filter(request => request.url === target.url)).toHaveLength(1);
   } finally { f.overlay.destroy(); await interactive?.catch(() => {}); }

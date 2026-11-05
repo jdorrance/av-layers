@@ -65,6 +65,7 @@ export interface ControllerState {
   opacity: number;
   badge: string;
   message: string | null;
+  notice: string | null;
   horizonNotice: string | null;
 }
 
@@ -81,6 +82,10 @@ export interface ControllerOptions {
 }
 
 const TILE_ERROR_MESSAGE = 'Overlay tile failed to load — forecast display may be incomplete.';
+
+export function forecastCommitted(state: ControllerState): boolean {
+  return state.phase === 'ready' && state.notice === null && (state.message === null || state.message === TILE_ERROR_MESSAGE);
+}
 
 function preferredLiftLayer(layers: readonly LayerId[]): LayerId | null {
   if (layers.includes('usable-lift-msl')) return 'usable-lift-msl';
@@ -104,6 +109,7 @@ export class PluginController {
   private badge = 'No frame selected';
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
+  private notice: string | null = null;
   // Successful LeafletGL tiles can move into the host cache without an unload
   // event. Membership must not keep those otherwise collectible tiles alive.
   private activeTiles = new WeakSet<object>();
@@ -163,6 +169,7 @@ export class PluginController {
       opacity: this.opacity,
       badge: this.badge,
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
+      notice: this.notice,
       horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice(this.build.manifest, this.now()) : null
     };
   }
@@ -174,6 +181,7 @@ export class PluginController {
   private fail(message: string): void {
     this.phase = 'error';
     this.message = message;
+    this.notice = null;
     this.emit();
   }
 
@@ -182,6 +190,7 @@ export class PluginController {
     this.started = true;
     this.phase = 'loading';
     this.message = null;
+    this.notice = null;
     this.clearTileState();
     this.emit();
     const loadAbort = new AbortController();
@@ -236,11 +245,11 @@ export class PluginController {
     const frame = selectExplicitFrame(this.build!.manifest.frames, id);
     if (!frame) {
       this.message = `Unknown frame ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     this.frameId = frame.id;
-    this.message = null;
     this.applyUrl();
     this.badge = frameBadge(frame, null, null).text;
     this.emit();
@@ -255,19 +264,20 @@ export class PluginController {
     if (!this.canUse()) return this.state();
     if (!this.build!.manifest.layers.includes(id)) {
       this.message = `Unknown layer ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     const template = this.build!.templates[id];
     if (!template || !this.frameId) {
       this.message = `No tile template for ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     const maxZoom = layerMaxZoom(this.build!.manifest, id);
     this.layerId = id;
     this.tileMaxZoom = maxZoom;
-    this.message = null;
     this.applyUrl();
     this.emit();
     return this.state();
@@ -357,10 +367,11 @@ export class PluginController {
     layer.setBuild?.(this.build!);
     layer.onStatus?.((status, displayedUrl) => {
       if (this.layer !== layer || !this.canUse()) return;
-      if (status === 'ready') this.clearTileState();
       this.displayedUrl = displayedUrl || null;
       const showing = this.displayedForecast ? `Showing ${this.displayedForecast}.` : '';
-      this.message = status === 'ready' ? null : `${status === 'error' ? 'Forecast replacement failed.' : 'Loading selected forecast.'} ${showing}`;
+      if (status === 'ready') { this.clearTileState(); this.message = null; this.notice = null; }
+      else if (status === 'error') { this.notice = null; this.message = showing ? `Forecast replacement failed. ${showing}` : 'Forecast replacement failed.'; }
+      else { this.message = null; this.notice = showing ? `Loading selected forecast. ${showing}` : 'Loading selected forecast.'; }
       this.emit();
     });
     this.host.map.addLayer(layer);
@@ -428,6 +439,7 @@ export class PluginController {
     this.clearTileState();
     this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
+    this.notice = null;
     this.releaseResources();
     this.emit();
   }

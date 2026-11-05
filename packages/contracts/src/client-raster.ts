@@ -42,7 +42,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
   const scheme = `av-raster-${crypto.randomUUID()}`, schemePrefix = `${scheme}://`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, retryDelayMs = options.retryDelayMs ?? 200;
   const maxActive = options.maxActive ?? 4, maxQueued = options.maxQueued ?? 64;
-  const maxCacheBytes = options.maxCacheBytes ?? 48 * 1024 * 1024, maxPrefetchActive = options.maxPrefetchActive ?? Math.min(4, maxActive);
+  const maxCacheBytes = options.maxCacheBytes ?? 48 * 1024 * 1024, maxPrefetchActive = options.maxPrefetchActive ?? Math.min(2, Math.max(1, maxActive - 2));
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0
       || !Number.isInteger(maxActive) || maxActive < 1 || maxActive > 16 || !Number.isInteger(maxQueued) || maxQueued < 1 || maxQueued > 512
       || !Number.isSafeInteger(maxCacheBytes) || maxCacheBytes < 0 || maxCacheBytes > 48 * 1024 * 1024
@@ -116,6 +116,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
       // Include URL/header strings and estimated Map, object and buffer metadata.
       const weight = result.data.byteLength + 256 + 2 * (task.url.length + task.build.length + (result.cacheControl?.length ?? 0) + (result.expires?.length ?? 0));
       if (until > Date.now() && weight <= maxCacheBytes) {
+        pruneCache();
         dropCache(task.url);
         while (cache.size && retainedBytes + weight > maxCacheBytes) dropCache(cache.keys().next().value!);
         cache.set(task.url, { response: result, until, build: task.build, weight });

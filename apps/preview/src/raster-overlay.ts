@@ -5,7 +5,7 @@ import { addProtocol, removeProtocol } from 'maplibre-gl';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }
 interface Slot extends Selection { id: string; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean; ready: boolean }
-export interface OverlayState { displayed: Selection | null; requested: Selection | null; error: boolean }
+export interface OverlayState { displayed: Selection | null; requested: Selection | null; incomplete: boolean; replacementFailed: boolean }
 
 /** Owns two raster slots and one bounded transport for a mounted preview map. */
 export class RasterOverlay {
@@ -15,16 +15,20 @@ export class RasterOverlay {
   private requested: Selection | null = null;
   private generation = 0;
   private opacity: number;
-  private error = false;
+  private incomplete = false;
+  private replacementFailed = false;
   private moving = false;
   private prefetchAbort: AbortController | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly data = (event: MapSourceDataEvent): void => {
-    if (event.sourceId === this.active?.id && event.tile && this.active.failed.delete(event.tile)) { this.error = this.active.sourceFailed || this.active.failed.size > 0; this.emit(); }
+    if (event.sourceId === this.active?.id && event.tile && this.active.failed.delete(event.tile)) {
+      this.incomplete = this.problem(this.active);
+      this.emit();
+    }
     const slot = this.staging;
     if (!slot || event.sourceId !== slot.id) return;
-    if (event.tile) { slot.pending.delete(event.tile); slot.successful = true; }
-    slot.ready = slot.successful && slot.pending.size === 0 && this.map.isSourceLoaded(slot.id);
+    if (event.tile) { slot.pending.delete(event.tile); slot.failed.delete(event.tile); slot.successful = true; }
+    this.settle(slot);
   };
   private readonly loading = (event: MapSourceDataEvent): void => {
     if (event.sourceId === this.staging?.id) {
@@ -33,17 +37,23 @@ export class RasterOverlay {
     }
   };
   private readonly abort = (event: MapSourceDataEvent): void => {
-    if (event.sourceId === this.staging?.id && event.tile) this.staging.pending.delete(event.tile);
-    if (event.sourceId === this.active?.id && event.tile && this.active.failed.delete(event.tile)) { this.error = this.active.sourceFailed || this.active.failed.size > 0; this.emit(); }
+    if (event.sourceId === this.staging?.id && event.tile) { this.staging.pending.delete(event.tile); this.settle(this.staging); }
+    if (event.sourceId === this.active?.id && event.tile && this.active.failed.delete(event.tile)) { this.incomplete = this.problem(this.active); this.emit(); }
   };
   private readonly failed = (event: ErrorEvent & { sourceId?: string; tile?: object }): void => {
     if (!event.sourceId) return;
-    if (event.sourceId !== this.staging?.id && event.sourceId !== this.active?.id) return;
-    const active = this.active;
-    if (active && event.sourceId === active.id) { if (event.tile) active.failed.add(event.tile); else active.sourceFailed = true; }
-    this.error = true;
-    if (event.sourceId === this.staging?.id) { this.drop(this.staging); this.staging = null; this.cancelPrefetch(); }
-    this.emit();
+    const slot = event.sourceId === this.staging?.id ? this.staging : event.sourceId === this.active?.id ? this.active : null;
+    if (!slot) return;
+    if (!event.tile) {
+      slot.sourceFailed = true;
+      if (slot === this.staging) this.abandon();
+      else { this.incomplete = true; this.emit(); }
+      return;
+    }
+    slot.failed.add(event.tile);
+    slot.pending.delete(event.tile);
+    if (slot === this.active) { this.incomplete = true; this.emit(); return; }
+    this.settle(slot);
   };
   private readonly render = (): void => {
     this.refresh();
@@ -51,9 +61,11 @@ export class RasterOverlay {
     if (!next?.ready || this.moving || !this.map.isSourceLoaded(next.id) || next.build.expiresAtMs <= Date.now()) return;
     const previous = this.active;
     this.map.setPaintProperty(next.id, 'raster-opacity', this.opacity);
-    this.active = next; this.staging = null; this.error = false;
+    this.active = next; this.staging = null;
+    this.replacementFailed = false;
+    this.incomplete = next.sourceFailed || next.failed.size > 0;
     this.cancelPrefetch();
-    this.drop(previous);
+    queueMicrotask(() => this.drop(previous));
     if (previous && previous.build.manifest.buildId !== next.build.manifest.buildId) this.protocol?.evictBuild(previous.build.manifest.buildId);
     this.armExpiry(); this.emit();
   };
@@ -62,7 +74,7 @@ export class RasterOverlay {
     this.cancelPrefetch();
     if (this.staging) this.staging.ready = false;
   };
-  private readonly settled = (): void => { this.moving = false; if (this.staging) this.staging.ready = this.staging.successful && this.staging.pending.size === 0 && this.map.isSourceLoaded(this.staging.id); };
+  private readonly settled = (): void => { this.moving = false; if (this.staging) this.settle(this.staging); };
   private readonly idle = (): void => { this.render(); this.prefetch(); };
 
   constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void) {
@@ -77,11 +89,12 @@ export class RasterOverlay {
     if (build.expiresAtMs <= Date.now()) { this.clear(); return; }
     this.requested = { build, layer, frame };
     if (this.active?.build === build && this.active.layer === layer && this.active.frame === frame) {
-      this.drop(this.staging); this.staging = null; this.error = this.active.sourceFailed || this.active.failed.size > 0; this.emit(); return;
+      this.drop(this.staging); this.staging = null; this.replacementFailed = false; this.incomplete = this.problem(this.active); this.emit(); return;
     }
     if (this.staging?.build === build && this.staging.layer === layer && this.staging.frame === frame) return;
     this.drop(this.staging); this.staging = null;
-    this.error = false;
+    this.replacementFailed = false;
+    this.incomplete = this.problem(this.active);
     if (!this.protocol) {
       this.protocol = createRasterTileProtocol(this.baseUrl);
       addProtocol(this.protocol.scheme, this.protocol.load);
@@ -97,7 +110,7 @@ export class RasterOverlay {
       this.map.addLayer({ ...previewRasterLayer(0), id, source: id, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } });
       this.armExpiry(); this.emit();
     } catch (error) {
-      this.drop(next); this.staging = null; this.error = true; this.cancelPrefetch(); this.emit(); throw error;
+      this.drop(next); this.staging = null; this.replacementFailed = true; this.cancelPrefetch(); this.emit(); throw error;
     }
   }
 
@@ -126,7 +139,7 @@ export class RasterOverlay {
     if (dispose && this.protocol) {
       this.protocol.dispose(); removeProtocol(this.protocol.scheme); this.protocol = null;
     }
-    this.error = false; this.emit();
+    this.incomplete = false; this.replacementFailed = false; this.emit();
   }
 
   destroy(): void {
@@ -137,13 +150,23 @@ export class RasterOverlay {
     this.map.off('moveend', this.settled); this.map.off('zoomend', this.settled); this.map.off('idle', this.idle);
   }
 
+  private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }
+  private settle(slot: Slot): void {
+    const settled = slot.pending.size === 0 && this.map.isSourceLoaded(slot.id);
+    slot.ready = settled && slot.successful && !slot.sourceFailed;
+    if (slot === this.staging && settled && !slot.successful && (slot.failed.size > 0 || slot.sourceFailed)) this.abandon();
+  }
+  private abandon(): void {
+    this.drop(this.staging); this.staging = null; this.cancelPrefetch();
+    this.replacementFailed = true; this.incomplete = this.problem(this.active); this.emit();
+  }
   private cancelPrefetch(): void { this.prefetchAbort?.abort(); this.prefetchAbort = null; }
   private drop(slot: Slot | null): void {
     if (!slot) return;
     if (this.map.getLayer(slot.id)) this.map.removeLayer(slot.id);
     if (this.map.getSource(slot.id)) this.map.removeSource(slot.id);
   }
-  private emit(): void { this.onState({ displayed: this.active, requested: this.requested, error: this.error }); }
+  private emit(): void { this.onState({ displayed: this.active, requested: this.requested, incomplete: this.incomplete, replacementFailed: this.replacementFailed }); }
   private armExpiry(): void {
     if (this.expiryTimer !== null) clearTimeout(this.expiryTimer);
     const deadline = Math.min(...[this.active, this.staging].flatMap(slot => slot ? [slot.build.expiresAtMs] : []));

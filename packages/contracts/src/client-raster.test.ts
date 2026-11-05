@@ -239,6 +239,33 @@ it('aborts an initial consumer independently and returns distinct coalesced buff
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
 
+it('reserves interactive slots under the default prefetch cap', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
+  const background = Array.from({ length: 4 }, (_, index) => protocol.prefetch(tile(index)));
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  const foreground = protocol.load({ url: protocol.url(tile(4)) }, new AbortController());
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  for (const done of finish.splice(0)) done(webp());
+  await foreground;
+  expect(fetchImpl).toHaveBeenCalledTimes(5);
+  for (const done of finish.splice(0)) done(webp());
+  await Promise.all(background);
+});
+
+it('drops expired cache entries before a newer tile can evict a live one', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(100_000);
+  const fetchImpl = vi.fn<typeof fetch>(async url => {
+    const response = webp();
+    if (String(url).endsWith('/1/50.webp')) response.headers.set('cache-control', 'public, max-age=1');
+    return response;
+  }), protocol = setup({ fetchImpl, maxCacheBytes: 1100 });
+  const load = (x: number) => protocol.load({ url: protocol.url(tile(x)) }, new AbortController());
+  await load(0); await load(1);
+  await vi.advanceTimersByTimeAsync(1500);
+  await load(2); await load(0);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+});
+
 it('defaults to four interactive fetches within the measured viewport budget', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
   const requests = Array.from({ length: 5 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
