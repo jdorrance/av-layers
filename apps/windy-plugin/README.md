@@ -1,30 +1,21 @@
 # Windy plugin
 
-Renders forecast tiles and point time series inside Windy, syncing with Windy's
-timeline and `singleclick` events.
-
-Run tests or build `dist/plugin.min.js` from the repository root:
+Draws usable-lift tiles on Windy's map, following its timeline and staying under the wind particles.
 
 ```sh
-pnpm test apps/windy-plugin
-AV_API_BASE=https://your-api.example pnpm --filter @av/windy-plugin build
+pnpm --filter @av/windy-plugin build
+pnpm --filter @av/windy-plugin serve
 ```
 
-`AV_API_BASE` is embedded at build time and defaults to `http://localhost:8787`.
-[src/pluginConfig.ts](src/pluginConfig.ts) defines the plugin metadata emitted
-to `dist/plugin.json`.
+`AV_API_BASE` is embedded at build time and defaults to `http://localhost:8787`. Open `https://127.0.0.1:9999/plugin.js`, accept the certificate, then load that URL from [Windy's developer loader](https://www.windy.com/developer-mode).
 
-Load `plugin.min.js` over HTTPS in [Windy's developer loader](https://www.windy.com/developer-mode)
-(see [Windy's debugging guide](https://docs.windy-plugins.com/getting-started/debugging.html),
-or open the [staging loader](https://www.windy.com/dev/windy-av-preview-staging.pages.dev/windy-plugin/plugin.min.js)
-in a fresh tab). For local UI work without Windy, use
-[`@av/preview`](../preview/README.md).
+The pane has model and opacity. Closing it leaves the overlay on the map. The overlay leaves when the build expires. For a map without Windy, use [`@av/preview`](../preview/README.md).
 
 ## Source layout
 
-- [src/plugin.ts](src/plugin.ts): Windy lifecycle hooks (`onopen`, `onclose`, `$destroy`).
-- [src/controller.ts](src/controller.ts): build pinning, layer/frame selection, and host timestamp sync.
-- [src/raster-layer.ts](src/raster-layer.ts): Leaflet tile layer adapter and abortable tile fetching.
-- [src/view.ts](src/view.ts): plugin panel DOM and keyboard/gesture isolation.
+- [src/plugin.ts](src/plugin.ts): pane lifecycle. The forecast layer outlives the pane.
+- [src/controller.ts](src/controller.ts): build pinning, usable-lift selection, and host timestamp sync.
+- [src/raster-layer.ts](src/raster-layer.ts): LeafletGL tile layer, tile protocol, and stacking order.
+- [src/view.ts](src/view.ts): model and opacity controls.
 
-See [the data guide](../../docs/data.md) for layer units and statuses.
+See [the data guide](../../docs/data.md) for layer units.

@@ -1,24 +1,10 @@
-import { renderBuildDiagnostics, renderPaletteLegend, renderSampleTable } from '@av/contracts/client/dom';
-import { type LayerId } from '@av/contracts';
-import {
-  coverageSummaryText,
-  DEFAULT_OPACITY,
-  formatSeriesSummary,
-  normalizePoint,
-  populateModelOptions,
-  type FrameSample,
-  type GeoPoint,
-  type PinnedBuild
-} from '@av/contracts/client';
+import { DEFAULT_OPACITY, populateModelOptions, type PinnedBuild } from '@av/contracts/client';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
 
 export interface PanelCallbacks {
   onModel(model: string): void;
-  onLayer(layer: LayerId): void;
-  onFrame(frame: string): void;
   onOpacity(opacity: number): void;
-  onSeries(): void;
   onBack(): void;
 }
 
@@ -29,26 +15,13 @@ const CSS = `
 .av-panel[hidden],.av-mobile-header[hidden]{display:none}
 .av-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .av-header h1{margin:0;font-size:15px}
-.av-back,.av-button{padding:5px 8px;border:0;border-radius:4px;background:#1c6b8a;color:#fff;cursor:pointer;font-size:12px}
-.av-button:disabled{opacity:.45;cursor:default}
-.av-muted,.av-palette-note{color:#8fa4ad;font-size:11px;margin:6px 0}
-.av-controls{display:grid;grid-template-columns:62px 1fr;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
+.av-back{padding:5px 8px;border:0;border-radius:4px;background:#1c6b8a;color:#fff;cursor:pointer;font-size:12px}
+.av-muted{color:#8fa4ad;font-size:11px;margin:6px 0}
+.av-controls{display:grid;grid-template-columns:62px 1fr auto;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
 .av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
-.av-badge{margin:8px 0;padding:5px 7px;background:#1d2b31;border:1px solid #2f444d;border-radius:4px;font-size:11px}
+.av-readout{min-width:36px;text-align:right;font-variant-numeric:tabular-nums;color:#e6edf0}
 .av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
 .av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
-.av-diagnostics{margin-top:12px;border-top:1px solid #253036;padding-top:8px}
-.av-diagnostics summary{cursor:pointer;color:#8fa4ad;font-size:11px;font-weight:600;margin-bottom:6px}
-.av-meta{display:grid;grid-template-columns:76px 1fr;gap:3px 8px;margin:8px 0;font-size:10.5px}
-.av-meta dt{color:#8fa4ad}.av-meta dd{margin:0;word-break:break-word}.av-meta a{color:#9bdcff}
-.av-panel h2{margin:10px 0 5px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#8fa4ad}
-.av-legend-row{display:flex;align-items:center;gap:6px;font-size:10.5px;min-height:16px}
-.av-swatch{width:22px;height:11px;border-radius:2px;border:1px solid #ffffff22;flex:none}
-.av-series-panel{margin-top:12px;border-top:1px solid #253036;padding-top:8px}
-.av-series{overflow-x:auto}
-.av-series table{width:100%;border-collapse:collapse;font-size:9px;margin-top:6px}
-.av-series th,.av-series td{padding:2px 3px;border-bottom:1px solid #253036;text-align:left;white-space:nowrap}
-.av-series th{color:#8fa4ad}
 `;
 
 function ensureStyles(): void {
@@ -69,77 +42,50 @@ export class PluginPanel {
   readonly root: HTMLElement;
   readonly mobileHeader: HTMLDivElement;
   private readonly modelSelect = node('select');
-  private readonly layerSelect = node('select');
-  private readonly frameSelect = node('select');
   private readonly opacityInput = node('input');
-  private readonly badge = node('p', 'av-badge');
+  private readonly opacityReadout = node('span', 'av-readout', '50%');
   private readonly status = node('p', 'av-muted');
-  private readonly coverage = node('p', 'av-muted');
-  private readonly meta = node('dl', 'av-meta');
-  private readonly legend = node('div', 'av-legend');
   private readonly error = node('p', 'av-error');
   private readonly horizonNotice = node('p', 'av-warning');
-  private readonly seriesStatus = node('p', 'av-muted');
-  private readonly series = node('div', 'av-series');
-  private readonly seriesButton = node('button', 'av-button', 'Sample clicked point');
   private renderedBuildId: string | null = null;
-  private renderedLegend: { buildId: string; layer: string | null } | null = null;
-  private currentBuild: PinnedBuild | null = null;
-  private clicked: GeoPoint | null = null;
 
   constructor(callbacks: PanelCallbacks) {
     ensureStyles();
-    // Native pane content and mobile drag header are mounted as siblings,
-    // following Windy's rhpane/fullscreen layout contract.
     this.root = node('section', 'plugin__content av-panel');
     this.mobileHeader = node('div', 'plugin__mobile-header av-mobile-header', config.title);
     this.root.addEventListener('keydown', event => {
-      // Keep control keys away from Windy's page shortcuts without canceling native actions.
       if (event.key !== 'Escape' && event.key !== 'Tab') event.stopPropagation();
     });
     const header = node('header', 'plugin__title av-header');
-    const title = node('h1', undefined, config.title);
     const back = node('button', 'av-back', '← Menu');
     back.type = 'button';
     back.addEventListener('click', callbacks.onBack);
-    header.append(title, back);
+    header.append(node('h1', undefined, config.title), back);
     populateModelOptions(this.modelSelect);
+    this.modelSelect.id = 'av-model';
     this.modelSelect.addEventListener('change', () => callbacks.onModel(this.modelSelect.value));
-    this.layerSelect.addEventListener('change', () => {
-      if (this.currentBuild) this.renderLegend(this.currentBuild, this.layerSelect.value);
-      callbacks.onLayer(this.layerSelect.value as LayerId);
-    });
-    this.frameSelect.addEventListener('change', () => callbacks.onFrame(this.frameSelect.value));
+    this.opacityInput.id = 'av-opacity';
     this.opacityInput.type = 'range';
     this.opacityInput.min = '0';
     this.opacityInput.max = '1';
-    this.opacityInput.step = '0.05';
+    this.opacityInput.step = '0.01';
     this.opacityInput.value = String(DEFAULT_OPACITY);
-    this.opacityInput.addEventListener('input', () => callbacks.onOpacity(Number(this.opacityInput.value)));
-    this.seriesButton.type = 'button';
-    this.seriesButton.disabled = true;
-    this.seriesButton.addEventListener('click', callbacks.onSeries);
-    this.series.role = 'region';
-    this.series.ariaLabel = 'Point forecast values';
+    this.opacityInput.addEventListener('input', () => {
+      const opacity = Number(this.opacityInput.value);
+      this.opacityReadout.textContent = percent(opacity);
+      callbacks.onOpacity(opacity);
+    });
     this.error.hidden = true;
     this.error.role = 'alert';
     this.horizonNotice.hidden = true;
     this.horizonNotice.role = 'status';
     const controls = node('div', 'av-controls');
-    for (const [name, control] of [
-      ['Model', this.modelSelect], ['Layer', this.layerSelect],
-      ['Frame', this.frameSelect], ['Opacity', this.opacityInput]
-    ] as const) {
-      control.id = `av-${name.toLowerCase()}`;
-      const label = node('label', undefined, name);
-      label.htmlFor = control.id;
-      controls.append(label, control);
-    }
-    const seriesPanel = node('section', 'av-series-panel');
-    seriesPanel.append(node('h2', undefined, 'Point series'), this.seriesStatus, this.seriesButton, this.series);
-    const diagnostics = node('details', 'av-diagnostics');
-    diagnostics.append(node('summary', undefined, 'Build & method diagnostics'), this.meta);
-    this.root.append(header, this.status, this.horizonNotice, controls, this.badge, this.error, this.coverage, this.legend, seriesPanel, diagnostics);
+    const modelLabel = node('label', undefined, 'Model');
+    modelLabel.htmlFor = this.modelSelect.id;
+    const opacityLabel = node('label', undefined, 'Opacity');
+    opacityLabel.htmlFor = this.opacityInput.id;
+    controls.append(modelLabel, this.modelSelect, node('span'), opacityLabel, this.opacityInput, this.opacityReadout);
+    this.root.append(header, this.status, this.horizonNotice, controls, this.error);
   }
 
   setVisible(visible: boolean): void {
@@ -156,87 +102,30 @@ export class PluginPanel {
     this.error.textContent = message ?? '';
   }
 
-  setSeriesStatus(text: string): void {
-    this.seriesStatus.textContent = text;
-  }
-
-  clearSeries(): void {
-    this.series.replaceChildren();
-    this.series.tabIndex = -1;
-    this.setSeriesStatus('');
-  }
-
-  setClicked(lat: number, lon: number): void {
-    this.clearSeries();
-    this.clicked = normalizePoint(lat, lon);
-    this.seriesButton.disabled = false;
-    this.seriesStatus.textContent = `Clicked ${this.clicked.lat.toFixed(4)}, ${this.clicked.lon.toFixed(4)}`;
-  }
-
-  get clickedPoint(): GeoPoint | null {
-    return this.clicked;
-  }
-
-  setSeriesEnabled(enabled: boolean): void {
-    this.seriesButton.disabled = !enabled || !this.clicked;
-  }
-
   renderBuild(build: PinnedBuild): void {
     const key = `${build.manifest.model}:${build.manifest.buildId}`;
-    this.currentBuild = build;
-    if (this.renderedBuildId === key) {
-      this.renderLegend(build, this.layerSelect.value);
-      return;
-    }
+    if (this.renderedBuildId === key) return;
     this.renderedBuildId = key;
     this.modelSelect.value = build.manifest.model;
-    this.layerSelect.replaceChildren(...build.manifest.layers.map(layer => new Option(build.manifest.descriptors.layers[layer].label, layer)));
-    this.layerSelect.value = build.manifest.layers[0] ?? '';
-    this.frameSelect.replaceChildren(...build.manifest.frames.map(frame => new Option(`${frame.id} · ${frame.validTime}`, frame.id)));
-    this.coverage.textContent = coverageSummaryText(build);
-    renderBuildDiagnostics(this.meta, build);
-    this.renderLegend(build, this.layerSelect.value);
-  }
-
-  private renderLegend(build: PinnedBuild, activeLayer: string | null): void {
-    const buildId = `${build.manifest.model}:${build.manifest.buildId}`;
-    if (this.renderedLegend?.buildId === buildId && this.renderedLegend.layer === activeLayer) return;
-    this.renderedLegend = { buildId, layer: activeLayer };
-    renderPaletteLegend(this.legend, build, activeLayer);
   }
 
   renderState(state: ControllerState): void {
-    this.badge.textContent = state.badge;
     this.setError(state.message);
     this.horizonNotice.hidden = state.horizonNotice === null;
     this.horizonNotice.textContent = state.horizonNotice ?? '';
-    if (state.frameId) this.frameSelect.value = state.frameId;
-    if (state.layerId) {
-      this.layerSelect.value = state.layerId;
-      if (this.currentBuild) this.renderLegend(this.currentBuild, state.layerId);
+    if (document.activeElement !== this.opacityInput) {
+      this.opacityInput.value = String(state.opacity);
+      this.opacityReadout.textContent = percent(state.opacity);
     }
-    this.opacityInput.value = String(state.opacity);
-    const usable = state.phase === 'ready';
-    this.modelSelect.disabled = !usable;
-    this.layerSelect.disabled = !usable;
-    this.frameSelect.disabled = !usable;
-    this.opacityInput.disabled = !usable;
-    this.setSeriesEnabled(usable);
+    this.modelSelect.disabled = state.phase === 'disposed';
+    this.opacityInput.disabled = state.phase === 'disposed' || state.phase === 'expired';
     if (state.phase === 'loading') this.setStatus('Loading latest immutable build…');
     if (state.phase === 'expired') this.setStatus('Expired build — overlay removed');
     if (state.phase === 'ready' && state.buildId) this.setStatus(`Pinned build ${state.buildId}`);
     if (state.phase === 'error') this.setStatus('No viewable build');
   }
+}
 
-  renderSeries(
-    payload: { frames: FrameSample[]; method: unknown; source?: unknown; coverage?: unknown; surfaces?: readonly { id: string }[]; expiresAt: string },
-    layers: string[],
-    point?: GeoPoint
-  ): void {
-    if (!this.currentBuild) return;
-    renderSampleTable(this.series, payload, layers, this.currentBuild);
-    this.series.tabIndex = 0;
-    const targetPoint = point ?? this.clicked ?? { lat: 0, lon: 0 };
-    this.seriesStatus.textContent = formatSeriesSummary(payload, layers, targetPoint);
-  }
+function percent(opacity: number): string {
+  return `${Math.round(opacity * 100)}%`;
 }

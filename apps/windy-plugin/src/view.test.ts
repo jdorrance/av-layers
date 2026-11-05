@@ -1,7 +1,5 @@
-import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, expect, it, vi } from 'vitest';
-import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
-import { createProductDescriptors } from '@av/contracts';
+import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -12,14 +10,16 @@ class FakeElement {
   style: { background?: string } = {};
   textContent = '';
   hidden = false;
-  href = '';
-  target = '';
-  rel = '';
   className = '';
   id = '';
   htmlFor = '';
   role = '';
   value = '';
+  disabled = false;
+  type = '';
+  min = '';
+  max = '';
+  step = '';
   constructor(readonly tag: string) {}
   append(...children: FakeElement[]): void {
     for (const child of children) child.parent = this;
@@ -41,56 +41,62 @@ class FakeElement {
   }
 }
 
+const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn() });
+
+function installDom(active: FakeElement | null = null): { activeElement: FakeElement | null } {
+  const document = {
+    activeElement: active,
+    getElementById: () => null,
+    createElement: (tag: string) => new FakeElement(tag),
+    head: new FakeElement('head')
+  };
+  vi.stubGlobal('document', document);
+  vi.stubGlobal('Option', class extends FakeElement {
+    constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; }
+  });
+  return document;
+}
+
+function visit(element: FakeElement): FakeElement[] {
+  return [element, ...element.children.flatMap(visit)];
+}
+
+const ready: ControllerState = {
+  phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
+  badge: 'Host frame f003', message: null, horizonNotice: null
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
-it('replaces GFS precipitation and frame options with the selected ICON build contents', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const state: ControllerState = { phase: 'ready', model: 'gfs', buildId: 'same-build-id', frameId: 'f003', layerId: 'precip-rate', opacity: 0.5, badge: '', message: null, horizonNotice: null };
-  panel.renderBuild(fixtureBuild({ buildId: state.buildId! }));
-  panel.renderState(state);
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+it('offers the published models and follows the selected build', () => {
+  installDom();
+  const panel = new PluginPanel(callbacks());
+  panel.renderBuild(fixtureBuild({ buildId: 'build-1' }));
+  panel.renderState(ready);
   const nodes = visit(panel.root as unknown as FakeElement);
-  const layer = nodes.find(element => element.id === 'av-layer')!;
-  const frame = nodes.find(element => element.id === 'av-frame')!;
-  expect(layer.value).toBe('precip-rate');
-  expect(layer.children.some(option => option.value === 'precip-rate')).toBe(true);
-
-  const frames = [
-    { id: 'f007', validTime: '2026-10-29T19:00:00.000Z', intervalStart: '2026-10-29T18:00:00.000Z', intervalEnd: '2026-10-29T19:00:00.000Z' },
-    { id: 'f020', validTime: '2026-10-30T08:00:00.000Z', intervalStart: '2026-10-30T07:00:00.000Z', intervalEnd: '2026-10-30T08:00:00.000Z' }
-  ];
-  panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: state.buildId!, frames,
-    layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) }));
-  expect(nodes.find(element => element.id === 'av-model')?.value).toBe('icon-eu');
-  expect(layer.children.map(option => option.value)).toEqual(SPLIT_PRODUCT.layers);
-  expect(layer.value).toBe(SPLIT_PRODUCT.layers[0]);
-  expect(frame.children.map(option => [option.value, option.textContent])).toEqual(frames.map(value => [value.id, `${value.id} · ${value.validTime}`]));
-  const legend = nodes.find(element => element.className === 'av-legend')!;
-  expect(visit(legend).some(element => element.textContent === 'rain · mm/h')).toBe(false);
-  expect(visit(legend).some(element => element.textContent === 'lift · m')).toBe(true);
+  const model = nodes.find(element => element.id === 'av-model')!;
+  expect(model.value).toBe('gfs');
+  expect(model.children.map(option => option.value)).toEqual(['gfs', 'icon-eu', 'rrfs']);
+  expect(nodes.some(element => element.id === 'av-layer' || element.id === 'av-frame')).toBe(false);
+  panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: 'build-1' }));
+  expect(model.value).toBe('icon-eu');
 });
 
-it('associates visible labels with each keyboard control and exposes failures as alerts', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
+it('associates visible labels with the model and opacity controls', () => {
+  installDom();
+  const panel = new PluginPanel(callbacks());
   const nodes = visit(panel.root as unknown as FakeElement);
   const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
-  expect(controls).toHaveLength(4);
-  expect(new Set(controls.map(control => control.id)).size).toBe(4);
-  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Layer', 'Frame', 'Opacity']);
+  expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity']);
+  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity']);
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
 });
 
 it('keeps native panel control keys separate from page shortcuts while allowing Escape and Tab', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const callbacks = { onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() };
-  const panel = new PluginPanel(callbacks);
+  installDom();
+  const handlers = callbacks();
+  const panel = new PluginPanel(handlers);
   const body = new FakeElement('body'), map = new FakeElement('canvas');
   body.append(panel.root as unknown as FakeElement, map);
   const pageKeys: string[] = [];
@@ -101,9 +107,7 @@ it('keeps native panel control keys separate from page shortcuts while allowing 
     if (key === 'ArrowRight') { hostTime++; event.preventDefault(); }
   });
   const keydown = (key: string) => Object.assign(new Event('keydown', { bubbles: true, cancelable: true }), { key });
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
-  const nodes = visit(panel.root as unknown as FakeElement);
-  const controls = nodes.filter(element => ['select', 'input', 'button', 'summary'].includes(element.tag));
+  const controls = visit(panel.root as unknown as FakeElement).filter(element => ['select', 'input', 'button'].includes(element.tag));
   for (const control of controls) {
     for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowDown', ' ', 'f', 'Home']) {
       const event = keydown(key);
@@ -113,24 +117,19 @@ it('keeps native panel control keys separate from page shortcuts while allowing 
   }
   expect(pageKeys).toEqual([]);
   expect(hostTime).toBe(9);
-
-  // Native range changes remain allowed; its input event still reaches the panel callback.
-  const opacity = nodes.find(element => element.id === 'av-opacity')!;
+  const opacity = visit(panel.root as unknown as FakeElement).find(element => element.id === 'av-opacity')!;
   opacity.value = '0.55';
   opacity.dispatchEvent(new Event('input', { bubbles: true }));
-  expect(callbacks.onOpacity).toHaveBeenCalledWith(0.55);
+  expect(handlers.onOpacity).toHaveBeenCalledWith(0.55);
   for (const key of ['Escape', 'Tab']) expect(opacity.dispatchEvent(keydown(key))).toBe(true);
   expect(pageKeys).toEqual(['Escape', 'Tab']);
-
-  // Keyboard use outside the panel still belongs to the host.
   expect(map.dispatchEvent(keydown('ArrowRight'))).toBe(false);
   expect(hostTime).toBe(10);
 });
 
 it('leaves native mobile header gestures to the host and hides both pane elements together', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
+  installDom();
+  const panel = new PluginPanel(callbacks());
   const target = new FakeElement('target');
   target.append(panel.mobileHeader as unknown as FakeElement, panel.root as unknown as FakeElement);
   const startSlide = vi.fn();
@@ -146,65 +145,10 @@ it('leaves native mobile header gestures to the host and hides both pane element
   expect(panel.root.hidden).toBe(false);
 });
 
-it('renders build-specific opaque or transparent no-lift legends and discloses diagnostics inside details', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const callbacks = { onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() };
-  for (const [color, label] of [['#00000000', 'no usable lift (transparent)'], ['#55184d', 'no usable lift']]) {
-    const panel = new PluginPanel(callbacks);
-    const build = fixtureBuild({
-      buildId: color === '#00000000' ? 'transparent' : 'opaque',
-      descriptors: { ...fixtureManifest().descriptors, palettes: [
-        { id: 'lift', units: 'm', edges: [0, 300], colors: ['#55184d'], noLiftColor: color },
-        { id: 'rain', units: 'mm/h', edges: [0.1, 0.5], colors: ['#b9e5ff'], transparentBelow: 0.1, provisional: true }
-      ] }
-    });
-    panel.renderBuild(build);
-    const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
-    const nodes = visit(panel.root as unknown as FakeElement);
-    const row = nodes.find(element => element.className === 'av-legend-row' && element.children.some(child => child.textContent === label));
-    expect(row?.children[0].style.background).toBe(color);
-    expect(row?.children[1].textContent).toBe(label);
-    const headings = nodes.filter(element => element.tag === 'h2').map(element => element.textContent);
-    expect(headings).toContain('lift · m');
-    expect(headings).not.toContain('rain · mm/h');
-    expect(nodes.some(element => element.tag === 'details' && element.className === 'av-diagnostics')).toBe(true);
-  }
-});
-
-it('normalizes wrapped longitudes and clears existing series when clicking a new point', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  panel.renderBuild(fixtureBuild());
-  panel.setClicked(32.9, 190);
-  expect(panel.clickedPoint).toEqual({ lat: 32.9, lon: -170 });
-  panel.renderSeries(
-    {
-      frames: [{ id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z', layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } }],
-      method: { id: 'dry-lenschow-pbl-1p2-v1' },
-      source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
-      coverage: { id: 'soaring-land-v1' },
-      expiresAt: '2026-10-31T00:00:00Z'
-    },
-    ['precip-rate'],
-    panel.clickedPoint!
-  );
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
-  const series = visit(panel.root as unknown as FakeElement).find(element => element.className === 'av-series')!;
-  expect(series.children).toHaveLength(1);
-  panel.setClicked(40.1, 44.5);
-  expect(series.children).toHaveLength(0);
-});
-
 it('keeps horizon warnings visible alongside errors and removes them on expiry', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const state: ControllerState = {
-    phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'precip-rate', opacity: 0.5,
-    badge: 'Explicit frame f003', message: 'Overlay tile failed to load', horizonNotice: 'Forecast ended — update overdue.'
-  };
+  installDom();
+  const panel = new PluginPanel(callbacks());
+  const state: ControllerState = { ...ready, message: 'Overlay tile failed to load', horizonNotice: 'Forecast ended — update overdue.' };
   panel.renderState(state);
   const children = (panel.root as unknown as FakeElement).children;
   const warning = children.find(element => element.className === 'av-warning')!;
@@ -221,78 +165,17 @@ it('keeps horizon warnings visible alongside errors and removes them on expiry',
   expect(error.textContent).toBe('Build expired');
 });
 
-it.each(['https://api.test/provenance.json', 'http://localhost:8787/provenance.json', 'javascript:alert(1)'])('links HTTP(S) provenance in build diagnostics: %s', provenanceUrl => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const build = fixtureBuild();
-  build.manifest.source.provenanceUrl = provenanceUrl;
-  panel.renderBuild(build);
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
-  const diagnostics = (panel.root as unknown as FakeElement).children.find(element => element.tag === 'details')!;
-  const link = visit(diagnostics).find(element => element.tag === 'a');
-  if (provenanceUrl.startsWith('http')) {
-    expect(link?.href).toBe(provenanceUrl);
-    expect(link?.target).toBe('_blank');
-    expect(link?.rel).toContain('noopener');
-  } else expect(link).toBeUndefined();
-});
-
-
-it('reuses legend nodes for unchanged state and refreshes them for layer or immutable build changes', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  const build = fixtureBuild({ buildId: 'build-1' });
-  const state: ControllerState = { phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5, badge: 'f003', message: null, horizonNotice: null };
-  panel.renderBuild(build);
-  const legend = (panel.root as unknown as FakeElement).children.find(element => element.className === 'av-legend')!;
-  const initial = legend.children[0];
-  panel.renderState(state);
-  panel.renderState({ ...state, opacity: 0.8, badge: 'Host time changed' });
-  panel.renderState({ ...state, message: 'Tile failed', horizonNotice: 'Forecast ended' });
-  panel.renderBuild(build);
-  expect(legend.children[0]).toBe(initial);
-
-  panel.renderState({ ...state, layerId: 'precip-rate' });
-  const rain = legend.children[0];
-  expect(rain).not.toBe(initial);
-  expect(rain.children[0].textContent).toBe('rain · mm/h');
-  panel.renderState({ ...state, layerId: 'precip-rate', opacity: 0.2 });
-  expect(legend.children[0]).toBe(rain);
-
-  panel.renderBuild(fixtureBuild({ buildId: 'recolored', layers: ['precip-rate'], descriptors: {
-    ...build.manifest.descriptors, palettes: build.manifest.descriptors.palettes.map(palette => palette.id === 'rain' ? { ...palette, colors: ['#123456'] } : palette)
-  } }));
-  const recolored = legend.children[0];
-  expect(recolored).not.toBe(rain);
-  expect(recolored.children[1].children[0].style.background).toBe('#123456');
-
-  panel.renderBuild(fixtureBuild({ buildId: 'build-2' }));
-  expect(legend.children[0]).not.toBe(recolored);
-  expect(legend.children[0].children[0].textContent).toBe('lift · m');
-});
-
-it('renders a v5 sample with surface ids and surfaces in the series summary', () => {
-  vi.stubGlobal('document', { getElementById: () => null, createElement: (tag: string) => new FakeElement(tag), head: new FakeElement('head') });
-  vi.stubGlobal('Option', class extends FakeElement { constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; } });
-  const panel = new PluginPanel({ onModel: vi.fn(), onLayer: vi.fn(), onFrame: vi.fn(), onOpacity: vi.fn(), onSeries: vi.fn(), onBack: vi.fn() });
-  panel.renderBuild(fixtureBuild());
-  panel.renderSeries(
-    {
-      frames: [{ id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z', layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false, surfaceId: 'gfs-native' } } }],
-      method: { id: 'trailing-precipitation-rate-v1', hash: 'a'.repeat(64) },
-      source: { provider: 'NOAA', provenanceKey: 'builds/gfs/build-1/provenance.json', provenanceSha256: 'a'.repeat(64) },
-      surfaces: [{ id: 'gfs-native' }],
-      expiresAt: '2026-10-31T00:00:00Z'
-    },
-    ['precip-rate'],
-    { lat: 32.9, lon: -117.25 }
-  );
-  const visit = (element: FakeElement): FakeElement[] => [element, ...element.children.flatMap(visit)];
-  const nodes = visit(panel.root as unknown as FakeElement);
-  const series = nodes.find(element => element.className === 'av-series')!;
-  expect(series.children).toHaveLength(1);
-  expect(visit(series).some(element => element.textContent.includes('gfs-native'))).toBe(true);
-  expect(nodes.some(element => element.textContent.includes('coverage gfs-native'))).toBe(true);
+it('leaves the opacity slider alone while it is being dragged', () => {
+  const opacity = new FakeElement('input');
+  installDom(opacity);
+  const panel = new PluginPanel(callbacks());
+  const input = visit(panel.root as unknown as FakeElement).find(element => element.id === 'av-opacity')!;
+  const document = globalThis.document as { activeElement: FakeElement | null };
+  document.activeElement = input;
+  input.value = '0.33';
+  panel.renderState({ ...ready, opacity: 0.9 });
+  expect(input.value).toBe('0.33');
+  document.activeElement = null;
+  panel.renderState({ ...ready, opacity: 0.9 });
+  expect(input.value).toBe('0.9');
 });

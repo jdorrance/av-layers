@@ -8,36 +8,38 @@
   </head>
   <body>
     <div id="app">
-      <aside id="panel">
-        <header>
-          <h1>Aviation Forecast Layers</h1>
-          <p id="freshness" class="muted">Loading latest immutable build…</p>
-        </header>
-        <div class="controls">
-          <label>Model <select id="model"></select></label>
-          <label>Layer <select id="layer"></select></label>
-          <label>Frame <select id="frame"></select></label>
-          <label>Opacity <input id="opacity" type="range" min="0" max="1" step="0.05" value="0.5" /></label>
-        </div>
-        <p id="timestamp" class="badge">No frame selected</p>
-        <p id="horizon-notice" class="notice" role="status" hidden></p>
-        <p id="tile-error" class="error" role="alert" hidden></p>
-        <p id="error" class="error" hidden></p>
-        <p id="coverage-note" class="muted"></p>
-        <div id="legend"></div>
-        <section id="series-panel">
-          <h2>Point series</h2>
-          <p class="muted">Click the map, then request the frames and layers in this build.</p>
-          <button id="series-button" type="button" disabled>Sample clicked point</button>
-          <p id="series-status" class="muted"></p>
-          <div id="series" role="region" aria-label="Point forecast values" tabindex="-1"></div>
-        </section>
-        <details class="diagnostics">
-          <summary>Build &amp; method diagnostics</summary>
-          <dl id="meta"></dl>
-        </details>
-      </aside>
       <div id="map"></div>
+      <header id="topbar">
+        <div id="models" role="toolbar" aria-label="Forecast model"></div>
+        <div id="reference" role="group" aria-label="Lift reference">
+          <button id="ref-agl" type="button" class="ref">AGL</button>
+          <button id="ref-msl" type="button" class="ref">MSL</button>
+        </div>
+        <label id="opacity-label">
+          Opacity
+          <input id="opacity" type="range" min="0" max="1" step="0.01" value="0.7" />
+          <span id="opacity-readout">70%</span>
+        </label>
+      </header>
+      <aside id="legend" class="ribbon" hidden>
+        <div id="legend-body"></div>
+        <button id="legend-toggle" type="button" aria-expanded="true" aria-label="Collapse lift scale">⌃</button>
+      </aside>
+      <footer id="timebar">
+        <div id="days" role="toolbar" aria-label="Forecast day"></div>
+        <input id="time" type="range" min="0" max="0" step="1" value="0" aria-label="Forecast time" />
+        <p id="timestamp">No frame selected</p>
+      </footer>
+      <p id="horizon-notice" class="toast" role="status" hidden></p>
+      <p id="tile-error" class="toast error" role="alert" hidden></p>
+      <p id="error" class="toast error" role="alert" hidden></p>
+      <p id="freshness" class="sr-only">Loading latest immutable build…</p>
+      <div id="point-card" hidden>
+        <p id="point-summary"></p>
+        <p id="point-status"></p>
+        <div id="point-body" tabindex="-1"></div>
+        <dl id="meta"></dl>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

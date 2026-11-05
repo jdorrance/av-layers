@@ -1,6 +1,22 @@
 import type { HostTileEvent, HostTileEventName, HostTileLayer, WindyTileOptions } from './controller';
 import { createRasterTileProtocol } from '@av/contracts/client';
 
+export interface ForecastLayerOrder {
+  MAIN?: number;
+  PARTICLES?: number;
+  PARTICLES_HIGH_ZOOM?: number;
+}
+
+/** Sit one step above the weather color and below wind particles. A one-step gap uses the midpoint so particles stay on top. */
+export function forecastStackZIndex(order: ForecastLayerOrder | undefined): number {
+  const main = typeof order?.MAIN === 'number' && Number.isFinite(order.MAIN) ? order.MAIN : 0;
+  const ceiling = [order?.PARTICLES, order?.PARTICLES_HIGH_ZOOM]
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > main)
+    .reduce((lowest, value) => Math.min(lowest, value), Number.POSITIVE_INFINITY);
+  if (!Number.isFinite(ceiling)) return main + 1;
+  return ceiling - main > 1 ? main + 1 : (main + ceiling) / 2;
+}
+
 type SourceEventName = 'dataloading' | 'data' | 'error' | 'dataabort';
 export interface RasterSourceEvent { tile?: object }
 export interface NativeRasterSource {

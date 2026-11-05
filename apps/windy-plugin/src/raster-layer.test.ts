@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { windyTileOptions } from '@av/contracts/client';
-import { WindyRasterLayer, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
+import { forecastStackZIndex, WindyRasterLayer, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -142,4 +142,13 @@ it('preserves the registered protocol after a native URL update fails and cleans
   layer.remove();
   expect(api.removeProtocol).toHaveBeenCalledTimes(1);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
+});
+
+it('stacks the forecast just above the weather color and below wind particles', () => {
+  expect(forecastStackZIndex(undefined)).toBe(1);
+  expect(forecastStackZIndex({ MAIN: 10 })).toBe(11);
+  expect(forecastStackZIndex({ MAIN: 10, PARTICLES: 12 })).toBe(11);
+  expect(forecastStackZIndex({ MAIN: 10, PARTICLES: 11 })).toBe(10.5);
+  expect(forecastStackZIndex({ MAIN: 10, PARTICLES: 40, PARTICLES_HIGH_ZOOM: 11 })).toBe(10.5);
+  expect(forecastStackZIndex({ MAIN: 10, PARTICLES: 9 })).toBe(11);
 });

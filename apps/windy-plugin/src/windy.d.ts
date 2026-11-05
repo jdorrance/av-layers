@@ -3,7 +3,10 @@
 type WindySingleclickPoint = { lat: number; lon: number };
 
 declare const W: {
-  map: { map: import('./raster-layer').NativeRasterMap };
+  map: {
+    map: import('./raster-layer').NativeRasterMap;
+    layerOrder?: import('./raster-layer').ForecastLayerOrder;
+  };
   singleclick: { singleclick: {
     on(name: string, listener: (point: WindySingleclickPoint) => void): unknown;
     off(name: string, listener: (point: WindySingleclickPoint) => void): unknown;

@@ -7,8 +7,9 @@ import {
   frameTileUrl,
   frameTime,
   layerMaxZoom,
-  matchHostFrame,
+  hostTimestampMs,
   selectExplicitFrame,
+  selectHostFrame,
   syncTimestampForFrame,
   windyTileOptions,
   type DatasetRange,
@@ -40,8 +41,8 @@ export interface HostMap {
 export interface HostStore {
   get(key: 'timestamp'): unknown;
   set(key: 'timestamp', value: number): boolean;
-  on(event: 'timestamp', listener: (value: number) => void): unknown;
-  off?(event: 'timestamp', listener: (value: number) => void): unknown;
+  on(event: 'timestamp', listener: (value: unknown) => void): unknown;
+  off?(event: 'timestamp', listener: (value: unknown) => void): unknown;
 }
 
 export interface WindyHost {
@@ -68,7 +69,6 @@ export interface ControllerOptions {
   model: ModelId;
   loadBuild(model: ModelId, options: { signal: AbortSignal }): Promise<PinnedBuild>;
   host: WindyHost;
-  initialLayer?: LayerId;
   opacity?: number;
   hostRange?: () => DatasetRange | null;
   onState?: (state: ControllerState) => void;
@@ -78,6 +78,12 @@ export interface ControllerOptions {
 }
 
 const TILE_ERROR_MESSAGE = 'Overlay tile failed to load — forecast display may be incomplete.';
+
+function preferredLiftLayer(layers: readonly LayerId[]): LayerId | null {
+  if (layers.includes('usable-lift-msl')) return 'usable-lift-msl';
+  if (layers.includes('usable-lift-agl')) return 'usable-lift-agl';
+  return layers[0] ?? null;
+}
 
 export class PluginController {
   private readonly options: ControllerOptions;
@@ -104,7 +110,7 @@ export class PluginController {
   private timeTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private disposed = false;
-  private readonly onTimestamp = (value: number): void => {
+  private readonly onTimestamp = (value: unknown): void => {
     this.syncHost(value);
   };
   private readonly onTileStart = (event: HostTileEvent): void => {
@@ -182,15 +188,11 @@ export class PluginController {
         return this.state();
       }
       this.build = build;
-      const initialLayer =
-        this.options.initialLayer && build.manifest.layers.includes(this.options.initialLayer)
-          ? this.options.initialLayer
-          : build.manifest.layers[0];
-      this.layerId = initialLayer ?? null;
-      const hostTimestamp = this.host.store.get('timestamp');
-      const hostValue = typeof hostTimestamp === 'number' && Number.isFinite(hostTimestamp) ? hostTimestamp : null;
-      const hostFrame = hostValue === null ? null : matchHostFrame(build.manifest.frames, hostValue);
-      const first = hostFrame ?? selectExplicitFrame(build.manifest.frames, build.manifest.frames[0]?.id ?? '');
+      this.layerId = preferredLiftLayer(build.manifest.layers);
+      const hostValue = hostTimestampMs(this.host.store.get('timestamp'));
+      const first = hostValue === null
+        ? selectExplicitFrame(build.manifest.frames, build.manifest.frames[0]?.id ?? '')
+        : selectHostFrame(build.manifest.frames, hostValue);
       if (!first || !this.layerId) {
         this.fail('Build has no usable frame or layer');
         return this.state();
@@ -201,11 +203,11 @@ export class PluginController {
         this.fail(`Build has no tile template for ${this.layerId}`);
         return this.state();
       }
-      this.badge = frameBadge(first, hostFrame, hostValue).text;
-      this.mountLayer(frameTileUrl(template, first.id), layerMaxZoom(build.manifest, this.layerId));
-      // Own the subscription before calling a host that may subscribe and throw.
+      this.badge = frameBadge(first, hostValue === null ? null : first, hostValue).text;
+      // Subscribe before mounting so a host that throws never leaves a layer on the map.
       this.subscribed = true;
       this.host.store.on('timestamp', this.onTimestamp);
+      this.mountLayer(frameTileUrl(template, this.frameId), layerMaxZoom(build.manifest, this.layerId));
       this.scheduleTimeCheck();
       this.phase = 'ready';
       this.emit();
@@ -276,17 +278,16 @@ export class PluginController {
     return this.state();
   }
 
-  syncHost(timestampMs: number): ControllerState {
+  syncHost(timestamp: unknown): ControllerState {
     if (!this.canUse()) return this.state();
-    if (!Number.isFinite(timestampMs)) return this.state();
-    const matched = matchHostFrame(this.build!.manifest.frames, timestampMs);
-    if (matched) {
-      this.frameId = matched.id;
-      this.applyUrl();
-    }
-    const selected = this.frameId ? selectExplicitFrame(this.build!.manifest.frames, this.frameId) : null;
-    this.badge = frameBadge(selected, matched, timestampMs).text;
-    this.emit();
+    const hostValue = hostTimestampMs(timestamp);
+    if (hostValue === null) return this.state();
+    const frame = selectHostFrame(this.build!.manifest.frames, hostValue);
+    if (!frame) return this.state();
+    this.frameId = frame.id;
+    this.applyUrl();
+    this.badge = frameBadge(frame, frame, hostValue).text;
+    if (this.phase === 'ready') this.emit();
     return this.state();
   }
 
@@ -302,7 +303,8 @@ export class PluginController {
   refreshTime(): void {
     if (this.phase !== 'ready' || this.checkExpiry()) return;
     this.scheduleTimeCheck();
-    this.emit();
+    this.syncHost(this.host.store.get('timestamp'));
+    if (this.phase === 'ready') this.emit();
   }
 
   dispose(): void {

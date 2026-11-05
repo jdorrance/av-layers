@@ -24,7 +24,7 @@ Reload the page to pick up a newly published build (subject to the API's
 
 ## Source layout
 
-- [src/main.ts](src/main.ts): MapLibre initialization, model/layer/frame controls, and point sampling.
+- [src/main.ts](src/main.ts): Google terrain map, model and AGL/MSL controls, local/UTC time, and the point card.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.
 

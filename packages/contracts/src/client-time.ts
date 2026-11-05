@@ -43,6 +43,39 @@ export function matchHostFrame<T extends FrameLike>(frames: readonly T[], timest
   return best;
 }
 
+/** Windy's store uses epoch milliseconds, and some hosts emit seconds, numeric strings, or Dates. */
+export function hostTimestampMs(value: unknown): number | null {
+  if (value instanceof Date) return hostTimestampMs(value.getTime());
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return null;
+    return hostTimestampMs(Number(trimmed));
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.abs(value) < 1e12 ? value * 1000 : value;
+}
+
+/** Latest frame whose valid time is at or before the host instant, or the earliest frame when the host is earlier than all of them. */
+export function selectHostFrame<T extends FrameLike>(frames: readonly T[], timestampMs: number): T | null {
+  if (!Number.isFinite(timestampMs) || frames.length === 0) return null;
+  let covered: T | null = null;
+  let coveredAt = Number.NEGATIVE_INFINITY;
+  let earliest: T | null = null;
+  let earliestAt = Number.POSITIVE_INFINITY;
+  for (const frame of frames) {
+    const valid = frameTime(frame.validTime);
+    if (valid < earliestAt) {
+      earliest = frame;
+      earliestAt = valid;
+    }
+    if (valid <= timestampMs && valid >= coveredAt) {
+      covered = frame;
+      coveredAt = valid;
+    }
+  }
+  return covered ?? earliest;
+}
+
 export function datasetRange(frames: readonly FrameLike[]): DatasetRange | null {
   if (frames.length === 0) return null;
   let start = Number.POSITIVE_INFINITY;

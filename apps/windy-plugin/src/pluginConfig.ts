@@ -3,12 +3,12 @@ const config = {
   version: '0.1.0',
   icon: '🪂',
   title: 'AV usable lift',
-  description: 'Forecast usable lift above sea level and terrain, with available precipitation layers.',
+  description: 'Usable lift forecast drawn with the wind field.',
   author: 'AV Forecast Layers',
   repository: 'https://github.com/jdorrance/av-layers',
   desktopUI: 'rhpane',
   mobileUI: 'fullscreen',
-  listenToSingleclick: true,
+  listenToSingleclick: false,
   routerPath: '/av-layer',
   private: true
 } as const;
