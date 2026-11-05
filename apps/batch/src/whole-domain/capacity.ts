@@ -1,4 +1,4 @@
-import { CELL_BYTES, MAX_SAMPLE_VALUES, MAX_TILE_BYTES, RASTER_TILE_SIZE, TERRAIN_COLUMN_METHOD, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
+import { CELL_BYTES, MAX_SAMPLE_VALUES, MAX_TILE_BYTES, RASTER_TILE_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
 import { prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
 import type { PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from '../capacity.js';
@@ -12,6 +12,7 @@ export interface WholeDomainCapacityInput {
   plan: WholeDomainGrid;
   nativeBlocks: Uint32Array;
   nativeActive: number;
+  nativeMask: Pick<CoverageMask, 'tiles' | 'maxZoom'>;
   maxLevels?: number;
   retainedGeometryFields?: number;
   fine: SparseCoverageMask;
@@ -23,16 +24,23 @@ export interface WholeDomainCapacityInput {
   terrainBytes: number;
 }
 
-export function wholeDomainSampleLayouts(input: WholeDomainCapacityInput): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout } {
+export function wholeDomainSampleLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout } {
   const fine = prepareShardedSamplePackLayout(input.plan.fine, input.fine.coverage.blockIds, input.frames * input.fineLayers, MAX_V5_SHARD_BYTES);
   const native = input.nativeLayers ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, input.frames * input.nativeLayers, MAX_V5_SHARD_BYTES) : null;
   return { native, fine };
 }
 
 export interface WholeDomainCapacity {
-  frames: number; nativeLayers: number; fineLayers: number;
+  frames: number; nativeLayers: number; fineLayers: number; tiles: number;
   nativeStoredCells: number; fineStoredCells: number; nativeSampleBytes: number; fineSampleBytes: number;
   rasterWorkers: number; deriveWorkers: number; deriveFrameCopyBytes: number; rasterSharedInputBytes: number; workingSet: Record<string, number>; estimatedPeakBytes: number; violations: string[];
+}
+
+function coveredTiles(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>): number {
+  const bits = (4 ** (mask.maxZoom + 1) - 1) / 3;
+  let count = 0;
+  for (let i = 0; i < bits; i++) count += (mask.tiles[i >> 3]! >> (i & 7)) & 1;
+  return count;
 }
 
 export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCapacity {
@@ -42,6 +50,7 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   const fineActive = fine.coverage.offsets[fine.coverage.blockIds.length]!;
   const layouts = wholeDomainSampleLayouts(input);
   const nativeSampleBytes = layouts.native?.byteLength ?? 0, fineSampleBytes = layouts.fine.byteLength;
+  const tiles = frames * (nativeLayers * coveredTiles(input.nativeMask) + fineLayers * coveredTiles(fine));
   if (frames * Math.max(nativeLayers, fineLayers) > MAX_SAMPLE_VALUES) throw new Error('Sample value budget exceeded');
   if (layouts.fine.storedCells < 1 || layouts.fine.blockCount < 1) throw new Error('Fine coverage has no sample blocks');
   const nativeCells = input.plan.native.width * input.plan.native.height;
@@ -98,8 +107,9 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   workingSet.deriveWorkerRuntimes = deriveWorkers * RASTER_WORKER_RESERVE_BYTES;
   const estimatedPeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   const violations: string[] = [];
+  if (!Number.isSafeInteger(tiles) || tiles > BUILD_BUDGETS.tiles) violations.push('tile budget exceeded');
   if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) violations.push('whole-domain working set exceeds the 2 GiB process budget');
   if (fineFields > 512 * 1024 * 1024) violations.push('live fine packed fields exceed the inline budget');
-  return { frames, nativeLayers, fineLayers, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine.storedCells,
+  return { frames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine.storedCells,
     nativeSampleBytes, fineSampleBytes, rasterWorkers, deriveWorkers, deriveFrameCopyBytes: Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes), rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
 }

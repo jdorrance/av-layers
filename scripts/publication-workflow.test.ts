@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { canonicalGridJson, createRefinementDescriptors, createSparseCoverage, encodeSparseCoverage, getProduct, manifestV5Schema, MODEL_IDS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, validateArtifactRecords, type Manifest, type ManifestV5, type ModelPointer } from '@av/contracts';
+import { canonicalGridJson, createRefinementDescriptors, createSparseCoverage, encodeSparseCoverage, expectedTiles, getProduct, manifestV5Schema, MODEL_IDS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, validateArtifactRecords, type Manifest, type ManifestV5, type ModelPointer } from '@av/contracts';
 import * as refinementConfiguration from '../apps/batch/src/refinement/config.js';
 import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
@@ -128,14 +128,41 @@ it('reads the published fine terrain reference only when a missing cache request
   expect(get).toHaveBeenCalledWith(key, undefined, 512 * 1024, expect.any(AbortSignal));
   expect(fake.discover).not.toHaveBeenCalled();
 });
-it.each(['missing', 'different cycle'] as const)('fails terrain reuse discovery for a %s published manifest', async defect => {
+it.each([0, 86400000])('cold prepares terrain when the latest manifest is missing %i ms after expiry', async age => {
+  const { manifest } = v5ResumeFixture();
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.expiresAt) + age);
+  const key = `builds/${manifest.model}/${manifest.buildId}/manifest.json`, get = vi.fn(async () => null);
+  fake.storage.mockReturnValue({ get });
+  fake.pointer.mockResolvedValue({ pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
+    retained: [{ buildId: manifest.buildId, cycle: manifest.cycle, expiresAt: manifest.expiresAt, manifestKey: key }] } });
+  fake.terrain.mockImplementationOnce(async ({ reuseFrom, signal }) => {
+    expect(await reuseFrom(signal)).toBeUndefined();
+    return { key: 'terrain/prepared/cold/manifest.json' };
+  });
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  await expect(prepareForecastTerrain()).resolves.toBeUndefined();
+  expect(get).toHaveBeenCalledWith(key, undefined, 512 * 1024, expect.any(AbortSignal));
+  expect(fake.terrain).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('terrain/prepared/cold/manifest.json'));
+  for (const call of [fake.plan, fake.publish, fake.write]) expect(call).not.toHaveBeenCalled();
+});
+it.each([
+  { defect: 'missing', expired: false },
+  { defect: 'different cycle', expired: false },
+  { defect: 'different cycle', expired: true },
+  { defect: 'invalid schema', expired: true }
+])('fails terrain reuse discovery for a $defect published manifest (expired=$expired)', async ({ defect, expired }) => {
   const { manifest } = v5ResumeFixture(), cycle = manifest.cycle;
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.expiresAt) + (expired ? 86400000 : -1));
   if (defect === 'different cycle') manifest.cycle = '2020-01-01T00:00:00Z';
-  fake.storage.mockReturnValue({ get: vi.fn(async () => defect === 'missing' ? null : { bytes: Buffer.from(JSON.stringify(manifest)), etag: 'published' }) });
+  fake.storage.mockReturnValue({ get: vi.fn(async () => defect === 'missing' ? null : {
+    bytes: Buffer.from(JSON.stringify(defect === 'invalid schema' ? { ...manifest, version: 0 } : manifest)), etag: 'published'
+  }) });
   fake.pointer.mockResolvedValue({ pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
     retained: [{ buildId: manifest.buildId, cycle, expiresAt: manifest.expiresAt, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json` }] } });
   fake.terrain.mockImplementationOnce(async ({ reuseFrom, signal }) => reuseFrom(signal));
-  await expect(prepareForecastTerrain()).rejects.toThrow(defect === 'missing' ? 'Published terrain manifest is missing' : 'Published terrain manifest identity mismatch');
+  await expect(prepareForecastTerrain()).rejects.toThrow(defect === 'missing' ? 'Published terrain manifest is missing'
+    : defect === 'invalid schema' ? 'Invalid input' : 'Published terrain manifest identity mismatch');
   expect(fake.terrain).toHaveBeenCalledOnce();
 });
 it('preserves terrain preparation failures for workflow diagnostics', async () => {
@@ -349,7 +376,7 @@ function refinedResumePlan(): BuildPlan {
 
 function digest(data: Uint8Array | string): string { return createHash('sha256').update(data).digest('hex'); }
 
-function v5ResumeFixture(metrics: Record<string, unknown> = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
+function v5ResumeFixture(metrics?: Record<string, unknown>): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
   const base = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')) as Manifest;
   const grid = { kind: 'regular-latlon' as const, width: 34, height: 17, earthRadiusM: 6371229, lon0: -10, lat0: 10, dx: 0.1, dy: -0.1, wrapLongitude: false };
   const gridHash = digest(canonicalGridJson(grid)), blockCount = 3;
@@ -377,6 +404,11 @@ function v5ResumeFixture(metrics: Record<string, unknown> = { elapsedMs: 1000, p
   };
   const native = surface('native', ['precip-rate']), fine = surface('fine', ['usable-lift-msl', 'usable-lift-agl']);
   const { file: nativeFile, ...nativeSurface } = native, { file: fineFile, ...fineSurface } = fine;
+  const counts = Array.from({ length: fineSurface.coverage.maxZoom + 1 }, (_, z) => expectedTiles({ tiles, maxZoom: fineSurface.coverage.maxZoom }, z).length);
+  const coveredTiles = counts.reduce((sum, count) => sum + count, 0);
+  metrics = { renderer: { native: { tiles: coveredTiles * base.frames.length * native.layers.length },
+    fine: { tiles: coveredTiles * base.frames.length * fine.layers.length } },
+  ...(metrics ?? { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: counts }) };
   const manifest = manifestV5Schema.parse({ version: 5, descriptors: base.descriptors, recipe: { ...base.recipe, sourceRevision: revision, sourceDirty: false }, model: base.model,
     buildId: base.buildId, cycle: base.cycle, createdAt: base.createdAt, expiresAt: base.expiresAt, method: base.method,
     frames: base.frames, layers: base.layers, artifacts: base.artifacts, source: base.source, tool: base.tool,

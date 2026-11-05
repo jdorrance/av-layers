@@ -32,6 +32,11 @@ See the [CLI reference](../../docs/reference.md#batch-cli) for all options and
 [operations](../../docs/operations.md) for publication, rollback, and cleanup.
 Run batch tests with `pnpm test apps/batch`.
 
+The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
+surfaces. Each additional zoom level adds about four times the previous level's
+tiles. Model configuration and regenerated coverage select the rendered zooms;
+elapsed time and memory have separate admission limits.
+
 ## Source layout
 
 - [src/cli.ts](src/cli.ts) & [src/commands.ts](src/commands.ts): CLI entry point and flag definitions.

@@ -121,7 +121,10 @@ async function publishedTerrainRef(store: ObjectStorage, model: string, signal?:
   if (!latest) throw new Error('Published terrain pointer lacks its latest build');
   const object = await store.get(latest.manifestKey, undefined, MAX_MANIFEST_BYTES, signal);
   signal?.throwIfAborted();
-  if (!object) throw new Error('Published terrain manifest is missing');
+  if (!object) {
+    if (Date.parse(latest.expiresAt) <= Date.now()) return;
+    throw new Error('Published terrain manifest is missing');
+  }
   const manifest = publishedManifestSchema.parse(parseBoundedJson(object.bytes));
   if (manifest.model !== model || manifest.buildId !== latest.buildId || manifest.cycle !== latest.cycle || manifest.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
   if (manifest.version !== 5) return;

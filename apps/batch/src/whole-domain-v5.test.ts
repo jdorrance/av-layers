@@ -556,10 +556,42 @@ describe('whole-domain v5 production', () => {
     const invalid = structuredClone(manifest);
     invalid.metrics.elapsedMs = -1;
     invalid.metrics.peakRssBytes = 3 * 1024 ** 3;
-    invalid.metrics.tiles = [];
+    invalid.metrics.renderer = { native: { tiles: -1 }, fine: { tiles: 4 } };
     const result = checkPerformance(invalid);
     expect(result.passed).toBe(false);
-    expect(result.failures).toEqual(expect.arrayContaining(['missing or invalid elapsedMs', 'peakRssBytes: 3221225472 exceeds 2147483648', 'missing or invalid tile counts']));
+    expect(result.failures).toEqual(expect.arrayContaining(['missing or invalid elapsedMs', 'peakRssBytes: 3221225472 exceeds 2147483648', 'missing or invalid renderer tile counts']));
+  });
+
+  it('counts distinct native and fine raster work for direct and assembled v5 builds', async () => {
+    const manifest = await builtManifest();
+    manifest.metrics.capacity = { tiles: 8 };
+    for (const renderer of [
+      { native: { tiles: 4 }, fine: { tiles: 4 } },
+      { shards: [{ native: { tiles: 2 }, fine: { tiles: 2 } }, { native: { tiles: 2 }, fine: { tiles: 2 } }] }
+    ]) {
+      manifest.metrics.renderer = renderer;
+      const result = checkPerformance(manifest);
+      expect(result.passed).toBe(true);
+      expect(result.observed.tiles).toBe(8);
+    }
+    manifest.metrics.capacity = { tiles: 9 };
+    expect(checkPerformance(manifest).failures).toContain('rendered tile count differs from admitted coverage');
+    delete manifest.metrics.renderer;
+    expect(checkPerformance(manifest).passed).toBe(false);
+  });
+
+  it('keeps the v5 physical tile work limit inclusive and rejects malformed renderer counters', async () => {
+    const manifest = await builtManifest();
+    delete manifest.metrics.capacity;
+    manifest.metrics.renderer = { native: { tiles: 0 }, fine: { tiles: BUILD_BUDGETS.tiles } };
+    expect(checkPerformance(manifest)).toMatchObject({ passed: true, observed: { tiles: BUILD_BUDGETS.tiles } });
+    manifest.metrics.renderer = { native: { tiles: 0 }, fine: { tiles: BUILD_BUDGETS.tiles + 1 } };
+    expect(checkPerformance(manifest).failures).toContain(`tiles: ${BUILD_BUDGETS.tiles + 1} exceeds ${BUILD_BUDGETS.tiles}`);
+    for (const renderer of [null, { shards: [] }, { native: { tiles: 4 } },
+      { native: { tiles: 1.5 }, fine: { tiles: 4 } }, { native: { tiles: Number.MAX_SAFE_INTEGER }, fine: { tiles: 1 } }]) {
+      manifest.metrics.renderer = renderer;
+      expect(checkPerformance(manifest).failures).toContain('missing or invalid renderer tile counts');
+    }
   });
 
   it('acquires positive fine donors outside the public native mask without changing output support', async () => {
@@ -839,11 +871,12 @@ describe('whole-domain v5 production', () => {
     const { active } = acquisitionSupport(plan, fine.coverage, nativeMask);
     const native = nativeSparseMask(nativeMask);
     const columns = { byteLength: 1000, workspaceBufferBytes: 1000, workspaceObjectBudgetBytes: 1000, outputBufferBytes: 1000 };
-    const input = { product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, fine,
+    const input = { product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask, fine,
       nativeMaskBytes: nativeMask.output.byteLength + nativeMask.halo.byteLength + nativeMask.tiles.byteLength,
       frames: product.frameHours.length, nativeLayers: 1, fineLayers: 2, columns, terrainBytes: active.length * 5, maxLevels: 3, retainedGeometryFields: 0 };
     const admitted = admitWholeDomain(input);
     expect(admitted.violations).toEqual([]);
+    expect(admitted.tiles).toBe(product.frameHours.length * 3);
     expect(admitted.estimatedPeakBytes).toBe(Object.values(admitted.workingSet).reduce((sum, value) => sum + value, 0));
     expect(admitted.fineStoredCells).toBeGreaterThan(0);
     expect(admitted.workingSet.nativeFields).toBe(cells * product.layers.length * 5);
@@ -854,5 +887,34 @@ describe('whole-domain v5 production', () => {
     expect(sparseAdmission.workingSet.nativeFrame).toBeLessThan(admitted.workingSet.nativeFrame);
     const rejected = admitWholeDomain({ ...input, terrainBytes: 3 * 1024 ** 3 });
     expect(rejected.violations).toContain('whole-domain working set exceeds the 2 GiB process budget');
+  });
+
+  it('admits exact per-surface tile counts at the cap and rejects the next covered tile', () => {
+    const fine = fineCoverage(), plan = planWholeDomainGrid(product.grid as RegularLatLonGrid, 2);
+    const tiles = (count: number) => {
+      const bytes = new Uint8Array(Math.ceil((4 ** 10 - 1) / 3 / 8));
+      for (let i = 0; i < count; i++) setBit(bytes, i);
+      return bytes;
+    };
+    const input = { product, plan, nativeBlocks: nativeSparseMask(nativeMask).coverage.blockIds, nativeActive: cells,
+      nativeMask: { maxZoom: 9, tiles: tiles(340_000) }, fine: { ...fine, maxZoom: 9, tiles: tiles(330_000) },
+      nativeMaskBytes: 0, frames: 4, nativeLayers: 1, fineLayers: 2, maxLevels: 3, retainedGeometryFields: 0,
+      columns: { byteLength: 1000, workspaceBufferBytes: 1000, workspaceObjectBudgetBytes: 1000, outputBufferBytes: 1000 }, terrainBytes: 0 };
+    expect(admitWholeDomain(input)).toMatchObject({ tiles: 4_000_000, violations: [] });
+    setBit(input.nativeMask.tiles, 340_000);
+    expect(admitWholeDomain(input)).toMatchObject({ tiles: 4_000_004, violations: ['tile budget exceeded'] });
+  });
+
+  it('rejects full-product tile work during planning before opening any forecast shard', async () => {
+    const configured = { ...product, maxNativeZoom: 9, frameHours: Array.from({ length: 24 }, (_, i) => (i + 1) * 2) };
+    const allTiles = new Uint8Array(Math.ceil((4 ** 10 - 1) / 3 / 8)).fill(255);
+    const mask = { ...nativeMask, maxZoom: 9, tiles: allTiles };
+    const setup = await fixture(configured), fineMask = { ...setup.fine.mask, maxZoom: 9, tiles: allTiles };
+    const described = describeSparseCoverage(fineMask, configured);
+    setup.fine = { mask: fineMask, ...described };
+    const source = fixtureProvider(), out = await root('wd-full-tile-cap');
+    await expect(createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider, wholeDomain: setup, shards: 8 })).rejects.toThrow('tile budget exceeded');
+    expect(source.open).not.toHaveBeenCalled();
+    await expect(readFile(join(out, 'plan.json'))).rejects.toThrow('ENOENT');
   });
 });

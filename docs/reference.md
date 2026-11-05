@@ -398,7 +398,7 @@ Complete-build limits:
 - `gridCells`: `4000000`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.
-- `tiles`: `800000`.
+- `tiles`: `4000000`.
 
 Shared limits and storage constants:
 

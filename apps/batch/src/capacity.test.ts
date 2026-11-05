@@ -47,6 +47,7 @@ describe('build capacity admission and performance budgets', () => {
     expect(result.status, result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.capacity.violations).toEqual([]);
+    expect(report.capacity.tiles).toBe(model === 'gfs' ? 780_864 : 369_792);
     const expectedWorkers = model === 'icon-eu' ? Math.min(2, rasterWorkerCount()) : rasterWorkerCount();
     expect(report.capacity.rasterWorkers).toBe(expectedWorkers);
     expect(report.capacity.deriveWorkers).toBe(expectedWorkers);
@@ -84,8 +85,9 @@ describe('build capacity admission and performance budgets', () => {
     expect(doubled.tiles).toBe(TOTAL_TILES * 8);
     expect(doubled.totalSamplePackBytes).toBe(105392520 * 8);
     const deeper = estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 9 });
-    expect(deeper.violations).toContain('tile budget exceeded');
+    expect(deeper.tiles).toBeLessThan(BUILD_BUDGETS.tiles);
     expect(deeper.violations.join()).toContain('trusted product');
+    expect(estimateCapacity(mask, GFS_PRODUCT, layout.storedCells, { nativeZoom: 10 }).violations).toContain('tile budget exceeded');
     expect(() => prepareBuild({ ...mask, maxZoom: 24 }, GFS_PRODUCT, { maxLevels: GFS_PRESSURE_LEVELS_HPA.length })).toThrow('trusted product');
   });
   it('admits ICON with per-column pressures and retained geometry, but rejects an oversized provider cache', async () => {
