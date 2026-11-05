@@ -315,7 +315,8 @@ export async function validateSampleGroup(root: string, surface: Pick<ManifestV5
                 offset += part.bytesRead;
               }
               const after = await file.stat();
-              if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error(`Sample shard changed during read ${other.key}`);
+              // A read can move ctime when Linux updates atime. Content changes move mtime.
+              if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error(`Sample shard changed during read ${other.key}`);
             } finally { await file.close(); }
           }
           for (let n = 0; n < count; n++) {
