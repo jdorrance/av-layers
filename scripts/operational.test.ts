@@ -102,7 +102,7 @@ describe('declarative workflows', () => {
     expect(record(maintenance.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
   });
 
-  it('isolates four compute workers from publication credentials and preserves the resume path', () => {
+  it('isolates forecast shards from publication credentials and preserves the resume path', () => {
     const forecast = workflow('forecast-model.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
     expect(record(shard.strategy)['max-parallel']).toBe(MAX_FORECAST_SHARDS);
     expect(record(shard.strategy)['fail-fast']).toBe(false);

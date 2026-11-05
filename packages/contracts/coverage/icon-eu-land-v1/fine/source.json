@@ -374,13 +374,13 @@
       "sha256": "a6ec499725f8cdb3e3ca26e39457e711b18260bbc2a4bde427f1ba758c74d8d8"
     },
     "tiles": {
-      "bytes": 43691,
-      "sha256": "201c7c69195bd92b2bfff685c56ea9e3cf90b417a7e3a05ce58196a4e9685d2e"
+      "bytes": 174763,
+      "sha256": "77503ae5d41e431739bac31688f53374f3d8ffd2945c8c112fc0a51ae99be88c"
     }
   },
   "generator": {
     "path": "scripts/masks/build_fine_masks.py",
-    "sha256": "ddacf2df99efa75084657de63fdbb5600b269d9c0b1b3f02d24b308409996479",
+    "sha256": "17a0414399e871ee48b9a45bf79f3d3b3a226659358b23a71c011dfd435a63d7",
     "policySha256": "28d40b4a08cd94ddac1e34a84045ecaf19ebf4525b20eb879484e724722f3856",
     "python": "3.14.7",
     "geos": "3.13.1",
@@ -393,10 +393,12 @@
     "arguments": [
       "--config",
       "packages/contracts/config/icon-eu.json",
-      "--output",
-      "packages/contracts/coverage/icon-eu-land-v1/fine",
+      "--source",
+      "output/evidence/next-zoom/ne_50m_admin_0_countries.zip",
       "--k",
-      "5"
+      "5",
+      "--output",
+      "packages/contracts/coverage/icon-eu-land-v1/fine"
     ]
   }
 }

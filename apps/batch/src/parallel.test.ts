@@ -6,7 +6,7 @@ import { LIFT_STEP_RENDER_STYLE, liftRenderStyle, PALETTES, type CoverageMask, t
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
-import { buildShard, createBuildPlan, finalizeBuild, type BuildPlan } from './parallel.js';
+import { buildShard, createBuildPlan, finalizeBuild, MAX_FORECAST_SHARDS, type BuildPlan } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
 import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
 import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
@@ -347,10 +347,10 @@ describe('forecast hour-group builds', () => {
   });
 
   it.each([
-    { hours: Array.from({ length: 24 }, (_, i) => i + 1), groups: [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24]] },
-    { hours: [1, ...Array.from({ length: 16 }, (_, i) => i + 9)], groups: [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] }
-  ])('bounds the full $hours.length-frame timeline across eight ordered groups', async ({ hours, groups }) => {
-    const configured = { ...product, frameHours: hours, intervalHours: 1 };
+    { modelId: 'gfs', hours: Array.from({ length: 24 }, (_, i) => i + 1), groups: [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] },
+    { modelId: 'icon-eu', hours: [1, ...Array.from({ length: 16 }, (_, i) => i + 9)], groups: [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] }
+  ])('bounds the full $modelId $hours.length-frame timeline across ordered groups', async ({ modelId, hours, groups }) => {
+    const configured = { ...product, modelId, frameHours: hours, intervalHours: 1 };
     const out = await temporaryRoot(), source = fixtureProvider();
     const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider });
     expect(planned.groups).toEqual(groups);
@@ -358,7 +358,7 @@ describe('forecast hour-group builds', () => {
     expect(source.open).not.toHaveBeenCalled();
   });
 
-  it.each([0, -1, 1.5, 9])('rejects an unbounded or invalid shard count %s before acquisition', async shards => {
+  it.each([0, -1, 1.5, MAX_FORECAST_SHARDS + 1])('rejects an unbounded or invalid shard count %s before acquisition', async shards => {
     const out = await temporaryRoot(), provider = fixtureProvider();
     await expect(createBuildPlan({ out, cycle: CYCLE, product, mask, provider: provider.provider, shards })).rejects.toThrow();
     expect(provider.open).not.toHaveBeenCalled();

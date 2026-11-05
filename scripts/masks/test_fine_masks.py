@@ -90,10 +90,10 @@ def check_typescript(settings, k, result):
 
 
 class FineMasksTest(unittest.TestCase):
-    def run_case(self, grid, bounds, admitted, excluded, k=1):
+    def run_case(self, grid, bounds, admitted, excluded, k=1, zoom=3):
         settings = {'modelId': 'test', 'coverageDir': 'coverage/test', 'grid': grid,
                     'coverage': {'id': 'test', 'description': 'test', 'west': bounds[0], 'south': bounds[1],
-                                 'east': bounds[2], 'north': bounds[3], 'maxNativeZoom': 3,
+                                 'east': bounds[2], 'north': bounds[3], 'maxNativeZoom': zoom,
                                  'seaBufferMeters': 0, 'excludedA3': [], 'excludedContinents': []}}
         admitted_union = unary_union(admitted)
         excluded = unary_union(excluded)
@@ -109,7 +109,13 @@ class FineMasksTest(unittest.TestCase):
         actual_out, actual_halo = unpack(result['sparseBytes'])
         self.assertEqual(actual_out, expected_out)
         self.assertEqual(actual_halo, expected_halo)
-        self.assertEqual(result['tilesBytes'], expected_tiles)
+        if zoom == 3:
+            self.assertEqual(result['tilesBytes'], expected_tiles)
+        else:
+            prefix = bytearray(result['tilesBytes'][:len(expected_tiles)])
+            prefix[-1] &= (1 << (sum(4 ** z for z in range(4)) % 8)) - 1
+            self.assertEqual(prefix, expected_tiles)
+            self.assertTrue(any(result['tilesBytes'][len(expected_tiles):]))
         self.assertTrue(actual_out)
         check_typescript(settings, k, result)
         return actual_out, actual_halo
@@ -146,6 +152,11 @@ class FineMasksTest(unittest.TestCase):
         grid = {'kind': 'regular-latlon', 'width': 21, 'height': 21, 'earthRadiusM': 6371229,
                 'lon0': -10, 'lat0': 10, 'dx': 1, 'dy': -1, 'wrapLongitude': False}
         self.run_case(grid, (-10, -10, 10, 10), [box(-0.1, -0.1, 0.1, 0.1)], [], k=2)
+
+    def test_zoom_ten_preserves_cells_and_prior_tiles(self):
+        grid = {'kind': 'regular-latlon', 'width': 3, 'height': 3, 'earthRadiusM': 6371229,
+                'lon0': 0, 'lat0': 1, 'dx': 0.5, 'dy': -0.5, 'wrapLongitude': False}
+        self.run_case(grid, (0, 0, 1, 1), [box(0.1, 0.1, 0.9, 0.9)], [], zoom=10)
 
     @unittest.skipUnless(os.environ.get('FINE_MASK_REAL_SOURCE'), 'set FINE_MASK_REAL_SOURCE for pinned source smoke')
     def test_pinned_source_smoke(self):

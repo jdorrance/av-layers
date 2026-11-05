@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "soaring-land-v1",
   "kind": "coverage-mask",
-  "maxZoom": 8,
+  "maxZoom": 9,
   "crs": "EPSG:4326",
   "source": {
     "dataset": "Natural Earth 1:50m Admin 0 Countries",
@@ -372,7 +372,7 @@
     "excludedPrecedence": "An output cell is cleared if its nearest-cell footprint intersects the filled raw ADM0 footprint of RUS, CHN, ATA, GRL or any country whose CONTINENT attribute is Africa, even when that removes a buffer strip outside the excluded polygon.",
     "inlandLakes": "Interior rings of admitted country polygons are filled before buffering, so inland lakes and enclosed water remain included.",
     "cellFootprint": "Regular-grid nearest-cell rectangle: longitude center +/-0.125deg, latitude center +/-0.125deg, clipped to bounds [-180, -55, 180, 65].",
-    "tileRule": "A z0-8 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
+    "tileRule": "A z0-9 XYZ bit is set iff the tile's exact EPSG:4326 Web-Mercator lon/lat bounding box intersects at least one active cell footprint; tile centers are not tested.",
     "outputDomain": "union of admitted nearest-cell footprints clipped to the coverage bounds"
   },
   "grid": {
@@ -432,7 +432,8 @@
       5,
       6,
       7,
-      8
+      8,
+      9
     ],
     "offsets": {
       "0": 0,
@@ -443,7 +444,8 @@
       "5": 341,
       "6": 1365,
       "7": 5461,
-      "8": 21845
+      "8": 21845,
+      "9": 87381
     },
     "tileCounts": {
       "0": 1,
@@ -454,10 +456,11 @@
       "5": 1024,
       "6": 4096,
       "7": 16384,
-      "8": 65536
+      "8": 65536,
+      "9": 262144
     },
-    "totalBits": 87381,
-    "bytes": 10923,
+    "totalBits": 349525,
+    "bytes": 43691,
     "countsByZoom": {
       "0": 1,
       "1": 4,
@@ -467,7 +470,8 @@
       "5": 233,
       "6": 708,
       "7": 2235,
-      "8": 7680
+      "8": 7680,
+      "9": 27916
     },
     "activeZ5Tiles": [
       "5/0/8",
@@ -704,7 +708,7 @@
       "5/31/20",
       "5/31/21"
     ],
-    "sha256": "bcd8ff946b1b1432a4552c3ae6d81dfc87a3c81949d374c2a198193f78af092b"
+    "sha256": "132f830012601dfc823b2d45cc6a02166ae0e69d7b18c76c67fce6396cd754fe"
   },
   "approximation": {
     "cellDiagonalDegrees": 0.353553,
@@ -1063,7 +1067,7 @@
       "pyproj": "3.7.2",
       "pyshp": "2.3.1"
     },
-    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/gfs.json --output packages/contracts/coverage",
+    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/gfs.json --output packages/contracts/coverage --source output/evidence/next-zoom/ne_50m_admin_0_countries.zip",
     "scheduledBuildGIS": false
   }
 }

@@ -26,7 +26,7 @@ import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepa
 import { sampleShardKey } from './sample-pack-v5.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 
-export const MAX_FORECAST_SHARDS = 8;
+export const MAX_FORECAST_SHARDS = 12;
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
 const objectReceiptSchema = z.strictObject({ key: z.string().min(1), bytes: z.number().int().positive().max(BUILD_BUDGETS.samplePackBytes), sha256: digestSchema, etag: z.string().min(1) });
 const timestampSchema = manifestSchema.shape.createdAt.refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
@@ -154,7 +154,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadlineSignal]) : deadlineSignal };
   const { product, provider, mask } = options, root = resolve(options.out);
   if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
-  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? MAX_FORECAST_SHARDS);
+  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? (product.modelId === 'icon-eu' ? 8 : MAX_FORECAST_SHARDS));
   if (product.terrainSubdivisionFactor !== undefined) {
     const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
     const capacity = admitWholeDomain({ product, plan: prepared.plan, nativeBlocks: prepared.native.mask.coverage.blockIds,

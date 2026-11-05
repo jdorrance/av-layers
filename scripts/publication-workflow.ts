@@ -9,7 +9,7 @@ import { checkPerformance } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
-import { MAX_FORECAST_SHARDS, type BuildPlan } from '../apps/batch/src/parallel.js';
+import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { isTransientStorageError, r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/validate.js';
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
@@ -189,7 +189,7 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
       ? { catalogRef: terrainCatalogInput(process.env.TERRAIN_CATALOG_REF), storage: store }
       : undefined;
     const terrain = process.env.TERRAIN_INPUTS ? terrainInputForModel(process.env.TERRAIN_INPUTS, model) : undefined;
-    const options = { out: root, cycle, shards: MAX_FORECAST_SHARDS, signal, store, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
+    const options = { out: root, cycle, signal, store, ...(terrain ? { terrain: { ref: terrain, storage: store } } : {}),
       ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain: { ...wholeDomain, cacheOnly: true } } : {}) };
     const plan = await createForecastPlan(model, options);
     await writeFile(join(root, 'plan-metrics.json'), JSON.stringify({ planWallMs: Date.now() - Date.parse(plan.createdAt), rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));

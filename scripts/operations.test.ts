@@ -67,8 +67,8 @@ it('accepts explicit operations without ceremonial confirmation and rejects ambi
 
 it('admits explicit forecast commands and bounded worker identities', () => {
   for (const command of ['forecast-terrain', 'forecast-plan', 'forecast']) expect(() => validateOperationInputs(command, base)).not.toThrow();
-  for (const SHARD_ID of ['0', '1', '2', '3', '4', '5', '6', '7']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).not.toThrow();
-  for (const SHARD_ID of ['', '-1', '8', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).toThrow('SHARD_ID');
+  for (const SHARD_ID of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).not.toThrow();
+  for (const SHARD_ID of ['', '-1', '12', '0.5', '01', '1; command']) expect(() => validateOperationInputs('forecast-shard', { ...base, SHARD_ID })).toThrow('SHARD_ID');
   for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
 });
 

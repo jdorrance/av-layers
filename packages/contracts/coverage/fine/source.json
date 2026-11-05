@@ -374,13 +374,13 @@
       "sha256": "bea9a151189fe07ca44ce65e84ff1dfd3579804dee0da3e392b360b17908e543"
     },
     "tiles": {
-      "bytes": 10923,
-      "sha256": "c88a75eba1e87f24db70060aaf55854899ef39525070186ae89b428c0ece6a9c"
+      "bytes": 43691,
+      "sha256": "92911b3ea857625e8e0f1d33fb01876e394d5c39fa3fcb0bb9977ca4ad1e4ed5"
     }
   },
   "generator": {
     "path": "scripts/masks/build_fine_masks.py",
-    "sha256": "ddacf2df99efa75084657de63fdbb5600b269d9c0b1b3f02d24b308409996479",
+    "sha256": "17a0414399e871ee48b9a45bf79f3d3b3a226659358b23a71c011dfd435a63d7",
     "policySha256": "28d40b4a08cd94ddac1e34a84045ecaf19ebf4525b20eb879484e724722f3856",
     "python": "3.14.7",
     "geos": "3.13.1",
@@ -393,10 +393,12 @@
     "arguments": [
       "--config",
       "packages/contracts/config/gfs.json",
-      "--output",
-      "packages/contracts/coverage/fine",
+      "--source",
+      "output/evidence/next-zoom/ne_50m_admin_0_countries.zip",
       "--k",
-      "10"
+      "10",
+      "--output",
+      "packages/contracts/coverage/fine"
     ]
   }
 }
