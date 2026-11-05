@@ -17,7 +17,12 @@ async function withBackoff<T>(start: () => Promise<T>): Promise<T> {
   const pending = start().then(value => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
   void pending.then(() => { settled = true; }, () => { settled = true; });
   try {
-    for (let step = 0; step < 8 && !settled; step++) await vi.advanceTimersByTimeAsync(250);
+    // SDK setup timers and the faked backoff have to run on alternate turns.
+    for (let step = 0; step < 40 && !settled; step++) {
+      await vi.advanceTimersByTimeAsync(250);
+      if (!settled) await new Promise(resolve => { setImmediate(resolve); });
+    }
+    if (!settled) throw new Error('storage operation did not settle during backoff');
     const result = await pending;
     if (!result.ok) throw result.error;
     return result.value;
