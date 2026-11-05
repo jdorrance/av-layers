@@ -1,17 +1,19 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, layerSurface, sameGrid, publishedManifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
-import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, type ShardedSampleBlock } from '@av/forecast';
+import { CELL_BYTES, STATUS_OUTSIDE, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, expectedTiles, getBit, getProduct, layerSurface, renderedLayers, sourceIntervalHours, mapFrameCount, sameGrid, publishedManifestSchema, provenanceObjects, matchesFrameIntervals, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
+import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, validateProfileRecord, type ShardedSampleBlock } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
 import { describeCoverage, describeSparseCoverage, loadCoverage, readGridCoverage, readSparseCoverage } from './coverage.js';
 import { forecastGrids, type ForecastGrid } from '@av/contracts';
 import { validateRefinementCoverage } from './refinement/coverage.js';
-import { readLocalFile } from './local-file.js';
+import { localPath, readLocalFile } from './local-file.js';
+import { readLocalProvenance, readFrameProvenance } from './frame-provenance.js';
+export { localPath } from './local-file.js';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './whole-domain/coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
@@ -40,7 +42,7 @@ export function assertTerrainManifestBinding(manifest: ManifestV5, terrain: NonN
   if (descriptor.dataId !== terrain.dataId || descriptor.source.verticalDatum !== terrain.verticalDatum || descriptor.source.surface !== terrain.surface
       || !source || typeof source !== 'object' || !('dataId' in source) || source.dataId !== terrain.dataId || !('key' in source) || source.key !== terrain.key
       || !('sha256' in source) || source.sha256 !== terrain.sha256 || !('arrayBytes' in source) || source.arrayBytes !== arrayBytes
-      || manifest.tool.terrainMethod !== TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate].id
+      || manifest.tool.terrainMethod !== terrainColumnMethodForProduct({ ...product, layers: manifest.layers }).id
       || manifest.tool.terrainClearance !== TERRAIN_CLEARANCE_METHOD.id) throw new Error('Terrain source or method mismatch');
 }
 
@@ -51,7 +53,7 @@ export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, m
 export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, metrics: Manifest['metrics']): ValidatedBuild {
   assertValidatedBuild(root, result.manifest, result);
   const manifest = publishedManifestSchema.parse({ ...result.manifest, metrics: structuredClone(metrics) });
-  encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
+  encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   return validatedResult(root, manifest);
 }
 
@@ -65,12 +67,6 @@ export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINI
     hash.update(chunk);
   }
   return hash.digest('hex');
-}
-
-export function localPath(root: string, key: string): string {
-  const base = resolve(root), path = resolve(base, key);
-  if (!path.startsWith(base + sep)) throw new Error(`Invalid artifact key: ${key}`);
-  return path;
 }
 
 export async function runConcurrent<T>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -171,7 +167,7 @@ export async function validateBuild(root: string, raw: Manifest, mask: CoverageM
 export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild>;
 export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild> {
   const manifest = publishedManifestSchema.parse(raw);
-  encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
+  encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   if (manifest.version === 5) return validateBuildV5(root, manifest, mask, trustedProduct, remote);
   if (remote) throw new Error('Receipt validation requires a v5 manifest');
   const product = trustedProduct ?? getProduct(manifest.model);
@@ -193,15 +189,12 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   for (let i = 0; i < frames.length; i++) {
     const frame = manifest.frames[i];
     const hour = expectedHours[i], end = cycle + hour * 3600000;
-    if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== end - product.intervalHours * 3600000 || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) {
+    if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== end - sourceIntervalHours(product, hour) * 3600000 || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) {
       throw new Error(`Invalid frame interval ${frame.id}`);
     }
   }
   validateArtifactRecords(manifest);
-  const provenance = getProvenanceReference(manifest);
-  const provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
-  if (sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Invalid provenance hash ${provenance.key}`);
-  parseProvenance(parseBoundedJson(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  await readLocalProvenance(root, manifest);
   if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.samples.bytes, 0) > BUILD_BUDGETS.samplePackBytes) throw new Error('Aggregate sample packs exceed the build byte budget');
   if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) > BUILD_BUDGETS.gridCells) throw new Error('Aggregate forecast grids exceed the cell budget');
   await validateSamplePack(localPath(root, manifest.samples.key), manifest, mask);
@@ -231,14 +224,17 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
   if (!Number.isFinite(cycle) || !(created < expiry) || expiry > created + RETENTION_DAYS * 86400000) throw new Error('Invalid build timestamps');
   const hours = resolveProductFrameHours(product, mask, manifest.cycle);
   if (hours.length !== manifest.frames.length) throw new Error('Incomplete frame set');
+  if ((manifest.mapFrameCount ?? manifest.frames.length) !== mapFrameCount({ ...product, frameHours: hours })) throw new Error('Invalid map frame prefix');
   for (let i = 0; i < hours.length; i++) {
     const frame = manifest.frames[i], end = cycle + hours[i] * 3600000;
-    if (frame.id !== `f${String(hours[i]).padStart(3, '0')}` || Date.parse(frame.intervalStart) !== end - product.intervalHours * 3600000
+    if (frame.id !== `f${String(hours[i]).padStart(3, '0')}` || Date.parse(frame.intervalStart) !== end - sourceIntervalHours(product, hours[i]!) * 3600000
         || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) throw new Error(`Invalid frame interval ${frame.id}`);
   }
-  const provenance = getProvenanceReference(manifest), receipt = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
-  if (sha256(receipt) !== provenance.sha256) throw new Error(`Invalid provenance hash ${provenance.key}`);
-  parseProvenance(parseBoundedJson(receipt, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  const provenance = await readLocalProvenance(root, manifest);
+  if (provenance.value.version === 2) for (const [index, reference] of provenance.value.frames.entries()) {
+    const frame = manifest.frames[index]!, chunk = await readFrameProvenance(remote ?? root, manifest, frame, reference);
+    if (!matchesFrameIntervals(chunk.intervals, frame, manifest.layers.includes('precip-rate'))) throw new Error('Provenance frame interval mismatch');
+  }
   const masks = new Map<string, Awaited<ReturnType<typeof readSparseCoverage>>['mask']>();
   for (const surface of manifest.surfaces) {
     const coverage = await readSparseCoverage(root, surface.coverage.hash), descriptor = coverage.descriptor;
@@ -249,7 +245,10 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
         || JSON.stringify(descriptor.bounds) !== JSON.stringify(product.bounds)) throw new Error('Sparse coverage descriptor binding mismatch');
     if (surface.kind === 'native' && describeSparseCoverage(nativeSparseMask(mask), product).hash !== surface.coverage.hash) throw new Error('Native coverage identity mismatch');
     if (surface.kind === 'fine' && bundledFine && surface.coverage.hash !== bundledFine.hash) throw new Error('Fine coverage identity mismatch');
-    assertSampleLayoutBindingV5(surface, { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.mask.coverage.blockIds });
+    const binding = { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.mask.coverage.blockIds };
+    assertSampleLayoutBindingV5(surface, binding);
+    if (surface.kind === 'native' && renderedLayers(product.layers).length !== product.layers.length && !surface.profiles) throw new Error('Native profiles are required for point products');
+    if (surface.profiles) assertProfileLayoutBindingV5(surface, binding);
     const groups = surface.samples.format === 'cell-major-block-shards-v1'
       ? [{ channels: surface.samples.channelCount, shards: surface.samples.shards }]
       : surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
@@ -258,8 +257,16 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     for (const group of groups) {
       if (!remote) await validateSampleGroup(root, surface, coverage.mask.coverage, manifest.descriptors, group);
       else {
-        const layout = prepareShardedSamplePackLayout(surface.grid, coverage.mask.coverage.blockIds, group.channels);
-        if (layout.shards.length !== group.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new Error('Noncanonical sample shard layout');
+        packedGroupLayout(surface, coverage.mask.coverage, group);
+      }
+    }
+    if (surface.profiles) {
+      const profiles = surface.profiles;
+      if (profiles.levelCount > product.capabilities.maxVerticalLevels) throw new Error('Profile levels exceed product capacity');
+      for (const part of profiles.groups) {
+        const group = { channels: part.frameCount, recordBytes: profiles.recordBytes, shards: part.shards };
+        if (remote) packedGroupLayout(surface, coverage.mask.coverage, group);
+        else await validateSampleGroup(root, surface, coverage.mask.coverage, manifest.descriptors, group);
       }
     }
     masks.set(surface.kind, coverageAtZoom(coverage.mask, surface.coverage.maxZoom));
@@ -276,7 +283,7 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     await validateArchive(localPath(root, artifact.tilesKey), view);
   }
   if (remote) {
-    const expected = [...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
+    const expected = [...provenanceObjects(provenance.value), ...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
       ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256 }))];
     const byKey = new Map(remote.objects.map(object => [object.key, object]));
     if (byKey.size !== remote.objects.length || byKey.size !== expected.length || expected.some(item => {
@@ -288,10 +295,20 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
   return validatedResult(root, manifest);
 }
 
-export async function validateSampleGroup(root: string, surface: Pick<ManifestV5['surfaces'][number], 'grid' | 'layers'>, coverage: Awaited<ReturnType<typeof readSparseCoverage>>['mask']['coverage'], descriptors: ManifestV5['descriptors'], group: { channels: number; shards: Array<{ firstBlock: number; blockCount: number; bytes: number; key: string; sha256: string }> }): Promise<void> {
-    const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, group.channels);
-    if (layout.shards.length !== group.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new Error('Noncanonical sample shard layout');
-    const stride = group.channels * CELL_BYTES, gridWidth = surface.grid.width;
+interface PackedGroup {
+  channels: number;
+  recordBytes?: number;
+  shards: Array<{ firstBlock: number; blockCount: number; bytes: number; key: string; sha256: string }>;
+}
+function packedGroupLayout(surface: Pick<ManifestV5['surfaces'][number], 'grid'>, coverage: Awaited<ReturnType<typeof readSparseCoverage>>['mask']['coverage'], group: PackedGroup) {
+  const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, group.channels, undefined, group.recordBytes ?? CELL_BYTES);
+  if (layout.shards.length !== group.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new Error('Noncanonical sample shard layout');
+  return layout;
+}
+
+export async function validateSampleGroup(root: string, surface: Pick<ManifestV5['surfaces'][number], 'grid' | 'layers'>, coverage: Awaited<ReturnType<typeof readSparseCoverage>>['mask']['coverage'], descriptors: ManifestV5['descriptors'], group: PackedGroup): Promise<void> {
+    const layout = packedGroupLayout(surface, coverage, group), recordBytes = group.recordBytes ?? CELL_BYTES;
+    const stride = group.channels * recordBytes, gridWidth = surface.grid.width;
     let scratch: Buffer | undefined;
     for (let i = 0; i < group.shards.length; i++) {
       const shard = group.shards[i], data = await readLocalFile(localPath(root, shard.key), shard.bytes, shard.bytes);
@@ -344,7 +361,13 @@ export async function validateSampleGroup(root: string, surface: Pick<ManifestV5
         for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
           const active = !!sparseCoverageLookup(coverage, (block.column + x) % surface.grid.width, block.row + y);
           const offset = block.byteOffset + (y * block.width + x) * stride;
-          for (let channel = 0; channel < group.channels; channel++) validateSampleCell(view, offset + channel * CELL_BYTES, specs[channel % specs.length], shard.key, active);
+          for (let channel = 0; channel < group.channels; channel++) {
+            const record = offset + channel * recordBytes;
+            if (group.recordBytes !== undefined) {
+              validateProfileRecord(data.subarray(record, record + recordBytes));
+              if ((view.getUint8(record + 4) === STATUS_OUTSIDE) === active) throw new Error(`Profile coverage mismatch in ${shard.key}`);
+            } else validateSampleCell(view, record, specs[channel % specs.length], shard.key, active);
+          }
         }
       }
     }

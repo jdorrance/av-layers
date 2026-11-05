@@ -183,7 +183,7 @@ export async function previewBuild(options: PreviewOptions): Promise<void> {
     const previewDir = join(root, 'apps', 'preview');
     const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1'], {
       cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
-      env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${port}`, VITE_OFFLINE_FIXTURE: String(options.fixture ?? false), VITE_BUILD_REVISION: 'development' }
+      env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${port}`, VITE_MODEL: seeded.manifest.model, VITE_OFFLINE_FIXTURE: String(options.fixture ?? false), VITE_BUILD_REVISION: 'development' }
     });
     children.push(web); completed.push(completion(web));
     process.exitCode = await Promise.race(completed);

@@ -75,6 +75,8 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
       `- Execution: ${product.execution.shards} target shards; at most ${product.execution.parallelism} simultaneous shard jobs; worker ceiling ${product.execution.workers}; UTC cron schedules ${code(product.execution.schedule)}.`,
       `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
+      ...(product.mapEndHour === undefined ? [] : [`- Map prefix ends at forecast hour ${product.mapEndHour}; native samples and profiles retain the full selected axis.`]),
+      ...(product.intervalChange === undefined ? [] : [`- Source interval changes at hour ${product.intervalChange.fromHour} to ${product.intervalChange.hours} hours.`]),
       `- Vertical coordinate: ${code(product.capabilities.verticalCoordinate)}; maximum levels: ${product.capabilities.maxVerticalLevels}.`,
       `- Calculation methods: ${methods.map(method => code(method.id)).join(', ')}.`,
       `- Required calculation inputs: ${[...new Set(methods.flatMap(method => method.requiredInputs))].map(code).join(', ')}.`,
@@ -86,7 +88,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     lines.push(`### ${layer.label} (${id})`, '',
       `- Kind: ${code(layer.kind)}; quantity: ${code(layer.quantity)}; units: ${code(layer.units)}.`,
       `- Vertical reference: ${code(layer.verticalReference)}; time support: ${code(layer.timeSupport)}.`,
-      `- Method: ${code(layer.methodId)}; palette: ${code(layer.palette)}.`,
+      `- Method: ${code(layer.methodId)}; delivery: ${code(layer.delivery ?? 'tiles-and-samples')}${layer.palette === undefined ? '' : `; palette: ${code(layer.palette)}`}.`,
       `- Supports no-lift status: ${layer.supportsNoLift}; public no-lift value: ${code(layer.noLiftSampleValue)}; supports lift flags: ${layer.supportsLiftFlags}.`,
       `- Zero on no-lift interpolation: ${layer.zeroOnNoLiftInterpolation}; hide nonpositive rendered values: ${layer.hideNonPositiveValues}.`, '');
   }

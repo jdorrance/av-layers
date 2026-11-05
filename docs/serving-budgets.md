@@ -35,8 +35,8 @@ apply to the combined work across all grids selected by a request.
   reads coalesce and share materialized `Uint8Array` bytes. Up to 64 distinct
   reads wait FIFO and 96 callers may wait in total; each sample request starts
   at most 4 reads concurrently. The 15 s deadline includes queue time.
-- **Memory & response pools:** 32 MiB shared stream/verification pool (12 MiB
-  reserved per active provenance check) and 16 MiB outgoing response pool (4×
+- **Memory & response pools:** 32 MiB shared stream/verification pool (provenance
+  reserves from verified object length) and 16 MiB outgoing response pool (4×
   body size reserved until client and Cache API streams settle). Operations
   time out after 15 s.
   Requests exceeding any pool or concurrency limit return uncached HTTP 503.
@@ -46,9 +46,11 @@ Per-object byte caps: pointer 128 KiB, manifest 512 KiB, coverage descriptor
 combined sample ranges 256 KiB. Sparse coverage is admitted only when decoded
 masks, indexes, tiles and metadata fit the 24 MiB cache entry bound and the
 shared in-flight pool. Version-5
-numeric objects are at most 64 MiB; point requests read bounded ranges from them.
-JSON structural token caps: 8,192 for metadata, 262,144 for
-provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
+scalar/profile objects are at most 64 MiB; point requests read bounded ranges
+from them. Build admission and assembly enforce aggregate numeric bytes through
+[`BUILD_BUDGETS`](../apps/batch/src/capacity.ts).
+JSON structural token caps: 16,384 for manifests, 8,192 for other metadata,
+262,144 for provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
 at 16 KiB.
 
 Point requests group layers by surface and frame group. GFS precipitation and

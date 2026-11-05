@@ -1,4 +1,4 @@
-import { DEFAULT_PROBE_TIMEOUT_MS, type LayerId, type PublishedManifest } from '@av/contracts';
+import { DEFAULT_PROBE_TIMEOUT_MS, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, renderedFrames, renderedLayers, type LayerId, type PublishedManifest } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -103,8 +103,20 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
     for (const surface of manifest.surfaces) {
       invariant(surface.layers.length > 0, `Surface ${surface.id} has no layers`);
       const point = await coveredPoint(client, build, surface.layers, signal);
-      if (frames.length > 1) await sample(point.lat, point.lon, surface.layers, frames);
-      await sample(point.lat, point.lon, surface.layers, 'all');
+      const available = surface.kind === 'fine' ? renderedFrames(manifest).map(frame => frame.id) : frames;
+      const pageSize = Math.floor(manifest.descriptors.maxSampleValues / surface.layers.length);
+      invariant(pageSize > 0, 'Surface layers exceed the point value budget');
+      for (let start = 0; start < available.length; start += pageSize) await sample(point.lat, point.lon, surface.layers, available.slice(start, start + pageSize));
+      if (available.length === frames.length && frames.length <= pageSize) await sample(point.lat, point.lon, surface.layers, 'all');
+      if (surface.kind === 'native' && surface.profiles) {
+        let profilePage = 1;
+        while (profilePage < frames.length && estimateProfileResponseBytes(profilePage + 1, surface.profiles.levelCount, surface.layers.length) <= MAX_POINT_RESPONSE_BYTES) profilePage++;
+        for (let start = 0; start < frames.length; start += profilePage) {
+          const payload = await client.profile(build, { ...point, frames: frames.slice(start, start + profilePage), layers: surface.layers, signal });
+          invariant(payload.cell !== null && payload.frames.some(frame => frame.profile.status === 'valid' && frame.profile.levels.length > 0), 'Covered native profile probe found no atmospheric levels');
+        }
+        await client.samples(build, { points: [point, point], frames: [frames.at(-1)!], layers: surface.layers, signal });
+      }
     }
     return;
   }
@@ -139,7 +151,9 @@ export async function probeApi(options: {
   const runs = await json(`/v1/models/${options.model}/runs`) as { retained?: Array<{ buildId?: string }> };
   invariant(Array.isArray(runs.retained) && runs.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
   await probeSamples(client, build, options.signal);
-  const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${manifest.layers[0]}/${frame}/0/0/0.webp`, 'image/webp');
+  const tileLayer = renderedLayers(manifest.layers, manifest.descriptors.layers)[0];
+  invariant(tileLayer, 'Publication has no rendered layer');
+  const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${tileLayer}/${frame}/0/0/0.webp`, 'image/webp');
   invariant(response.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
   invariant(response.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
   invariant(response.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');

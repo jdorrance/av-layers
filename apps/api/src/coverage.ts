@@ -14,7 +14,6 @@ export interface FrameGroup {
 export interface ResolvedSparseCoverage {
   descriptor: SparseCoverageDescriptor;
   mask: SparseCoverageMask;
-  layout: ShardedSamplePackLayout;
   layouts: ReadonlyMap<number, ShardedSamplePackLayout>;
   groups: readonly FrameGroup[] | null;
 }
@@ -199,8 +198,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
         assertSparseCoverageHalo(coverage);
         const mask: SparseCoverageMask = { grid: descriptor.grid, bounds: descriptor.bounds, maxZoom: descriptor.maxZoom, coverage, tiles };
         const layouts = new Map(channelCounts.map(count => [count, prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, count)]));
-        const layout = layouts.get(surface.samples.channelCount) ?? layouts.values().next().value!;
-        const result = { descriptor, mask, layout, layouts, groups: null };
+        const result = { descriptor, mask, layouts, groups: null };
         const actual = sparseRetainedBytes(result);
         if (actual > retained) throw new CoverageError('Sparse coverage exceeds serving byte budget');
         signal.throwIfAborted();
@@ -240,14 +238,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       cache.set(cacheKey, resolved, sparseRetainedBytes(resolved), Date.now() + 3_600_000);
     } catch (error) { releaseExtra(); throw error; }
   }
-  const layout = layouts.get(surface.samples.channelCount) ?? layouts.values().next().value!;
-  if (groups) {
-    for (const group of groups) {
-      const bound = layouts.get(group.channelCount)!;
-      if (bound.shards.length !== group.shards.length || bound.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new CoverageError('Coverage shard layout disagrees with publication');
-    }
-  } else if (layout.shards.length !== surface.samples.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== surface.samples.shards[i].firstBlock || shard.blockCount !== surface.samples.shards[i].blockCount || shard.byteLength !== surface.samples.shards[i].bytes)) throw new CoverageError('Coverage shard layout disagrees with publication');
-  return { coverage: { ...resolved, layout, groups }, release };
+  return { coverage: { ...resolved, groups }, release };
   } catch (error) { release(); throw error; }
 }
 

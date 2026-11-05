@@ -238,7 +238,7 @@ export function decodeSplitGribField(source: SplitSource,
   const bitsPerValue = s5View.getUint8(19);
   const binaryScale = 2 ** binaryScaleFactor;
   const decimalScale = 10 ** -decimalScaleFactor;
-  const packingError = 0.5 * binaryScale * decimalScale;
+  const packingError = bitsPerValue === 0 ? 0 : 0.5 * binaryScale * decimalScale;
 
   const s6 = field.section6 as Uint8Array | null | undefined;
   let hasBitmap = false;

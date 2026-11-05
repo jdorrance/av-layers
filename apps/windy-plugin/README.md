@@ -9,7 +9,10 @@ pnpm --filter @av/windy-plugin serve
 
 `AV_API_BASE` is embedded at build time and defaults to `http://localhost:8787`. Open `https://127.0.0.1:9999/plugin.js`, accept the certificate, then load that URL from [Windy's developer loader](https://www.windy.com/developer-mode).
 
-The pane has model and opacity. Closing it leaves the overlay on the map. The overlay leaves when the build expires. For a map without Windy, use [`@av/preview`](../preview/README.md).
+Click the map for a diurnal lift chart and point summary. Chart hours follow the
+host timeline; units switch between metres/m/s and feet/knots. Closing the pane
+ends point requests and leaves the overlay until build expiry. For a map without
+Windy, use [`@av/preview`](../preview/README.md).
 
 ## Source layout
 

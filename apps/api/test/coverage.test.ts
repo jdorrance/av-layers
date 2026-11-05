@@ -170,7 +170,7 @@ it('lazily verifies sparse coverage and binds its canonical sample layout', asyn
   const results = await Promise.all([resolveSparseCoverage(bucket, surface), resolveSparseCoverage(bucket, surface)]);
   expect(results[0].coverage.mask).toBe(results[1].coverage.mask);
   expect(results[0].coverage.mask.coverage).toEqual(coverage);
-  expect(results[0].coverage.layout.storedCells).toBe(9);
+  expect(results[0].coverage.layouts.get(1)!.storedCells).toBe(9);
   for (const result of results) result.release();
   expect(get).toHaveBeenCalledTimes(3);
   await expect(resolveSparseCoverage(bucket, { ...surface, gridHash: '0'.repeat(64) })).rejects.toThrow('disagrees');

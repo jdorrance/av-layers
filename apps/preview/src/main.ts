@@ -1,23 +1,23 @@
-import { renderBuildDiagnostics, renderSampleTable } from '@av/contracts/client/dom';
+import { renderBuildDiagnostics, renderPointSeries } from '@av/contracts/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { PRODUCTS, type LayerId, type ModelId } from '@av/contracts';
+import { PRODUCTS, renderedFrames, type LayerId, type ModelId } from '@av/contracts';
 import {
   ApiClient,
   activePalettes,
   assertNotExpired,
-  formatSampleStatus,
   formatSeriesSummary,
   forecastHorizonNotice,
   formatBuildFreshness,
   normalizePoint,
   samePoint,
+  pointSeriesSelection,
   watchBuildExpiry,
-  type FrameSampleLayer,
   type GeoPoint,
   type PinnedBuild,
-  type SamplePayload
+  type SamplePayload,
+  type UnitSystem
 } from '@av/contracts/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
@@ -47,6 +47,7 @@ const pointCard = element<HTMLDivElement>('point-card');
 const pointSummary = element<HTMLParagraphElement>('point-summary');
 const pointStatus = element<HTMLParagraphElement>('point-status');
 const pointBody = element<HTMLDivElement>('point-body');
+const pointUnits = element<HTMLSelectElement>('point-units');
 const meta = element<HTMLDListElement>('meta');
 
 const ARMENIA: [[number, number], [number, number]] = [[43.45, 38.84], [46.63, 41.3]];
@@ -215,6 +216,8 @@ function startPreview(): void {
   let seriesAbort: AbortController | null = null;
   let clicked: GeoPoint | null = null;
   let pointOpen = false;
+  let pointUnitSystem: UnitSystem = 'metric';
+  let updatePointSeries: ReturnType<typeof renderPointSeries> | null = null;
   let pointInterrupted = false;
   let ignoreNextMapClick = false;
   let expiryTimer: number | null = null;
@@ -229,13 +232,13 @@ function startPreview(): void {
   }
 
   function liftLayers(value: PinnedBuild): LayerId[] {
-    return LIFT.filter(layer => value.manifest.layers.includes(layer));
+    return LIFT.filter(layer => value.templates[layer]);
   }
 
   function activeLayer(): LayerId | null {
     if (!build) return null;
     const preferred: LayerId = reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl';
-    if (build.manifest.layers.includes(preferred)) return preferred;
+    if (build.templates[preferred]) return preferred;
     return liftLayers(build)[0] ?? null;
   }
 
@@ -291,6 +294,7 @@ function startPreview(): void {
     pointSummary.textContent = '';
     pointStatus.textContent = '';
     pointBody.replaceChildren();
+    updatePointSeries = null;
     pointBody.tabIndex = -1;
     meta.replaceChildren();
     clicked = null;
@@ -313,7 +317,7 @@ function startPreview(): void {
       expireView();
       return;
     }
-    const notice = forecastHorizonNotice(build.manifest, now);
+    const notice = forecastHorizonNotice({ frames: renderedFrames(build.manifest) }, now);
     horizonNotice.textContent = notice ?? '';
     horizonNotice.hidden = notice === null;
     freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);
@@ -360,7 +364,7 @@ function startPreview(): void {
       timestamp.textContent = expired ? 'Build expired — overlay removed' : 'No frame selected';
       return;
     }
-    const frames = build.manifest.frames;
+    const frames = renderedFrames(build.manifest);
     const offset = zoneOffsetMinutes(mapLon());
     const today = dayKey(Date.now(), offset);
     const selected = frames.find(frame => frame.id === selectedFrame) ?? frames[0];
@@ -456,19 +460,21 @@ function startPreview(): void {
   }
 
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
-    const frame = build?.manifest.frames[index];
+    const frame = build ? renderedFrames(build.manifest)[index] : undefined;
     if (!frame) return;
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
+    updatePointSeries?.(selectedFrame, pointUnitSystem);
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
     if (history !== 'none') writeUrl(history);
   }
 
   function chooseFrame(value: PinnedBuild): void {
-    const index = frameIndexFor(value.manifest.frames, requestedTime, Date.now());
-    selectedFrame = value.manifest.frames[index]?.id ?? null;
+    const frames = renderedFrames(value.manifest);
+    const index = frameIndexFor(frames, requestedTime, Date.now());
+    selectedFrame = frames[index]?.id ?? null;
     const frame = value.manifest.frames.find(item => item.id === selectedFrame);
     if (frame) requestedTime = frame.validTime;
   }
@@ -539,22 +545,17 @@ function startPreview(): void {
     else if (model === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
   }
 
-  function liftText(sample: FrameSampleLayer | undefined): string {
-    if (!sample) return '…';
-    if (sample.status === 'valid' && sample.value !== null && Number.isFinite(sample.value)) return `${Math.round(sample.value)} m`;
-    return formatSampleStatus(sample);
-  }
-
-  function showPoint(point: GeoPoint, payload?: SamplePayload): void {
-    const layer = activeLayer();
-    const frame = payload?.frames.find(item => item.id === selectedFrame) ?? payload?.frames[0];
-    const sample = layer && frame ? frame.layers[layer] : undefined;
+  function showPoint(point: GeoPoint, payload: SamplePayload): void {
     const place = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
-    pointSummary.textContent = sample ? `${liftText(sample)} · ${place}` : place;
-    if (payload && build && layer) {
-      renderSampleTable(pointBody, payload, build.manifest.layers, build);
+    pointSummary.textContent = place;
+    if (build) {
+      const requestedBuild = build;
+      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: selectedFrame, unitSystem: pointUnitSystem, onFrame(id) {
+        if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
+        selectIndex(renderedFrames(build.manifest).findIndex(frame => frame.id === id), 'push');
+      } });
       pointBody.tabIndex = 0;
-      pointStatus.textContent = formatSeriesSummary(payload, build.manifest.layers, point);
+      pointStatus.textContent = formatSeriesSummary(payload, Object.keys(payload.frames[0]?.layers ?? {}), point);
     }
   }
 
@@ -570,16 +571,17 @@ function startPreview(): void {
     pointInterrupted = false;
     pointCard.hidden = false;
     pointBody.replaceChildren();
+    updatePointSeries = null;
     pointBody.tabIndex = -1;
     pointSummary.textContent = `${requestedPoint.lat.toFixed(3)}°, ${requestedPoint.lon.toFixed(3)}°`;
     pointStatus.textContent = 'Loading point…';
     renderBuildDiagnostics(meta, requestedBuild);
     try {
-      const layers = [...requestedBuild.manifest.layers];
+      const { layers, frames } = pointSeriesSelection(requestedBuild);
       const payload = await api.sample(requestedBuild, {
         lat: requestedPoint.lat,
         lon: requestedPoint.lon,
-        frames: 'all',
+        frames,
         layers,
         signal: requestAbort.signal
       });
@@ -658,6 +660,20 @@ function startPreview(): void {
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
   timeInput.addEventListener('input', () => { selectIndex(Number(timeInput.value), 'none'); });
   timeInput.addEventListener('change', () => { writeUrl('replace'); });
+  pointUnits.value = pointUnitSystem;
+  pointUnits.addEventListener('change', () => {
+    pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
+    updatePointSeries?.(selectedFrame, pointUnitSystem);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button')) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    if (!build || !ensureLive()) return;
+    event.preventDefault();
+    const frames = renderedFrames(build.manifest);
+    const index = frames.findIndex(frame => frame.id === selectedFrame);
+    selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
+  });
   legendToggle.addEventListener('click', () => {
     legendOpen = !legendOpen;
     legend.className = legendOpen ? 'ribbon' : 'ribbon is-collapsed';

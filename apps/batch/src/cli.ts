@@ -1,7 +1,7 @@
 import { validateLocalBuild } from './local-build.js';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_MODEL, getProduct, layerSurface, modelIdSchema } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct, mapFrameCount, layerSurface, modelIdSchema } from '@av/contracts';
 import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
 
 export async function runBatch(args = process.argv.slice(2)): Promise<void> {
@@ -49,7 +49,8 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
       const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
       const native = nativeSparseMask(mask);
       const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask: mask, fine: fine.mask,
-        nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+        nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, mapFrames: mapFrameCount(product), groupFrames: Math.ceil(product.frameHours.length / product.execution.shards), maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+        auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
         nativeLayers: product.layers.filter(layer => layerSurface(layer) === 'native').length,
         fineLayers: product.layers.filter(layer => layerSurface(layer) === 'fine').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });
       const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity, violations: capacity.violations };

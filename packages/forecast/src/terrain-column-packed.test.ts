@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
-import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, TERRAIN_CLEARANCE_METHOD,
+import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, CLOUD_SUPPORT_MASK, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, STATUS_NO_LIFT, STATUS_OUTSIDE, TERRAIN_CLEARANCE_METHOD,
   type CoverageMask, type Grid, type RegularLatLonGrid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { deriveFrame, FRAME_BRANCH } from './frame.js';
@@ -8,6 +8,27 @@ import { preparePackedTerrainColumns, prepareTerrainColumns } from './refinement
 
 const day = { intervalStart: '2026-03-20T11:00:00Z', validTime: '2026-03-20T12:00:00Z' };
 const gridHash = (grid: Grid) => createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
+
+it('carries positive-weight native cloud support through fine columns without changing lift values', () => {
+  const native: Grid = { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229,
+    lon0: 0, lat0: 1, dx: 0.1, dy: -0.1, wrapLongitude: false };
+  const plan = planWholeDomainGrid(native, 2), source = mask(native, () => 1), target = mask(plan.fine, () => 1);
+  const active = Uint32Array.of(0, 1, 2, 3), frame = normalizedFixtureFrame(native, active, '2026-03-20T00:00:00Z', 12, 1);
+  const diagnostics = { ceilingMslM: new Float32Array(4), buoyancyM2S3: new Float32Array(4), branch: new Uint8Array(4) };
+  const flags = deriveFrame(frame, source, { daylightOnly: false, diagnostics })['usable-lift-msl']!.flags;
+  const nativeClearance = { validTime: day.validTime, grid: native, diagnostics, flags };
+  const columns = prepareTerrainColumns(source, target, active, 3);
+  const terrain = { elevationM: new Float32Array(9).fill(100), valid: new Uint8Array(9).fill(1) };
+  const baseline = columns.derive(frame, terrain, day, { daylightOnly: false, nativeClearance });
+  flags[0] |= SUPPORT_CUMULUS; flags[1] |= SUPPORT_OVERDEVELOPED; flags[2] |= SUPPORT_CLOUD_CAPPED;
+  const enriched = columns.derive(frame, terrain, day, { daylightOnly: false, nativeClearance });
+  for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
+    expect(new Uint8Array(enriched.fields[layer].values.buffer)).toEqual(new Uint8Array(baseline.fields[layer].values.buffer));
+    expect(enriched.fields[layer].flags[0]! & CLOUD_SUPPORT_MASK).toBe(SUPPORT_CUMULUS);
+    expect(enriched.fields[layer].flags[4]! & CLOUD_SUPPORT_MASK).toBe(CLOUD_SUPPORT_MASK);
+    for (let i = 0; i < 9; i++) expect(enriched.fields[layer].flags[i]! & ~CLOUD_SUPPORT_MASK).toBe(baseline.fields[layer].flags[i]);
+  }
+});
 
 function mask(grid: Grid, selected: (index: number) => number): CoverageMask {
   const bytes = Math.ceil(grid.width * grid.height / 8);

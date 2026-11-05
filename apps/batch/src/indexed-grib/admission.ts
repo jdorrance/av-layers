@@ -152,12 +152,11 @@ export function inspectIndexedGribField(source: IndexedSource, bytes: Uint8Array
   ) {
     throw new IndexedGribError('source-conflict', `Wrong Indexed GRIB parameter identity for ${spec.key}`);
   }
-  const [expectedSurface, expectedSurfaceValue] = indexedGribFirstFixedSurface(spec.level);
+  const [expectedSurface, expectedSurfaceValue] = spec.fixedSurface ?? indexedGribFirstFixedSurface(spec.level);
   const actualSurfaceValue = scalarLevel(product);
   if (
     product.typeOfFirstFixedSurface !== expectedSurface ||
-    actualSurfaceValue === null ||
-    !Number.isFinite(actualSurfaceValue) ||
+    (actualSurfaceValue !== null && !Number.isFinite(actualSurfaceValue)) ||
     actualSurfaceValue !== expectedSurfaceValue ||
     product.typeOfSecondFixedSurface !== undefined
   ) {
@@ -207,6 +206,7 @@ export function inspectIndexedGribField(source: IndexedSource, bytes: Uint8Array
     key: spec.key,
     kind: spec.kind,
     role: spec.role ?? 'current',
+    ...(spec.outputUnit ? { normalization: { units: spec.outputUnit, scale: spec.scale ?? 1, ...(spec.conversion ? { conversion: spec.conversion } : {}) } } : {}),
     variable: spec.variable,
     level: spec.level,
     levelHpa: spec.levelHpa ?? null,
@@ -235,6 +235,7 @@ export function inspectIndexedGribField(source: IndexedSource, bytes: Uint8Array
       gridDefinitionTemplateNumber: grid.gridDefinitionTemplateNumber,
       scanningMode: grid.scanningMode,
       earthRadiusM: grid.earthRadiusM,
+      uvRelativeToGrid: grid.uvRelativeToGrid,
     },
     productMetadata: {
       productDefinitionTemplateNumber: product.productDefinitionTemplateNumber,

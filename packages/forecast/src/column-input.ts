@@ -22,7 +22,7 @@ export function createNativeColumnScratch(maxLevels: number): NativeColumnScratc
   };
 }
 
-function readSurfaceSpecificHumidityKgKg(frame: NormalizedFrame, i: number): number {
+export function readSurfaceSpecificHumidityKgKg(frame: NormalizedFrame, i: number): number {
   if (frame.missing.humidity2m[i]) return NaN;
   const specificHumidityKgKg = frame.specificHumidity2mKgKg[i]!;
   if (!Number.isFinite(specificHumidityKgKg) || specificHumidityKgKg <= 0 || specificHumidityKgKg >= 1) return specificHumidityKgKg;

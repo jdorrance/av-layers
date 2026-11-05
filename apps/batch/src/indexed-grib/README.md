@@ -12,6 +12,10 @@ pnpm test apps/batch/src/indexed-grib
 URLs, parameter identities, field roles, pressure routing, cycles and windows.
 [source.ts](source.ts) validates each configured instance;
 [provider.ts](provider.ts) exposes the shared provider boundary.
+Optional `auxSurface` and `auxLevels` descriptors select instantaneous diagnostics
+in canonical [normalized units](../../../../packages/contracts/src/methods.ts).
+Wind components are paired and rotated to Earth coordinates. An explicit
+`geometric-w-to-omega` conversion uses the temperature at the same pressure level.
 
 [acquire.ts](acquire.ts) owns session cancellation, bounded prefetch and companion
 reuse. [transport.ts](transport.ts) verifies inventory selection and cached

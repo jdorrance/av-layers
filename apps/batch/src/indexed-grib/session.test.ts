@@ -10,15 +10,16 @@ import { compactIndexedGribSamples, IndexedGribFieldSampler } from './sampling.t
 import { IndexedGribTransport } from './transport.ts';
 import type { IndexedGribFrameAcquisition } from './types.ts';
 import { createNormalizedFrameTarget } from '../provider.js';
+import { omegaFromGeometricWPaS, kelvinToCelsius } from '@av/thermodynamics';
 
 const cycle = '2026-10-30T00:00:00Z';
 afterEach(() => vi.restoreAllMocks());
 
-function source() {
+function source(configured = profile) {
   const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input), hour = Number(/\.f(\d{3})/.exec(url)![1]);
     const product = url.includes('pgrb2b.') ? 'secondary' : 'primary';
-    const specs = indexedGribCurrentSpecs(profile, hour).filter(spec => spec.product === product);
+    const specs = indexedGribCurrentSpecs(configured, hour).filter(spec => spec.product === product);
     if (url.endsWith('.idx')) {
       const lines = specs.map((spec, i) => `${i + 1}:${i * 32}:d=2026103000:${spec.variable}:${spec.level}:${spec.forecast}:`);
       lines.push(`${specs.length + 1}:${specs.length * 32}:d=2026103000:DUMMY:surface:unused:`);
@@ -37,7 +38,7 @@ function source() {
     const grid = { kind: 'latlon', gridKey: 'fixture-grid', ni: 1440, nj: 721, longitudeOfFirstGridPoint: 0, latitudeOfFirstGridPoint: 90, iDirectionIncrement: 0.25, jDirectionIncrement: 0.25, earthRadiusM: 6371229, gridDefinitionTemplateNumber: 0 };
     return { grid, packing: 3, packingError: 0, field: {}, receipt: {
       key: spec.key, kind: spec.kind, role: spec.role ?? 'current', variable: spec.variable, level: spec.level, forecastLabel: spec.forecast,
-      interval, grid, identification: {}, productMetadata: { typeOfGeneratingProcess: 2 }, unit: spec.statistic === 'mean' ? 'W/m2' : 'kg/m2',
+      interval, grid, identification: { year: 2026, month: 10, day: 30, hour: 0, minute: 0, second: 0 }, productMetadata: { typeOfGeneratingProcess: 2 }, unit: spec.statistic === 'mean' ? 'W/m2' : 'kg/m2',
     } } as unknown as admission.InspectedIndexedGribField;
   });
   const sample = vi.spyOn(IndexedGribFieldSampler.prototype, 'sample').mockImplementation(async (inspected, indices, destination, targetMissing) => {
@@ -92,6 +93,58 @@ it('writes every normalized GFS field into the supplied shared slot with identic
   } finally { await session.close(); }
 });
 
+it('acquires only configured auxiliary fields and retains their caller-owned shared buffers', async () => {
+  const configured = indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream,
+    parameters: { ...profile.upstream.parameters, TCDC: [6, 1, '%'], UGRD: [2, 2, 'm/s'], VGRD: [2, 3, 'm/s'] },
+    auxSurface: { cloudTotalPct: { variable: 'TCDC', level: 'entire atmosphere', unit: '%', scale: 10, surface: [10, 0] } },
+    auxLevels: { uWindMps: { variable: 'UGRD', unit: 'm/s' }, vWindMps: { variable: 'VGRD', unit: 'm/s' } }
+  } });
+  const { fetchImpl } = source(configured);
+  const slot = createNormalizedFrameTarget(2, configured.pressureLevels.length, false, true);
+  const session = await createIndexedGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0, 1), fetchImpl });
+  try {
+    const first = await session.acquire(1, slot), surface = first.auxSurface!.cloudTotalPct!;
+    expect(Object.keys(first.auxSurface!)).toEqual(['cloudTotalPct']);
+    expect(surface.values[0]).toBeCloseTo(12.3456789);
+    expect(surface.missing).toEqual(Uint8Array.of(0, 1));
+    expect(surface.values.buffer).toBeInstanceOf(SharedArrayBuffer);
+    expect(first.auxLevels!.uWindMps).toHaveLength(configured.pressureLevels.length);
+    expect(first.auxLevels!.uWindMps![0]!.missing).toEqual(Uint8Array.of(0, 1));
+    const second = await session.acquire(2, slot);
+    expect(second.auxSurface!.cloudTotalPct!.values).toBe(surface.values);
+    expect(second.auxLevels!.vWindMps![0]!.values).toBe(first.auxLevels!.vWindMps![0]!.values);
+    expect(second.receipt.fields.filter(field => field.kind === 'aux-level')).toHaveLength(2 * configured.pressureLevels.length);
+  } finally { await session.close(); }
+});
+
+it('normalizes configured geometric vertical velocity with the same isobaric temperature', async () => {
+  const configured = indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream,
+    parameters: { ...profile.upstream.parameters, DZDT: [2, 9, 'm/s'] },
+    auxLevels: { omegaPaS: { variable: 'DZDT', unit: 'Pa/s', conversion: 'geometric-w-to-omega' } }
+  } });
+  const { fetchImpl, sample } = source(configured), original = sample.getMockImplementation()!;
+  sample.mockImplementation(async (...args) => {
+    const result = await original(...args), kind = args[0].receipt.kind;
+    if (kind === 'temperature' || kind === 'aux-level') for (let i = 0; i < result.values.length; i++) {
+      if (!result.missing[i]) result.values[i] = kind === 'temperature' ? 280 : 2;
+    }
+    return result;
+  });
+  const result = await acquireIndexedGribFrame(configured, { cycle, hour: 1, activeIndices: Uint32Array.of(0, 1), fetchImpl });
+  expect(result.auxLevels!.omegaPaS![0]!.values[0]).toBeCloseTo(omegaFromGeometricWPaS(2,
+    result.pressureLevelsHpa[0]!, kelvinToCelsius(result.tempK[0]![0]!)));
+  expect(result.auxLevels!.omegaPaS![0]!.missing).toEqual(Uint8Array.of(0, 1));
+});
+
+it('refuses auxiliary units, unknown names, half vectors and unsupported conversions at configuration', () => {
+  for (const upstream of [
+    { auxSurface: { imaginary: { variable: 'TMP', level: '2 m above ground', unit: 'K' } } },
+    { auxSurface: { mslpPa: { variable: 'TMP', level: 'mean sea level', unit: 'hPa' } } },
+    { auxSurface: { u10mMps: { variable: 'TMP', level: '10 m above ground', unit: 'm/s' } } },
+    { auxLevels: { rhPercent: { variable: 'TMP', unit: '%', conversion: 'geometric-w-to-omega' } } }
+  ]) expect(() => indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream, ...upstream } })).toThrow();
+});
+
 it('rejects a job whose decoded working set cannot fit before fetching its field', async () => {
   const { fetchImpl, sample } = source();
   const session = await createIndexedGribAcquisitionSession(profile, { cycle, activeIndices: Uint32Array.of(0), fetchImpl, prefetchBytes: 1024 });
@@ -137,6 +190,23 @@ it('shares discovery inventories with the acquired cycle', async () => {
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(48);
     await session.acquire(1);
     expect(fetchImpl.mock.calls.filter(([url]) => String(url).endsWith('.idx'))).toHaveLength(48);
+  } finally { await session.close(); }
+});
+
+it('discovers sparse horizons with unselected companions and preserves the source interval transition', async () => {
+  const configured = indexedSource({ ...INDEXED_PRODUCT, forecast: { ...INDEXED_PRODUCT.forecast,
+    hours: [27, 123, 384], intervalChange: { fromHour: 123, hours: 3 } } });
+  const { fetchImpl } = source(configured);
+  const session = await createIndexedGribAcquisitionSession(configured, { activeIndices: Uint32Array.of(0), now: new Date('2026-10-30T08:00:00Z'), fetchImpl });
+  try {
+    const indexes = fetchImpl.mock.calls.map(([url]) => String(url)).filter(url => url.endsWith('.idx'));
+    expect(indexes).toHaveLength(8);
+    expect(indexes.some(url => url.includes('.f026.'))).toBe(true);
+    expect(indexes.some(url => url.includes('.f381.'))).toBe(true);
+    expect(indexes.some(url => url.includes('.f122.'))).toBe(false);
+    const hourly = await session.acquire(27), threeHourly = await session.acquire(384);
+    expect(hourly.intervals.fluxWindow).toEqual({ start: validAt(cycle, 26), end: validAt(cycle, 27) });
+    expect(threeHourly.intervals.fluxWindow).toEqual({ start: validAt(cycle, 381), end: validAt(cycle, 384) });
   } finally { await session.close(); }
 });
 

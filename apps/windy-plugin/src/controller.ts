@@ -1,4 +1,4 @@
-import type { LayerId, ModelId } from '@av/contracts';
+import { renderedFrames, type LayerId, type ModelId } from '@av/contracts';
 import {
   clampOpacity,
   DEFAULT_OPACITY,
@@ -170,7 +170,7 @@ export class PluginController {
       badge: this.badge,
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
       notice: this.notice,
-      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice(this.build.manifest, this.now()) : null
+      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice({ frames: renderedFrames(this.build.manifest) }, this.now()) : null
     };
   }
 
@@ -208,11 +208,11 @@ export class PluginController {
         return this.state();
       }
       this.build = build;
-      this.layerId = preferredLiftLayer(build.manifest.layers);
+      this.layerId = preferredLiftLayer(Object.keys(build.templates) as LayerId[]);
       const hostValue = hostTimestampMs(this.host.store.get('timestamp'));
       const first = hostValue === null
-        ? selectExplicitFrame(build.manifest.frames, build.manifest.frames[0]?.id ?? '')
-        : selectHostFrame(build.manifest.frames, hostValue);
+        ? selectExplicitFrame(renderedFrames(build.manifest), renderedFrames(build.manifest)[0]?.id ?? '')
+        : selectHostFrame(renderedFrames(build.manifest), hostValue);
       if (!first || !this.layerId) {
         this.fail('Build has no usable frame or layer');
         return this.state();
@@ -242,7 +242,7 @@ export class PluginController {
 
   selectFrame(id: string, options: { syncHost?: boolean } = {}): ControllerState {
     if (!this.canUse()) return this.state();
-    const frame = selectExplicitFrame(this.build!.manifest.frames, id);
+    const frame = selectExplicitFrame(renderedFrames(this.build!.manifest), id);
     if (!frame) {
       this.message = `Unknown frame ${id}`;
       this.notice = null;
@@ -295,7 +295,7 @@ export class PluginController {
     if (!this.canUse()) return this.state();
     const hostValue = hostTimestampMs(timestamp);
     if (hostValue === null) return this.state();
-    const frame = selectHostFrame(this.build!.manifest.frames, hostValue);
+    const frame = selectHostFrame(renderedFrames(this.build!.manifest), hostValue);
     if (!frame) return this.state();
     this.frameId = frame.id;
     this.applyUrl();
@@ -401,7 +401,7 @@ export class PluginController {
     if (!this.build) return;
     this.cancelTimeTimer();
     const now = this.now();
-    const horizonEnd = Math.max(...this.build.manifest.frames.map(frame => frameTime(frame.validTime)));
+    const horizonEnd = Math.max(...renderedFrames(this.build.manifest).map(frame => frameTime(frame.validTime)));
     const nextChange = horizonEnd > now
       ? Math.min(horizonEnd, this.build.expiresAtMs)
       : this.build.expiresAtMs;

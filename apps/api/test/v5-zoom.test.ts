@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCTS, MAX_NATIVE_ZOOM, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { PRODUCTS, LAYER_IDS, LAYERS, MAX_NATIVE_ZOOM, renderedLayers, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { describeSparseCoverage } from '../../batch/src/coverage.js';
 import { createApp } from '../src/index';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture } from './v5-fixture';
 
@@ -10,6 +11,47 @@ beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW)
 afterEach(() => { vi.useRealTimers(); });
 
 describe('retained v5 zoom compatibility', () => {
+  it('rejects every sample-only tile and TileJSON layer before coverage or archive reads', async () => {
+    const layers = LAYER_IDS.filter(layer => LAYERS[layer].delivery === 'samples-only');
+    expect(layers).toHaveLength(17);
+    const fixture = createV5Fixture({ nativeLayers: ['precip-rate', ...layers] });
+    const root = `/v1/models/gfs/runs/${fixture.buildId}`;
+    for (const layer of layers) for (const path of [`${root}/layers/${layer}/h001/tilejson.json`, `/tiles/gfs/${fixture.buildId}/${layer}/h001/0/0/0.webp`]) {
+      const response = await fixture.request(path);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ title: 'unknown-resource' });
+    }
+    expect(fixture.get.mock.calls.some(([key]) => key.startsWith('coverage/') || key.endsWith('.pmtiles'))).toBe(false);
+  });
+
+  it('keeps a missing rendered archive descriptor as a publication failure', async () => {
+    const fixture = createV5Fixture();
+    fixture.manifest.artifacts = fixture.manifest.artifacts.filter(artifact => artifact.layer !== 'precip-rate' || artifact.frame !== 'h001');
+    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, json(fixture.manifest));
+    for (const path of [`/v1/models/gfs/runs/${fixture.buildId}/layers/precip-rate/h001/tilejson.json`, `/tiles/gfs/${fixture.buildId}/precip-rate/h001/0/0/0.webp`]) {
+      const response = await fixture.request(path);
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ title: 'publication-invalid' });
+    }
+    expect(fixture.get.mock.calls.some(([key]) => key.endsWith('.pmtiles'))).toBe(false);
+  });
+
+  it('keeps a missing advertised rendered archive as a publication failure', async () => {
+    const fixture = createV5Fixture(), surface = fixture.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    fixture.native.mask.tiles[0] |= 1;
+    const coverage = describeSparseCoverage(fixture.native.mask, fixture.product), prefix = `coverage/${coverage.hash}`;
+    surface.coverage = { ...surface.coverage, hash: coverage.hash, maskKey: `${prefix}/manifest.json` };
+    surface.samples.coverageHash = coverage.hash;
+    fixture.objects.set(`${prefix}/manifest.json`, coverage.bytes);
+    fixture.objects.set(`${prefix}/sparse.bin`, coverage.sparseBytes);
+    fixture.objects.set(`${prefix}/tiles.bin`, fixture.native.mask.tiles);
+    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, json(fixture.manifest));
+    const response = await fixture.request(`/tiles/gfs/${fixture.buildId}/precip-rate/h001/0/0/0.webp`);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ title: 'publication-unavailable' });
+    expect(fixture.get.mock.calls.some(([key]) => key.endsWith('/precip-rate/h001.pmtiles'))).toBe(true);
+  });
+
   it.each(upgrades)('serves retained and new $product.modelId builds after upgrading z$olderZoom to z$zoom', async ({ product, olderZoom, zoom }) => {
     const previous = createV5Fixture({ product, maxZoom: olderZoom });
     const current = createV5Fixture({ product, maxZoom: zoom, buildId: '20261101T000000Z-00000000-0000-0000-0000-000000000002' });
@@ -40,7 +82,7 @@ describe('retained v5 zoom compatibility', () => {
       if (product.layers.includes('precip-rate')) expect(body.frames[0].layers['precip-rate']).toMatchObject({ value: 7, status: 'valid', surfaceId: 'native' });
       else expect(body.frames[0].layers).not.toHaveProperty('precip-rate');
 
-      for (const surface of manifest.surfaces) for (const layer of surface.layers) {
+      for (const surface of manifest.surfaces) for (const layer of renderedLayers(surface.layers)) {
         const frame = manifest.frames[0].id, maxZoom = surface.coverage.maxZoom;
         const tilejson = await current.request(`${root}/layers/${layer}/${frame}/tilejson.json`);
         expect(tilejson.status).toBe(200);

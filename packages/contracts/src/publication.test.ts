@@ -1,13 +1,40 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
-import { encodeBoundedJson, MAX_MANIFEST_BYTES, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertSampleLayoutBindingV5, forecastGrids, forecastObjects, forecastObjectsV5, manifestSchema, manifestV5Schema, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
+import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, forecastObjects, forecastObjectsV5, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
 
 function refined(): Manifest {
   const manifest = fixtureManifest();
   return manifestSchema.parse({ ...manifest, version: 4, patches: [fixturePatch(manifest)] });
 }
+
+it('requires advertised precipitation support when API and rollback verify a frame receipt', () => {
+  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const identity = { model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle };
+  const window = { start: frame.intervalStart, end: frame.intervalEnd };
+  const chunk = { version: 1, ...identity, frame, hour: (Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000,
+    intervals: { profileTime: frame.validTime, fluxWindow: window }, receipt: {} };
+  expect(() => parseFrameProvenance(chunk, manifest, frame)).toThrow('does not match');
+  expect(parseFrameProvenance(chunk, identity, frame)).toEqual(chunk);
+  expect(parseFrameProvenance(chunk, { ...identity, layers: ['usable-lift-msl'] }, frame)).toEqual(chunk);
+  const complete = { ...chunk, intervals: { ...chunk.intervals, precipitationWindow: window } };
+  expect(parseFrameProvenance(complete, manifest, frame)).toEqual(complete);
+  const invalid = { ...complete, intervals: { ...complete.intervals, precipitationWindow: { ...window, start: frame.intervalEnd } } };
+  for (const binding of [identity, manifest]) expect(() => parseFrameProvenance(invalid, binding, frame)).toThrow('does not match');
+});
+
+it('binds provenance frame values independently of input key order', () => {
+  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const expected = { intervalEnd: frame.intervalEnd, validTime: frame.validTime, id: frame.id, intervalStart: frame.intervalStart };
+  const window = { start: frame.intervalStart, end: frame.intervalEnd };
+  const chunk = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+    hour: (Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000,
+    frame: { validTime: frame.validTime, intervalStart: frame.intervalStart, intervalEnd: frame.intervalEnd, id: frame.id },
+    intervals: { profileTime: frame.validTime, fluxWindow: window, precipitationWindow: window }, receipt: {} };
+  expect(parseFrameProvenance(chunk, manifest, expected).frame).toEqual(frame);
+  expect(() => parseFrameProvenance(chunk, manifest, { ...expected, intervalStart: frame.intervalEnd })).toThrow('does not match');
+});
 
 describe('refined forecast publications', () => {
   it('round-trips v3 and v4 without changing the public model, frame axis or raster archive paths', () => {
@@ -264,4 +291,32 @@ describe('v2 terrain references', () => {
     if (defect === 'native-terrain') manifest.surfaces[0].terrain = structuredClone(terrain);
     expect(manifestV5Schema.safeParse(manifest).success).toBe(false);
   });
+});
+
+
+it('binds native profile groups to the scalar coverage block geometry and codec width', () => {
+  const manifest = v5(), surface = manifest.surfaces[0], recordBytes = PROFILE_HEADER_BYTES + 3 * PROFILE_LEVEL_BYTES;
+  const frames = manifest.frames.length, prefix = `builds/${manifest.model}/${manifest.buildId}/surfaces/native/profiles`;
+  surface.profiles = { format: PROFILE_PACK_FORMAT, blockSize: 16, levelCount: 3, recordBytes,
+    coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells,
+    groups: [{ firstFrame: 0, frameCount: frames, shards: surface.samples.shards.map((shard, index) => ({ ...shard,
+      bytes: shard.storedCells * frames * recordBytes, key: `${prefix}/g0-b${index}.bin` })) }] };
+  const binding = { grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3] };
+  expect(() => manifestV5Schema.parse(manifest)).not.toThrow();
+  expect(() => assertProfileLayoutBindingV5(surface, binding)).not.toThrow();
+  expect(forecastObjectsV5(manifest).filter(object => object.key.includes('/profiles/'))).toHaveLength(2);
+  expect(() => assertProfileLayoutBindingV5(surface, { ...binding, blockIds: [0, 1, 3] })).toThrow('size mismatch');
+  expect(() => assertProfileLayoutBindingV5(surface, { ...binding, coverageHash: 'f'.repeat(64) })).toThrow('identity mismatch');
+  for (const mutate of [
+    (profiles: NonNullable<typeof surface.profiles>) => { profiles.recordBytes++; },
+    (profiles: NonNullable<typeof surface.profiles>) => { profiles.groups[0].firstFrame++; },
+    (profiles: NonNullable<typeof surface.profiles>) => { profiles.groups[0].shards[1].key = profiles.groups[0].shards[0].key; },
+    (profiles: NonNullable<typeof surface.profiles>) => { profiles.groups[0].shards[1].storedCells++; },
+    (profiles: NonNullable<typeof surface.profiles>) => { profiles.coverageHash = 'f'.repeat(64); }
+  ]) {
+    const changed = structuredClone(manifest);
+    mutate(changed.surfaces[0].profiles!);
+    expect(manifestV5Schema.safeParse(changed).success).toBe(false);
+  }
+  expect(() => assertProfileLayoutBindingV5(manifest.surfaces[1], binding)).toThrow('identity mismatch');
 });

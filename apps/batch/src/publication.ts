@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -10,6 +10,7 @@ import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
+import { readLocalProvenance } from './frame-provenance.js';
 
 const decode = parseBoundedJson;
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
@@ -63,7 +64,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
   if (options.validated) assertValidatedBuild(root, manifest, options.validated);
   assertAuthority(options.authority, manifest.model);
-  const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES);
+  const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   const captured = await readPointer(store, manifest.model, options.signal);
   const existing = captured.pointer?.retained.find(item => item.buildId === manifest.buildId);
   if (options.committedOnly && (!existing || captured.pointer?.latestBuildId !== manifest.buildId)) throw new Error('Recovery requires the committed latest build');
@@ -96,7 +97,8 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   if (manifest.version !== 5) validateArtifactRecords(manifest);
   const uploadStarted = Date.now();
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
-  const files = manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest);
+  const localProvenance = await readLocalProvenance(root, manifest);
+  const files = [...(manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest)), ...provenanceObjects(localProvenance.value)];
   if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
   const sized = options.receiptsOnly ? [] : await Promise.all(files.map(async file => {
     const { size } = await stat(localPath(root, file.key));
@@ -122,9 +124,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
     check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal, manifest.version === 5 && file.contentType === 'application/octet-stream');
   });
-  const provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
-  if (provenanceBytes.byteLength > MAX_PROVENANCE_BYTES || sha256(provenanceBytes) !== provenance.sha256) throw new Error(`Local hash mismatch: ${provenance.key}`);
-  parseProvenance(decode(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  const provenanceBytes = localProvenance.bytes;
   check(); await putImmutable(store, provenance.key, provenanceBytes, 'application/json', options.signal);
   const uploadedProvenance = await store.get(provenance.key, undefined, MAX_PROVENANCE_BYTES, options.signal);
   if (!uploadedProvenance || !Buffer.from(uploadedProvenance.bytes).equals(provenanceBytes)) throw new Error('Provenance readback mismatch');
@@ -201,17 +201,23 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     const coverage = decodeSparseCoverage(values[0], descriptor.gridHash);
     if (coverage.width !== surface.grid.width || coverage.height !== surface.grid.height || coverage.wrapLongitude !== surface.grid.wrapLongitude) throw new Error('Rollback sparse grid mismatch');
     assertSparseCoverageHalo(coverage);
-    assertSampleLayoutBindingV5(surface, { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds });
+    const binding = { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds };
+    assertSampleLayoutBindingV5(surface, binding);
+    if (surface.profiles) assertProfileLayoutBindingV5(surface, binding);
     const groups = surface.samples.format === 'cell-major-block-shards-v1'
       ? [{ channels: surface.samples.channelCount, shards: surface.samples.shards }]
       : surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
         channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => 'group' in shard && shard.group === first.group)
       }));
-    for (const group of groups) {
-      const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, group.channels);
+    const packedGroups = [...groups.map(group => ({ ...group, recordBytes: CELL_BYTES })),
+      ...(surface.profiles?.groups.map(group => ({
+        channels: group.frameCount, recordBytes: surface.profiles!.recordBytes, shards: group.shards
+      })) ?? [])];
+    for (const group of packedGroups) {
+      const layout = prepareShardedSamplePackLayout(surface.grid, coverage.blockIds, group.channels, undefined, group.recordBytes);
       if (layout.shards.length !== group.shards.length || layout.shards.some((item, i) => item.firstBlock !== group.shards[i].firstBlock || item.blockCount !== group.shards[i].blockCount || item.byteLength !== group.shards[i].bytes)) throw new Error('Rollback sample layout mismatch');
     }
-    for (const shard of surface.samples.shards) await verifyRemoteHash(store, shard.key, shard.sha256, shard.bytes, shard.bytes, signal, true);
+    for (const shard of [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])]) await verifyRemoteHash(store, shard.key, shard.sha256, shard.bytes, shard.bytes, signal, true);
     if (surface.terrain) {
       const terrain = surface.terrain, head = await store.head(terrain.key, signal);
       if (!head) throw new Error('Rollback terrain descriptor missing');
@@ -240,7 +246,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   const object = await store.get(retained.manifestKey, undefined, MAX_MANIFEST_BYTES, options.signal);
   check();
   if (!object) throw new Error('Rollback manifest missing');
-  const manifest = publishedManifestSchema.parse(decode(object.bytes));
+  const manifest = publishedManifestSchema.parse(decode(object.bytes, MAX_MANIFEST_JSON_TOKENS));
   if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) {
     throw new Error('Rollback manifest does not match pointer');
   }
@@ -248,7 +254,14 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   const receipt = await store.get(provenance.key, undefined, MAX_PROVENANCE_BYTES, options.signal);
   check();
   if (!receipt || sha256(receipt.bytes) !== provenance.sha256) throw new Error(`Rollback provenance missing or corrupt: ${provenance.key}`);
-  parseProvenance(decode(receipt.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  const provenanceValue = parseProvenance(decode(receipt.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest);
+  for (const [index, reference] of provenanceObjects(provenanceValue).entries()) {
+    check();
+    const object = await store.get(reference.key, undefined, reference.bytes, options.signal);
+    if (!object || object.bytes.byteLength !== reference.bytes || sha256(object.bytes) !== reference.sha256) throw new Error(`Rollback provenance missing or corrupt: ${reference.key}`);
+    const value = parseFrameProvenance(decode(object.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest, manifest.frames[index]!);
+    if (value.hour !== reference.hour) throw new Error('Rollback provenance hour mismatch');
+  }
   if (manifest.version === 5) await verifyV5Dependencies(store, manifest, options.signal);
   else {
   validateArtifactRecords(manifest);

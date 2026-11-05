@@ -1,4 +1,5 @@
-import { DEFAULT_OPACITY, populateModelOptions, type PinnedBuild } from '@av/contracts/client';
+import { DEFAULT_OPACITY, populateModelOptions, type PinnedBuild, type GeoPoint, type SamplePayload, type UnitSystem } from '@av/contracts/client';
+import { renderPointSeries } from '@av/contracts/client/dom';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
 
@@ -49,6 +50,14 @@ export class PluginPanel {
   private readonly notice = node('p', 'av-notice');
   private readonly error = node('p', 'av-error');
   private readonly horizonNotice = node('p', 'av-warning');
+  private readonly point = node('section', 'av-point');
+  private readonly pointTitle = node('p', 'av-muted');
+  private readonly pointStatus = node('p', 'av-muted');
+  private readonly pointBody = node('div');
+  private readonly units = node('select');
+  private unitSystem: UnitSystem = 'metric';
+  private pointFrameId: string | null = null;
+  private updatePoint: ReturnType<typeof renderPointSeries> | null = null;
   private renderedBuildId: string | null = null;
 
   constructor(callbacks: PanelCallbacks) {
@@ -89,7 +98,19 @@ export class PluginPanel {
     const opacityLabel = node('label', undefined, 'Opacity');
     opacityLabel.htmlFor = this.opacityInput.id;
     controls.append(modelLabel, this.modelSelect, node('span'), opacityLabel, this.opacityInput, this.opacityReadout);
-    this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error);
+    this.units.id = 'av-units';
+    this.units.add(new Option('m · m/s', 'metric')); this.units.add(new Option('ft · kt', 'imperial'));
+    this.units.value = this.unitSystem;
+    const unitsLabel = node('label', undefined, 'Units'); unitsLabel.htmlFor = this.units.id;
+    this.units.addEventListener('change', () => {
+      this.unitSystem = this.units.value === 'imperial' ? 'imperial' : 'metric';
+      this.updatePoint?.(this.pointFrameId, this.unitSystem);
+    });
+    this.point.hidden = true;
+    this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
+    this.pointStatus.role = 'status';
+    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, this.pointBody);
+    this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
 
   setVisible(visible: boolean): void {
@@ -133,6 +154,27 @@ export class PluginPanel {
     if (state.phase === 'expired') this.setStatus('Expired build — overlay removed');
     if (state.phase === 'ready' && state.buildId) this.setStatus(`Pinned build ${state.buildId}`);
     if (state.phase === 'error') this.setStatus('No viewable build');
+    if (state.phase === 'ready') { this.pointFrameId = state.frameId; this.updatePoint?.(state.frameId, this.unitSystem); }
+    if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') this.clearPoint();
+  }
+
+  loadPoint(point: GeoPoint): void {
+    this.clearPoint(); this.point.hidden = false;
+    this.pointTitle.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
+    this.pointStatus.textContent = 'Loading point…';
+  }
+
+  renderPoint(payload: SamplePayload, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void): void {
+    this.pointFrameId = frameId;
+    this.pointStatus.textContent = `${payload.frames.length} forecast hours · ${build.manifest.model}`;
+    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId, unitSystem: this.unitSystem, onFrame });
+  }
+
+  pointError(message: string): void { this.pointStatus.textContent = message; }
+
+  clearPoint(): void {
+    this.updatePoint = null; this.pointFrameId = null; this.point.hidden = true;
+    this.pointBody.replaceChildren(); this.pointStatus.textContent = '';
   }
 }
 

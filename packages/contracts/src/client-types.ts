@@ -8,7 +8,7 @@ export type FrameSampleLayer = FrameSample['layers'][string];
 
 export interface PinnedBuild {
   manifest: PublishedManifest;
-  templates: Record<LayerId, string>;
+  templates: Partial<Record<LayerId, string>>;
   expiresAtMs: number;
 }
 

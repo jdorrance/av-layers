@@ -42,6 +42,9 @@ export function splitGribRunSentinelUrls(source: SplitSource,
     splitGribRegularFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
     ...[topHalfLevel, bottomHalfLevel].map(level => splitGribRegularFieldUrl(source, source.fields.halfLevelHeight, cycle, { level, baseUrl: options.baseUrl })),
     ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => splitGribRegularFieldUrl(source, field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...(source.model.layers.includes('precip-rate') ? [splitGribRegularFieldUrl(source, source.fields.precipitation!, cycle, { hour: lastHour, baseUrl: options.baseUrl })] : []),
+    ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribRegularFieldUrl(source, spec.field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribRegularFieldUrl(source, spec.field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl }))),
     ...[source.fields.temperature, source.fields.pressure].flatMap(field => [lowestLevel, highestLevel].map(level => splitGribRegularFieldUrl(source, field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
   ];
 }

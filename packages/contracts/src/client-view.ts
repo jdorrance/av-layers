@@ -1,6 +1,58 @@
-import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, normalizeLon, paletteBinLabel, type LayerId, type Manifest } from './index.ts';
+import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, paletteBinLabel, renderedLayers, renderedFrames, type LayerId, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { compilePaletteColor, samplePaletteValueInto } from './palette-color.ts';
+import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
+
+export type UnitSystem = 'metric' | 'imperial';
+
+/** One bounded diurnal request shared by the map hosts. */
+export function pointSeriesSelection(build: PinnedBuild) {
+  const preferred: readonly LayerId[] = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'thermal-velocity', 'surface-lcl-msl',
+    'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
+  const layers = preferred.filter(layer => build.manifest.layers.includes(layer));
+  if (!layers.length) return { layers, frames: [] };
+  const start = Date.parse(renderedFrames(build.manifest)[0].validTime);
+  const count = Math.min(24, Math.floor(build.manifest.descriptors.maxSampleValues / layers.length));
+  const frames = renderedFrames(build.manifest).filter(frame => Date.parse(frame.validTime) < start + 24 * 3600000).slice(0, count).map(frame => frame.id);
+  return { layers, frames };
+}
+
+export function formatAltitude(meters: number | null, unitSystem: UnitSystem): string {
+  return meters === null || !Number.isFinite(meters) ? '—' : `${Math.round(unitSystem === 'imperial' ? meters / 0.3048 : meters)} ${unitSystem === 'imperial' ? 'ft' : 'm'}`;
+}
+
+/** Recover fine terrain only from two valid values with the same sampled surface. */
+export function deriveTerrainM(frame: FrameSample, build: PinnedBuild): number | null {
+  const msl = frame.layers['usable-lift-msl'], agl = frame.layers['usable-lift-agl'];
+  if (!msl || !agl || msl.status !== 'valid' || agl.status !== 'valid' || msl.value === null || agl.value === null || msl.interpolated || agl.interpolated || msl.support !== agl.support) return null;
+  if ('surfaceId' in msl && 'surfaceId' in agl && build.manifest.version === 5 && msl.surfaceId === agl.surfaceId &&
+    build.manifest.surfaces.find(surface => surface.id === msl.surfaceId)?.kind === 'fine' && build.manifest.descriptors.layers['usable-lift-agl'].verticalReference === 'terrain-AGL') return msl.value - agl.value;
+  if ('patchId' in msl && 'patchId' in agl && msl.patchId && msl.patchId === agl.patchId && build.manifest.version !== 5 &&
+    build.manifest.patches?.find(patch => patch.id === msl.patchId)?.descriptors.layers['usable-lift-agl'].verticalReference === 'terrain-AGL') return msl.value - agl.value;
+  return null;
+}
+
+export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: UnitSystem) {
+  const read = (layer: LayerId) => frame.layers[layer]?.status === 'valid' ? frame.layers[layer].value : null;
+  const terrainM = deriveTerrainM(frame, build), mslM = read('usable-lift-msl'), aglM = read('usable-lift-agl'), lclM = read('surface-lcl-msl');
+  const wind = deriveSoaringViews({ wind10mU: read('wind-10m-u'), wind10mV: read('wind-10m-v'), blMeanWindU: read('bl-mean-wind-u'), blMeanWindV: read('bl-mean-wind-v') });
+  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(units === 'imperial' ? speed * 3600 / 1852 : speed).toFixed(1)} ${units === 'imperial' ? 'kt' : 'm/s'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
+  const liftText = (layer: LayerId, meters: number | null) => frame.layers[layer]?.status === 'no-usable-lift' ? 'no usable lift' : formatAltitude(meters, units);
+  const thermal = read('thermal-velocity');
+  const support = (['usable-lift-agl', 'usable-lift-msl', 'thermal-velocity', 'thermal-top-msl'] as const).reduce((flags, layer) => {
+    const value = frame.layers[layer];
+    return flags | (value?.status === 'valid' || value?.status === 'no-usable-lift' ? value.support : 0);
+  }, 0);
+  const regime = support & SUPPORT_OVERDEVELOPED ? 'OD' : support & SUPPORT_CUMULUS ? 'Cu' : 'Cloud regime unknown';
+  const thermalText = thermal === null ? '—' : units === 'imperial' ? `${Math.round(thermal / FEET_PER_MINUTE_TO_MPS)} ft/min` : `${thermal.toFixed(1)} m/s`;
+  const summary = [
+    `MSL ${liftText('usable-lift-msl', mslM)}`, `AGL ${liftText('usable-lift-agl', aglM)}`, `Terrain ${terrainM === null ? 'unknown' : formatAltitude(terrainM, units)}`,
+    `w* ${thermalText}`, `LCL ${formatAltitude(lclM, units)}`,
+    `10 m ${windText(wind.wind10mSpeedMps, wind.wind10mDirDeg)}`, `BL ${windText(wind.blMeanWindSpeedMps, wind.blMeanWindDirDeg)}`,
+    regime, ...(support & SUPPORT_CLOUD_CAPPED ? ['capped'] : [])
+  ].join(' · ');
+  return { id: frame.id, validTime: frame.validTime, terrainM, mslM, aglM, lclM, summary };
+}
 
 export function noLiftLabel(color: string): string {
   return color.toLowerCase() === '#00000000' ? 'no usable lift (transparent)' : 'no usable lift';
@@ -14,6 +66,7 @@ export function paletteNoteText(palette: PaletteSummary): string | null {
 
 export function activePalettes(palettes: readonly PaletteSummary[], layerId: string | null, descriptors: Manifest['descriptors']['layers']): readonly PaletteSummary[] {
   if (!layerId || !Object.hasOwn(descriptors, layerId)) return palettes;
+  if (descriptors[layerId].delivery === 'samples-only') return [];
   const targetId = descriptors[layerId].palette;
   const matched = palettes.filter(palette => palette.id === targetId);
   return matched.length > 0 ? matched : palettes;
@@ -106,6 +159,9 @@ export function formatSupportFlags(support: number): string {
   if (support & SUPPORT_PARCEL_CROSSING) flags.push('parcel');
   if (support & SUPPORT_PROFILE_TOP) flags.push('top');
   if (support & SUPPORT_PBL_CLOSURE) flags.push('PBL');
+  if (support & SUPPORT_CUMULUS) flags.push('Cu');
+  if (support & SUPPORT_OVERDEVELOPED) flags.push('OD');
+  if (support & SUPPORT_CLOUD_CAPPED) flags.push('capped');
   return flags.join('+') || '—';
 }
 
@@ -214,7 +270,8 @@ export function clampOpacity(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-export function frameTileUrl(template: string, frame: string): string {
+export function frameTileUrl(template: string | undefined, frame: string): string {
+  if (!template) throw new RangeError('Layer has no tile template');
   if (!template.includes('{frame}')) throw new RangeError('tile template is missing {frame}');
   if (!template.includes('{z}') || !template.includes('{x}') || !template.includes('{y}')) {
     throw new RangeError('tile template is missing {z}/{x}/{y}');
@@ -246,8 +303,10 @@ export function planViewportPrefetch(options: {
   viewportTiles: readonly ViewportTile[];
 }): string[] {
   const { build, activeLayer, activeFrame } = options, manifest = build.manifest;
-  const frameIndex = manifest.frames.findIndex(frame => frame.id === activeFrame);
-  if (frameIndex < 0 || !manifest.layers.includes(activeLayer)) return [];
+  const frames = renderedFrames(manifest);
+  const frameIndex = frames.findIndex(frame => frame.id === activeFrame);
+  const rendered = renderedLayers(manifest.layers, manifest.descriptors.layers);
+  if (frameIndex < 0 || !rendered.includes(activeLayer) || !build.templates[activeLayer]) return [];
   const urls = new Set<string>();
   const [west, south, east, north] = manifest.descriptors.bounds;
   function normalize(tile: ViewportTile, layer: LayerId): ViewportTile | undefined {
@@ -262,7 +321,7 @@ export function planViewportPrefetch(options: {
   }
   const viewport = options.viewportTiles.slice(0, 64).flatMap(tile => { const valid = normalize(tile, activeLayer); return valid ? [valid] : []; });
   function add(layer: LayerId, frame: string | undefined, tile: ViewportTile): void {
-    if (!frame || urls.size >= 64 || !build.templates[layer] || !manifest.layers.includes(layer)) return;
+    if (!frame || urls.size >= 64 || !build.templates[layer] || !rendered.includes(layer)) return;
     const valid = normalize(tile, layer);
     if (!valid) return;
     const { z, x, y } = valid, width = 2 ** z;
@@ -273,7 +332,7 @@ export function planViewportPrefetch(options: {
     const template = frameTileUrl(build.templates[layer], frame);
     urls.add(template.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y)));
   }
-  const frame = (offset: number) => manifest.frames[frameIndex + offset]?.id;
+  const frame = (offset: number) => frames[frameIndex + offset]?.id;
   for (const offset of [1, -1]) for (const tile of viewport) add(activeLayer, frame(offset), tile);
   const sibling = activeLayer === 'usable-lift-agl' ? 'usable-lift-msl' : activeLayer === 'usable-lift-msl' ? 'usable-lift-agl' : undefined;
   if (sibling) for (const tile of viewport) add(sibling, activeFrame, tile);
@@ -288,7 +347,7 @@ export function planViewportPrefetch(options: {
   return [...urls];
 }
 
-export function previewRasterSource(template: string, frame: string, maxNativeZoom: number, attribution: string): PreviewRasterSource {
+export function previewRasterSource(template: string | undefined, frame: string, maxNativeZoom: number, attribution: string): PreviewRasterSource {
   if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0) throw new RangeError('maxNativeZoom must be a non-negative integer');
   return {
     type: 'raster',

@@ -1,10 +1,10 @@
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import z from 'zod';
-import { resolveProductFrameHours } from '@av/forecast';
-import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, layerSurface, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
+import { profileRecordBytes, prepareShardedSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
+import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
 import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
-import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild, type PreparedBuild } from './capacity.js';
+import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES, prepareBuild, type PreparedBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
 import { describeCoverage, loadCoverage, writeCoverage } from './coverage.js';
 import { buildFrames, forecastFrame, matchesFrameIntervals, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
@@ -23,10 +23,11 @@ import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capac
 import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
 import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
+import { readFrameProvenance } from './frame-provenance.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 
-export const MAX_FORECAST_SHARDS = MAX_SAMPLE_VALUES;
+export { MAX_FORECAST_SHARDS } from '@av/contracts';
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
 const objectReceiptSchema = z.strictObject({ key: z.string().min(1), bytes: z.number().int().positive().max(BUILD_BUDGETS.samplePackBytes), sha256: digestSchema, etag: z.string().min(1) });
 const timestampSchema = manifestSchema.shape.createdAt.refine(value => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value);
@@ -79,35 +80,40 @@ const receiptSchema = z.strictObject({
 const sampleShardSchema = z.strictObject({ firstBlock: z.number().int().nonnegative(), blockCount: z.number().int().positive(), storedCells: z.number().int().positive(), bytes: z.number().int().positive(), key: z.string().min(1), sha256: digestSchema });
 const wholeDomainReceiptSchema = z.strictObject({
   version: z.literal(2), planHash: digestSchema, shard: z.number().int().min(0).max(MAX_FORECAST_SHARDS - 1),
-  artifacts: z.array(manifestSchema.shape.artifacts.element).min(1).max(MAX_SAMPLE_VALUES),
-  provenance: z.array(z.strictObject({ hour: z.number().int().positive(), intervals: z.unknown(), receipt: z.unknown() })).min(1).max(MAX_SAMPLE_VALUES),
-  surfaces: z.array(z.strictObject({ id: z.enum(['native', 'fine']), channelCount: z.number().int().positive(), shards: z.array(sampleShardSchema).min(1) })).min(1).max(2),
+  artifacts: z.array(manifestSchema.shape.artifacts.element).max(MAX_SAMPLE_VALUES),
+  provenance: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_SAMPLE_VALUES),
+  surfaces: z.array(z.strictObject({ id: z.enum(['native', 'fine']), channelCount: z.number().int().positive(), shards: z.array(sampleShardSchema).min(1),
+    profiles: z.strictObject({ levelCount: z.number().int().positive().max(256), recordBytes: z.number().int().positive(), shards: z.array(sampleShardSchema).min(1) }).optional() })).min(1).max(2),
   objects: z.array(objectReceiptSchema).min(1).optional(),
   metrics: metricsSchema
 });
 type WholeDomainReceipt = z.infer<typeof wholeDomainReceiptSchema>;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 const planHash = (plan: BuildPlan) => sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES));
-function assertReceiptFrames(receipt: Pick<WholeDomainReceipt, 'provenance' | 'metrics'>, plan: BuildPlan, shard: number, product: ForecastInputs['product']) {
-  const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, product.intervalHours));
+function assertReceiptFrames(receipt: Pick<z.infer<typeof receiptSchema>, 'provenance' | 'metrics'>, plan: BuildPlan, shard: number, product: ForecastInputs['product']) {
+  const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(product, hour)));
   if (receipt.provenance.length !== hours.length || receipt.provenance.some((entry, index) => entry.hour !== hours[index] || !matchesFrameIntervals(entry.intervals, frames[index]!, product.layers.includes('precip-rate')))) throw new Error('Forecast shard provenance interval mismatch');
   if (!same(Object.keys(receipt.metrics.frames), frames.map(frame => frame.id))) throw new Error('Forecast shard metric frames mismatch');
   return frames;
 }
-function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, shard: number, product: ForecastInputs['product'], whole: WholeDomainPrepared) {
+function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, shard: number, product: ForecastInputs['product'], whole: WholeDomainPrepared, maxLevels: number) {
   if (receipt.planHash !== planHash(plan) || receipt.shard !== shard) throw new Error('Forecast shard receipt identity mismatch');
-  const frames = assertReceiptFrames(receipt, plan, shard, product), layers = wholeDomainSurfaceLayers(product);
+  const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(product, hour))), layers = wholeDomainSurfaceLayers(product);
+  if (receipt.provenance.length !== frames.length || receipt.provenance.some((entry, index) => entry.hour !== hours[index] || entry.frame !== frames[index]!.id
+    || entry.key !== `builds/${plan.model}/${plan.buildId}/provenance/${entry.frame}.json`)) throw new Error('Forecast shard provenance frame mismatch');
+  if (!same(Object.keys(receipt.metrics.frames), frames.map(frame => frame.id))) throw new Error('Forecast shard metric frames mismatch');
   const prefix = `builds/${plan.model}/${plan.buildId}`;
-  const artifacts = frames.flatMap(frame => [...layers.native, ...layers.fine].map(layer => ({ layer, frame: frame.id, key: `${prefix}/${layer}/${frame.id}.pmtiles` })));
+  const mapped = mapFrameCount({ ...product, frameHours: plan.groups[shard]! });
+  const artifacts = frames.slice(0, mapped).flatMap(frame => renderedLayers([...layers.native, ...layers.fine]).map(layer => ({ layer, frame: frame.id, key: `${prefix}/${layer}/${frame.id}.pmtiles` })));
   if (receipt.artifacts.length !== artifacts.length) throw new Error('Forecast shard artifact count mismatch');
   if (receipt.artifacts.some((artifact, index) => artifact.layer !== artifacts[index]!.layer || artifact.frame !== artifacts[index]!.frame || artifact.tilesKey !== artifacts[index]!.key)) throw new Error('Forecast shard artifact record mismatch');
-  const expectedSurfaces = (['native', 'fine'] as const).filter(id => layers[id].length);
+  const expectedSurfaces = (['native', 'fine'] as const).filter(id => layers[id].length && (id === 'native' || mapped));
   if (!same(receipt.surfaces.map(surface => surface.id), expectedSurfaces)) throw new Error('Forecast shard surface set mismatch');
   for (const surface of receipt.surfaces) {
     const id = surface.id, info = id === 'native' ? whole.native : whole.fine;
     const binding = { grid: id === 'native' ? whole.plan.native : whole.plan.fine, gridHash: info.descriptor.gridHash,
       coverageHash: info.hash, blockIds: info.mask.coverage.blockIds };
-    if (surface.channelCount !== frames.length * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
+    if (surface.channelCount !== (id === 'native' ? frames.length : mapped) * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
     if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard))) throw new Error('Forecast shard surface key mismatch');
     const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
       coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
@@ -116,7 +122,31 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
         channelCount: surface.channelCount, coverageHash: info.hash, blockCount: binding.blockIds.length,
         storedCells: surface.shards.reduce((sum, item) => sum + item.storedCells, 0), shards: surface.shards } };
     assertSampleLayoutBindingV5(candidate, binding);
+    const requiresProfiles = id === 'native' && renderedLayers(product.layers).length !== product.layers.length;
+    if (requiresProfiles !== !!surface.profiles) throw new Error('Forecast shard profile set mismatch');
+    if (surface.profiles) {
+      const profiles = surface.profiles;
+      if (profiles.levelCount !== maxLevels || profiles.recordBytes !== profileRecordBytes(maxLevels)) throw new Error('Forecast shard profile width mismatch');
+      const layout = prepareShardedSamplePackLayout(binding.grid, binding.blockIds, frames.length, MAX_V5_SHARD_BYTES, profiles.recordBytes);
+      if (layout.shards.length !== profiles.shards.length || profiles.shards.some((item, index) => {
+        const expected = layout.shards[index]!;
+        return item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard, 'profiles')
+          || item.firstBlock !== expected.firstBlock || item.blockCount !== expected.blockCount || item.bytes !== expected.byteLength
+          || item.storedCells !== expected.byteLength / (frames.length * profiles.recordBytes);
+      })) throw new Error('Forecast shard profile layout mismatch');
+    }
   }
+}
+
+async function assertWholeDomainProvenance(root: string, plan: BuildPlan, shard: number, product: ForecastInputs['product'], references: WholeDomainReceipt['provenance']) {
+  const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(product, hour)));
+  if (references.length !== hours.length) throw new Error('Forecast shard provenance frame mismatch');
+  for (const [index, reference] of references.entries()) {
+    if (reference.hour !== hours[index] || reference.frame !== frames[index]!.id) throw new Error('Forecast shard provenance frame mismatch');
+    const value = await readFrameProvenance(root, plan, frames[index]!, reference);
+    if (!matchesFrameIntervals(value.intervals, frames[index]!, product.layers.includes('precip-rate'))) throw new Error('Forecast shard provenance interval mismatch');
+  }
+  return frames;
 }
 
 const terrainStaging = new Map<string, Promise<void>>();
@@ -175,8 +205,9 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
     const capacity = admitWholeDomain({ product, plan: prepared.plan, nativeBlocks: prepared.native.mask.coverage.blockIds,
       nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask, fine: prepared.fine.mask,
       maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+      auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
       nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
-      frames: groups.flat().length, nativeLayers: prepared.nativeSurfaceLayers.length, fineLayers: prepared.fineSurfaceLayers.length,
+      frames: groups.flat().length, mapFrames: mapFrameCount({ ...product, frameHours: groups.flat() }), groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: prepared.nativeSurfaceLayers.length, fineLayers: prepared.fineSurfaceLayers.length,
       columns: prepared.columns, terrainBytes: prepared.terrain.arrayBytes });
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
     const frozen = frozenWholeDomain(prepared);
@@ -277,16 +308,21 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       for (const surface of result.surfaces) {
         const coverage = surface.id === 'native' ? whole.native : whole.fine;
         await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), { channels: surface.layout.channelCount, shards: surface.shards! });
+        if (surface.profiles) await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), {
+          channels: surface.profiles.layout.channelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards
+        });
       }
       for (const artifact of result.artifacts) {
         const coverage = layerSurface(artifact.layer) === 'native' ? whole.native : whole.fine;
         if (await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
         await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
       }
+      await assertWholeDomainProvenance(root, plan, shard, options.product, result.receipts);
       const objects: ObjectReceipt[] = [];
       if (options.store) {
-        const files = [...result.surfaces.flatMap(surface => surface.shards!.map(item => ({ key: item.key, hash: item.sha256, type: 'application/octet-stream' }))),
-          ...result.artifacts.map(item => ({ key: item.tilesKey, hash: item.tilesSha256, type: 'application/vnd.pmtiles' }))];
+        const files = [...result.surfaces.flatMap(surface => [...surface.shards!, ...(surface.profiles?.shards ?? [])].map(item => ({ key: item.key, hash: item.sha256, type: 'application/octet-stream' }))),
+          ...result.artifacts.map(item => ({ key: item.tilesKey, hash: item.tilesSha256, type: 'application/vnd.pmtiles' })),
+          ...result.receipts.map(item => ({ key: item.key, hash: item.sha256, type: 'application/json' }))];
         for (const file of files) {
           const bytes = await readLocalFile(localPath(root, file.key), BUILD_BUDGETS.samplePackBytes);
           if (sha256(bytes) !== file.hash) throw new Error(`Local hash mismatch: ${file.key}`);
@@ -296,7 +332,8 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       const receipt: WholeDomainReceipt = wholeDomainReceiptSchema.parse({ version: 2, planHash: planHash(plan), shard,
         artifacts: result.artifacts, provenance: result.receipts,
         surfaces: result.surfaces.map(surface => ({ id: surface.id, channelCount: surface.layout.channelCount,
-          shards: surface.shards!.map(item => ({ ...item, key: item.key })) })), metrics: result.metrics, ...(objects.length ? { objects } : {}) });
+          shards: surface.shards!.map(item => ({ ...item, key: item.key })),
+          ...(surface.profiles ? { profiles: { levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards } } : {}) })), metrics: result.metrics, ...(objects.length ? { objects } : {}) });
       options.signal?.throwIfAborted();
       const path = localPath(root, `${prefix}/receipt.json`);
       await writeFile(path + '.tmp', encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
@@ -355,22 +392,25 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     for (let shard = 0; shard < plan.groups.length; shard++) {
       const bytes = await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES);
       const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(bytes, MAX_PROVENANCE_JSON_TOKENS));
-      assertWholeDomainReceipt(receipt, plan, shard, options.product, whole);
+      assertWholeDomainReceipt(receipt, plan, shard, options.product, whole, options.provider.maxLevels);
       receipts.push(receipt);
     }
     const capacity = admitWholeDomain({ product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
       nativeActive: whole.acquisitionActive.length, nativeMask: whole.native.mask, fine: whole.fine.mask, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
+      auxiliarySurfaceFields: options.provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: options.provider.auxiliaryLevelFields ?? 0,
       nativeMaskBytes: whole.nativeMask.output.byteLength + whole.nativeMask.halo.byteLength + whole.nativeMask.tiles.byteLength,
-      frames: totalFrames, nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length,
+      frames: totalFrames, mapFrames: mapFrameCount({ ...options.product, frameHours: plan.groups.flat() }), groupFrames: Math.max(...plan.groups.map(group => group.length)), nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length,
       columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
     const layouts = wholeDomainSampleLayouts({ product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
-      nativeActive: whole.acquisitionActive.length, fine: whole.fine.mask, nativeMaskBytes: 0, frames: totalFrames, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
+      nativeActive: whole.acquisitionActive.length, fine: whole.fine.mask, nativeMaskBytes: 0, frames: totalFrames, mapFrames: mapFrameCount({ ...options.product, frameHours: plan.groups.flat() }), groupFrames: Math.max(...plan.groups.map(group => group.length)), maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
+      auxiliarySurfaceFields: options.provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: options.provider.auxiliaryLevelFields ?? 0,
       nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length, columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });
     const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
       coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });
     const surfaces: WholeDomainSurfaceResult[] = [];
     const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
+    let profileGroups: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'] | undefined;
     for (const id of ['native', 'fine'] as const) {
       const layout = id === 'native' ? layouts.native : layouts.fine, info = id === 'native' ? whole.native : whole.fine;
       const layers = id === 'native' ? whole.nativeSurfaceLayers : whole.fineSurfaceLayers;
@@ -378,21 +418,38 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       const shards: NonNullable<typeof sampleGroups[typeof id]> = [];
       let firstFrame = 0;
       for (const receipt of receipts) {
+        const frameCount = id === 'native' ? plan.groups[receipt.shard].length : mapFrameCount({ ...options.product, frameHours: plan.groups[receipt.shard] });
+        if (!frameCount) continue;
         const surface = receipt.surfaces.find(item => item.id === id);
         if (!surface) throw new Error(`Forecast shard is missing ${id} samples`);
-        const frameCount = plan.groups[receipt.shard].length;
         shards.push(...surface.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame, frameCount, blockShard })));
         firstFrame += frameCount;
       }
       sampleGroups[id] = shards;
+      let profiles: WholeDomainSurfaceResult['profiles'];
+      if (id === 'native' && renderedLayers(options.product.layers).length !== options.product.layers.length) {
+        const recordBytes = profileRecordBytes(options.provider.maxLevels), groups: NonNullable<typeof profileGroups> = [];
+        let profileFirstFrame = 0;
+        for (const receipt of receipts) {
+          const part = receipt.surfaces.find(surface => surface.id === 'native')?.profiles;
+          if (!part) throw new Error('Forecast shard is missing native profiles');
+          const frameCount = plan.groups[receipt.shard]!.length;
+          groups.push({ firstFrame: profileFirstFrame, frameCount, shards: part.shards });
+          profileFirstFrame += frameCount;
+        }
+        profileGroups = groups;
+        profiles = { levelCount: options.provider.maxLevels, recordBytes, shards: groups.flatMap(group => group.shards),
+          layout: prepareShardedSamplePackLayout(whole.plan.native, whole.native.mask.coverage.blockIds,
+            Math.max(...plan.groups.map(group => group.length)), MAX_V5_SHARD_BYTES, recordBytes) };
+      }
       surfaces.push({ id, kind: id, grid: id === 'native' ? whole.plan.native : whole.plan.fine, gridHash: info.descriptor.gridHash,
         coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: options.product.maxNativeZoom, gridHash: info.descriptor.gridHash },
-        layers: [...layers], layout, shards, ...(id === 'fine' ? { terrain: { dataId: terrainData.descriptor.dataId, verticalDatum: terrainData.descriptor.source.verticalDatum,
+        layers: [...layers], layout, shards, ...(profiles ? { profiles } : {}), ...(id === 'fine' ? { terrain: { dataId: terrainData.descriptor.dataId, verticalDatum: terrainData.descriptor.source.verticalDatum,
         surface: terrainData.descriptor.source.surface, ref: whole.terrain, layoutVersion: 1 as const } } : {}) });
     }
     const phasesMs = { acquireMs: 0, deriveMs: 0, packMs: 0, renderMs: 0 };
     for (const receipt of receipts) for (const key of Object.keys(phasesMs) as (keyof typeof phasesMs)[]) phasesMs[key] += receipt.metrics.phasesMs[key];
-    const frames = plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours));
+    const frames = plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(options.product, hour)));
     const result: FinishWholeDomainOptions['result'] = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
       receipts: receipts.flatMap(receipt => receipt.provenance), surfaces, capacity,
       metrics: { phasesMs, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
@@ -401,7 +458,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
       return receipt.objects;
     }) : undefined;
-    return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups,
+    return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups, profileGroups,
       ...(objects ? { remote: { store: options.store!, objects, signal: options.signal } } : {}) });
   }
   const results: FrameBuildResult[] = [];
@@ -471,11 +528,11 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
   const receipts: WholeDomainReceipt[] = [];
   for (let shard = 0; shard < plan.groups.length; shard++) {
     const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES), MAX_PROVENANCE_JSON_TOKENS));
-    assertWholeDomainReceipt(receipt, plan, shard, admitted.product, whole);
+    assertWholeDomainReceipt(receipt, plan, shard, admitted.product, whole, inputs.provider.maxLevels);
     if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
     receipts.push(receipt);
   }
-  if (!same(manifest.frames, plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, admitted.product.intervalHours)))
+  if (!same(manifest.frames, plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(admitted.product, hour))))
       || !same(manifest.artifacts, receipts.flatMap(receipt => receipt.artifacts))) throw new Error('Manifest forecast receipt mismatch');
   const provenance = getProvenanceReference(manifest), provenanceBytes = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
   if (sha256(provenanceBytes) !== provenance.sha256 || !same(parseProvenance(parseBoundedJson(provenanceBytes, MAX_PROVENANCE_JSON_TOKENS), manifest).frames, receipts.flatMap(receipt => receipt.provenance))) throw new Error('Manifest provenance receipt mismatch');
@@ -485,18 +542,35 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Receipt build requires grouped samples');
     let firstFrame = 0;
     const expected = receipts.flatMap(receipt => {
+      const frameCount = surface.kind === 'native' ? plan.groups[receipt.shard].length : mapFrameCount({ ...admitted.product, frameHours: plan.groups[receipt.shard] });
+      if (!frameCount) return [];
       const part = receipt.surfaces.find(item => item.id === surface.id);
       if (!part) throw new Error('Missing receipt surface');
-      const frameCount = plan.groups[receipt.shard].length;
       const result = part.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame, frameCount, blockShard }));
       firstFrame += frameCount;
       return result;
     });
     if (!same(surface.samples.shards, expected)) throw new Error('Manifest sample receipt mismatch');
+    const profileBasis = receipts[0]!.surfaces.find(part => part.id === surface.id)?.profiles;
+    if (!!surface.profiles !== !!profileBasis) throw new Error('Manifest profile receipt mismatch');
+    if (surface.profiles && profileBasis) {
+      let firstFrame = 0;
+      const expectedProfiles = receipts.map(receipt => {
+        const part = receipt.surfaces.find(item => item.id === surface.id)?.profiles;
+        if (!part || part.levelCount !== profileBasis.levelCount || part.recordBytes !== profileBasis.recordBytes) throw new Error('Missing or inconsistent receipt profiles');
+        const frameCount = plan.groups[receipt.shard]!.length;
+        const group = { firstFrame, frameCount, shards: part.shards };
+        firstFrame += frameCount;
+        return group;
+      });
+      if (surface.profiles.levelCount !== profileBasis.levelCount || surface.profiles.recordBytes !== profileBasis.recordBytes
+        || !same(surface.profiles.groups, expectedProfiles)) throw new Error('Manifest profile receipt mismatch');
+    }
   }
   const objects = receipts.flatMap(receipt => receipt.objects!);
-  const expected = [...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
-    ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256 }))];
+  const expected = [...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
+    ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256 })),
+    ...receipts.flatMap(receipt => receipt.provenance.map(item => ({ key: item.key, sha256: item.sha256, bytes: item.bytes })))];
   const byKey = new Map(objects.map(object => [object.key, object]));
   if (byKey.size !== objects.length || byKey.size !== expected.length || expected.some(item => {
     const object = byKey.get(item.key);

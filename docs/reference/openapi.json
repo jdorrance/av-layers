@@ -17,7 +17,24 @@
                       "enum": [
                         "usable-lift-msl",
                         "usable-lift-agl",
-                        "precip-rate"
+                        "precip-rate",
+                        "thermal-velocity",
+                        "thermal-top-msl",
+                        "pbl-height-agl",
+                        "sensible-heat-flux",
+                        "latent-heat-flux",
+                        "surface-lcl-msl",
+                        "cape-jkg",
+                        "cloud-cover-total",
+                        "cloud-cover-low",
+                        "sfc-temp-c",
+                        "sfc-dewpoint-c",
+                        "mslp-hpa",
+                        "wind-10m-u",
+                        "wind-10m-v",
+                        "wind-gust-10m",
+                        "bl-mean-wind-u",
+                        "bl-mean-wind-v"
                       ],
                       "type": "string"
                     },
@@ -113,6 +130,13 @@
                   "layers": {
                     "additionalProperties": {
                       "properties": {
+                        "delivery": {
+                          "enum": [
+                            "tiles-and-samples",
+                            "samples-only"
+                          ],
+                          "type": "string"
+                        },
                         "hideNonPositiveValues": {
                           "type": "boolean"
                         },
@@ -120,7 +144,24 @@
                           "enum": [
                             "usable-lift-msl",
                             "usable-lift-agl",
-                            "precip-rate"
+                            "precip-rate",
+                            "thermal-velocity",
+                            "thermal-top-msl",
+                            "pbl-height-agl",
+                            "sensible-heat-flux",
+                            "latent-heat-flux",
+                            "surface-lcl-msl",
+                            "cape-jkg",
+                            "cloud-cover-total",
+                            "cloud-cover-low",
+                            "sfc-temp-c",
+                            "sfc-dewpoint-c",
+                            "mslp-hpa",
+                            "wind-10m-u",
+                            "wind-10m-v",
+                            "wind-gust-10m",
+                            "bl-mean-wind-u",
+                            "bl-mean-wind-v"
                           ],
                           "type": "string"
                         },
@@ -161,7 +202,9 @@
                         },
                         "timeSupport": {
                           "enum": [
+                            "valid-time",
                             "interval-mean",
+                            "interval-maximum",
                             "interval-flux-endpoint-profile"
                           ],
                           "type": "string"
@@ -175,7 +218,8 @@
                             "MSL",
                             "model-AGL",
                             "terrain-AGL",
-                            "surface"
+                            "surface",
+                            "pressure-level"
                           ],
                           "type": "string"
                         },
@@ -192,7 +236,6 @@
                         "verticalReference",
                         "timeSupport",
                         "methodId",
-                        "palette",
                         "supportsNoLift",
                         "supportsLiftFlags",
                         "noLiftSampleValue",
@@ -259,7 +302,8 @@
                                 "enum": [
                                   "static",
                                   "valid-time",
-                                  "interval-mean"
+                                  "interval-mean",
+                                  "interval-maximum"
                                 ],
                                 "type": "string"
                               },
@@ -588,11 +632,28 @@
                   "enum": [
                     "usable-lift-msl",
                     "usable-lift-agl",
-                    "precip-rate"
+                    "precip-rate",
+                    "thermal-velocity",
+                    "thermal-top-msl",
+                    "pbl-height-agl",
+                    "sensible-heat-flux",
+                    "latent-heat-flux",
+                    "surface-lcl-msl",
+                    "cape-jkg",
+                    "cloud-cover-total",
+                    "cloud-cover-low",
+                    "sfc-temp-c",
+                    "sfc-dewpoint-c",
+                    "mslp-hpa",
+                    "wind-10m-u",
+                    "wind-10m-v",
+                    "wind-gust-10m",
+                    "bl-mean-wind-u",
+                    "bl-mean-wind-v"
                   ],
                   "type": "string"
                 },
-                "maxItems": 3,
+                "maxItems": 20,
                 "minItems": 1,
                 "type": "array"
               },
@@ -694,6 +755,13 @@
                         "layers": {
                           "additionalProperties": {
                             "properties": {
+                              "delivery": {
+                                "enum": [
+                                  "tiles-and-samples",
+                                  "samples-only"
+                                ],
+                                "type": "string"
+                              },
                               "hideNonPositiveValues": {
                                 "type": "boolean"
                               },
@@ -701,7 +769,24 @@
                                 "enum": [
                                   "usable-lift-msl",
                                   "usable-lift-agl",
-                                  "precip-rate"
+                                  "precip-rate",
+                                  "thermal-velocity",
+                                  "thermal-top-msl",
+                                  "pbl-height-agl",
+                                  "sensible-heat-flux",
+                                  "latent-heat-flux",
+                                  "surface-lcl-msl",
+                                  "cape-jkg",
+                                  "cloud-cover-total",
+                                  "cloud-cover-low",
+                                  "sfc-temp-c",
+                                  "sfc-dewpoint-c",
+                                  "mslp-hpa",
+                                  "wind-10m-u",
+                                  "wind-10m-v",
+                                  "wind-gust-10m",
+                                  "bl-mean-wind-u",
+                                  "bl-mean-wind-v"
                                 ],
                                 "type": "string"
                               },
@@ -742,7 +827,9 @@
                               },
                               "timeSupport": {
                                 "enum": [
+                                  "valid-time",
                                   "interval-mean",
+                                  "interval-maximum",
                                   "interval-flux-endpoint-profile"
                                 ],
                                 "type": "string"
@@ -756,7 +843,8 @@
                                   "MSL",
                                   "model-AGL",
                                   "terrain-AGL",
-                                  "surface"
+                                  "surface",
+                                  "pressure-level"
                                 ],
                                 "type": "string"
                               },
@@ -773,7 +861,6 @@
                               "verticalReference",
                               "timeSupport",
                               "methodId",
-                              "palette",
                               "supportsNoLift",
                               "supportsLiftFlags",
                               "noLiftSampleValue",
@@ -840,7 +927,8 @@
                                       "enum": [
                                         "static",
                                         "valid-time",
-                                        "interval-mean"
+                                        "interval-mean",
+                                        "interval-maximum"
                                       ],
                                       "type": "string"
                                     },
@@ -1236,11 +1324,28 @@
                         "enum": [
                           "usable-lift-msl",
                           "usable-lift-agl",
-                          "precip-rate"
+                          "precip-rate",
+                          "thermal-velocity",
+                          "thermal-top-msl",
+                          "pbl-height-agl",
+                          "sensible-heat-flux",
+                          "latent-heat-flux",
+                          "surface-lcl-msl",
+                          "cape-jkg",
+                          "cloud-cover-total",
+                          "cloud-cover-low",
+                          "sfc-temp-c",
+                          "sfc-dewpoint-c",
+                          "mslp-hpa",
+                          "wind-10m-u",
+                          "wind-10m-v",
+                          "wind-gust-10m",
+                          "bl-mean-wind-u",
+                          "bl-mean-wind-v"
                         ],
                         "type": "string"
                       },
-                      "maxItems": 3,
+                      "maxItems": 20,
                       "minItems": 1,
                       "type": "array"
                     },
@@ -1553,7 +1658,24 @@
                       "enum": [
                         "usable-lift-msl",
                         "usable-lift-agl",
-                        "precip-rate"
+                        "precip-rate",
+                        "thermal-velocity",
+                        "thermal-top-msl",
+                        "pbl-height-agl",
+                        "sensible-heat-flux",
+                        "latent-heat-flux",
+                        "surface-lcl-msl",
+                        "cape-jkg",
+                        "cloud-cover-total",
+                        "cloud-cover-low",
+                        "sfc-temp-c",
+                        "sfc-dewpoint-c",
+                        "mslp-hpa",
+                        "wind-10m-u",
+                        "wind-10m-v",
+                        "wind-gust-10m",
+                        "bl-mean-wind-u",
+                        "bl-mean-wind-v"
                       ],
                       "type": "string"
                     },
@@ -1621,6 +1743,13 @@
                   "layers": {
                     "additionalProperties": {
                       "properties": {
+                        "delivery": {
+                          "enum": [
+                            "tiles-and-samples",
+                            "samples-only"
+                          ],
+                          "type": "string"
+                        },
                         "hideNonPositiveValues": {
                           "type": "boolean"
                         },
@@ -1628,7 +1757,24 @@
                           "enum": [
                             "usable-lift-msl",
                             "usable-lift-agl",
-                            "precip-rate"
+                            "precip-rate",
+                            "thermal-velocity",
+                            "thermal-top-msl",
+                            "pbl-height-agl",
+                            "sensible-heat-flux",
+                            "latent-heat-flux",
+                            "surface-lcl-msl",
+                            "cape-jkg",
+                            "cloud-cover-total",
+                            "cloud-cover-low",
+                            "sfc-temp-c",
+                            "sfc-dewpoint-c",
+                            "mslp-hpa",
+                            "wind-10m-u",
+                            "wind-10m-v",
+                            "wind-gust-10m",
+                            "bl-mean-wind-u",
+                            "bl-mean-wind-v"
                           ],
                           "type": "string"
                         },
@@ -1669,7 +1815,9 @@
                         },
                         "timeSupport": {
                           "enum": [
+                            "valid-time",
                             "interval-mean",
+                            "interval-maximum",
                             "interval-flux-endpoint-profile"
                           ],
                           "type": "string"
@@ -1683,7 +1831,8 @@
                             "MSL",
                             "model-AGL",
                             "terrain-AGL",
-                            "surface"
+                            "surface",
+                            "pressure-level"
                           ],
                           "type": "string"
                         },
@@ -1700,7 +1849,6 @@
                         "verticalReference",
                         "timeSupport",
                         "methodId",
-                        "palette",
                         "supportsNoLift",
                         "supportsLiftFlags",
                         "noLiftSampleValue",
@@ -1767,7 +1915,8 @@
                                 "enum": [
                                   "static",
                                   "valid-time",
-                                  "interval-mean"
+                                  "interval-mean",
+                                  "interval-maximum"
                                 ],
                                 "type": "string"
                               },
@@ -1949,13 +2098,36 @@
                   "enum": [
                     "usable-lift-msl",
                     "usable-lift-agl",
-                    "precip-rate"
+                    "precip-rate",
+                    "thermal-velocity",
+                    "thermal-top-msl",
+                    "pbl-height-agl",
+                    "sensible-heat-flux",
+                    "latent-heat-flux",
+                    "surface-lcl-msl",
+                    "cape-jkg",
+                    "cloud-cover-total",
+                    "cloud-cover-low",
+                    "sfc-temp-c",
+                    "sfc-dewpoint-c",
+                    "mslp-hpa",
+                    "wind-10m-u",
+                    "wind-10m-v",
+                    "wind-gust-10m",
+                    "bl-mean-wind-u",
+                    "bl-mean-wind-v"
                   ],
                   "type": "string"
                 },
-                "maxItems": 3,
+                "maxItems": 20,
                 "minItems": 1,
                 "type": "array"
+              },
+              "mapFrameCount": {
+                "exclusiveMinimum": true,
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               "method": {
                 "properties": {
@@ -2278,13 +2450,163 @@
                         "enum": [
                           "usable-lift-msl",
                           "usable-lift-agl",
-                          "precip-rate"
+                          "precip-rate",
+                          "thermal-velocity",
+                          "thermal-top-msl",
+                          "pbl-height-agl",
+                          "sensible-heat-flux",
+                          "latent-heat-flux",
+                          "surface-lcl-msl",
+                          "cape-jkg",
+                          "cloud-cover-total",
+                          "cloud-cover-low",
+                          "sfc-temp-c",
+                          "sfc-dewpoint-c",
+                          "mslp-hpa",
+                          "wind-10m-u",
+                          "wind-10m-v",
+                          "wind-gust-10m",
+                          "bl-mean-wind-u",
+                          "bl-mean-wind-v"
                         ],
                         "type": "string"
                       },
-                      "maxItems": 3,
+                      "maxItems": 20,
                       "minItems": 1,
                       "type": "array"
+                    },
+                    "profiles": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blockCount": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "blockSize": {
+                          "enum": [
+                            16
+                          ],
+                          "type": "number"
+                        },
+                        "coverageHash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "format": {
+                          "enum": [
+                            "native-column-profile-v1"
+                          ],
+                          "type": "string"
+                        },
+                        "groups": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "firstFrame": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "frameCount": {
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "shards": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "blockCount": {
+                                      "exclusiveMinimum": true,
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "bytes": {
+                                      "exclusiveMinimum": true,
+                                      "maximum": 67108864,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "firstBlock": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "key": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "pattern": "^[a-f0-9]{64}$",
+                                      "type": "string"
+                                    },
+                                    "storedCells": {
+                                      "exclusiveMinimum": true,
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "firstBlock",
+                                    "blockCount",
+                                    "storedCells",
+                                    "bytes",
+                                    "key",
+                                    "sha256"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 256,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "firstFrame",
+                              "frameCount",
+                              "shards"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "levelCount": {
+                          "exclusiveMinimum": true,
+                          "maximum": 256,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "recordBytes": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "storedCells": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "format",
+                        "blockSize",
+                        "levelCount",
+                        "recordBytes",
+                        "coverageHash",
+                        "blockCount",
+                        "storedCells",
+                        "groups"
+                      ],
+                      "type": "object"
                     },
                     "samples": {
                       "oneOf": [
@@ -2730,6 +3052,36 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -2948,6 +3300,36 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -3161,11 +3543,28 @@
                                     "enum": [
                                       "usable-lift-msl",
                                       "usable-lift-agl",
-                                      "precip-rate"
+                                      "precip-rate",
+                                      "thermal-velocity",
+                                      "thermal-top-msl",
+                                      "pbl-height-agl",
+                                      "sensible-heat-flux",
+                                      "latent-heat-flux",
+                                      "surface-lcl-msl",
+                                      "cape-jkg",
+                                      "cloud-cover-total",
+                                      "cloud-cover-low",
+                                      "sfc-temp-c",
+                                      "sfc-dewpoint-c",
+                                      "mslp-hpa",
+                                      "wind-10m-u",
+                                      "wind-10m-v",
+                                      "wind-gust-10m",
+                                      "bl-mean-wind-u",
+                                      "bl-mean-wind-v"
                                     ],
                                     "type": "string"
                                   },
-                                  "maxItems": 3,
+                                  "maxItems": 20,
                                   "minItems": 1,
                                   "type": "array"
                                 }
@@ -3260,6 +3659,36 @@
               }
             },
             "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
           },
           "429": {
             "content": {
@@ -3525,6 +3954,36 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -3714,6 +4173,36 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -3871,6 +4360,36 @@
               }
             },
             "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
           },
           "429": {
             "content": {
@@ -4087,6 +4606,632 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}/profile": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frame",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "layers",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "buildId": {
+                      "type": "string"
+                    },
+                    "cell": {
+                      "additionalProperties": false,
+                      "nullable": true,
+                      "properties": {
+                        "index": {
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "lat": {
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "lon": {
+                          "maximum": 180,
+                          "minimum": -180,
+                          "type": "number"
+                        },
+                        "surfaceId": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "index",
+                        "lat",
+                        "lon",
+                        "surfaceId"
+                      ],
+                      "type": "object"
+                    },
+                    "createdAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "cycle": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "frames": {
+                      "items": {
+                        "properties": {
+                          "derived": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "blMeanWindDirDeg": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "blMeanWindSpeedMps": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "blTopWindDirDeg": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "blTopWindSpeedMps": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "blWindShearMps": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "buoyancyShearRatio": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "cloudCapped": {
+                                "nullable": true,
+                                "type": "boolean"
+                              },
+                              "cuPotentialM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "cumulus": {
+                                "nullable": true,
+                                "type": "boolean"
+                              },
+                              "dryHcritM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "effectiveCloudLimitM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "hcritWxtoflyM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "mixedLayerLclM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "odPotentialM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "overdeveloped": {
+                                "nullable": true,
+                                "type": "boolean"
+                              },
+                              "usableLiftTopV2M": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "wind10mDirDeg": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "wind10mSpeedMps": {
+                                "nullable": true,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "usableLiftTopV2M",
+                              "hcritWxtoflyM",
+                              "dryHcritM",
+                              "cuPotentialM",
+                              "odPotentialM",
+                              "wind10mSpeedMps",
+                              "wind10mDirDeg",
+                              "blMeanWindSpeedMps",
+                              "blMeanWindDirDeg",
+                              "blTopWindSpeedMps",
+                              "blTopWindDirDeg",
+                              "blWindShearMps",
+                              "buoyancyShearRatio",
+                              "cumulus",
+                              "overdeveloped",
+                              "cloudCapped",
+                              "mixedLayerLclM",
+                              "effectiveCloudLimitM"
+                            ],
+                            "type": "object"
+                          },
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "intervalEnd": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "intervalStart": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "layers": {
+                            "additionalProperties": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "interpolated": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "enum": [
+                                    "valid",
+                                    "no-usable-lift",
+                                    "unavailable",
+                                    "outside-domain"
+                                  ],
+                                  "type": "string"
+                                },
+                                "support": {
+                                  "type": "integer"
+                                },
+                                "surfaceId": {
+                                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "nullable": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "status",
+                                "support",
+                                "interpolated",
+                                "surfaceId"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "object"
+                          },
+                          "profile": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "levels": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "dewPointC": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "heightM": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "omegaPaS": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "pressureHpa": {
+                                      "exclusiveMinimum": true,
+                                      "minimum": 0,
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "temperatureC": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "uWindMps": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    },
+                                    "vWindMps": {
+                                      "nullable": true,
+                                      "type": "number"
+                                    }
+                                  },
+                                  "required": [
+                                    "pressureHpa",
+                                    "heightM",
+                                    "temperatureC",
+                                    "dewPointC",
+                                    "uWindMps",
+                                    "vWindMps",
+                                    "omegaPaS"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 256,
+                                "type": "array"
+                              },
+                              "modelTerrainM": {
+                                "nullable": true,
+                                "type": "number"
+                              },
+                              "status": {
+                                "enum": [
+                                  "valid",
+                                  "unavailable",
+                                  "outside-domain"
+                                ],
+                                "type": "string"
+                              },
+                              "surfacePressureHpa": {
+                                "exclusiveMinimum": true,
+                                "minimum": 0,
+                                "nullable": true,
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "modelTerrainM",
+                              "surfacePressureHpa",
+                              "status",
+                              "levels"
+                            ],
+                            "type": "object"
+                          },
+                          "validTime": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "validTime",
+                          "intervalStart",
+                          "intervalEnd",
+                          "layers",
+                          "profile",
+                          "derived"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "lat": {
+                      "maximum": 90,
+                      "minimum": -90,
+                      "type": "number"
+                    },
+                    "lon": {
+                      "maximum": 180,
+                      "minimum": -180,
+                      "type": "number"
+                    },
+                    "method": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "model": {
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                      "type": "string"
+                    },
+                    "source": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "properties": {
+                        "provenanceKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "provenanceSha256": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "provenanceKey",
+                        "provenanceSha256"
+                      ],
+                      "type": "object"
+                    },
+                    "version": {
+                      "enum": [
+                        1
+                      ],
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "model",
+                    "buildId",
+                    "cycle",
+                    "createdAt",
+                    "expiresAt",
+                    "lat",
+                    "lon",
+                    "cell",
+                    "method",
+                    "source",
+                    "frames"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -4172,6 +5317,16 @@
               "minLength": 1,
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "frame",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4179,51 +5334,206 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": false,
-                  "properties": {
-                    "buildId": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "cycle": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "frames": {
-                      "items": {
-                        "nullable": true
+                  "anyOf": [
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "buildId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cycle": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "frames": {
+                          "items": {
+                            "nullable": true
+                          },
+                          "maxItems": 256,
+                          "type": "array"
+                        },
+                        "model": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "temporalApproximation": {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        "version": {
+                          "enum": [
+                            1
+                          ],
+                          "type": "number"
+                        }
                       },
-                      "maxItems": 256,
-                      "type": "array"
-                    },
-                    "model": {
-                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                      "type": "string"
-                    },
-                    "provider": {
-                      "maxLength": 256,
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "temporalApproximation": {
-                      "maxLength": 2048,
-                      "type": "string"
-                    },
-                    "version": {
-                      "enum": [
-                        1
+                      "required": [
+                        "version",
+                        "model",
+                        "buildId",
+                        "cycle",
+                        "frames"
                       ],
-                      "type": "number"
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "buildId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cycle": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "frames": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "bytes": {
+                                "exclusiveMinimum": true,
+                                "maximum": 4194304,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "frame": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "hour": {
+                                "exclusiveMinimum": true,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "key": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sha256": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "hour",
+                              "frame",
+                              "key",
+                              "bytes",
+                              "sha256"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "model": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "temporalApproximation": {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        "version": {
+                          "enum": [
+                            2
+                          ],
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "model",
+                        "buildId",
+                        "cycle",
+                        "frames"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "buildId": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "cycle": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "frame": {
+                          "properties": {
+                            "id": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "intervalEnd": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "intervalStart": {
+                              "format": "date-time",
+                              "type": "string"
+                            },
+                            "validTime": {
+                              "format": "date-time",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "validTime",
+                            "intervalStart",
+                            "intervalEnd"
+                          ],
+                          "type": "object"
+                        },
+                        "hour": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "intervals": {
+                          "nullable": true
+                        },
+                        "model": {
+                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                          "type": "string"
+                        },
+                        "receipt": {
+                          "nullable": true
+                        },
+                        "version": {
+                          "enum": [
+                            1
+                          ],
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "model",
+                        "buildId",
+                        "cycle",
+                        "frame",
+                        "hour"
+                      ],
+                      "type": "object"
                     }
-                  },
-                  "required": [
-                    "version",
-                    "model",
-                    "buildId",
-                    "cycle",
-                    "frames"
-                  ],
-                  "type": "object"
+                  ]
                 }
               }
             },
@@ -4288,6 +5598,36 @@
               }
             },
             "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
           },
           "429": {
             "content": {
@@ -4767,11 +6107,28 @@
                                   "enum": [
                                     "usable-lift-msl",
                                     "usable-lift-agl",
-                                    "precip-rate"
+                                    "precip-rate",
+                                    "thermal-velocity",
+                                    "thermal-top-msl",
+                                    "pbl-height-agl",
+                                    "sensible-heat-flux",
+                                    "latent-heat-flux",
+                                    "surface-lcl-msl",
+                                    "cape-jkg",
+                                    "cloud-cover-total",
+                                    "cloud-cover-low",
+                                    "sfc-temp-c",
+                                    "sfc-dewpoint-c",
+                                    "mslp-hpa",
+                                    "wind-10m-u",
+                                    "wind-10m-v",
+                                    "wind-gust-10m",
+                                    "bl-mean-wind-u",
+                                    "bl-mean-wind-v"
                                   ],
                                   "type": "string"
                                 },
-                                "maxItems": 3,
+                                "maxItems": 20,
                                 "minItems": 1,
                                 "type": "array"
                               }
@@ -4874,6 +6231,538 @@
               }
             },
             "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Sample selection or request rate exceeds limits"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Publication, coverage, archive or rate limiter unavailable"
+          }
+        }
+      }
+    },
+    "/v1/models/{model}/runs/{buildId}/samples": {
+      "get": {
+        "parameters": [
+          {
+            "in": "path",
+            "name": "model",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "buildId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "points",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "frame",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "layers",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "buildId": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "model": {
+                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                      "type": "string"
+                    },
+                    "points": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "index": {
+                            "maximum": 63,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "sample": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "buildId": {
+                                "type": "string"
+                              },
+                              "expiresAt": {
+                                "type": "string"
+                              },
+                              "frames": {
+                                "items": {
+                                  "properties": {
+                                    "id": {
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "intervalEnd": {
+                                      "format": "date-time",
+                                      "type": "string"
+                                    },
+                                    "intervalStart": {
+                                      "format": "date-time",
+                                      "type": "string"
+                                    },
+                                    "layers": {
+                                      "additionalProperties": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "interpolated": {
+                                            "type": "boolean"
+                                          },
+                                          "status": {
+                                            "enum": [
+                                              "valid",
+                                              "no-usable-lift",
+                                              "unavailable",
+                                              "outside-domain"
+                                            ],
+                                            "type": "string"
+                                          },
+                                          "support": {
+                                            "type": "integer"
+                                          },
+                                          "surfaceId": {
+                                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                            "type": "string"
+                                          },
+                                          "value": {
+                                            "nullable": true,
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "value",
+                                          "status",
+                                          "support",
+                                          "interpolated",
+                                          "surfaceId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "validTime": {
+                                      "format": "date-time",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "validTime",
+                                    "intervalStart",
+                                    "intervalEnd",
+                                    "layers"
+                                  ],
+                                  "type": "object"
+                                },
+                                "type": "array"
+                              },
+                              "lat": {
+                                "type": "number"
+                              },
+                              "lon": {
+                                "type": "number"
+                              },
+                              "method": {
+                                "properties": {
+                                  "hash": {
+                                    "pattern": "^[a-f0-9]{64}$",
+                                    "type": "string"
+                                  },
+                                  "id": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "id",
+                                  "hash"
+                                ],
+                                "type": "object"
+                              },
+                              "model": {
+                                "type": "string"
+                              },
+                              "source": {
+                                "additionalProperties": {
+                                  "nullable": true
+                                },
+                                "properties": {
+                                  "provenanceKey": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "provenanceSha256": {
+                                    "pattern": "^[a-f0-9]{64}$",
+                                    "type": "string"
+                                  },
+                                  "provider": {
+                                    "minLength": 1,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "provider",
+                                  "provenanceKey",
+                                  "provenanceSha256"
+                                ],
+                                "type": "object"
+                              },
+                              "surfaces": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "coverage": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "gridHash": {
+                                          "pattern": "^[a-f0-9]{64}$",
+                                          "type": "string"
+                                        },
+                                        "hash": {
+                                          "pattern": "^[a-f0-9]{64}$",
+                                          "type": "string"
+                                        },
+                                        "id": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "maskKey": {
+                                          "minLength": 1,
+                                          "type": "string"
+                                        },
+                                        "maxZoom": {
+                                          "maximum": 10,
+                                          "minimum": 0,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "hash",
+                                        "maskKey",
+                                        "maxZoom",
+                                        "gridHash"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "id": {
+                                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                      "type": "string"
+                                    },
+                                    "kind": {
+                                      "enum": [
+                                        "native",
+                                        "fine"
+                                      ],
+                                      "type": "string"
+                                    },
+                                    "layers": {
+                                      "items": {
+                                        "enum": [
+                                          "usable-lift-msl",
+                                          "usable-lift-agl",
+                                          "precip-rate",
+                                          "thermal-velocity",
+                                          "thermal-top-msl",
+                                          "pbl-height-agl",
+                                          "sensible-heat-flux",
+                                          "latent-heat-flux",
+                                          "surface-lcl-msl",
+                                          "cape-jkg",
+                                          "cloud-cover-total",
+                                          "cloud-cover-low",
+                                          "sfc-temp-c",
+                                          "sfc-dewpoint-c",
+                                          "mslp-hpa",
+                                          "wind-10m-u",
+                                          "wind-10m-v",
+                                          "wind-gust-10m",
+                                          "bl-mean-wind-u",
+                                          "bl-mean-wind-v"
+                                        ],
+                                        "type": "string"
+                                      },
+                                      "maxItems": 20,
+                                      "minItems": 1,
+                                      "type": "array"
+                                    }
+                                  },
+                                  "required": [
+                                    "id",
+                                    "kind",
+                                    "layers",
+                                    "coverage"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 2,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "version": {
+                                "enum": [
+                                  5
+                                ],
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "version",
+                              "model",
+                              "buildId",
+                              "lat",
+                              "lon",
+                              "method",
+                              "source",
+                              "expiresAt",
+                              "surfaces",
+                              "frames"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "index",
+                          "sample"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "version": {
+                      "enum": [
+                        1
+                      ],
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "model",
+                    "buildId",
+                    "expiresAt",
+                    "points"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
           },
           "429": {
             "content": {
@@ -5071,6 +6960,36 @@
             },
             "description": "Unknown or not-retained resource"
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
+          },
           "429": {
             "content": {
               "application/problem+json": {
@@ -5218,6 +7137,36 @@
               }
             },
             "description": "Unknown or not-retained resource"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "properties": {
+                    "detail": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "title",
+                    "status",
+                    "detail"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Product unavailable in this retained build"
           },
           "429": {
             "content": {

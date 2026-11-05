@@ -1,4 +1,11 @@
 import { open } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
+
+export function localPath(root: string, key: string): string {
+  const base = resolve(root), path = resolve(base, key);
+  if (!path.startsWith(base + sep)) throw new Error(`Invalid artifact key: ${key}`);
+  return path;
+}
 
 /** Bound allocation from the opened descriptor, not a stale earlier path stat. */
 export async function readLocalFile(path: string, maxBytes: number, expectedBytes?: number): Promise<Buffer> {

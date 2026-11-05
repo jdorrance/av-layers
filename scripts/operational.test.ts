@@ -45,12 +45,13 @@ describe('real contract-shaped fixtures', () => {
     expect(() => validateArtifactRecords(wrongPath)).toThrow(/unexpected tilesKey/);
   });
 
-  it('rejects invalid packed values and unsupported status flags', () => {
+  it('rejects invalid packed values and layer-incompatible support flags', () => {
     const flags = Uint8Array.from([0, 0, 0, 0, 4, 0, 0, 0, 0, 16]);
     expect(() => validateSampleFlags(flags, 10)).not.toThrow();
     expect(() => validateSampleFlags(flags, 10, 'precip-rate')).toThrow(/precip-rate lift flags/);
     expect(() => validateSampleFlags(Uint8Array.from([0, 0, 192, 127, 0]), 5)).toThrow(/non-finite sample value/);
-    expect(() => validateSampleFlags(Uint8Array.from([0, 0, 0, 0, 32]), 5)).toThrow(/support bits/);
+    expect(() => validateSampleFlags(Uint8Array.from([0, 0, 0, 0, 32]), 5)).not.toThrow();
+    expect(() => validateSampleFlags(Uint8Array.from([0, 0, 0, 0, 32]), 5, 'precip-rate')).toThrow(/lift flags/);
     expect(() => validateSampleFlags(new Uint8Array(5), 10)).toThrow(/length/);
   });
 

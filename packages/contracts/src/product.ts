@@ -1,8 +1,9 @@
 import z from 'zod';
 import { gridSchema, type Grid } from './geometry.js';
-import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES } from './format.js';
+import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, MAX_FORECAST_SHARDS } from './format.js';
+import { NATIVE_LAYER_IDS } from './native-layers.js';
 
-export const LAYER_IDS = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as const;
+export const LAYER_IDS = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', ...NATIVE_LAYER_IDS] as const;
 export type LayerId = typeof LAYER_IDS[number];
 const capabilitiesSchema = z.object({
   verticalCoordinate: z.enum(['isobaric', 'model-levels']),
@@ -15,7 +16,7 @@ export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
 
 export const MAX_MODEL_WORKERS = 3;
 const workerLimit = z.number().int().min(0).max(MAX_MODEL_WORKERS);
-const jobLimit = z.number().int().positive().max(MAX_SAMPLE_VALUES);
+const jobLimit = z.number().int().positive().max(MAX_FORECAST_SHARDS);
 function validSchedule(value: string): boolean {
   const fields = value.split(' '), ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
   return fields.length === ranges.length && fields.every((field, i) => field.split(',').every(term => {
@@ -54,6 +55,8 @@ export interface ProductDefinition {
   readonly supportHaloCells: number;
   readonly terrainSubdivisionFactor?: number;
   readonly frameHours: readonly number[];
+  readonly mapEndHour?: number;
+  readonly intervalChange?: { readonly fromHour: number; readonly hours: number };
   readonly intervalHours: number;
   readonly layers: readonly LayerId[];
   readonly capabilities: ProductCapabilities;
@@ -62,7 +65,7 @@ export interface ProductDefinition {
 
 export interface ModelDefinition extends ProductDefinition {
   readonly upstream: Readonly<Record<string, unknown>>;
-  readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number;
+  readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number; readonly intervalChange?: ProductDefinition['intervalChange']; readonly mapEndHour?: number;
     readonly cycleHoursUtc: readonly number[]; readonly statisticsResetHours: number | null };
 }
 
@@ -87,9 +90,13 @@ const productConfigSchema = z.object({
       'Product requires strictly ascending frame hours'
     ).readonly(),
     intervalHours: z.number().finite().positive(),
+    intervalChange: z.object({ fromHour: z.number().int().positive(), hours: z.number().int().positive() }).strict().optional(),
+    mapEndHour: z.number().int().positive().optional(),
     cycleHoursUtc: z.array(z.number().int().min(0).max(23)).min(1).refine(hours => new Set(hours).size === hours.length).readonly(),
     statisticsResetHours: z.number().finite().positive().nullable()
-  }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour'),
+  }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour')
+    .refine(forecast => forecast.mapEndHour === undefined || forecast.hours.some(hour => hour <= forecast.mapEndHour!), 'Map window requires a forecast prefix')
+    .refine(forecast => !forecast.intervalChange || forecast.intervalChange.hours <= forecast.intervalChange.fromHour, 'Source interval exceeds transition hour'),
   freshness: z.object({ maxCycleAgeHours: z.number().positive(), minHorizonHours: z.number().nonnegative() }).readonly(),
   terrainSubdivisionFactor: z.number().int().positive().max(64).optional(),
   coverage: z.object({
@@ -99,7 +106,7 @@ const productConfigSchema = z.object({
     interpolationHaloCells: z.number().int().nonnegative()
   }).refine(coverage => coverage.west < coverage.east && coverage.south < coverage.north, 'Invalid coverage bounds'),
   upstream: z.record(z.string(), z.unknown()).readonly()
-}).refine(config => config.layers.length * config.forecast.hours.length <= MAX_SAMPLE_VALUES, 'Product exceeds sample value budget');
+});
 
 /** Validate declarative product settings without importing any source adapter. */
 export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
@@ -116,8 +123,23 @@ export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
     supportHaloCells: config.coverage.interpolationHaloCells,
     ...(config.terrainSubdivisionFactor === undefined ? {} : { terrainSubdivisionFactor: config.terrainSubdivisionFactor }),
     frameHours: config.forecast.hours, intervalHours: config.forecast.intervalHours,
+    ...(config.forecast.mapEndHour === undefined ? {} : { mapEndHour: config.forecast.mapEndHour }),
+    ...(config.forecast.intervalChange ? { intervalChange: config.forecast.intervalChange } : {}),
     layers: config.layers, capabilities: config.capabilities,
     execution: Object.freeze({ ...execution, workers: workerLimit.parse(execution.workers ?? workers) }),
     forecast: config.forecast, upstream: config.upstream
   });
+}
+
+/** Source support is independent of the selected output schedule. */
+export function sourceIntervalHours(product: Pick<ProductDefinition, 'intervalHours' | 'intervalChange'>, hour: number): number {
+  return product.intervalChange && hour >= product.intervalChange.fromHour ? product.intervalChange.hours : product.intervalHours;
+}
+
+/** Map rasters and fine samples use the selected forecast prefix. */
+export function mapFrameCount(product: Pick<ProductDefinition, 'frameHours' | 'mapEndHour'>): number {
+  const end = product.mapEndHour;
+  if (end === undefined) return product.frameHours.length;
+  const index = product.frameHours.findIndex(hour => hour > end);
+  return index < 0 ? product.frameHours.length : index;
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { manifestSchema, type PublishedManifest } from '@av/contracts';
+import { DEFAULT_PRODUCT, createWholeDomainDescriptors, estimateProfileResponseBytes, layerSurface, MAX_POINT_RESPONSE_BYTES, manifestSchema, type PublishedManifest, type ProfileResponse } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 import { verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
@@ -246,4 +246,36 @@ it('fails clearly when every bounded candidate is outside coverage', async () =>
   });
   await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl })).rejects.toThrow('did not reach output coverage');
   expect(tileRequests).toEqual([]);
+});
+
+it('pages the extended native timeline and probes full profiles and point batches within budgets', async () => {
+  const legacy = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const product = DEFAULT_PRODUCT, nativeLayers = product.layers.filter(layer => layerSurface(layer) === 'native');
+  const frames = product.frameHours.map(hour => ({ ...legacy.frames[0]!, id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(Date.parse(legacy.cycle) + hour * 3_600_000).toISOString() }));
+  const manifest = { ...legacy, version: 5, layers: product.layers, descriptors: createWholeDomainDescriptors(product), frames, mapFrameCount: 24,
+    surfaces: [{ id: 'native', kind: 'native', layers: nativeLayers, profiles: { levelCount: 21 } },
+      { id: 'fine', kind: 'fine', layers: ['usable-lift-msl', 'usable-lift-agl'] }] } as unknown as PublishedManifest;
+  const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: {} };
+  vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  const sample = vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async (_build, request) => ({ version: 5, model: manifest.model, buildId: manifest.buildId,
+    lat: request.lat, lon: request.lon, method: manifest.method, source: manifest.source, expiresAt: manifest.expiresAt, surfaces: [],
+    frames: [{ ...frames[0]!, layers: Object.fromEntries(request.layers!.map(layer => [layer, { value: 1, status: 'valid' as const, support: 0, interpolated: false, surfaceId: layerSurface(layer) }])) }] }));
+  const profile = vi.spyOn(ApiClient.prototype, 'profile').mockImplementation(async (_build, request) => ({ cell: {},
+    frames: (request.frames as string[]).map(id => ({ id, profile: { status: 'valid', levels: [{}] } })) } as unknown as ProfileResponse));
+  const samples = vi.spyOn(ApiClient.prototype, 'samples').mockResolvedValue({ version: 1, model: manifest.model, buildId: manifest.buildId, expiresAt: manifest.expiresAt, points: [] });
+  await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl: async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/healthz') return Response.json({ ok: true });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+  } });
+  for (const [, request] of sample.mock.calls) {
+    expect(request.frames).not.toBe('all');
+    expect(request.frames!.length * request.layers!.length).toBeLessThanOrEqual(manifest.descriptors.maxSampleValues);
+    if (request.layers!.includes('usable-lift-msl')) expect((request.frames as string[]).every(id => frames.slice(0, 24).some(frame => frame.id === id))).toBe(true);
+  }
+  expect(profile.mock.calls.flatMap(([, request]) => request.frames)).toEqual(frames.map(frame => frame.id));
+  for (const [, request] of profile.mock.calls) expect(estimateProfileResponseBytes(request.frames!.length, 21, request.layers!.length)).toBeLessThanOrEqual(MAX_POINT_RESPONSE_BYTES);
+  expect(samples).toHaveBeenCalledWith(build, expect.objectContaining({ frames: [frames.at(-1)!.id], points: [expect.any(Object), expect.any(Object)] }));
 });

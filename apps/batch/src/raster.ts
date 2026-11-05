@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { compilePaletteColor, LAYERS, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
+import { compilePaletteColor, LAYERS, layerPalette, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
 import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
 import { fieldOffset, MAX_PREPARED_SAMPLES, prepareGridAxis, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, samplingCovered, validateSamplingField, type GridField, type PreparedGridAxis, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
 
@@ -276,7 +276,7 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
 
   function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patchFields?: RasterPatchFields) {
     if (patches.length || patchFields) validateRasterPatchFields(patches, layer, patchFields);
-    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, mask, plan, layer, palettes[LAYERS[layer].palette], patches, patchFields);
+    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, mask, plan, layer, palettes[layerPalette(layer)], patches, patchFields);
     stats.rasterMs += performance.now() - started; stats.tiles++;
     if (result.blank) stats.blankTiles++;
     return result;
@@ -291,5 +291,5 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
 
 export function renderTileRgba(field: GridField, mask: SamplingMask, layer: LayerId, z: number, x: number, y: number, liftInterpolation?: PaletteColorMode): Uint8Array {
   const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
-  return raster(field, mask, preparedTileGeometry(mask, z, x, y), layer, palettes[LAYERS[layer].palette]).rgba;
+  return raster(field, mask, preparedTileGeometry(mask, z, x, y), layer, palettes[layerPalette(layer)]).rgba;
 }

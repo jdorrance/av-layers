@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL, type ModelId } from '@av/contracts';
-import { ApiClient, createRasterTileProtocol, formatBuildFreshness, type RasterTileProtocol } from '@av/contracts/client';
+import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, pointSeriesSelection, type GeoPoint, type RasterTileProtocol } from '@av/contracts/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -16,6 +16,41 @@ let mountedIn: HTMLElement | null = null;
 let selectedModel: ModelId = DEFAULT_MODEL;
 let rasterProtocol: RasterTileProtocol | null = null;
 let previousController: PluginController | null = null;
+let paneOpen = false;
+let pointListening = false;
+let pointAbort: AbortController | null = null;
+
+function clearPoint(): void {
+  pointAbort?.abort(); pointAbort = null; panel?.clearPoint();
+}
+
+const pointClick = (point: GeoPoint): void => { void loadPoint(normalizePoint(point.lat, point.lon)); };
+
+function pointListener(enabled: boolean): void {
+  if (pointListening === enabled) return;
+  pointListening = enabled;
+  if (enabled) W.singleclick.singleclick.on(__pluginConfig.name, pointClick);
+  else W.singleclick.singleclick.off(__pluginConfig.name, pointClick);
+}
+
+async function loadPoint(point: GeoPoint): Promise<void> {
+  const active = controller, build = active?.currentBuild;
+  if (!paneOpen || !active || !build || active.state().phase !== 'ready' || active.checkExpiry()) return;
+  clearPoint();
+  const pending = new AbortController(); pointAbort = pending;
+  panel?.loadPoint(point);
+  try {
+    const selection = pointSeriesSelection(build);
+    const payload = await api.sample(build, { ...point, ...selection, signal: pending.signal });
+    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || !paneOpen || active.checkExpiry()) return;
+    panel?.renderPoint(payload, build, active.state().frameId, id => {
+      if (paneOpen && controller === active && active.currentBuild === build) active.selectFrame(id);
+    });
+  } catch (error) {
+    if (pending.signal.aborted || controller !== active || !paneOpen) return;
+    panel?.pointError(error instanceof Error ? error.message : String(error));
+  } finally { if (pointAbort === pending) pointAbort = null; }
+}
 function protocol(): RasterTileProtocol {
   if (!rasterProtocol) {
     rasterProtocol = createRasterTileProtocol(API_BASE);
@@ -43,11 +78,12 @@ function bindHostListeners(): void {
   window.addEventListener('focus', refreshTime);
   document.addEventListener('visibilitychange', refreshTime);
   window.addEventListener('pagehide', () => {
+    pointListener(false); clearPoint();
     controller?.dispose(); controller = null;
     previousController?.dispose(); previousController = null;
     if (rasterProtocol) { rasterProtocol.dispose(); L.removeProtocol(rasterProtocol.scheme); rasterProtocol = null; }
   });
-  window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) void startController(selectedModel); });
+  window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) { pointListener(paneOpen); void startController(selectedModel); } });
   listenersBound = true;
 }
 
@@ -64,7 +100,7 @@ function ensurePanel(): PluginPanel {
         previousController?.setOpacity(opacity);
       },
       onBack: () => {
-        panel?.setVisible(false);
+        onclose();
         bcast.emit('rqstClose', __pluginConfig.name);
         bcast.emit('rqstOpen', 'menu');
       }
@@ -105,6 +141,7 @@ function showCurrent(ui: PluginPanel): boolean {
 }
 
 async function startController(model: ModelId): Promise<void> {
+  clearPoint();
   const opacity = controller?.state().opacity;
   const previous = previousController ?? controller;
   if (previousController) controller?.dispose();
@@ -112,7 +149,7 @@ async function startController(model: ModelId): Promise<void> {
   previousController = previous;
   controller = null;
   const ui = ensurePanel();
-  ui.setVisible(true);
+  ui.setVisible(paneOpen);
   ui.setError(null);
   ui.setNotice(null);
   ui.setStatus('Loading latest immutable build…');
@@ -137,6 +174,7 @@ async function startController(model: ModelId): Promise<void> {
         const oldBuildId = previous?.currentBuild?.manifest.buildId;
         if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);
       }
+      if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') clearPoint();
       renderController(ui, activeController);
     }
   });
@@ -146,13 +184,16 @@ async function startController(model: ModelId): Promise<void> {
 }
 
 export const onopen = (): void => {
+  paneOpen = true;
   bindHostListeners();
+  pointListener(true);
   const ui = ensurePanel();
   if (showCurrent(ui)) return;
   void startController(selectedModel);
 };
 
 export function onclose(): void {
+  paneOpen = false; pointListener(false); clearPoint();
   panel?.setVisible(false);
 }
 

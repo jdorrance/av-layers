@@ -1,3 +1,4 @@
+import { sourceIntervalHours } from '@av/contracts';
 import { recentSourceCycles } from '../source.js';
 import type { IndexedSource } from './source.js';
 import { IndexedGribError } from './errors.ts';
@@ -28,15 +29,20 @@ async function checkRun(source: IndexedSource, cycle: string, transport: Indexed
   const stamp = cycleStamp(cycle);
   const indexes = new Map<string, IndexResult>();
   const duplicates: DiscoveredIndexedGribRun['duplicates'] = [];
-  const inventoryJobs = source.model.forecast.hours.flatMap(hour => Object.keys(source.upstream.products).map(product => ({ hour, product })));
-  for (const { hour, product } of inventoryJobs) {
+  const inventoryJobs = new Map<string, { hour: number; product: string }>();
+  const addInventory = (hour: number, product: string) => inventoryJobs.set(`${product}:${hour}`, { hour, product });
+  for (const hour of source.model.forecast.hours) {
+    for (const product of Object.keys(source.upstream.products)) addInventory(hour, product);
+    for (const spec of indexedGribCompanionSpecs(source, hour)) addInventory(hour - sourceIntervalHours(source.model.forecast, hour), spec.product);
+  }
+  for (const { hour, product } of inventoryJobs.values()) {
     const index = await transport.index(`${indexedGribFileUrl(source, cycle, hour, source.upstream.products[product])}.idx`, stamp, refresh);
     indexes.set(`${product}:${hour}`, index);
   }
   for (const hour of source.model.forecast.hours) {
     await checkSpecList(source, cycle, transport, indexes, indexedGribCurrentSpecs(source, hour), hour, 'current', duplicates);
     if (indexedGribWindowNeedsCompanion(source, hour)) {
-      await checkSpecList(source, cycle, transport, indexes, indexedGribCompanionSpecs(source, hour), hour - source.model.forecast.intervalHours, 'companion', duplicates);
+      await checkSpecList(source, cycle, transport, indexes, indexedGribCompanionSpecs(source, hour), hour - sourceIntervalHours(source.model.forecast, hour), 'companion', duplicates);
     }
   }
   return {

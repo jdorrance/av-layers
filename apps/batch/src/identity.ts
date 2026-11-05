@@ -4,7 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type ProductDefinition } from '@av/contracts';
+import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, terrainColumnMethodForProduct, type ProductDefinition } from '@av/contracts';
 import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
 import { refinementInputSchema, type RefinementInput } from './refinement/prepare.js';
 
@@ -85,7 +85,7 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
     ...(wholeDomain ? { wholeDomain } : {}) }));
   const hash = digest(JSON.stringify({ components, lockHash, configurationHash }));
   const { revision, dirty } = await readProducerSourceState(root);
-  const refinementMethod = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
+  const refinementMethod = terrainColumnMethodForProduct(product);
   const scienceHash = digest(JSON.stringify({ source: components.science, methods: { ...createProductDescriptors(product).methods,
     ...(refinements.length || wholeDomain ? { [refinementMethod.id]: refinementMethod } : {}) } }));
   return { recipe: createRecipeIdentity(product, hash, revision, dirty, lockHash), components: { ...components, configuration: configurationHash }, scienceHash };

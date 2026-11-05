@@ -113,7 +113,7 @@ describe('ApiClient.sample', () => {
     ['missing layer', p => { delete p.frames[0].layers['precip-rate']; }],
     ['extra layer', p => { p.frames[0].layers.extra = p.frames[0].layers['precip-rate']; }],
     ['invalid rain support', p => { p.frames[0].layers['precip-rate'].support = 4; }],
-    ['unknown support bit', p => { p.frames[0].layers['usable-lift-agl'].support = 32; }],
+    ['unknown support bit', p => { p.frames[0].layers['usable-lift-agl'].support = 256; }],
     ['support integer overflow', p => { p.frames[0].layers['usable-lift-agl'].support = 2 ** 32; }],
     ['valid null', p => { Object.assign(p.frames[0].layers['precip-rate'], { value: null }); }],
     ['outside with value', p => { p.frames[0].layers['precip-rate'].status = 'outside-domain'; }],

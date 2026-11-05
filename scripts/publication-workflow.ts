@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -125,7 +125,7 @@ async function publishedTerrainRef(store: ObjectStorage, model: string, signal?:
     if (Date.parse(latest.expiresAt) <= Date.now()) return;
     throw new Error('Published terrain manifest is missing');
   }
-  const manifest = publishedManifestSchema.parse(parseBoundedJson(object.bytes));
+  const manifest = publishedManifestSchema.parse(parseBoundedJson(object.bytes, MAX_MANIFEST_JSON_TOKENS));
   if (manifest.model !== model || manifest.buildId !== latest.buildId || manifest.cycle !== latest.cycle || manifest.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
   if (manifest.version !== 5) return;
   const terrain = manifest.surfaces.find(surface => surface.id === 'fine')?.terrain;
@@ -321,7 +321,7 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       }
       throw error;
     });
-    const manifest = publishedManifestSchema.parse(parseBoundedJson(bytes));
+    const manifest = publishedManifestSchema.parse(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS));
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
     const product = getProduct(manifest.model), same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);

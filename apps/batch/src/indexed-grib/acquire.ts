@@ -21,7 +21,10 @@ import {
 } from './intervals.ts';
 import { IndexedGribTransport, indexedGribRecordWorkingBytes, type IndexedGribTransportStats } from './transport.ts';
 import { IndexedGribFieldSampler } from './sampling.ts';
-import type { NormalizedFrameTarget } from '../provider.js';
+import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
+import { sourceIntervalHours, gridVectorToEarth } from '@av/contracts';
+import { omegaFromGeometricWPaS, kelvinToCelsius } from '@av/thermodynamics';
+import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
 import type {
   AcquireIndexedGribFrameOptions,
   DecodedFieldReceipt,
@@ -147,6 +150,9 @@ export async function acquireIndexedGribFrame(source: IndexedSource, options: Ac
 async function acquireFrame(context: AcquisitionContext, hour: number, target?: NormalizedFrameTarget): Promise<IndexedGribFrameAcquisition> {
   const { source, cycle, activeIndices, nativeIndices, transport, sampler } = context;
   const capturedAt = new Date().toISOString();
+  const intervalHours = sourceIntervalHours(source.model.forecast, hour);
+  const { auxSurface, auxLevels } = createAuxiliaryTargets(activeIndices.length, source.pressureLevels.length,
+    Object.keys(source.upstream.auxSurface ?? {}) as AuxSurfaceId[], Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[], target);
   const nextRaw = new Map<string, Omit<LoadedField, 'inspected'>>();
   const stamp = cycleStamp(cycle);
   const currentStartHour = indexedGribWindowStart(source, hour);
@@ -166,7 +172,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
   ): Promise<LoadedField> => {
     transport.abort();
     const productName = indexedGribProductName(source, spec.product);
-    const url = indexedGribFileUrl(source, cycle, spec.role === 'companion' ? hour - source.model.forecast.intervalHours : hour, productName);
+    const url = indexedGribFileUrl(source, cycle, spec.role === 'companion' ? hour - intervalHours : hour, productName);
     const index = spec.role === 'companion'
       ? await transport.index(`${url}.idx`, stamp)
       : indexes.get(spec.product)!;
@@ -178,8 +184,8 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       return { ...prior, receipt: { ...structuredClone(prior.receipt), role: 'companion' } };
     }
     return loadAndInspectIndexedGribField(source, transport, {
-      cycle, spec, sourceHour: spec.role === 'companion' ? hour - source.model.forecast.intervalHours : hour, startHour, endHour,
-      expectedGridKey, index, timings: context.stats,
+      cycle, spec, sourceHour: spec.role === 'companion' ? hour - intervalHours : hour, startHour, endHour,
+      expectedGridKey: spec.auxId ? undefined : expectedGridKey, index, timings: context.stats,
     });
   };
 
@@ -199,10 +205,12 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     async spec => {
       const loaded = await load(spec, hour, hour, gridKey);
       const index = source.pressureLevels.indexOf(spec.levelHpa!);
-      const values = spec.kind === 'height' ? target?.hgtM[index] : spec.kind === 'temperature' ? target?.tempK[index]
-        : spec.kind === 'surface-pressure' ? target?.surfacePressurePa : spec.kind === 'temp-2m' ? target?.temp2mK : target?.specificHumidity2mKgKg;
-      const missing = spec.kind === 'height' ? target?.missing.hgt[index] : spec.kind === 'temperature' ? target?.missing.temp[index]
-        : spec.kind === 'surface-pressure' ? target?.missing.surfacePressure : spec.kind === 'temp-2m' ? target?.missing.temp2m : target?.missing.humidity2m;
+      const auxiliary = spec.kind === 'aux-surface' ? auxSurface[spec.auxId as AuxSurfaceId]
+        : spec.kind === 'aux-level' ? auxLevels[spec.auxId as AuxLevelId]?.[index] : undefined;
+      const values = auxiliary?.values ?? (spec.kind === 'height' ? target?.hgtM[index] : spec.kind === 'temperature' ? target?.tempK[index]
+        : spec.kind === 'surface-pressure' ? target?.surfacePressurePa : spec.kind === 'temp-2m' ? target?.temp2mK : target?.specificHumidity2mKgKg);
+      const missing = auxiliary?.missing ?? (spec.kind === 'height' ? target?.missing.hgt[index] : spec.kind === 'temperature' ? target?.missing.temp[index]
+        : spec.kind === 'surface-pressure' ? target?.missing.surfacePressure : spec.kind === 'temp-2m' ? target?.missing.temp2m : target?.missing.humidity2m);
       loaded.sampled = await instant(loaded, values, missing);
       return loaded;
     },
@@ -212,7 +220,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
   const instant = (loaded: LoadedField, values?: Float32Array, missing?: Uint8Array) => decode(loaded, nativeIndices, values ?? new Float32Array(activeIndices.length), missing);
   try {
     const specs = indexedGribCurrentSpecs(source, hour);
-    const surfaceSpecs = specs.filter((spec) => spec.kind !== 'height' && spec.kind !== 'temperature');
+    const surfaceSpecs = specs.filter((spec) => spec.kind !== 'height' && spec.kind !== 'temperature' && !spec.auxId);
     const terrainSpec = surfaceSpecs.find((spec) => spec.kind === 'terrain');
     if (!terrainSpec) throw new IndexedGribError('invalid-option', 'Indexed GRIB terrain spec missing');
     const terrainField = await load(terrainSpec, hour, hour);
@@ -245,7 +253,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     const intervalOutputs = new Map<string, { values: Float32Array; missing: Uint8Array; missingCount: number }>();
     const windowReceipts = new Map<string, { current: DecodedFieldReceipt; companion: DecodedFieldReceipt | null }>();
     const needsCompanion = indexedGribWindowNeedsCompanion(source, hour);
-    const nextHour = hour + source.model.forecast.intervalHours;
+    const nextHour = hour + intervalHours;
     const nextNeedsCompanion = source.model.forecast.hours.includes(nextHour) && indexedGribWindowNeedsCompanion(source, nextHour);
     const companionSpecs = indexedGribCompanionSpecs(source, hour);
     const companionByKind = new Map(companionSpecs.map((spec) => [spec.kind, spec]));
@@ -263,12 +271,12 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       if (needsCompanion) {
         const companionSpec = companionByKind.get(spec.kind);
         if (!companionSpec) throw new IndexedGribError('source-conflict', `Missing companion spec for ${spec.key}`);
-        companion = await load(companionSpec, currentStartHour, hour - source.model.forecast.intervalHours, sourceGrid.gridKey);
+        companion = await load(companionSpec, currentStartHour, hour - intervalHours, sourceGrid.gridKey);
         companionSampled = await decode(companion, nativeIndices);
         receipts.push(companion.receipt);
         admitIndexedGribWindowPair(source, current.receipt, companion.receipt);
-      } else if (hoursInWindow(current.receipt) !== source.model.forecast.intervalHours) {
-        const expectedHours = source.model.forecast.intervalHours;
+      } else if (hoursInWindow(current.receipt) !== intervalHours) {
+        const expectedHours = intervalHours;
         throw new IndexedGribError('source-conflict', `Direct Indexed GRIB window is not ${expectedHours === 3 ? 'three hours' : `${expectedHours} hour${expectedHours === 1 ? '' : 's'}`} for ${spec.key}`);
       }
       const recovered = recoverTrailingWindow({
@@ -322,6 +330,40 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       else { tempK.push(sampled.values); tempMissing.push(sampled.missing); }
     }
 
+    const auxiliarySpecs = specs.filter(spec => spec.auxId);
+    const auxiliaryReceipts = new Map<string, DecodedFieldReceipt>();
+    let auxiliaryIndex = 0;
+    for await (const loaded of prefetch(auxiliarySpecs, sourceGrid.gridKey)) {
+      const spec = auxiliarySpecs[auxiliaryIndex++]!, sampled = loaded.sampled as SampledColumn<Float32Array>;
+      if (spec.scale !== 1) for (let i = 0; i < sampled.values.length; i++) if (!sampled.missing[i]) sampled.values[i] *= spec.scale!;
+      if (spec.conversion) {
+        const level = source.pressureLevels.indexOf(spec.levelHpa!);
+        for (let i = 0; i < activeIndices.length; i++) {
+          const value = sampled.missing[i] || tempMissing[level]![i] ? NaN
+            : omegaFromGeometricWPaS(sampled.values[i]!, spec.levelHpa!, kelvinToCelsius(tempK[level]![i]!));
+          sampled.values[i] = value; if (!Number.isFinite(value)) sampled.missing[i] = 1;
+        }
+      }
+      receipts.push(loaded.receipt); auxiliaryReceipts.set(spec.key, loaded.receipt);
+    }
+    const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined, uKey: string, vKey: string) => {
+      if (!u || !v) return;
+      const relative = auxiliaryReceipts.get(uKey)?.grid.uvRelativeToGrid;
+      if (relative !== auxiliaryReceipts.get(vKey)?.grid.uvRelativeToGrid) throw new IndexedGribError('source-conflict', 'Auxiliary wind component reference mismatch');
+      for (let i = 0; i < activeIndices.length; i++) {
+        if (u.missing[i] || v.missing[i]) { u.missing[i] = v.missing[i] = 1; u.values[i] = v.values[i] = NaN; continue; }
+        if (!relative) continue;
+        const index = activeIndices[i]!, point = source.geometry.gridToGeographic(index % source.grid.width, Math.floor(index / source.grid.width));
+        const rotation = point && source.geometry.rotationAndMetrics(point.lat, point.lon);
+        if (!rotation) throw new IndexedGribError('unsupported-grid', 'Auxiliary wind rotation unavailable');
+        const earth = gridVectorToEarth(u.values[i]!, v.values[i]!, rotation);
+        u.values[i] = earth.east; v.values[i] = earth.north;
+      }
+    };
+    normalizeWind(auxSurface.u10mMps, auxSurface.v10mMps, 'auxSurface.u10mMps', 'auxSurface.v10mMps');
+    for (let i = 0; i < source.pressureLevels.length; i++) normalizeWind(auxLevels.uWindMps?.[i], auxLevels.vWindMps?.[i],
+      `auxLevels.uWindMps.${source.pressureLevels[i]}`, `auxLevels.vWindMps.${source.pressureLevels[i]}`);
+
     const surfacePressure = outputs.surfacePressure;
     const temp2m = outputs.temp2m;
     const spfh2m = outputs.spfh2m;
@@ -373,6 +415,8 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       pressureLevelsHpa: source.pressureLevels,
       hgtM,
       tempK,
+      ...(Object.keys(auxSurface).length ? { auxSurface } : {}),
+      ...(Object.keys(auxLevels).length ? { auxLevels } : {}),
       missing: {
         terrain: terrain.missing,
         surfacePressure: surfacePressure.missing,

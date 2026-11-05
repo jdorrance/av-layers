@@ -212,8 +212,8 @@ export function estimateJsonBytes(value: unknown): number {
   if (Array.isArray(value)) return 40 + value.length * 8 + value.reduce((sum, item) => sum + estimateJsonBytes(item), 0);
   return 64 + Object.entries(value).reduce((sum, [key, item]) => sum + 32 + 24 + key.length * 2 + estimateJsonBytes(item), 0);
 }
-export async function readObjectJson(object: R2ObjectBody, limit: number, ctx?: WaitContext, signal?: AbortSignal): Promise<{ value: unknown; bytes: number; estimatedBytes: number }> {
-  const bytes = await readObjectBytes(object, limit, false, ctx, signal), value = parseBoundedJson(bytes);
+export async function readObjectJson(object: R2ObjectBody, limit: number, ctx?: WaitContext, signal?: AbortSignal, maxTokens?: number): Promise<{ value: unknown; bytes: number; estimatedBytes: number }> {
+  const bytes = await readObjectBytes(object, limit, false, ctx, signal), value = parseBoundedJson(bytes, maxTokens);
   return { value, bytes: bytes.byteLength, estimatedBytes: estimateJsonBytes(value) };
 }
 

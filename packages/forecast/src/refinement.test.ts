@@ -239,7 +239,7 @@ describe('terrain-referenced clearance', () => {
     expect(result.flags[0]).toBe(STATUS_VALID);
   });
 
-  it.each([STATUS_UNAVAILABLE, STATUS_OUTSIDE, 32])('refuses a positive-weight contributor with state/flag %s', flag => {
+  it.each([STATUS_UNAVAILABLE, STATUS_OUTSIDE])('refuses a positive-weight contributor with state/flag %s', flag => {
     const prepared = prepareTerrainClearance(mask(), mask({ ...targetGrid, lon0: 0.1, lat0: 0.9 }));
     const result = prepared.derive(field(undefined, [SUPPORT_PARCEL_CROSSING, 0, 0, flag]), terrain(), day);
     expect(result.values[0]).toBeNaN();

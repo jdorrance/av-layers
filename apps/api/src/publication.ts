@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, renderedLayers, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -107,7 +107,7 @@ export async function manifest(
       const object = await bucket.get(entry.manifestKey);
       if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
       let decoded: Awaited<ReturnType<typeof readObjectJson>>;
-      try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal); }
+      try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal, MAX_MANIFEST_JSON_TOKENS); }
       catch (error) {
         if (isOperationalReadFailure(error, signal)) throw error;
         return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
@@ -169,9 +169,13 @@ async function checkProduct(m: PublishedManifest, product: ProductDefinition): P
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
   if (m.version === 5) {
+    const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
+    if (m.descriptors.layers['precip-rate']?.methodId === PRECIPITATION_METHOD.id) {
+      expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
+      expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
+    }
     if (product.terrainSubdivisionFactor === undefined
-        || JSON.stringify(m.layers) !== JSON.stringify(product.layers)
-        || JSON.stringify(m.descriptors) !== JSON.stringify(createWholeDomainDescriptors(product))) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+        || JSON.stringify(m.descriptors) !== JSON.stringify(expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
     let plan: ReturnType<typeof planWholeDomainGrid>;
     try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
     catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }
@@ -199,7 +203,7 @@ export function servedSource(m: PublishedManifest, origin: string): Manifest['so
 
 export function artifact(m: PublishedManifest, layer: LayerId, frame: string) {
   validateId(frame);
-  if (!m.layers.includes(layer) || !m.frames.some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
+  if (!renderedLayers(m.layers, m.descriptors.layers).includes(layer) || !renderedFrames(m).some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
   const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
   if (!item) fail(503, 'publication-incomplete', 'Artifact missing from manifest');
   const prefix = `builds/${m.model}/${m.buildId}`;
@@ -209,24 +213,52 @@ export function artifact(m: PublishedManifest, layer: LayerId, frame: string) {
   return item;
 }
 
-export function readProvenance(bucket: R2Bucket, m: PublishedManifest, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext): Promise<Uint8Array> {
+export function readProvenance(bucket: R2Bucket, m: PublishedManifest, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext, signal?: AbortSignal): Promise<Uint8Array> {
+  return readVerifiedProvenance(bucket, reference, value => { parseProvenance(value, m); }, ctx, signal);
+}
+
+export async function readProvenanceFrame(bucket: R2Bucket, m: PublishedManifest, frameId: string, ctx: WaitContext, signal?: AbortSignal) {
+  const frame = m.frames.find(frame => frame.id === frameId);
+  if (!frame) return fail(404, 'unknown-resource', 'Unknown provenance frame');
+  const index = await readProvenance(bucket, m, provenanceReference(m), ctx, signal);
+  signal?.throwIfAborted();
+  const release = reserveAllocation(3 * index.byteLength);
+  let reference;
+  try {
+    const value = parseProvenance(parseBoundedJson(index, MAX_PROVENANCE_JSON_TOKENS), m);
+    if (value.version !== 2) return fail(409, 'provenance-frame-unavailable', 'This build publishes inline provenance');
+    reference = value.frames.find(reference => reference.frame === frameId)!;
+  } finally { release(); }
+  const bytes = await readVerifiedProvenance(bucket, reference, raw => {
+    const value = parseFrameProvenance(raw, m, frame);
+    if (value.hour !== reference.hour) throw new Error('Provenance hour mismatch');
+  }, ctx, signal);
+  return { bytes, sha256: reference.sha256 };
+}
+
+function readVerifiedProvenance(bucket: R2Bucket, reference: { key: string; sha256: string; bytes?: number }, verify: (value: unknown) => void, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   return binaryRead(bucket, `${reference.key}:${reference.sha256}`, async signal => {
-    // Verification stays in the coalesced operation; consumers never reparse the receipt.
     countRead(ctx);
     const object = await bucket.get(reference.key);
     if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
     if (signal.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
+    const limit = reference.bytes ?? object.size;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PROVENANCE_BYTES) {
+      void object.body?.cancel?.();
+      throw new ResourceLimitError('Provenance exceeds byte budget');
+    }
     let release: () => void;
-    try { release = reserveAllocation(3 * MAX_PROVENANCE_BYTES); }
+    try { release = reserveAllocation(3 * limit); }
     catch (error) { void object.body?.cancel?.(error); throw error; }
     try {
-      const value = await readObjectBytes(object, MAX_PROVENANCE_BYTES, false, ctx, signal, true);
+      const value = await readObjectBytes(object, limit, false, ctx, signal, true);
+      if (reference.bytes !== undefined && value.byteLength !== reference.bytes) fail(503, 'publication-invalid', 'Provenance length mismatch');
       const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', value as Uint8Array<ArrayBuffer>)), byte => byte.toString(16).padStart(2, '0')).join('');
       signal.throwIfAborted();
       if (digest !== reference.sha256) fail(503, 'publication-invalid', 'Provenance hash mismatch');
-      try { parseProvenance(parseBoundedJson(value, MAX_PROVENANCE_JSON_TOKENS), m); }
+      try { verify(parseBoundedJson(value, MAX_PROVENANCE_JSON_TOKENS)); }
       catch { return fail(503, 'publication-invalid', 'Invalid provenance JSON or identity'); }
       return value;
     } finally { release(); }
-  }, ctx);
+  }, ctx, waiterSignal);
 }

@@ -4,15 +4,17 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
-import { deriveFrame, prepareShardedSamplePackLayout } from '@av/forecast';
+import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
 import { describeSparseCoverage } from './coverage.js';
 import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { admitWholeDomain } from './whole-domain/capacity.js';
+import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
+import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
+import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, checkPerformance } from './capacity.js';
 import { fixtureProvider } from '../parallel-fixtures.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
@@ -32,7 +34,7 @@ const resources = vi.hoisted(() => ({ writers: [] as Array<{ surface: string; cl
 vi.mock('@av/forecast', async importOriginal => {
   const actual = await importOriginal<typeof import('@av/forecast')>();
   return { ...actual, prepareShardedSamplePackLayout: (...args: Parameters<typeof actual.prepareShardedSamplePackLayout>) =>
-    actual.prepareShardedSamplePackLayout(args[0], args[1], args[2], shardTarget.bytes || args[3]) };
+    actual.prepareShardedSamplePackLayout(args[0], args[1], args[2], shardTarget.bytes || args[3], args[4]) };
 });
 vi.mock('./local-file.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./local-file.js')>();
@@ -54,7 +56,7 @@ vi.mock('./render.js', async importOriginal => {
     return { ...renderer, renderArchives };
   } };
 });
-vi.mock('./raster-pool.js', async importOriginal => ({ ...await importOriginal<typeof import('./raster-pool.js')>(), rasterWorkerCount: () => 0 }));
+vi.mock('./raster-pool.js', async importOriginal => ({ ...await importOriginal<typeof import('./raster-pool.js')>(), rasterWorkerCount: vi.fn(() => 0) }));
 vi.mock('./terrain/source.js', async importOriginal => ({ ...await importOriginal<typeof import('./terrain/source.js')>(), verifyTerrainCatalogInventory: async () => undefined }));
 vi.mock('./terrain/reader.js', async importOriginal => ({
   ...await importOriginal<typeof import('./terrain/reader.js')>(),
@@ -428,11 +430,11 @@ describe('whole-domain v5 production', () => {
     expect(sealed).toBe(true);
     const serial = await readV5(serialPath);
     expect(serial.version).toBe(5);
-    expect(serial.method.id).toBe(`${TERRAIN_COLUMN_METHOD.id}+${PRECIPITATION_METHOD.id}`);
+    expect(serial.method.id).toBe(`${TERRAIN_COLUMN_METHOD.id}+${PRECIPITATION_ALL_HOURS_METHOD.id}`);
     expect(serial.tool).toMatchObject({ terrainMethod: TERRAIN_COLUMN_METHOD.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id });
     expect(serial.descriptors.layers['usable-lift-msl']).toMatchObject({ methodId: TERRAIN_COLUMN_METHOD.id, verticalReference: 'MSL' });
     expect(serial.descriptors.layers['usable-lift-agl']).toMatchObject({ methodId: TERRAIN_COLUMN_METHOD.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' });
-    expect(serial.descriptors.layers['precip-rate']).toMatchObject({ methodId: PRECIPITATION_METHOD.id, verticalReference: 'surface' });
+    expect(serial.descriptors.layers['precip-rate']).toMatchObject({ methodId: PRECIPITATION_ALL_HOURS_METHOD.id, verticalReference: 'surface' });
     expect(serial.descriptors.methods[LIFT_METHOD.id]).toBeUndefined();
     const wrongMethod = structuredClone(serial);
     wrongMethod.descriptors = createProductDescriptors(product);
@@ -925,11 +927,30 @@ describe('whole-domain v5 production', () => {
       frames: product.frameHours.length, nativeLayers: 1, fineLayers: 2, columns, terrainBytes: active.length * 5, maxLevels: 3, retainedGeometryFields: 0 };
     const admitted = admitWholeDomain(input);
     expect(admitted.violations).toEqual([]);
+    const layouts = wholeDomainSampleLayouts(input);
+    expect(admitted.workingSet.packBuffers).toBe(samplePackWriterBufferBytes(layouts.native!) + samplePackWriterBufferBytes(layouts.fine!));
+    vi.mocked(rasterWorkerCount).mockReturnValueOnce(3);
+    const threaded = admitWholeDomain(input), nativeCells = plan.native.width * plan.native.height, activeBytes = active.byteLength;
+    expect(threaded.deriveWorkers).toBeGreaterThan(0);
+    const copyBytes = activeBytes + nativeCells * 10;
+    expect(threaded.workingSet.deriveSharedInputs).toBe(input.terrainBytes + fine.coverage.blockIds.byteLength
+      + fine.coverage.offsets.byteLength + fine.coverage.output.byteLength + fine.coverage.halo.byteLength + activeBytes + copyBytes);
+    expect(threaded.deriveFrameCopyBytes).toBe(copyBytes + BUILD_BUDGETS.peakRssBytes - threaded.estimatedPeakBytes);
     expect(admitted.tiles).toBe(product.frameHours.length * 3);
     expect(admitted.estimatedPeakBytes).toBe(Object.values(admitted.workingSet).reduce((sum, value) => sum + value, 0));
-    expect(admitted.fineStoredCells).toBeGreaterThan(0);
+    expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(180);
+    expect(admitted.fineStoredCells).toBe((17 + 17 + 5) * 5);
+    expect(admitted.fineSampleBytes).toBe(3900);
+    expect(admitted.numericBytes).toBe(admitted.nativeSampleBytes + 3900);
     expect(admitted.workingSet.nativeFields).toBe(cells * product.layers.length * 5);
     expect(admitted.workingSet.diagnostics).toBe(cells * 9);
+    expect(admitted.prefetchFrameCount).toBe(1);
+    const singleFrame = admitWholeDomain({ ...input, columns: { ...columns,
+      byteLength: columns.byteLength + BUILD_BUDGETS.peakRssBytes - admitted.estimatedPeakBytes + 1 } });
+    expect(singleFrame.prefetchFrameCount).toBe(0);
+    expect(singleFrame.workingSet.prefetchFrame).toBe(0);
+    expect(singleFrame.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+    expect(singleFrame.violations).toEqual([]);
     const sparseAdmission = admitWholeDomain({ ...input, nativeActive: 1 });
     expect(sparseAdmission.workingSet.nativeFields).toBe(admitted.workingSet.nativeFields);
     expect(sparseAdmission.workingSet.diagnostics).toBe(admitted.workingSet.diagnostics);
@@ -967,3 +988,108 @@ describe('whole-domain v5 production', () => {
     await expect(readFile(join(out, 'plan.json'))).rejects.toThrow('ENOENT');
   });
 });
+
+it('emits all native channels and profiles with serial/parallel parity and closed receipt validation', async () => {
+  const configured: ProductDefinition = { ...product, layers: LAYER_IDS, frameHours: [2, 4, 8],
+    capabilities: { ...product.capabilities, maxVerticalLevels: 3 } };
+  const setup = await fixture(configured), source = fixtureProvider(), serialRoot = await root('wd-profiles-serial'), parallelRoot = await root('wd-profiles-parallel');
+  const serial = await readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, product: configured,
+    mask: nativeMask, provider: source.provider, wholeDomain: setup }));
+  expect(serial.artifacts).toHaveLength(9);
+  expect(new Set(serial.artifacts.map(artifact => artifact.layer))).toEqual(new Set(['usable-lift-msl', 'usable-lift-agl', 'precip-rate']));
+  expect(surface(serial, 'native').layers).toHaveLength(18);
+  expect(surface(serial, 'fine').profiles).toBeUndefined();
+  const profiles = surface(serial, 'native').profiles!;
+  expect(profiles).toMatchObject({ format: 'native-column-profile-v1', levelCount: 3, recordBytes: profileRecordBytes(3) });
+  expect(profiles.groups).toHaveLength(1);
+  expect(profiles.groups[0]).toMatchObject({ firstFrame: 0, frameCount: 3 });
+  const serialBytes = await readFile(join(serialRoot, profiles.groups[0].shards[0].key));
+  expect(readProfileRecord(serialBytes.subarray(0, profiles.recordBytes))).toMatchObject({ status: 'valid', levels: expect.any(Array) });
+  const missing = structuredClone(serial);
+  delete surface(missing, 'native').profiles;
+  await expect(validateBuild(serialRoot, missing, nativeMask, undefined, configured)).rejects.toThrow('Native profiles are required');
+
+  const store = new PublicationStore(), inputs = { product: configured, mask: nativeMask, provider: source.provider };
+  const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
+  for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, ...inputs, store });
+  const parallel = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
+  const grouped = surface(parallel, 'native').profiles!;
+  expect(grouped.groups).toHaveLength(2);
+  let firstFrame = 0;
+  for (const group of grouped.groups) {
+    const shard = group.shards[0];
+    const bytes = await readFile(join(parallelRoot, shard.key));
+    for (let cell = 0; cell < grouped.storedCells; cell++) {
+      expect(bytes.subarray(cell * group.frameCount * grouped.recordBytes, (cell + 1) * group.frameCount * grouped.recordBytes))
+        .toEqual(serialBytes.subarray((cell * 3 + firstFrame) * profiles.recordBytes, (cell * 3 + firstFrame + group.frameCount) * profiles.recordBytes));
+    }
+    firstFrame += group.frameCount;
+  }
+  const receipts = await verifyBuildReceipts(parallelRoot, parallel, store, undefined, inputs);
+  expect(receipts.filter(receipt => receipt.key.includes('/profiles/'))).toHaveLength(2);
+  store.objects.delete(grouped.groups[0].shards[0].key);
+  await expect(verifyBuildReceipts(parallelRoot, parallel, store, undefined, inputs)).rejects.toThrow();
+
+  const path = join(serialRoot, profiles.groups[0].shards[0].key), corrupt = Buffer.from(serialBytes);
+  // Native cell 16 appears in the first block's right overlap and the next block's core.
+  const overlap = 16 * 3 * profiles.recordBytes;
+  corrupt.writeInt16LE(corrupt.readInt16LE(overlap) + 1, overlap);
+  await writeFile(path, corrupt);
+  const changed = structuredClone(serial);
+  surface(changed, 'native').profiles!.groups[0].shards[0].sha256 = sha256(corrupt);
+  await expect(validateBuild(serialRoot, changed, nativeMask, undefined, configured)).rejects.toThrow('Duplicate sample cell differs');
+  await writeFile(path, serialBytes);
+}, 60_000);
+
+it('keeps map bytes fixed across skipped hours, source intervals and native-only workflow groups', async () => {
+  const configured: ProductDefinition = { ...product, layers: LAYER_IDS, frameHours: [24, 27, 120, 123, 384], mapEndHour: 24,
+    intervalHours: 1, intervalChange: { fromHour: 123, hours: 3 }, capabilities: { ...product.capabilities, maxVerticalLevels: 3 } };
+  const setup = await fixture(configured), source = fixtureProvider();
+  const provider: ForecastProvider = { ...source.provider, async open(options) {
+    const session = await source.provider.open(options);
+    return { ...session, async acquire(hour, target) {
+      const frame = await session.acquire(hour, target), end = Date.parse(frame.validAt), duration = hour >= 123 ? 3 : 1;
+      const window = { start: new Date(end - duration * 3_600_000).toISOString(), end: new Date(end).toISOString() };
+      frame.intervals = { profileTime: frame.validAt, fluxWindow: window, precipitationWindow: window, fluxSourceWindow: window, precipitationSourceWindow: window, usedCompanion: false };
+      return frame;
+    } };
+  } };
+  const serialRoot = await root('wd-horizon-serial'), referenceRoot = await root('wd-horizon-map'), parallelRoot = await root('wd-horizon-parallel');
+  const inputs = { product: configured, mask: nativeMask, provider };
+  const serial = await readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, ...inputs, wholeDomain: setup }));
+  const reference = await readV5(await buildForecast({ out: referenceRoot, cycle: CYCLE, ...inputs, product: { ...configured, frameHours: [24] }, wholeDomain: setup }));
+  expect(serial.mapFrameCount).toBe(1);
+  expect(serial.artifacts).toHaveLength(3);
+  expect(surface(serial, 'native').samples.channelCount).toBe(90);
+  expect(surface(serial, 'fine').samples.channelCount).toBe(2);
+  expect(serial.metrics.capacity).toMatchObject({ frames: 5, mapFrames: 1, tiles: 3 });
+  for (const [index, hour] of configured.frameHours.entries()) {
+    const frame = serial.frames[index]!;
+    expect(Date.parse(frame.intervalEnd) - Date.parse(frame.intervalStart)).toBe((hour >= 123 ? 3 : 1) * 3_600_000);
+  }
+  expect(await surfaceBytes(serialRoot, serial, 'fine')).toEqual(await surfaceBytes(referenceRoot, reference, 'fine'));
+  const nativeBytes = (await surfaceBytes(serialRoot, serial, 'native'))[0]!, referenceNativeBytes = (await surfaceBytes(referenceRoot, reference, 'native'))[0]!;
+  for (let cell = 0; cell < surface(serial, 'native').samples.storedCells; cell++) {
+    expect(nativeBytes.subarray(cell * 90 * 5, cell * 90 * 5 + 18 * 5)).toEqual(referenceNativeBytes.subarray(cell * 18 * 5, (cell + 1) * 18 * 5));
+  }
+  for (const artifact of reference.artifacts) expect(await readFile(join(referenceRoot, artifact.tilesKey)))
+    .toEqual(await readFile(join(serialRoot, serial.artifacts.find(item => item.layer === artifact.layer)!.tilesKey)));
+  const profiles = surface(serial, 'native').profiles!, profileBytes = await readFile(join(serialRoot, profiles.groups[0]!.shards[0]!.key));
+  const first = readProfileRecord(profileBytes.subarray(0, profiles.recordBytes)), last = readProfileRecord(profileBytes.subarray(4 * profiles.recordBytes, 5 * profiles.recordBytes));
+  expect(first.status).toBe('valid'); expect(last.status).toBe('valid');
+  expect(last.levels[0]!.temperatureC).toBe(first.levels[0]!.temperatureC);
+
+  const store = new PublicationStore(), plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
+  for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, ...inputs, store });
+  const later = JSON.parse(await readFile(join(parallelRoot, 'shards/1/receipt.json'), 'utf8'));
+  expect(later.artifacts).toEqual([]);
+  expect(later.surfaces.map((item: { id: string }) => item.id)).toEqual(['native']);
+  const parallel = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
+  expect(parallel.frames).toEqual(serial.frames);
+  expect(parallel.mapFrameCount).toBe(1);
+  expect(await surfaceBytes(parallelRoot, parallel, 'fine')).toEqual(await surfaceBytes(serialRoot, serial, 'fine'));
+  expect(surface(parallel, 'native').profiles!.groups.map(group => [group.firstFrame, group.frameCount])).toEqual([[0, 3], [3, 2]]);
+  await expect(verifyBuildReceipts(parallelRoot, parallel, store, undefined, inputs)).resolves.toBeDefined();
+  const invalid = structuredClone(parallel); invalid.mapFrameCount = 2;
+  await expect(validateBuild(parallelRoot, invalid, nativeMask, undefined, configured)).rejects.toThrow();
+}, 60_000);

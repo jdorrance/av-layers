@@ -1,11 +1,12 @@
 import z from 'zod';
-import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, methodDescriptorSchema, methodIdSchema } from './methods.js';
+import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, terrainColumnMethodForProduct, methodDescriptorSchema, methodIdSchema, nativeMethodForLayer } from './methods.js';
 import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
-import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, layerSurface, paletteSchema, sampleStatusSchema } from './layers.js';
+import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, layerSurface, paletteSchema, sampleStatusSchema, renderedLayers, layerPalette } from './layers.js';
 import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
 import type { CoverageDescriptor } from './coverage.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
+import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS } from './format.js';
 import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
+import { MAX_JSON_CONTAINER_ENTRIES, MAX_PROVENANCE_BYTES } from './json.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 export type ModelId = z.infer<typeof modelIdSchema>;
@@ -34,7 +35,10 @@ export function createRecipeIdentity(product: ProductDefinition, hash: string, s
   return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
 }
 function methodForLayer(product: Pick<ProductDefinition, 'capabilities'>, layer: LayerId) {
-  const method = METHODS[LAYERS[layer].methodId];
+  const native = nativeMethodForLayer(layer, product.capabilities.verticalCoordinate);
+  if (native) return native;
+  const method = METHODS[LAYERS[layer].methodId as keyof typeof METHODS];
+  if (!method) throw new Error(`Unknown method for ${layer}`);
   return method.id === LIFT_METHOD.id ? LIFT_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate] : method;
 }
 export function createProductMethodId(product: Pick<ProductDefinition, 'layers' | 'capabilities'>): string {
@@ -42,10 +46,18 @@ export function createProductMethodId(product: Pick<ProductDefinition, 'layers' 
 }
 export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
   const layers = product.layers.map(id => ({ ...LAYERS[id], methodId: methodForLayer(product, id).id }));
+  const methods: Record<string, unknown> = Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId as keyof typeof METHODS]]));
+  const maximumGust = z.object({ upstream: z.object({ auxSurface: z.object({ gust10mMps: z.object({ statistic: z.literal(2) }) }) }) }).safeParse(product).success;
+  const gust = layers.find(layer => layer.id === 'wind-gust-10m');
+  if (maximumGust && gust) {
+    gust.timeSupport = 'interval-maximum';
+    const method = methodDescriptorSchema.parse(methods[gust.methodId]);
+    methods[gust.methodId] = { ...method, inputs: { ...method.inputs, gust10mMps: { ...method.inputs.gust10mMps!, timeSupport: 'interval-maximum' } } };
+  }
   return descriptorSchema.parse({
     layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
-    methods: Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId]])),
-    palettes: [...new Set(product.layers.map(id => LAYERS[id].palette))].map(id => PALETTES[id]),
+    methods,
+    palettes: [...new Set(renderedLayers(product.layers).map(layerPalette))].map(id => PALETTES[id]),
     attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
   });
 }
@@ -54,7 +66,7 @@ export function createRefinementDescriptors(product: ProductDefinition, bounds: 
   const base = createProductDescriptors(product);
   const msl = base.layers['usable-lift-msl'], agl = base.layers['usable-lift-agl'];
   if (!msl || !agl) throw new Error('Terrain refinement requires native MSL and AGL layers');
-  const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
+  const method = terrainColumnMethodForProduct(product);
   return descriptorSchema.parse({ ...base, bounds: [...bounds],
     coverageDescription: 'Polygon-owned terrain-column refinement inside the model coverage, with interpolation halos excluded.',
     layers: {
@@ -106,15 +118,25 @@ export const manifestSchema = z.object({
   version: z.union([z.literal(3), z.literal(4)]), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
   buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
   coverage: coverageReferenceSchema, grid: gridSchema,
-  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), samples: samplePackSchema,
+  frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), samples: samplePackSchema,
   patches: z.array(refinementPatchSchema).min(1).max(MAX_REFINEMENT_ZONES).optional(),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
   tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
 }).superRefine((manifest, ctx) => {
   if ((manifest.version === 4) !== (manifest.patches !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only version 4 publishes refinement patches' });
 });
-export const provenanceSchema = z.object({ version: z.literal(1), model: modelIdSchema, buildId: key, cycle: timestamp, provider: z.string().min(1).max(256).optional(), temporalApproximation: z.string().max(2048).optional(), frames: z.array(z.unknown()).max(MAX_SAMPLE_VALUES) }).strict();
+const provenanceIdentity = { model: modelIdSchema, buildId: key, cycle: timestamp };
+const provenanceDescription = { ...provenanceIdentity, provider: z.string().min(1).max(256).optional(), temporalApproximation: z.string().max(2048).optional() };
+export const provenanceFrameReferenceSchema = z.strictObject({ hour: z.number().int().positive(), frame: key, key,
+  bytes: z.number().int().positive().max(MAX_PROVENANCE_BYTES), sha256 });
+export type ProvenanceFrameReference = z.infer<typeof provenanceFrameReferenceSchema>;
+export const frameProvenanceSchema = z.strictObject({ version: z.literal(1), ...provenanceIdentity,
+  frame: frameSchema, hour: z.number().int().positive(), intervals: z.unknown(), receipt: z.unknown() });
+export const provenanceSchema = z.discriminatedUnion('version', [
+  z.strictObject({ version: z.literal(1), ...provenanceDescription, frames: z.array(z.unknown()).max(MAX_JSON_CONTAINER_ENTRIES) }),
+  z.strictObject({ version: z.literal(2), ...provenanceDescription, frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })
+]);
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
 export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean(), patchId: modelIdSchema.optional() });
@@ -146,6 +168,12 @@ const sampleV5Base = {
   blockSize: z.literal(SAMPLE_BLOCK_SIZE), channelOrder: z.literal('frame-then-layer'), channelCount: safePositive,
   coverageHash: sha256, blockCount: safePositive, storedCells: safePositive
 };
+const profilePackSchema = z.strictObject({
+  format: z.literal(PROFILE_PACK_FORMAT), blockSize: z.literal(SAMPLE_BLOCK_SIZE),
+  levelCount: safePositive.max(MAX_PROFILE_LEVELS), recordBytes: safePositive,
+  coverageHash: sha256, blockCount: safePositive, storedCells: safePositive,
+  groups: z.array(z.strictObject({ firstFrame: safeNonnegative, frameCount: safePositive, shards: z.array(shardSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })).min(1).max(MAX_JSON_CONTAINER_ENTRIES)
+}).refine(pack => pack.recordBytes === PROFILE_HEADER_BYTES + pack.levelCount * PROFILE_LEVEL_BYTES, 'Profile record width differs from level capacity');
 const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
   coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
@@ -154,6 +182,7 @@ const surfaceV5Schema = z.strictObject({
     z.strictObject({ ...sampleV5Base, format: z.literal('cell-major-block-shards-v1'), shards: z.array(shardSchema).min(1) }),
     z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1) })
   ]),
+  profiles: profilePackSchema.optional(),
   terrain: z.strictObject({
     dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
     sha256, verticalDatum: z.string().min(1).max(80), surface: z.string().min(1).max(80),
@@ -164,9 +193,10 @@ export type ForecastSurfaceV5 = z.infer<typeof surfaceV5Schema>;
 const manifestV5BaseSchema = z.strictObject({
   version: z.literal(5), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
   buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
-  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
-  source: manifestSchema.shape.source, tool: manifestSchema.shape.tool, palettes: manifestSchema.shape.palettes, metrics: manifestSchema.shape.metrics
+  frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
+  source: manifestSchema.shape.source, tool: manifestSchema.shape.tool, palettes: manifestSchema.shape.palettes, metrics: manifestSchema.shape.metrics,
+  mapFrameCount: safePositive.optional()
 });
 export const manifestV5Schema = manifestV5BaseSchema.superRefine((manifest, ctx) => {
   try { validateV5Records(manifest); }
@@ -205,15 +235,14 @@ export function validateArtifactRecordsV5(manifest: ManifestV5): void {
 }
 
 function validateV5Records(manifest: ManifestV5): void {
+  if (manifest.mapFrameCount !== undefined && manifest.mapFrameCount > manifest.frames.length) throw new Error('Invalid map frame prefix');
   if (!/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(manifest.buildId)) throw new Error('Invalid build ID');
-  const frames = new Set(manifest.frames.map(frame => frame.id)), layers = new Set(manifest.layers);
+  const frames = new Set(manifest.frames.map(frame => frame.id)), mapFrames = new Set(renderedFrames(manifest).map(frame => frame.id)), layers = new Set(manifest.layers);
   if (frames.size !== manifest.frames.length || layers.size !== manifest.layers.length) throw new Error('Duplicate frames or layers');
-  const channels = manifest.frames.length * manifest.layers.length;
-  if (!Number.isSafeInteger(channels) || channels > manifest.descriptors.maxSampleValues) throw new Error('Sample value budget exceeded');
   const methods = new Set<string>();
   for (const layer of manifest.layers) {
     const descriptor = manifest.descriptors.layers[layer];
-    if (!descriptor || descriptor.id !== layer || !manifest.descriptors.palettes.some(p => p.id === descriptor.palette)) throw new Error('Incomplete product descriptors');
+    if (!descriptor || descriptor.id !== layer || (descriptor.delivery !== 'samples-only' && !manifest.descriptors.palettes.some(p => p.id === descriptor.palette))) throw new Error('Incomplete product descriptors');
     methods.add(descriptor.methodId);
   }
   if (manifest.method.id !== [...methods].join('+')) throw new Error('Method identity does not match published descriptor snapshots');
@@ -235,7 +264,8 @@ function validateV5Records(manifest: ManifestV5): void {
       if (index <= previous || owned.has(layer) || surface.kind !== layerSurface(layer)) throw new Error('Invalid layer ownership or order');
       previous = index; owned.add(layer);
     }
-    const samples = surface.samples, expectedChannels = manifest.frames.length * surface.layers.length;
+    const expectedFrames = surfaceFrameCount(manifest, surface);
+    const samples = surface.samples, expectedChannels = expectedFrames * surface.layers.length;
     if (samples.channelCount !== expectedChannels) throw new Error('Invalid channel count');
     const blockSlots = Math.ceil(surface.grid.width / SAMPLE_BLOCK_SIZE) * Math.ceil(surface.grid.height / SAMPLE_BLOCK_SIZE);
     if (!Number.isSafeInteger(blockSlots) || samples.blockCount > blockSlots) throw new Error('Invalid sample block count');
@@ -261,27 +291,65 @@ function validateV5Records(manifest: ManifestV5): void {
       nextBlock += shard.blockCount; cells += shard.storedCells; keys.add(shard.key);
       if (!Number.isSafeInteger(nextBlock) || !Number.isSafeInteger(cells)) throw new Error('Sample shard arithmetic overflow');
     }
-    if (nextBlock !== samples.blockCount || cells !== samples.storedCells || (samples.format === 'frame-group-block-shards-v1' && nextFrame !== manifest.frames.length)) throw new Error('Incomplete sample shard ranges');
+    if (nextBlock !== samples.blockCount || cells !== samples.storedCells || (samples.format === 'frame-group-block-shards-v1' && nextFrame !== expectedFrames)) throw new Error('Incomplete sample shard ranges');
+    if (surface.profiles) {
+      const profiles = surface.profiles;
+      if (surface.kind !== 'native' || profiles.coverageHash !== surface.coverage.hash || profiles.blockCount !== samples.blockCount || profiles.storedCells !== samples.storedCells) throw new Error('Profile coverage identity mismatch');
+      validateProfileShards(profiles, manifest.frames.length, `${prefix}/surfaces/${surface.id}/profiles`, keys);
+    }
   }
   if (owned.size !== layers.size || manifest.layers.some(layer => !owned.has(layer))) throw new Error('Incomplete layer ownership');
-  if (manifest.artifacts.length !== channels) throw new Error('Invalid artifact count');
+  if (manifest.artifacts.length !== mapFrames.size * renderedLayers(manifest.layers, manifest.descriptors.layers).length) throw new Error('Invalid artifact count');
   const combinations = new Set<string>();
   for (const artifact of manifest.artifacts) {
     const combination = `${artifact.layer}/${artifact.frame}`;
-    if (!layers.has(artifact.layer) || !frames.has(artifact.frame) || combinations.has(combination)
+    if (!layers.has(artifact.layer) || manifest.descriptors.layers[artifact.layer]?.delivery === 'samples-only' || !mapFrames.has(artifact.frame) || combinations.has(combination)
       || artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles` || keys.has(artifact.tilesKey)) throw new Error('Invalid artifact record');
     combinations.add(combination); keys.add(artifact.tilesKey);
   }
 }
 
-export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding: { grid: ForecastSurfaceV5['grid']; gridHash: string; coverageHash: string; blockIds: ArrayLike<number> }): void {
+function validateProfileShards(profiles: z.infer<typeof profilePackSchema>, frames: number, prefix: string, keys: Set<string>): void {
+  let nextFrame = 0;
+  for (const [groupIndex, group] of profiles.groups.entries()) {
+    if (group.firstFrame !== nextFrame) throw new Error('Invalid profile frame group');
+    let nextBlock = 0, cells = 0;
+    for (const [blockShard, shard] of group.shards.entries()) {
+      const bytes = shard.storedCells * group.frameCount * profiles.recordBytes;
+      if (shard.firstBlock !== nextBlock || shard.storedCells < shard.blockCount || shard.storedCells > shard.blockCount * (SAMPLE_BLOCK_SIZE + 1) ** 2
+        || !Number.isSafeInteger(bytes) || shard.bytes !== bytes || keys.has(shard.key)
+        || shard.key !== `${prefix}/g${groupIndex}-b${blockShard}.bin`) throw new Error('Invalid profile shard');
+      nextBlock += shard.blockCount; cells += shard.storedCells; keys.add(shard.key);
+      if (!Number.isSafeInteger(nextBlock) || !Number.isSafeInteger(cells)) throw new Error('Profile shard arithmetic overflow');
+    }
+    if (nextBlock !== profiles.blockCount || cells !== profiles.storedCells) throw new Error('Incomplete profile block ranges');
+    nextFrame += group.frameCount;
+  }
+  if (nextFrame !== frames) throw new Error('Incomplete profile frame groups');
+}
+
+interface SurfaceLayoutBindingV5 { grid: ForecastSurfaceV5['grid']; gridHash: string; coverageHash: string; blockIds: ArrayLike<number> }
+
+export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding: SurfaceLayoutBindingV5): void {
+  assertPackedLayoutBindingV5(surface, binding, surface.samples, CELL_BYTES, surface.layers.length);
+}
+
+export function assertProfileLayoutBindingV5(surface: ForecastSurfaceV5, binding: SurfaceLayoutBindingV5): void {
+  if (!surface.profiles || surface.kind !== 'native') throw new Error('Profile layout identity mismatch');
+  for (const group of surface.profiles.groups) assertPackedLayoutBindingV5(surface, binding, { ...surface.profiles, shards: group.shards, channelCount: group.frameCount }, surface.profiles.recordBytes, 1);
+}
+
+function assertPackedLayoutBindingV5(
+  surface: ForecastSurfaceV5, binding: SurfaceLayoutBindingV5,
+  pack: Pick<ForecastSurfaceV5['samples'], 'coverageHash' | 'blockCount' | 'storedCells' | 'shards' | 'channelCount'>, recordBytes: number, layers: number
+): void {
   if (!sameGrid(surface.grid, binding.grid) || surface.gridHash !== binding.gridHash || surface.coverage.hash !== binding.coverageHash
-    || surface.samples.blockCount !== binding.blockIds.length) throw new Error('Sample layout identity mismatch');
+    || pack.coverageHash !== binding.coverageHash || pack.blockCount !== binding.blockIds.length) throw new Error('Sample layout identity mismatch');
   const { width, height, wrapLongitude } = surface.grid, columns = Math.ceil(width / SAMPLE_BLOCK_SIZE), rows = Math.ceil(height / SAMPLE_BLOCK_SIZE);
   let previous = -1, nextBlock = 0, totalCells = 0, group = -1;
-  for (const shard of surface.samples.shards) {
+  for (const shard of pack.shards) {
     if ('group' in shard && shard.group !== group) {
-      if (group >= 0 && (nextBlock !== binding.blockIds.length || totalCells !== surface.samples.storedCells)) throw new Error('Incomplete sample block ranges');
+      if (group >= 0 && (nextBlock !== binding.blockIds.length || totalCells !== pack.storedCells)) throw new Error('Incomplete sample block ranges');
       group = shard.group; previous = -1; nextBlock = 0; totalCells = 0;
     }
     let cells = 0;
@@ -297,17 +365,17 @@ export function assertSampleLayoutBindingV5(surface: ForecastSurfaceV5, binding:
       const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
       cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
     }
-    const channels = 'frameCount' in shard ? shard.frameCount * surface.layers.length : surface.samples.channelCount;
-    if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * CELL_BYTES)
-      || shard.bytes !== cells * channels * CELL_BYTES) throw new Error('Sample block size mismatch');
+    const channels = 'frameCount' in shard ? shard.frameCount * layers : 'channelCount' in pack ? pack.channelCount : 0;
+    if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * recordBytes)
+      || shard.bytes !== cells * channels * recordBytes) throw new Error('Sample block size mismatch');
     nextBlock = end; totalCells += cells;
   }
-  if (nextBlock !== binding.blockIds.length || totalCells !== surface.samples.storedCells) throw new Error('Incomplete sample block ranges');
+  if (nextBlock !== binding.blockIds.length || totalCells !== pack.storedCells) throw new Error('Incomplete sample block ranges');
 }
 
 export function forecastObjectsV5(manifest: ManifestV5): { key: string; sha256: string; contentType: string }[] {
   return [
-    ...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, contentType: 'application/octet-stream' }))),
+    ...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, contentType: 'application/octet-stream' }))),
     ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256, contentType: 'application/vnd.pmtiles' }))
   ];
 }
@@ -346,13 +414,50 @@ export function getProvenanceReference(
 
 export function parseProvenance(
   raw: unknown,
-  manifest: Pick<Manifest, 'model' | 'buildId' | 'cycle'>
+  manifest: Pick<Manifest, 'model' | 'buildId' | 'cycle'> & Partial<Pick<Manifest, 'frames'>>
 ): z.infer<typeof provenanceSchema> {
   const provenance = provenanceSchema.parse(raw);
   if (provenance.model !== manifest.model || provenance.buildId !== manifest.buildId || provenance.cycle !== manifest.cycle) {
     throw new Error('Provenance does not match manifest');
   }
+  if (provenance.version === 2) {
+    if (manifest.frames && provenance.frames.length !== manifest.frames.length) throw new Error('Incomplete provenance frames');
+    for (const [index, reference] of provenance.frames.entries()) {
+      const frame = manifest.frames?.[index];
+      if (reference.frame !== `f${String(reference.hour).padStart(3, '0')}`
+          || reference.key !== `builds/${manifest.model}/${manifest.buildId}/provenance/${reference.frame}.json`
+          || (index > 0 && reference.hour <= provenance.frames[index - 1]!.hour)
+          || (frame && (reference.frame !== frame.id || Date.parse(frame.validTime) !== Date.parse(manifest.cycle) + reference.hour * 3_600_000))) {
+        throw new Error('Invalid provenance frame reference');
+      }
+    }
+  }
   return provenance;
+}
+
+export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'model' | 'buildId' | 'cycle'> & Partial<Pick<Manifest, 'layers'>>, frame: Manifest['frames'][number]) {
+  const value = frameProvenanceSchema.parse(raw);
+  const requiresPrecipitation = identity.layers?.includes('precip-rate') || (value.intervals as { precipitationWindow?: unknown } | null)?.precipitationWindow !== undefined;
+  if (value.model !== identity.model || value.buildId !== identity.buildId || value.cycle !== identity.cycle
+      || value.frame.id !== frame.id || value.frame.validTime !== frame.validTime || value.frame.intervalStart !== frame.intervalStart || value.frame.intervalEnd !== frame.intervalEnd
+      || Date.parse(frame.validTime) !== Date.parse(identity.cycle) + value.hour * 3_600_000
+      || !matchesFrameIntervals(value.intervals, frame, requiresPrecipitation)) {
+    throw new Error('Provenance frame does not match manifest');
+  }
+  return value;
+}
+
+export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frames'][number], requiresPrecipitation: boolean): boolean {
+  if (!intervals || typeof intervals !== 'object') return false;
+  const value = intervals as { profileTime?: unknown; fluxWindow?: { start?: unknown; end?: unknown }; precipitationWindow?: { start?: unknown; end?: unknown } };
+  const sameInstant = (value: unknown, expected: string): boolean => typeof value === 'string' && Date.parse(value) === Date.parse(expected);
+  return sameInstant(value.profileTime, frame.validTime)
+    && sameInstant(value.fluxWindow?.start, frame.intervalStart) && sameInstant(value.fluxWindow?.end, frame.intervalEnd)
+    && (!requiresPrecipitation || (sameInstant(value.precipitationWindow?.start, frame.intervalStart) && sameInstant(value.precipitationWindow?.end, frame.intervalEnd)));
+}
+
+export function provenanceObjects(value: z.infer<typeof provenanceSchema>): (ProvenanceFrameReference & { contentType: 'application/json' })[] {
+  return value.version === 2 ? value.frames.map(frame => ({ ...frame, contentType: 'application/json' })) : [];
 }
 
 export function computeFreshness(
@@ -429,4 +534,13 @@ export function validateArtifactRecords(manifest: Manifest): void {
     combinations.add(combination);
     if (artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`) throw new Error(`unexpected tilesKey ${artifact.tilesKey}`);
   }
+}
+
+/** Raster consumers use the ordered map prefix; legacy manifests expose all frames. */
+export function renderedFrames(manifest: PublishedManifest): PublishedManifest['frames'] {
+  return manifest.version === 5 && manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
+}
+
+export function surfaceFrameCount(manifest: ManifestV5, surface: Pick<ForecastSurfaceV5, 'kind'>): number {
+  return surface.kind === 'fine' ? manifest.mapFrameCount ?? manifest.frames.length : manifest.frames.length;
 }

@@ -37,8 +37,9 @@
       <div id="point-card" hidden>
         <p id="point-summary"></p>
         <p id="point-status"></p>
+        <label class="point-units">Units <select id="point-units"><option value="metric">m · m/s</option><option value="imperial">ft · kt</option></select></label>
         <div id="point-body" tabindex="-1"></div>
-        <dl id="meta"></dl>
+        <details><summary>Build details</summary><dl id="meta"></dl></details>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

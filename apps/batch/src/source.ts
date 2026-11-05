@@ -1,3 +1,5 @@
+import { sourceIntervalHours, type ProductDefinition } from '@av/contracts';
+
 /** Configured source clocks, URLs and copied index ownership. */
 export function sourceCycle(value: string, hours: readonly number[]): string {
   const date = new Date(value);
@@ -6,8 +8,8 @@ export function sourceCycle(value: string, hours: readonly number[]): string {
   return date.toISOString();
 }
 
-export function sourceWindowStart(forecast: { intervalHours: number; statisticsResetHours: number | null }, hour: number): number {
-  return forecast.statisticsResetHours === null ? 0 : Math.floor((hour - forecast.intervalHours) / forecast.statisticsResetHours) * forecast.statisticsResetHours;
+export function sourceWindowStart(forecast: Pick<ProductDefinition, 'intervalHours' | 'intervalChange'> & { statisticsResetHours: number | null }, hour: number): number {
+  return forecast.statisticsResetHours === null ? 0 : Math.floor((hour - sourceIntervalHours(forecast, hour)) / forecast.statisticsResetHours) * forecast.statisticsResetHours;
 }
 
 export function recentSourceCycles(now: Date, hours: readonly number[], lag: number, count: number): string[] {

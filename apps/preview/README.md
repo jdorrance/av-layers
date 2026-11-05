@@ -22,6 +22,10 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
+Click the map for a diurnal lift chart and point summary. Chart hours and the
+arrow keys select map frames from the cached series. Point units switch between
+metres/m/s and feet/knots; missing terrain remains unknown.
+
 ## Source layout
 
 - [src/main.ts](src/main.ts): Google terrain map, model and AGL/MSL controls, local/UTC time, and the point card.

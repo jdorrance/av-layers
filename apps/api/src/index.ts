@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute, z, type RouteConfig } from '@hono/zod-openapi';
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import {
   PRODUCTS,
   type ProductDefinition,
@@ -15,18 +15,23 @@ import {
   modelPointerSchema,
   paletteSchema,
   provenanceSchema,
+  frameProvenanceSchema,
   sampleResponseSchema,
   sampleResponseV5Schema,
+  multiPointSampleResponseSchema,
+  profileResponseSchema,
+  renderedLayers,
   type LayerId,
   type ModelId,
   type ModelPointer
 } from '@av/contracts';
-import { serveSample } from './sample';
+import { serveSample, serveSamples } from './sample';
+import { serveProfile } from './profile';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveCoverage, resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, waitFor, type WaitContext } from './resources';
-import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
+import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
 
 type Env = {
@@ -72,7 +77,7 @@ const app = new OpenAPIHono<Env>({
   }
 });
 
-app.use('/v1/models/:model/runs/:buildId/sample', async (c, next) => {
+const pointRateLimit: MiddlewareHandler<Env> = async (c, next) => {
   const ip = c.req.header('CF-Connecting-IP');
   const key = ip === undefined && c.env.AV_LOCAL_DEVELOPMENT === 'true' ? 'localhost' : ip;
   if (!key || (ip !== undefined && !validIp(ip)) || !c.env.SAMPLE_RATE_LIMITER) {
@@ -87,12 +92,14 @@ app.use('/v1/models/:model/runs/:buildId/sample', async (c, next) => {
   if (typeof allowed?.success !== 'boolean') fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
   if (!allowed.success) fail(429, 'rate-limit-exceeded', 'Sample request rate exceeded');
   await next();
-});
+};
+for (const path of ['sample', 'samples', 'profile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, pointRateLimit);
 
 const problemSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string() });
 const problemResponses = {
   400: { description: 'Invalid request', content: { 'application/problem+json': { schema: problemSchema } } },
   404: { description: 'Unknown or not-retained resource', content: { 'application/problem+json': { schema: problemSchema } } },
+  409: { description: 'Product unavailable in this retained build', content: { 'application/problem+json': { schema: problemSchema } } },
   429: { description: 'Sample selection or request rate exceeds limits', content: { 'application/problem+json': { schema: problemSchema } } },
   503: { description: 'Publication, coverage, archive or rate limiter unavailable', content: { 'application/problem+json': { schema: problemSchema } } }
 };
@@ -202,7 +209,7 @@ registerJsonRoute(
       pointer: ptr,
       ...(url.searchParams.has('expand') ? {
         manifest: servedManifest,
-        templates: Object.fromEntries(m.layers.map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
+        templates: Object.fromEntries(renderedLayers(m.layers, m.descriptors.layers).map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
       } : {}),
       freshness: computeFreshness(m)
     }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt);
@@ -240,16 +247,21 @@ registerJsonRoute(
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/provenance',
   { model: param, buildId: param },
-  {},
-  provenanceSchema,
-  async c => {
+  { frame: param.optional() },
+  z.union([provenanceSchema, frameProvenanceSchema]),
+  async (c, url) => {
     const model = modelId(requiredParam(c, 'model'));
     const buildId = requiredParam(c, 'buildId');
     const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx);
     const m = await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]);
     const reference = provenanceReference(m);
     return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
-      const bytes = await readProvenance(c.env.BUCKET, m, reference, c.executionCtx);
+      const frame = url.searchParams.get('frame');
+      if (frame) {
+        const value = await readProvenanceFrame(c.env.BUCKET, m, frame, c.executionCtx, c.req.raw.signal);
+        return response(value.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, value.sha256);
+      }
+      const bytes = await readProvenance(c.env.BUCKET, m, reference, c.executionCtx, c.req.raw.signal);
       return response(bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, reference.sha256);
     });
   }
@@ -292,20 +304,39 @@ registerJsonRoute(
   }
 );
 
+async function pointManifest(c: Context<Env>) {
+  const model = modelId(requiredParam(c, 'model')), buildId = requiredParam(c, 'buildId');
+  c.req.raw.signal.throwIfAborted();
+  const entry = await waitFor(admit(c.env.BUCKET, model, buildId, c.executionCtx), c.req.raw.signal);
+  c.req.raw.signal.throwIfAborted();
+  return waitFor(manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]), c.req.raw.signal);
+}
+
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/sample',
   { model: param, buildId: param },
   { lat: z.string(), lon: z.string(), frame: z.string().optional(), layers: z.string().optional() },
   z.union([sampleResponseSchema, sampleResponseV5Schema]),
   async (c, url) => {
-    const model = modelId(requiredParam(c, 'model'));
-    const buildId = requiredParam(c, 'buildId');
-    c.req.raw.signal.throwIfAborted();
-    const entry = await waitFor(admit(c.env.BUCKET, model, buildId, c.executionCtx), c.req.raw.signal);
-    c.req.raw.signal.throwIfAborted();
-    const m = await waitFor(manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model]), c.req.raw.signal);
+    const m = await pointManifest(c);
     return serveSample(c.req.raw, c.env.BUCKET, c.executionCtx, m, url);
   }
+);
+
+registerJsonRoute(
+  '/v1/models/{model}/runs/{buildId}/samples',
+  { model: param, buildId: param },
+  { points: z.string(), frame: z.string().optional(), layers: z.string().optional() },
+  multiPointSampleResponseSchema,
+  async (c, url) => serveSamples(c.req.raw, c.env.BUCKET, c.executionCtx, await pointManifest(c), url)
+);
+
+registerJsonRoute(
+  '/v1/models/{model}/runs/{buildId}/profile',
+  { model: param, buildId: param },
+  { lat: z.string(), lon: z.string(), frame: z.string().optional(), layers: z.string().optional() },
+  profileResponseSchema,
+  async (c, url) => serveProfile(c.req.raw, c.env.BUCKET, c.executionCtx, await pointManifest(c), url)
 );
 
 app.openAPIRegistry.registerPath(
@@ -461,7 +492,7 @@ return {
     result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');
     result.headers.set('server-timing', `worker;dur=${elapsed.toFixed(2)}`);
     for (const [name, value] of Object.entries({ 'r2-reads': metrics.r2Reads, 'r2-bytes': metrics.r2Bytes, 'cache-hits': metrics.cacheHits, coalesced: metrics.coalesced })) result.headers.set(`x-av-${name}`, String(value));
-    if (env.AV_REQUEST_METRICS === 'true') console.log(JSON.stringify({ event: 'api-request', deploymentId: env.AV_DEPLOYMENT_ID, route: url.pathname.startsWith('/tiles/') ? 'tile' : url.pathname.endsWith('/sample') ? 'sample' : 'metadata', status: result.status, elapsedMs: Math.round(elapsed * 100) / 100, ...metrics }));
+    if (env.AV_REQUEST_METRICS === 'true') console.log(JSON.stringify({ event: 'api-request', deploymentId: env.AV_DEPLOYMENT_ID, route: url.pathname.startsWith('/tiles/') ? 'tile' : ['sample', 'samples', 'profile'].some(path => url.pathname.endsWith('/' + path)) ? 'sample' : 'metadata', status: result.status, elapsedMs: Math.round(elapsed * 100) / 100, ...metrics }));
     return result;
   }
 };

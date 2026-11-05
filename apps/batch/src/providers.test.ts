@@ -44,7 +44,8 @@ it('orders irregular configured cycles across dates and rejects inexact UTC time
 it('refuses unsupported source axes, layer roles and ignored normalization settings before opening input', () => {
   expect(() => createIndexedGribProvider({ ...INDEXED_PRODUCT, capabilities: { ...INDEXED_PRODUCT.capabilities, verticalCoordinate: 'model-levels' } })).toThrow('isobaric');
   expect(() => createSplitGribProvider({ ...SPLIT_PRODUCT, capabilities: { ...SPLIT_PRODUCT.capabilities, verticalCoordinate: 'isobaric' } })).toThrow('model-level');
-  expect(() => createSplitGribProvider({ ...SPLIT_PRODUCT, layers: [...SPLIT_PRODUCT.layers, 'precip-rate'] })).toThrow('lift fields');
+  const withoutPrecipitation = { ...SPLIT_PRODUCT.upstream, fields: { ...(SPLIT_PRODUCT.upstream.fields as object), precipitation: undefined } };
+  expect(() => createSplitGribProvider({ ...SPLIT_PRODUCT, upstream: withoutPrecipitation, layers: [...SPLIT_PRODUCT.layers, 'precip-rate'] })).toThrow('precipitation');
   const upstream = structuredClone(SPLIT_PRODUCT.upstream) as { fields: { temperature2m: Record<string, unknown> } };
   upstream.fields.temperature2m.scale = -1;
   expect(() => createSplitGribProvider({ ...SPLIT_PRODUCT, upstream })).toThrow();
