@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { GFS_PRODUCT, manifestSchema, setBit, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { manifestSchema, setBit, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { INDEXED_PRODUCT } from '../../tests/model-fixtures.js';
 import { normalizedFixtureFrame } from '../../scripts/fixtures/normalized-provider.js';
 import type { ForecastProvider } from './src/provider.js';
 import { localPath } from './src/validate.js';
@@ -11,7 +12,7 @@ import { decodeWebp } from './src/webp.js';
 
 export const CYCLE = '2026-06-21T00:00:00.000Z';
 export const product: ProductDefinition = {
-  ...GFS_PRODUCT,
+  ...INDEXED_PRODUCT,
   modelId: 'parallel-fixture', id: 'parallel-fixture-recipe',
   source: { modelFamily: 'fixture-model', configurationId: 'parallel-fixture-provider', domainId: 'synthetic' },
   label: 'Parallel build fixture', attribution: 'Synthetic test data',

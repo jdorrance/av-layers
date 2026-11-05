@@ -9,11 +9,11 @@ point queries. See [data](data.md) for output units and status meanings.
 
 ## Input fields
 
-- **GFS** ([fields.ts](../apps/batch/src/gfs/fields.ts), [gfs.json](../packages/contracts/config/gfs.json)):
+- **GFS** ([fields.ts](../apps/batch/src/indexed-grib/fields.ts), [gfs.json](../packages/contracts/config/models.json)):
   model terrain, surface pressure, 2 m temperature and specific humidity,
   sensible and latent heat flux, precipitation rate, and
   isobaric-level geopotential height and temperature (`pressureLevelsHpa`).
-- **ICON-EU** ([icon/README.md](../apps/batch/src/icon/README.md), [icon-eu.json](../packages/contracts/config/icon-eu.json)):
+- **ICON-EU** ([icon/README.md](../apps/batch/src/split-grib/README.md), [icon-eu.json](../packages/contracts/config/models.json)):
   DWD's 0.0625° regular latitude/longitude grid, surface fields (`HSURF`, `PS`,
   `T_2M`, `QV_2M`, `ASHFL_S`, `ALHFL_S`), static half-level heights `HHL`
   (`45..75`, midpoint-averaged into full-level heights and verified against
@@ -37,8 +37,8 @@ at the interval start, midpoint, or end.
 
 ## Statistical windows
 
-The [GFS](../apps/batch/src/gfs/intervals.ts) and
-[ICON](../apps/batch/src/icon/acquire.ts) adapters verify continuous statistical
+The [GFS](../apps/batch/src/indexed-grib/intervals.ts) and
+[ICON](../apps/batch/src/split-grib/acquire.ts) adapters verify continuous statistical
 windows in GRIB2 metadata and pass them to
 [`@av/forecast/intervals`](../packages/forecast/src/intervals.ts):
 

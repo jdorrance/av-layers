@@ -200,23 +200,25 @@ def descriptor(settings, k, result):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--config', type=Path, default=Path('packages/contracts/config/models.json'))
+    parser.add_argument('--model')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--source', type=Path)
-    parser.add_argument('--k', type=int, required=True)
+    parser.add_argument('--k', type=int)
     args = parser.parse_args()
     if build_masks.geos_version_string != '3.13.1' or build_masks.proj_version_str != '9.5.1':
         raise SystemExit('Mask generation requires GEOS 3.13.1 and PROJ 9.5.1')
-    settings = json.loads(args.config.read_text())
+    settings = build_masks.model_settings(args.config, args.model)
+    k = args.k if args.k is not None else settings.get('terrainSubdivisionFactor')
     settings['coverage']['maxNativeZoom'] = max_native_zoom()
     output = args.output or Path('packages/contracts') / settings['coverageDir'] / 'fine'
-    result = build_hierarchy(settings, args.k, args.source)
+    result = build_hierarchy(settings, k, args.source)
     output.mkdir(parents=True, exist_ok=True)
     for name, key in [('sparse.bin', 'sparseBytes'), ('tiles.bin', 'tilesBytes')]:
         build_masks.write_atomic(output / name, result[key])
-    build_masks.write_atomic(output / 'manifest.json', json.dumps(descriptor(settings, args.k, result), separators=(',', ':')).encode())
-    receipt = {'source': result['source'], 'grid': result['fine'], 'gridHash': result['gridHash'], 'k': args.k,
-               'seaBufferMeters': settings['coverage']['seaBufferMeters'], 'files': descriptor(settings, args.k, result)['files'],
+    build_masks.write_atomic(output / 'manifest.json', json.dumps(descriptor(settings, k, result), separators=(',', ':')).encode())
+    receipt = {'source': result['source'], 'grid': result['fine'], 'gridHash': result['gridHash'], 'k': k,
+               'seaBufferMeters': settings['coverage']['seaBufferMeters'], 'files': descriptor(settings, k, result)['files'],
                'generator': {'path': 'scripts/masks/build_fine_masks.py', 'sha256': build_masks.sha256_file(Path(__file__)),
                              'policySha256': build_masks.sha256_file(Path(build_masks.__file__)), 'python': platform.python_version(),
                              'geos': build_masks.geos_version_string, 'proj': build_masks.proj_version_str,
@@ -224,7 +226,7 @@ def main():
                              'arguments': sys.argv[1:]}}
     build_masks.write_atomic(output / 'source.json', json.dumps(receipt, indent=2).encode())
     print(json.dumps({'output': str(output), 'gridHash': result['gridHash'], 'activeCells': result['activeCells'],
-                      'blockCount': result['blockCount'], 'files': descriptor(settings, args.k, result)['files']}, indent=2))
+                      'blockCount': result['blockCount'], 'files': descriptor(settings, k, result)['files']}, indent=2))
 
 
 if __name__ == '__main__':

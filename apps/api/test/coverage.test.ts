@@ -1,6 +1,7 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { GFS_PRODUCT, LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, sparseCoverageFromDense, type ForecastSurfaceV5, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
+import { LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, sparseCoverageFromDense, type ForecastSurfaceV5, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
 import type { SamplePayload } from '@av/contracts/client';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
@@ -19,7 +20,7 @@ function fixture(grid: Grid = regular, frameCount = 5, options: { model?: string
   const layer = options.layer ?? 'precip-rate';
   const layers = options.layers ?? [layer];
   const bounds: [number, number, number, number] = grid.kind === 'regular-latlon' ? [-2, -2, 2, 2] : [-2, 38, 2, 42];
-  const product: ProductDefinition = { execution: { shards: 1, parallelism: 1, workers: 0, schedule: [] }, id: 'synthetic-test', modelId: model, configPath: `packages/contracts/config/${model}.json`, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers, capabilities: { verticalCoordinate: options.verticalCoordinate ?? 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
+  const product: ProductDefinition = { execution: { shards: 1, parallelism: 1, workers: 0, schedule: [] }, id: 'synthetic-test', modelId: model, coverageDir: `coverage/${model}`, supportHaloCells: 0, source: { modelFamily: model, configurationId: 'fixture-only', domainId: 'tiny' }, label: 'Synthetic test', attribution: 'Synthetic — not a forecast', bounds, coverageDescription: options.policy ?? 'Tiny synthetic test grid', freshness: { maxCycleAgeHours: 1, minHorizonHours: 1 }, grid, coverageId: 'synthetic-mask', maxNativeZoom: 0, frameHours: Array.from({ length: frameCount }, (_, i) => i + 1), intervalHours: 1, layers, capabilities: { verticalCoordinate: options.verticalCoordinate ?? 'isobaric', maxVerticalLevels: 21, daylightFrames: 'all-hours' } };
   const output = Uint8Array.of(255, 1), halo = Uint8Array.of(0, 0), tiles = Uint8Array.of(0);
   const descriptor = { version: 1, id: product.coverageId, grid, bounds, policy: product.coverageDescription, maxZoom: 0, supportHaloCells: 0, sampleLayout: { format: 'cell-major-blocks-v1', blockSize: 16 }, files: Object.fromEntries(Object.entries({ output, halo, tiles }).map(([name, data]) => [name, { bytes: data.length, sha256: hash(data) }])) };
   const descriptorBytes = json(descriptor), coverageHash = hash(descriptorBytes), coveragePrefix = `coverage/${coverageHash}`;
@@ -154,7 +155,7 @@ it('evicts and reloads coverage through the production 16-entry cache limit', as
 it('lazily verifies sparse coverage and binds its canonical sample layout', async () => {
   const gridHash = hash(new TextEncoder().encode(canonicalGridJson(regular)));
   const coverage = sparseCoverageFromDense({ width: 3, height: 3, wrapLongitude: false, gridHash, output: Uint8Array.of(16, 0), halo: Uint8Array.of(239, 1) });
-  const mask = { grid: regular, coverage, maxZoom: 0, tiles: Uint8Array.of(1) }, description = describeSparseCoverage(mask, GFS_PRODUCT);
+  const mask = { grid: regular, coverage, maxZoom: 0, tiles: Uint8Array.of(1) }, description = describeSparseCoverage(mask, INDEXED_PRODUCT);
   const prefix = `coverage/${description.hash}`;
   const objects = new Map<string, Uint8Array>([[`${prefix}/manifest.json`, description.bytes], [`${prefix}/sparse.bin`, description.sparseBytes], [`${prefix}/tiles.bin`, mask.tiles]]);
   const get = vi.fn(async (key: string) => {

@@ -1,0 +1,176 @@
+{
+  "defaultModel": "gfs",
+  "parallelism": {"jobs": 20, "workers": 3},
+  "models": [
+    {
+      "modelId": "gfs",
+      "id": "gfs-soaring",
+      "coverageDir": "coverage",
+      "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global"},
+      "label": "GFS",
+      "attribution": "NOAA GFS · Aviation Forecast Layers",
+      "layers": ["usable-lift-msl", "usable-lift-agl", "precip-rate"],
+      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 21, "daylightFrames": "all-hours"},
+      "grid": {
+        "kind": "regular-latlon",
+        "width": 1440,
+        "height": 721,
+        "earthRadiusM": 6371229,
+        "lon0": -180,
+        "lat0": 90,
+        "dx": 0.25,
+        "dy": -0.25,
+        "wrapLongitude": true
+      },
+      "forecast": {
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "intervalHours": 1,
+        "cycleHoursUtc": [0, 6, 12, 18],
+        "statisticsResetHours": 6
+      },
+      "freshness": {"maxCycleAgeHours": 18, "minHorizonHours": 6},
+      "coverage": {
+        "id": "soaring-land-v1",
+        "description": "Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.",
+        "west": -180,
+        "south": -55,
+        "east": 180,
+        "north": 65,
+        "seaBufferMeters": 50000,
+        "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
+        "excludedContinents": ["Africa"],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["torrey_pines", 32.92, -117.24, true],
+          ["karioitahi_offshore_4km", -37.29, 174.64, true],
+          ["big_sur_coast", 36.27, -121.81, true],
+          ["azores_sao_miguel", 37.741, -25.675, true],
+          ["canaries_tenerife", 28.291, -16.629, true],
+          ["caucasus_40n_44e", 40.179, 44.499, true],
+          ["new_zealand_wellington", -41.2865, 174.7762, true],
+          ["aleutians_unalaska", 53.875, -166.536, true],
+          ["dateline_east_attu", 52.9, 173.2, true],
+          ["dateline_west_taveuni", -16.85, -179.97, true],
+          ["exclude_russia_moscow", 55.7558, 37.6173, false],
+          ["exclude_greenland_nuuk", 64.1814, -51.6941, false],
+          ["exclude_antarctica", -77.85, 166.67, false],
+          ["exclude_china_beijing", 39.9042, 116.4074, false],
+          ["exclude_africa_lagos", 6.5244, 3.3792, false],
+          ["exclude_africa_cape_town", -33.9249, 18.4241, false],
+          ["outside_band_north", 66.0, 20.0, false],
+          ["outside_band_south", -56.0, 10.0, false],
+          ["open_ocean_atlantic", 30.0, -40.0, false]
+        ]
+      },
+      "upstream": {
+        "nativeLongitudeOrigin": 0,
+        "products": {"primary": "pgrb2.0p25", "secondary": "pgrb2b.0p25"},
+        "pressureLevelsHpa": {
+          "primary": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400],
+          "secondary": [875, 825, 775, 725, 675, 625]
+        },
+        "surfaceProduct": "primary",
+        "discoveryLagHours": 4,
+        "discoveryCandidates": 6,
+        "protocol": "indexed-grib2",
+        "provider": "NOAA",
+        "centre": 7,
+        "urlTemplate": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{date}/{cycleHour}/atmos/gfs.t{cycleHour}z.{product}.f{hour}",
+        "parameters": {
+          "HGT": [3, 5, "m"],
+          "PRES": [3, 0, "Pa"],
+          "TMP": [0, 0, "K"],
+          "SPFH": [1, 0, "kg/kg"],
+          "SHTFL": [0, 11, "W/m2"],
+          "LHTFL": [0, 10, "W/m2"],
+          "APCP": [1, 8, "kg/m2"]
+        },
+        "fields": {
+          "terrain": ["HGT", "surface"],
+          "surfacePressure": ["PRES", "surface"],
+          "temp2m": ["TMP", "2 m above ground"],
+          "spfh2m": ["SPFH", "2 m above ground"],
+          "sensibleHeatFlux": ["SHTFL", "surface", 1],
+          "latentHeatFlux": ["LHTFL", "surface", 1],
+          "precipitation": ["APCP", "surface"],
+          "height": ["HGT"],
+          "temperature": ["TMP"]
+        }
+      },
+      "terrainSubdivisionFactor": 10,
+      "execution": {"zoom": 9, "shards": 12, "parallelism": 12, "schedule": ["17 5,17 * * *"]}
+    },
+    {
+      "modelId": "icon-eu",
+      "id": "icon-eu-soaring",
+      "coverageDir": "coverage/icon-eu-land-v1",
+      "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe"},
+      "label": "ICON-EU",
+      "attribution": "DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers",
+      "layers": ["usable-lift-msl", "usable-lift-agl"],
+      "capabilities": {"verticalCoordinate": "model-levels", "maxVerticalLevels": 30, "daylightFrames": "regional-daylight"},
+      "grid": {
+        "kind": "regular-latlon",
+        "width": 1377,
+        "height": 657,
+        "earthRadiusM": 6371229,
+        "lon0": -23.5,
+        "lat0": 70.5,
+        "dx": 0.0625,
+        "dy": -0.0625,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "intervalHours": 1,
+        "cycleHoursUtc": [0, 6, 12, 18],
+        "statisticsResetHours": null
+      },
+      "freshness": {"maxCycleAgeHours": 18, "minHorizonHours": 6},
+      "coverage": {
+        "id": "icon-eu-land-v1",
+        "description": "Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.",
+        "west": -23.5,
+        "south": 29.5,
+        "east": 62.5,
+        "north": 70.5,
+        "seaBufferMeters": 50000,
+        "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
+        "excludedContinents": ["Africa"],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["caucasus_40n_44e", 40.179, 44.499, true],
+          ["alps_chamonix", 45.9237, 6.8694, true],
+          ["pyrenees_ager", 42.0, 0.762, true],
+          ["dolomites_marmolada", 46.4336, 11.8511, true],
+          ["exclude_russia_moscow", 55.7558, 37.6173, false],
+          ["exclude_africa_cairo", 30.0444, 31.2357, false],
+          ["exclude_africa_tunis", 36.8065, 10.1815, false],
+          ["open_ocean_atlantic", 45.0, -20.0, false]
+        ]
+      },
+      "upstream": {
+        "modelLevels": [45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74],
+        "fields": {
+          "staticTerrain": {"field": "HSURF", "kind": "time-invariant", "parameter": [3, 6], "surface": [1, null, 101]},
+          "halfLevelHeight": {"field": "HHL", "kind": "time-invariant", "parameter": [3, 6], "surface": [150, null, 101]},
+          "surfacePressure": {"field": "PS", "kind": "single-level", "parameter": [3, 0], "surface": [1]},
+          "temperature2m": {"field": "T_2M", "kind": "single-level", "parameter": [0, 0], "surface": [103, 2]},
+          "specificHumidity2m": {"field": "QV_2M", "kind": "single-level", "parameter": [1, 0], "surface": [103, 2]},
+          "sensibleHeatFlux": {"field": "ASHFL_S", "kind": "single-level", "parameter": [0, 11], "surface": [1], "statistic": 0, "scale": -1},
+          "latentHeatFlux": {"field": "ALHFL_S", "kind": "single-level", "parameter": [0, 10], "surface": [1], "statistic": 0, "scale": -1},
+          "temperature": {"field": "T", "kind": "model-level", "parameter": [0, 0], "surface": [150, null, 150]},
+          "pressure": {"field": "P", "kind": "model-level", "parameter": [3, 0], "surface": [150, null, 150]}
+        },
+        "discoveryLagHours": 3,
+        "discoveryCandidates": 4,
+        "protocol": "split-grib2",
+        "provider": "DWD",
+        "centre": 78,
+        "urlTemplate": "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{cycleHour}/{fieldLower}/icon-eu_europe_regular-lat-lon_{kind}_{runStamp}{suffix}_{field}.grib2.bz2"
+      },
+      "terrainSubdivisionFactor": 5,
+      "execution": {"zoom": 10, "shards": 8, "parallelism": 8, "schedule": ["17 5,17 * * *"]}
+    }
+  ]
+}

@@ -95,6 +95,17 @@ def check_typescript(settings, k, result):
 
 
 class FineMasksTest(unittest.TestCase):
+    def test_model_selection_uses_configured_default_and_explicit_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'models.json'
+            path.write_text(json.dumps({'defaultModel': 'west', 'models': [
+                {'modelId': 'west'}, {'modelId': 'east'}]}))
+            self.assertEqual(build_masks.model_settings(path)['modelId'], 'west')
+            self.assertEqual(build_masks.model_settings(path, 'east')['modelId'], 'east')
+            for model in ('', 'unknown'):
+                with self.assertRaisesRegex(SystemExit, 'Unknown model'):
+                    build_masks.model_settings(path, model)
+
     def test_tile_pyramid_bounds_come_from_wire_contract(self):
         for zoom in (-1, max_native_zoom() + 1, 1.5, True):
             with self.assertRaises(ValueError):
@@ -170,7 +181,7 @@ class FineMasksTest(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('FINE_MASK_REAL_SOURCE'), 'set FINE_MASK_REAL_SOURCE for pinned source smoke')
     def test_pinned_source_smoke(self):
-        settings = json.loads(Path('packages/contracts/config/gfs.json').read_text())
+        settings = build_masks.model_settings(Path('packages/contracts/config/models.json'))
         settings['grid'] = {'kind': 'regular-latlon', 'width': 33, 'height': 33, 'earthRadiusM': 6371229,
                             'lon0': -8, 'lat0': 40, 'dx': 0.25, 'dy': -0.25, 'wrapLongitude': False}
         settings['coverage'].update({'west': -8, 'south': 32, 'east': 0, 'north': 40, 'maxNativeZoom': 3})

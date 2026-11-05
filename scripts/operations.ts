@@ -3,7 +3,7 @@ import { mkdir, open, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { getProduct, MODEL_IDS } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct, MODEL_IDS } from '@av/contracts';
 import { MAX_FORECAST_SHARDS, readBuildPlan, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { assertBuildBucketLock, r2ShardStorage, r2Storage, sealShardCredentials } from '../apps/batch/src/storage.js';
@@ -270,7 +270,7 @@ export async function runOperation(command: string): Promise<void> {
   await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
   await assertCurrentMain();
   await pnpm(['--filter', '@av/api', 'exec', 'wrangler', 'deploy', '--env', cloud.targetEnv, '--var', `AV_DEPLOYMENT_ID:${deploymentId}`]);
-  await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? 'gfs', expectedDeploymentId: deploymentId, expectedModels: MODEL_IDS });
+  await probeApi({ baseUrl: cloud.apiBaseUrl, model: process.env.MODEL ?? DEFAULT_MODEL, expectedDeploymentId: deploymentId, expectedModels: MODEL_IDS });
   await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
   await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
   await verifyWindyPluginBundle({ url: pages.url, expectedApiBaseUrl: cloud.apiBaseUrl });

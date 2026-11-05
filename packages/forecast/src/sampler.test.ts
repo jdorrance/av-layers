@@ -1,5 +1,6 @@
+import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, LAYERS, prepareGridGeometry, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
+import { LAYERS, prepareGridGeometry, setBit, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
 import { cellsFromRange, MAX_PREPARED_SAMPLES, packCells, planSample, prepareGridSampling, preparePointSampling, sampleCells, sampleGrid, unpackCells } from './sampler.js';
 const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
 describe('scalar sampling', () => {
@@ -91,10 +92,10 @@ describe('scalar sampling', () => {
     expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: 0, flags: STATUS_UNAVAILABLE }], 'precip-rate')).toThrow();
   });
   it('coalesces interior and dateline two-row reads', () => {
-    expect(planSample(GFS_GRID, 10.125, 0.125)?.byteRange.length).toBe(7210);
-    expect(planSample(GFS_GRID, 10.125, 179.875)?.byteRange.length).toBe(14400);
-    expect(planSample(GFS_GRID, 10.125, -180)?.contributors).toHaveLength(2);
-    expect(planSample(GFS_GRID, 90, -180)?.byteRange.length).toBe(5);
+    expect(planSample(INDEXED_GRID, 10.125, 0.125)?.byteRange.length).toBe(7210);
+    expect(planSample(INDEXED_GRID, 10.125, 179.875)?.byteRange.length).toBe(14400);
+    expect(planSample(INDEXED_GRID, 10.125, -180)?.contributors).toHaveLength(2);
+    expect(planSample(INDEXED_GRID, 90, -180)?.byteRange.length).toBe(5);
   });
 });
 

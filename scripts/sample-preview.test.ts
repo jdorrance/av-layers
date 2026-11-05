@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { MODEL_IDS, getProduct, manifestSchema, manifestV5Schema, sampleResponseSchema, setBit, createSparseCoverage, encodeSparseCoverage, canonicalGridJson, type CoverageMask, type ManifestV5 } from '@av/contracts';
+import { getProduct, manifestSchema, manifestV5Schema, sampleResponseSchema, setBit, createSparseCoverage, encodeSparseCoverage, canonicalGridJson, type CoverageMask, type ManifestV5 } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { readCoverage, writeCoverage } from '../apps/batch/src/coverage.js';
@@ -34,7 +34,7 @@ async function fixture() {
   await cp(base, root, { recursive: true });
   const manifestPath = join(root, relativeManifest), persistTo = join(root, 'state');
   const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
-  return { root, manifest, manifestPath, persistTo, trustedProduct: offlineFixtureProduct() };
+  return { root, manifest, manifestPath, persistTo, pointerKey: `catalog/${manifest.model}/latest.json`, trustedProduct: offlineFixtureProduct() };
 }
 
 async function refinedFixture() {
@@ -140,8 +140,7 @@ describe('offline fixture and local seeding', () => {
     expect(Date.parse(manifest.expiresAt)).toBeGreaterThan(Date.now());
     expect(Math.abs(Date.parse(manifest.cycle) - Date.now())).toBeLessThan(86_400_000);
     expect((manifest.metrics.frames as Record<string, Record<string, { valid: number }>>).f001['precip-rate'].valid).toBe(40);
-    expect(MODEL_IDS).toEqual(['gfs', 'icon-eu']);
-    expect(getProduct('gfs')!.id).not.toBe(OFFLINE_PRODUCT.id);
+    expect(getProduct(manifest.model)!.id).not.toBe(OFFLINE_PRODUCT.id);
   });
 
   it('seeds coverage and provenance before the immutable manifest and latest pointer in one session', async () => {
@@ -153,8 +152,8 @@ describe('offline fixture and local seeding', () => {
     expect(memory.writes.slice(0, 4)).toEqual(['output.bin', 'halo.bin', 'tiles.bin', 'manifest.json'].map(name => `coverage/${local.manifest.coverage.hash}/${name}`));
     expect(memory.writes[4]).toBe(local.manifest.source.provenanceKey);
     expect(memory.writes.at(-2)).toBe(relativeManifest);
-    expect(memory.writes.at(-1)).toBe('catalog/gfs/latest.json');
-    expect(JSON.parse(Buffer.from(memory.objects.get('catalog/gfs/latest.json')!.bytes).toString()).latestBuildId).toBe(local.manifest.buildId);
+    expect(memory.writes.at(-1)).toBe(local.pointerKey);
+    expect(JSON.parse(Buffer.from(memory.objects.get(local.pointerKey)!.bytes).toString()).latestBuildId).toBe(local.manifest.buildId);
   });
 
   it('rejects an unknown recipe instead of reporting record-only validation', async () => {
@@ -182,11 +181,11 @@ describe('offline fixture and local seeding', () => {
     await seedLocalBuild(local, memory.open);
     memory.writes.length = 0;
     expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 1, reusedObjects: 13 });
-    expect(memory.writes).toEqual(['catalog/gfs/latest.json']);
+    expect(memory.writes).toEqual([local.pointerKey]);
     const missingKey = `coverage/${local.manifest.coverage.hash}/output.bin`;
     memory.objects.delete(missingKey); memory.writes.length = 0;
     expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 2, reusedObjects: 12 });
-    expect(memory.writes).toEqual([missingKey, 'catalog/gfs/latest.json']);
+    expect(memory.writes).toEqual([missingKey, local.pointerKey]);
     memory.objects.clear();
     expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 14, reusedObjects: 0 });
     expect(await seedLocalBuild({ ...local, reseed: true }, memory.open)).toMatchObject({ uploadedObjects: 14, reusedObjects: 0 });
@@ -198,7 +197,7 @@ describe('offline fixture and local seeding', () => {
     await expect(seedLocalBuild(local, memory.open)).rejects.toThrow('interrupted upload');
     expect(memory.dispose).toHaveBeenCalledOnce();
     expect(memory.objects.has(relativeManifest)).toBe(false);
-    expect(memory.objects.has('catalog/gfs/latest.json')).toBe(false);
+    expect(memory.objects.has(local.pointerKey)).toBe(false);
     await expect(readdir(join(local.persistTo, '.sample-preview'))).rejects.toThrow();
     memory.store.put = originalPut;
     expect(await seedLocalBuild(local, memory.open)).toMatchObject({ uploadedObjects: 14 });
@@ -230,7 +229,7 @@ describe('offline fixture and local seeding', () => {
     expect(await seedLocalBuild(local)).toMatchObject({ uploadedObjects: 1, reusedObjects: 13 });
     const reopened = await openLocalPreviewStore(local.persistTo);
     try {
-      expect(await reopened.head('catalog/gfs/latest.json')).not.toBeNull();
+      expect(await reopened.head(local.pointerKey)).not.toBeNull();
       expect((await reopened.head(local.manifest.samples.key))?.size).toBe(local.manifest.samples.bytes);
     } finally { await reopened.dispose(); }
   });
@@ -246,7 +245,7 @@ describe('offline fixture and local seeding', () => {
     const missing = `${prefix}/output.bin`;
     memory.objects.delete(missing); memory.writes.length = 0;
     await seedLocalBuild(local, memory.open);
-    expect(memory.writes).toEqual([missing, 'catalog/gfs/latest.json']);
+    expect(memory.writes).toEqual([missing, local.pointerKey]);
   });
 
   it.each(['missing', 'corrupt', 'mismatched-bounds'])('rejects %s patch coverage before opening local R2', async problem => {
@@ -268,7 +267,7 @@ describe('offline fixture and local seeding', () => {
       expect(memory.objects.has(key)).toBe(true);
       expect(memory.writes.indexOf(key)).toBeLessThan(memory.writes.indexOf(relativeManifest));
     }
-    expect(memory.writes.at(-1)).toBe('catalog/gfs/latest.json');
+    expect(memory.writes.at(-1)).toBe(local.pointerKey);
     expect(memory.writes.at(-2)).toBe(relativeManifest);
     for (const key of [...memory.objects.keys()]) expect(memory.objects.get(key)!.customMetadata.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
@@ -282,7 +281,7 @@ describe('offline fixture and local seeding', () => {
     if (problem === 'corrupt shard') await writeFile(join(local.outputRoot, local.shardKey), 'corrupt');
     await expect(seedLocalBuild(local, memory.open, local.validate)).rejects.toThrow();
     expect(memory.open).not.toHaveBeenCalled();
-    expect(memory.objects.has('catalog/gfs/latest.json')).toBe(false);
+    expect(memory.objects.has(local.pointerKey)).toBe(false);
   });
 
   it('serves a fine-zone sample through the real local Worker after seeding a v4 build', async () => {
@@ -296,7 +295,7 @@ describe('offline fixture and local seeding', () => {
       experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, enableContainers: false }
     });
     try {
-      const response = await fetch(`http://${worker.address}:${worker.port}/v1/models/gfs/runs/${local.manifest.buildId}/sample?lat=40&lon=-100&frame=all&layers=usable-lift-agl,precip-rate`);
+      const response = await fetch(`http://${worker.address}:${worker.port}/v1/models/${local.manifest.model}/runs/${local.manifest.buildId}/sample?lat=40&lon=-100&frame=all&layers=usable-lift-agl,precip-rate`);
       expect(response.status).toBe(200);
       const result = sampleResponseSchema.parse(await response.json());
       expect(result.frames.map(frame => frame.layers['usable-lift-agl'])).toEqual([900, 1000].map(value => ({

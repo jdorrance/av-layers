@@ -1,0 +1,11 @@
+{
+  "target": {"width": 325, "height": 339},
+  "models": [
+    {"modelId": "icon-eu", "prefix": "icon", "referenceMaeC": 1.43,
+     "controlFlag": "icon-control", "cacheFlag": "icon-cache-dir",
+     "defaultCache": ".cache/hindcast-icon/sourcecoop"},
+    {"modelId": "gfs", "prefix": "gfs", "referenceMaeC": 1.7,
+     "controlFlag": "gfs-control", "cacheFlag": "gfs-cache-dir",
+     "defaultCache": ".cache/hindcast-gfs"}
+  ]
+}

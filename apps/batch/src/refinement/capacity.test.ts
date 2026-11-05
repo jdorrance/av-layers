@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, setBit, STATUS_VALID, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { setBit, STATUS_VALID, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import { prepareTerrainClearance, prepareTerrainColumns } from '@av/forecast/refinement';
 import * as refinement from '@av/forecast/refinement';
@@ -45,7 +46,7 @@ async function fixture() {
   const out = await mkdtemp(join(tmpdir(), 'av-refinement-capacity-')); roots.push(out);
   const storage = new TerrainTestStorage(), catalogRef = seedTerrainCatalog(storage);
   const product: ProductDefinition = {
-    ...GFS_PRODUCT, terrainSubdivisionFactor: undefined,
+    ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined,
     grid: { kind: 'regular-latlon', width: 9, height: 7, earthRadiusM: 6371229, lon0: 0.46, lat0: 0.53, dx: 0.01, dy: -0.01, wrapLongitude: false },
     bounds: [0.46, 0.47, 0.54, 0.53], maxNativeZoom: 0, frameHours: [1, 2]
   };

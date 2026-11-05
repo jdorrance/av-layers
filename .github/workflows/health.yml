@@ -11,13 +11,11 @@ on:
         required: true
       model:
         description: Registered forecast model
-        type: choice
-        options: [all, gfs, icon-eu]
+        type: string
         default: all
         required: true
 permissions:
   contents: read
-  actions: read
 jobs:
   select:
     if: github.ref == 'refs/heads/main'
@@ -55,11 +53,9 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Check publication, horizon, serving and writer workflows
+      - name: Check publication, horizon and serving
         env:
-          TARGET_ENV: ${{ inputs.environment || 'production' }}
           API_BASE_URL: ${{ vars.API_BASE_URL }}
-          GH_TOKEN: ${{ github.token }}
           MODEL: ${{ matrix.model }}
         run: pnpm health
       - uses: actions/upload-artifact@v4

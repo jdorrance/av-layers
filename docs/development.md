@@ -83,7 +83,7 @@ pnpm verify
 `pnpm test` runs the offline test suite (pass a path such as
 `pnpm test packages/forecast` to run a subset). To run the optional retained DWD
 probe check for ICON-EU, set `ICON_DWD_PROBE_DIR` as shown in the
-[ICON adapter guide](../apps/batch/src/icon/README.md#offline-checks).
+[ICON adapter guide](../apps/batch/src/split-grib/README.md#offline-checks).
 
 `pnpm verify` runs lint, typecheck, tests, `docs:check`, and app builds. After
 changing API schemas, product configs, or CLI flags, regenerate the reference docs:

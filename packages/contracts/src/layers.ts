@@ -90,6 +90,9 @@ export function isPaletteId(value: string): value is PaletteId {
 export function isLayerId(value: string): value is LayerId {
   return Object.hasOwn(LAYERS, value);
 }
+export function layerSurface(layer: LayerId): 'native' | 'fine' {
+  return LAYERS[layer].quantity === 'precipitation-rate' ? 'native' : 'fine';
+}
 export function paletteBinLabel(edges: readonly number[], colorCount: number, index: number): string {
   const from = edges[index], to = edges[index + 1];
   if (to === undefined) return `≥ ${from}`;

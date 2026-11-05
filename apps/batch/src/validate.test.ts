@@ -1,9 +1,10 @@
+import { INDEXED_GRID, INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { loadCoverage } from './coverage.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, GFS_GRID, GFS_PRODUCT, ICON_EU_PRODUCT, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { packCells, prepareSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
 import { describeCoverage, writeCoverage } from './coverage.js';
@@ -20,7 +21,7 @@ async function writeTestSamplePack(output: string, inputs: string[], layout: Ret
 }
 
 describe('build provenance validation', () => {
-  async function fixture(product: ProductDefinition = GFS_PRODUCT) {
+  async function fixture(product: ProductDefinition = INDEXED_PRODUCT) {
     const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
     manifest.model = product.modelId;
     manifest.grid = product.grid;
@@ -124,7 +125,7 @@ describe('build provenance validation', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('validates retained $modelId methods against their snapshots instead of current product constants', async product => {
+  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('validates retained $modelId methods against their snapshots instead of current product constants', async product => {
     const { root, manifest, mask } = await fixture(product);
     try {
       const layer = manifest.descriptors.layers['usable-lift-msl'];
@@ -143,13 +144,13 @@ describe('build provenance validation', () => {
   });
 
   it('rejects unfiltered night frames for a regional-daylight product', async () => {
-    const { root, manifest, mask } = await fixture(ICON_EU_PRODUCT);
+    const { root, manifest, mask } = await fixture(SPLIT_PRODUCT);
     try {
       const cycleMs = Date.parse(manifest.cycle);
-      manifest.frames = ICON_EU_PRODUCT.frameHours.map(hour => ({
+      manifest.frames = SPLIT_PRODUCT.frameHours.map(hour => ({
         id: `f${String(hour).padStart(3, '0')}`,
         validTime: new Date(cycleMs + hour * 3600000).toISOString(),
-        intervalStart: new Date(cycleMs + (hour - ICON_EU_PRODUCT.intervalHours) * 3600000).toISOString(),
+        intervalStart: new Date(cycleMs + (hour - SPLIT_PRODUCT.intervalHours) * 3600000).toISOString(),
         intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
       }));
       await expect(validateBuild(root, manifest, mask)).rejects.toThrow('Incomplete frame or layer set');
@@ -185,9 +186,9 @@ describe('packed sample and concurrent archive validation', () => {
   });
 
   it('admits derived halo cells but rejects true outsiders and preserves public coverage', async () => {
-    const mask = await loadCoverage(GFS_PRODUCT), coverageHash = describeCoverage(mask, GFS_PRODUCT).hash;
+    const mask = await loadCoverage(INDEXED_PRODUCT), coverageHash = describeCoverage(mask, INDEXED_PRODUCT).hash;
     const hashes = [mask.output, mask.halo, mask.tiles].map(sha256);
-    const { width, height } = GFS_GRID;
+    const { width, height } = INDEXED_GRID;
     let output = -1, halo = -1;
     for (let index = 100 * width; index < (height - 100) * width; index++) {
       const col = index % width;
@@ -213,20 +214,20 @@ describe('packed sample and concurrent archive validation', () => {
       const bytes = await readFile(path);
       expect(bytes.length).toBe(width * height * CELL_BYTES);
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).not.toThrow();
-      const restored = unpackCells(bytes), lat = GFS_GRID.lat0 + Math.floor(output / width) * GFS_GRID.dy, lon = GFS_GRID.lon0 + (output % width) * GFS_GRID.dx;
+      const restored = unpackCells(bytes), lat = INDEXED_GRID.lat0 + Math.floor(output / width) * INDEXED_GRID.dy, lon = INDEXED_GRID.lon0 + (output % width) * INDEXED_GRID.dx;
       expect(isCovered(mask, lat, lon + 0.1)).toBe(true);
-      const sample = sampleGrid(GFS_GRID, restored, lat, lon + 0.1, 'precip-rate', mask);
+      const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask);
       expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
       expect(sample.value).toBeCloseTo(2.8);
       expect(isCovered(mask, lat, lon + 0.25)).toBe(false);
-      expect(sampleGrid(GFS_GRID, restored, lat, lon + 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+      expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
       bytes[outside * CELL_BYTES + 4] = STATUS_VALID;
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
       bytes[outside * CELL_BYTES + 4] = STATUS_OUTSIDE;
       bytes[output * CELL_BYTES + 4] = STATUS_OUTSIDE;
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
       expect([mask.output, mask.halo, mask.tiles].map(sha256)).toEqual(hashes);
-      expect(describeCoverage(mask, GFS_PRODUCT).hash).toBe(coverageHash);
+      expect(describeCoverage(mask, INDEXED_PRODUCT).hash).toBe(coverageHash);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
@@ -240,7 +241,7 @@ describe('packed sample and concurrent archive validation', () => {
       await writeFile(input, packCells({ values: new Float32Array(12).fill(2), flags }));
       const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
       const packed = await writeTestSamplePack(output, [input], layout);
-      const manifest = { descriptors: createProductDescriptors(GFS_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
+      const manifest = { descriptors: createProductDescriptors(INDEXED_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
       await expect(validateSamplePack(output, manifest, mask)).resolves.toBeUndefined();
       const original = await readFile(output);
       for (const [offset, flag, message] of [[4, 1, 'lift flags'], [9, 0, 'coverage'], [4, 128, 'support bits']] as const) {
@@ -268,7 +269,7 @@ describe('packed sample and concurrent archive validation', () => {
       flat.writeUInt32LE(0x7fc01234, 5); flat[9] = 2;
       await writeFile(input, flat);
       const packed = await writeTestSamplePack(path, [input], layout);
-      const manifest = { descriptors: createProductDescriptors(GFS_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
+      const manifest = { descriptors: createProductDescriptors(INDEXED_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
       await expect(validateSamplePack(path, manifest, mask)).resolves.toBeUndefined();
       const original = await readFile(path);
       const cases = [

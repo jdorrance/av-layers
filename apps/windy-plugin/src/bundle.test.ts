@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
-import { computeFreshness, latestSchema } from '@av/contracts';
-import { fixtureManifest } from '../../../tests/forecast-fixture.js';
+import { DEFAULT_PRODUCT, PRODUCTS, createProductDescriptors, createRecipeIdentity } from '@av/contracts';
+import { fixtureLatest, fixtureManifest } from '../../../tests/forecast-fixture.js';
 
 class FakeElement {
   children: FakeElement[] = [];
@@ -81,15 +81,14 @@ it.each([
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
   const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: `2026-10-30T${hour}:00:00.000Z` }));
-  const manifest = fixtureManifest({ buildId: 'b1', expiresAt, frames, layers: ['precip-rate'] });
-  const latest = latestSchema.parse({
-    pointer: { version: 1, model: 'gfs', latestBuildId: 'b1', retained: [{
-      buildId: 'b1', manifestKey: 'builds/gfs/b1/manifest.json', cycle: manifest.cycle, expiresAt
-    }] },
-    manifest, templates: { 'precip-rate': `${base}/tiles/gfs/b1/precip-rate/{frame}/{z}/{x}/{y}.webp` },
-    bounds: [-180, -55, 180, 65], maxNativeZoom: manifest.coverage.maxZoom, palettes: [], coverage: manifest.coverage,
-    freshness: computeFreshness(manifest, now)
+  const model = DEFAULT_PRODUCT.modelId, layerId = DEFAULT_PRODUCT.layers[0], fixture = fixtureManifest();
+  const manifest = fixtureManifest({ model, buildId: 'b1', expiresAt, frames, layers: [layerId], grid: DEFAULT_PRODUCT.grid,
+    descriptors: createProductDescriptors({ ...DEFAULT_PRODUCT, layers: [layerId] }), recipe: createRecipeIdentity(DEFAULT_PRODUCT, 'a'.repeat(64)),
+    coverage: { ...fixture.coverage, id: DEFAULT_PRODUCT.coverageId, maxZoom: DEFAULT_PRODUCT.maxNativeZoom },
+    source: { ...fixture.source, model, provider: 'Synthetic' }
   });
+  const latest = fixtureLatest(manifest, base), [west, south, east, north] = manifest.descriptors.bounds;
+  const point = { lat: (south + north) / 2, lon: (west + east) / 2 };
   let resolveSample!: (response: Response) => void;
   let sampleSignal: AbortSignal | null | undefined;
   const fetchImpl = vi.fn<typeof fetch>((url, init) => {
@@ -182,8 +181,8 @@ it.each([
   expect(addWindowListener).toHaveBeenCalledTimes(2);
   expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
-  expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/gfs/latest?expand=manifest`);
-  expect(layer.url).toContain('/tiles/gfs/b1/precip-rate/f006/');
+  expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/${model}/latest?expand=manifest`);
+  expect(layer.url).toContain(`/tiles/${model}/b1/${layerId}/f006/`);
   expect(protocols.size).toBe(1);
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;
   expect(horizonNotice.hidden).toBe(false);
@@ -211,16 +210,13 @@ it.each([
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
-  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([
-    ['gfs', false, 'GFS'],
-    ['icon-eu', false, 'ICON-EU']
-  ]);
+  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual(PRODUCTS.map(product => [product.modelId, false, product.label]));
   expect(selects[2].value).toBe('f006');
   selects[2].value = 'f003';
   selects[2].dispatch('change');
   expect(store.set).toHaveBeenCalledWith('timestamp', Date.parse('2026-10-30T03:00:00.000Z'));
 
-  click({ lat: 1, lon: 190 });
+  click({ lat: point.lat, lon: point.lon + 360 });
   expect(openWeatherPicker).not.toHaveBeenCalled();
   expect(target.children).toHaveLength(2);
   expect(map.removeLayer).not.toHaveBeenCalled();
@@ -239,9 +235,9 @@ it.each([
   win.dispatchEvent(new Event('focus'));
   expect(button.disabled).toBe(true);
   expect(sampleSignal?.aborted).toBe(false);
-  expect(fetchImpl.mock.calls[1][0]).toContain('lat=1');
-  expect(fetchImpl.mock.calls[1][0]).toContain('lon=-170');
-  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 1, lon: -170, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
+  expect(fetchImpl.mock.calls[1][0]).toContain(`lat=${point.lat}`);
+  expect(fetchImpl.mock.calls[1][0]).toContain(`lon=${point.lon}`);
+  resolveSample(new Response(JSON.stringify({ model, buildId: 'b1', ...point, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { [layerId]: { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
   const series = elements.find(element => element.className === 'av-series')!;
   await vi.waitFor(() => expect(series.children).toHaveLength(1));
 
@@ -263,7 +259,7 @@ it.each([
   click({ lat: 5, lon: 6 });
   expect(pointStatus.textContent).toBe('');
   expect(button.disabled).toBe(true);
-  resolveSample(new Response(JSON.stringify({ model: 'gfs', buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
+  resolveSample(new Response(JSON.stringify({ model, buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
   await Promise.resolve();
   await Promise.resolve();
   expect(series.children).toHaveLength(0);

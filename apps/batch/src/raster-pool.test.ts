@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { expectedTiles, GFS_PRODUCT, ICON_EU_PRODUCT, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, type CoverageMask, type LayerId } from '@av/contracts';
+import { expectedTiles, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, type CoverageMask, type LayerId } from '@av/contracts';
 import { openArchive } from './archive-reader.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { createRasterPool, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
@@ -80,7 +81,7 @@ describe('bounded per-frame raster workers', () => {
     await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('admits each configured packed snapshot within a bounded whole-domain budget', async product => {
+  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('admits each configured packed snapshot within a bounded whole-domain budget', async product => {
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const active = fine.coverage.offsets[fine.coverage.blockIds.length]!;
     expect(active).toBeGreaterThan(0);
@@ -120,7 +121,7 @@ describe('bounded per-frame raster workers', () => {
   }, 20_000);
 
   it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
-    const product = { ...ICON_EU_PRODUCT, execution: { ...ICON_EU_PRODUCT.execution, workers: 3 } };
+    const product = { ...SPLIT_PRODUCT, execution: { ...SPLIT_PRODUCT.execution, workers: 3 } };
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
     const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,

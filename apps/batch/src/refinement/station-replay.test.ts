@@ -10,7 +10,6 @@ import {
   pairedGateSummary,
   poolPredictionRows,
   resourceMaxRssBytes,
-  temperatureGateBaseline,
   temperatureGateEvidence,
   runWithStagedPredictions,
   variantDefinitions,
@@ -165,13 +164,12 @@ describe('variantDefinitions', () => {
     expect(variantDefinitions('gfs').map(variant => variant.id)).toEqual([
       'gfs-neutral-b1000', 'gfs-supported-clearance', 'gfs-uncorrected', 'gfs-dry-adiabatic'
     ]);
+    expect(() => variantDefinitions('unregistered')).toThrow('Unknown replay model');
   });
 });
 
 describe('temperature gate baseline metadata', () => {
   it('uses raw temperature comparators and truthful RSS bytes', () => {
-    expect(temperatureGateBaseline('icon-eu')).toBe('icon-uncorrected');
-    expect(temperatureGateBaseline('gfs')).toBe('gfs-uncorrected');
     for (const model of ['icon-eu', 'gfs'] as const) {
       const definitions = variantDefinitions(model);
       expect(definitions.find(variant => variant.id.endsWith('-neutral-b1000'))).toMatchObject({ kind: 'kernel', options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000 } });

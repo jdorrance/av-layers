@@ -1,5 +1,6 @@
+import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_GRID, setBit, STATUS_MASK, STATUS_VALID } from '@av/contracts';
+import { setBit, STATUS_MASK, STATUS_VALID } from '@av/contracts';
 import { validateNormalizedFrame, type ModelLevelFrame, type NormalizedFrame } from './inputs.js';
 import { createNativeColumnScratch, readNativeColumn } from './column-input.js';
 import { prepareTerrainColumns } from './refinement.js';
@@ -9,9 +10,9 @@ function frame(): NormalizedFrame & {
   pressureLevelsHpa: readonly number[];
 } {
   const values = () => Float32Array.of(1), missing = () => Uint8Array.of(0), time = '2026-10-30T00:00:00Z', window = { start: time, end: time };
-  return { cycle: time, hour: 3, validAt: time, capturedAt: time, grid: GFS_GRID, activeIndices: Uint32Array.of(0), terrainM: values(), surfacePressurePa: values(), temp2mK: values(), specificHumidity2mKgKg: values(), sensibleHeatFluxWm2: values(), latentHeatFluxWm2: values(), precipitationMmPerHour: values(), pressureLevelsHpa: [900], hgtM: [values()], tempK: [values()], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing()], temp: [missing()] }, intervals: { profileTime: time, fluxWindow: window, precipitationWindow: window, fluxSourceWindow: window, precipitationSourceWindow: window, usedCompanion: false }, receipt: {} };
+  return { cycle: time, hour: 3, validAt: time, capturedAt: time, grid: INDEXED_GRID, activeIndices: Uint32Array.of(0), terrainM: values(), surfacePressurePa: values(), temp2mK: values(), specificHumidity2mKgKg: values(), sensibleHeatFluxWm2: values(), latentHeatFluxWm2: values(), precipitationMmPerHour: values(), pressureLevelsHpa: [900], hgtM: [values()], tempK: [values()], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [missing()], temp: [missing()] }, intervals: { profileTime: time, fluxWindow: window, precipitationWindow: window, fluxSourceWindow: window, precipitationSourceWindow: window, usedCompanion: false }, receipt: {} };
 }
-const validate = (input: NormalizedFrame) => validateNormalizedFrame(input, Uint32Array.of(0), GFS_GRID, 21);
+const validate = (input: NormalizedFrame) => validateNormalizedFrame(input, Uint32Array.of(0), INDEXED_GRID, 21);
 
 describe('normalized provider admission', () => {
   it('accepts compact Float32 fields and explicitly masked missing values', () => {
@@ -40,9 +41,9 @@ describe('normalized provider admission', () => {
       ...isobaric, pressureLevelsHpa: undefined, pressurePa: [Float32Array.of(90000)],
       missing: { ...isobaric.missing, pressure: [Uint8Array.of(0)] }
     };
-    expect(() => validateNormalizedFrame(modelLevels, modelLevels.activeIndices, GFS_GRID, 1, undefined, 'model-levels')).not.toThrow();
-    expect(() => validateNormalizedFrame(isobaric, isobaric.activeIndices, GFS_GRID, 1, undefined, 'model-levels')).toThrow('vertical axis');
-    expect(() => validateNormalizedFrame(modelLevels, modelLevels.activeIndices, GFS_GRID, 1, undefined, 'isobaric')).toThrow('vertical axis');
+    expect(() => validateNormalizedFrame(modelLevels, modelLevels.activeIndices, INDEXED_GRID, 1, undefined, 'model-levels')).not.toThrow();
+    expect(() => validateNormalizedFrame(isobaric, isobaric.activeIndices, INDEXED_GRID, 1, undefined, 'model-levels')).toThrow('vertical axis');
+    expect(() => validateNormalizedFrame(modelLevels, modelLevels.activeIndices, INDEXED_GRID, 1, undefined, 'isobaric')).toThrow('vertical axis');
   });
 
   it.each(['both representations', 'neither representation', 'unpaired pressure mask', 'missing pressure mask', 'wrong pressure count'] as const)('rejects %s at the provider boundary', defect => {
@@ -75,9 +76,9 @@ describe('normalized provider admission', () => {
     readNativeColumn(input, 0, scratch);
     expect(scratch.humidity.specificHumidityKgKg).toBeLessThan(0.0058656);
     expect(scratch.humidity.specificHumidityKgKg).toBeCloseTo(0.005761, 5);
-    const mask = { grid: GFS_GRID, output: new Uint8Array(129780), halo: new Uint8Array(129780), tiles: Uint8Array.of(1), maxZoom: 0 };
+    const mask = { grid: INDEXED_GRID, output: new Uint8Array(129780), halo: new Uint8Array(129780), tiles: Uint8Array.of(1), maxZoom: 0 };
     setBit(mask.output, 0);
-    const targetMask = { grid: { ...GFS_GRID, width: 1, height: 1 }, output: Uint8Array.of(1), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
+    const targetMask = { grid: { ...INDEXED_GRID, width: 1, height: 1 }, output: Uint8Array.of(1), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
     const prepared = prepareTerrainColumns(mask, targetMask, input.activeIndices, 2);
     const displaced = prepared.derive(
       input,

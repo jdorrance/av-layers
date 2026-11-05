@@ -1,3 +1,4 @@
+import profile from '../../../../packages/contracts/config/station-replay.json' with { type: 'json' };
 import { createHash } from 'node:crypto';
 import { link, mkdir, open, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -44,17 +45,14 @@ import {
 const OGIMET_RAW_SHA256 = 'f996a85895f7738210f68c4416319484bf3958d7554712ef3ea5958bf32fd37d';
 const CYCLES = Array.from({ length: 10 }, (_, index) => `2026-10-${String(15 + index).padStart(2, '0')}T00:00:00.000Z`);
 const HOURS = [6, 9, 12, 15] as const;
-const TARGET_WIDTH = 325;
-const TARGET_HEIGHT = 339;
 const MAX_COMPILED_COLUMN_BUFFER_BYTES = 32 * 1024 * 1024;
-const DEFAULT_ICON_CACHE = resolve(process.cwd(), '.cache/hindcast-icon/sourcecoop');
-const DEFAULT_GFS_CACHE = resolve(process.cwd(), '.cache/hindcast-gfs');
-
-type ModelId = 'icon-eu' | 'gfs';
+for (const entry of profile.models) {
+  if (!getProduct(entry.modelId)) throw new Error(`Unknown replay model ${entry.modelId}`);
+}
 
 interface VariantDefinition {
   readonly id: string;
-  readonly model: ModelId;
+  readonly model: string;
   readonly kind: 'kernel' | 'uncorrected' | 'dry-adiabatic';
   readonly options?: TerrainColumnEvaluationOptions;
   readonly clearance?: boolean;
@@ -104,7 +102,7 @@ export interface FrameDiagnosticReport {
 }
 
 interface FrameReport {
-  readonly model: ModelId;
+  readonly model: string;
   readonly cycle: string;
   readonly hour: number;
   readonly validAt: string;
@@ -129,7 +127,7 @@ export interface HourBandAggregate {
 
 export interface VariantAggregate {
   readonly id: string;
-  readonly model: ModelId;
+  readonly model: string;
   readonly kind: VariantDefinition['kind'];
   readonly options: TerrainColumnEvaluationOptions | null;
   readonly gate: PooledTemperatureMetrics;
@@ -145,14 +143,14 @@ export interface VariantAggregate {
 }
 
 export interface TemperatureGateEvidence {
-  readonly model: ModelId;
+  readonly model: string;
   readonly variant: string;
   readonly baseline: string;
   readonly status: 'pass' | 'fail' | 'inconclusive';
   readonly reason: string;
   readonly minimumStationHours: 100;
   readonly minimumStations: 3;
-  readonly targetMaeC: 1.43 | 1.7;
+  readonly targetMaeC: number;
   readonly paired: PairedGateSummary;
   readonly stationHours: number;
   readonly uniqueStations: number;
@@ -195,7 +193,7 @@ export interface StationReplayReport {
     readonly componentsAfter: BuildIdentity['components'];
   };
   readonly controls: readonly {
-    readonly model: ModelId;
+    readonly model: string;
     readonly path: string;
     readonly manifestSha256: string;
     readonly buildId: string;
@@ -216,7 +214,7 @@ export interface StationReplayReport {
   };
   readonly variantDefinitions: readonly {
     readonly id: string;
-    readonly model: ModelId;
+    readonly model: string;
     readonly kind: VariantDefinition['kind'];
     readonly options: TerrainColumnEvaluationOptions | null;
   }[];
@@ -227,7 +225,7 @@ export interface StationReplayReport {
     readonly requestedFrames: number;
     readonly completedFrames: number;
     readonly failedFrames: number;
-    readonly models: readonly ModelId[];
+    readonly models: readonly string[];
     readonly cycles: readonly string[];
     readonly hours: readonly number[];
     readonly observationRows: number;
@@ -256,12 +254,9 @@ export interface StationReplayReport {
 export interface RunStationReplayOptions {
   readonly observations: string;
   readonly out: string;
-  readonly iconControl: string;
-  readonly gfsControl: string;
-  readonly iconCacheDir?: string;
-  readonly gfsCacheDir?: string;
+  readonly controls: Readonly<Record<string, { manifestPath: string; cacheDir?: string }>>;
   readonly signal?: AbortSignal;
-  readonly providerFactory?: (model: ModelId) => ForecastProvider;
+  readonly providerFactory?: (model: string) => ForecastProvider;
 }
 
 export interface StationReplayRunResult {
@@ -388,12 +383,10 @@ export function runWithStagedPredictions<T>(
   return result;
 }
 
-export function temperatureGateBaseline(model: ModelId): string {
-  return model === 'icon-eu' ? 'icon-uncorrected' : 'gfs-uncorrected';
-}
-
-export function temperatureGateReferenceMaeC(model: ModelId): 1.43 | 1.7 {
-  return model === 'icon-eu' ? 1.43 : 1.7;
+function replayModel(model: string) {
+  const entry = profile.models.find(entry => entry.modelId === model);
+  if (!entry) throw new Error(`Unknown replay model ${model}`);
+  return entry;
 }
 
 export function resourceMaxRssBytes(maxRssRaw: number): number {
@@ -401,7 +394,7 @@ export function resourceMaxRssBytes(maxRssRaw: number): number {
 }
 
 export function temperatureGateEvidence(input: {
-  readonly model: ModelId;
+  readonly model: string;
   readonly variant: string;
   readonly baseline: string;
   readonly paired: PairedGateSummary;
@@ -411,7 +404,7 @@ export function temperatureGateEvidence(input: {
   const enoughEvidence = enoughHours && enoughSites
     && input.paired.candidateBiasC !== null && input.paired.baselineBiasC !== null
     && input.paired.candidateMaeC !== null && input.paired.baselineMaeC !== null;
-  const targetMaeC = temperatureGateReferenceMaeC(input.model);
+  const targetMaeC = replayModel(input.model).referenceMaeC;
   const meetsTarget = enoughEvidence && input.paired.candidateMaeC! <= targetMaeC;
   const noRegression = enoughEvidence && input.paired.candidateMaeC! <= input.paired.baselineMaeC!;
   const pass = enoughEvidence && meetsTarget && noRegression;
@@ -473,20 +466,13 @@ function median(values: readonly number[]): number | null {
   return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
 }
 
-export function variantDefinitions(model: ModelId): VariantDefinition[] {
-  if (model === 'icon-eu') {
-    return [
-      { id: 'icon-neutral-b1000', model, kind: 'kernel', options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000 } },
-      { id: 'icon-supported-clearance', model, kind: 'kernel', clearance: true, options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000, clearanceFallback: 'unsupported' } },
-      { id: 'icon-uncorrected', model, kind: 'uncorrected' },
-      { id: 'icon-dry-adiabatic', model, kind: 'dry-adiabatic' }
-    ];
-  }
+export function variantDefinitions(model: string): VariantDefinition[] {
+  const { prefix } = replayModel(model);
   return [
-    { id: 'gfs-neutral-b1000', model, kind: 'kernel', options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000 } },
-    { id: 'gfs-supported-clearance', model, kind: 'kernel', clearance: true, options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000, clearanceFallback: 'unsupported' } },
-    { id: 'gfs-uncorrected', model, kind: 'uncorrected' },
-    { id: 'gfs-dry-adiabatic', model, kind: 'dry-adiabatic' }
+    { id: `${prefix}-neutral-b1000`, model, kind: 'kernel', options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000 } },
+    { id: `${prefix}-supported-clearance`, model, kind: 'kernel', clearance: true, options: { bridgeMode: 'neutral', maximumBelowGroundExtrapolationM: 1000, clearanceFallback: 'unsupported' } },
+    { id: `${prefix}-uncorrected`, model, kind: 'uncorrected' },
+    { id: `${prefix}-dry-adiabatic`, model, kind: 'dry-adiabatic' }
   ];
 }
 
@@ -567,12 +553,12 @@ export async function loadFrozenObservationSource(
   };
 }
 
-async function controlInfo(control: EvaluationControl, path: string, model: ModelId) {
+async function controlInfo(control: EvaluationControl, path: string, model: string) {
   const manifestPath = resolve(path);
   if (control.manifest.model !== model) throw new Error(`Control model ${control.manifest.model} is not ${model}`);
   if (control.manifest.recipe.sourceDirty !== false) throw new Error(`${model} control sourceDirty must be false`);
-  if (control.targetMask.grid.width !== TARGET_WIDTH || control.targetMask.grid.height !== TARGET_HEIGHT) {
-    throw new Error(`${model} control target grid must be the current ${TARGET_WIDTH}x${TARGET_HEIGHT} full zone`);
+  if (control.targetMask.grid.width !== profile.target.width || control.targetMask.grid.height !== profile.target.height) {
+    throw new Error(`${model} control target grid must be the current ${profile.target.width}x${profile.target.height} full zone`);
   }
   return {
     model,
@@ -589,10 +575,10 @@ async function controlInfo(control: EvaluationControl, path: string, model: Mode
   };
 }
 
-function assertControlPair(icon: EvaluationControl, gfs: EvaluationControl): void {
-  if (!sameGrid(icon.targetMask.grid, gfs.targetMask.grid)) throw new Error('Icon and GFS control target grids differ');
-  if (!sameTyped(icon.terrain.elevationM, gfs.terrain.elevationM) || !sameTyped(icon.terrain.valid, gfs.terrain.valid)) {
-    throw new Error('Icon and GFS control target terrain differs');
+function assertControlPair(first: EvaluationControl, second: EvaluationControl): void {
+  if (!sameGrid(first.targetMask.grid, second.targetMask.grid)) throw new Error('Control target grids differ');
+  if (!sameTyped(first.terrain.elevationM, second.terrain.elevationM) || !sameTyped(first.terrain.valid, second.terrain.valid)) {
+    throw new Error('Control target terrain differs');
   }
 }
 
@@ -611,18 +597,19 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
   try {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
     const frozen = await loadFrozenObservationSource(options.observations);
-    const iconPath = resolve(options.iconControl), gfsPath = resolve(options.gfsControl);
-    const [icon, gfs] = await Promise.all([
-      loadEvaluationInput({ manifestPath: iconPath, signal: options.signal }),
-      loadEvaluationInput({ manifestPath: gfsPath, signal: options.signal })
-    ]);
-    assertControlPair(icon, gfs);
-    const iconProduct = getProduct('icon-eu');
-    if (!iconProduct) throw new Error('No product for icon-eu');
-    const coverageHash = icon.manifest.patches?.[0]?.coverage.hash;
-    if (!coverageHash) throw new Error('Icon control coverage hash is missing');
-    const identityBefore = await buildIdentity(iconProduct, coverageHash, undefined, [], repoRoot);
-    const controls = [await controlInfo(icon, iconPath, 'icon-eu'), await controlInfo(gfs, gfsPath, 'gfs')];
+    const modelInputs = await Promise.all(profile.models.map(async entry => {
+      const input = options.controls[entry.modelId];
+      if (!input?.manifestPath) throw new Error(`Missing replay control for ${entry.modelId}`);
+      const path = resolve(input.manifestPath);
+      return { model: entry.modelId, path, control: await loadEvaluationInput({ manifestPath: path, signal: options.signal }),
+        cacheDir: resolve(input.cacheDir ?? entry.defaultCache) };
+    }));
+    for (const input of modelInputs.slice(1)) assertControlPair(modelInputs[0].control, input.control);
+    const first = modelInputs[0], product = getProduct(first.model)!;
+    const coverageHash = first.control.manifest.patches?.[0]?.coverage.hash;
+    if (!coverageHash) throw new Error('Control coverage hash is missing');
+    const identityBefore = await buildIdentity(product, coverageHash, undefined, [], repoRoot);
+    const controls = await Promise.all(modelInputs.map(input => controlInfo(input.control, input.path, input.model)));
     const observationsByTime = new Map<number, StationObservation[]>();
     for (const observation of frozen.observations) {
       const key = Date.parse(observation.validAt);
@@ -632,17 +619,11 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
     }
 
     const providerFactory = options.providerFactory ?? getForecastProvider;
-    const iconCacheDir = resolve(options.iconCacheDir ?? DEFAULT_ICON_CACHE);
-    const gfsCacheDir = resolve(options.gfsCacheDir ?? DEFAULT_GFS_CACHE);
-    const modelInputs: { model: ModelId; control: EvaluationControl; cacheDir: string }[] = [
-      { model: 'icon-eu', control: icon, cacheDir: iconCacheDir },
-      { model: 'gfs', control: gfs, cacheDir: gfsCacheDir }
-    ];
     const frames: FrameReport[] = [], sessionErrors: string[] = [];
     let peakSparseDiagnosticsBufferBytes = 0, peakSparseIndexBufferBytes = 0, peakClearanceMappingBytes = 0, peakCompiledColumnBufferBytes = 0, peakSelectedAndMappingBufferBytes = 0;
     const rowsByVariant = new Map<string, StationPredictionRow[]>();
     const exclusionsByVariant = new Map<string, { probeUnavailable: number; invalidProbe: number; temperatureMissing: number; framesWithExclusions: number }>();
-    const definitionsByModel = new Map<ModelId, VariantDefinition[]>();
+    const definitionsByModel = new Map<string, VariantDefinition[]>();
 
     for (const input of modelInputs) {
       const definitions = variantDefinitions(input.model);
@@ -833,22 +814,18 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
       }
     }
     const temperatureGate: TemperatureGateEvidence[] = [];
-    for (const [model, candidateIds, baselineIds] of [
-      ['icon-eu', ['icon-neutral-b1000', 'icon-supported-clearance'], ['icon-uncorrected']],
-      ['gfs', ['gfs-neutral-b1000', 'gfs-supported-clearance'], ['gfs-uncorrected']]
-    ] as const) {
-      for (const candidateId of candidateIds) {
-        for (const baselineId of baselineIds) {
-          const paired = pairedGateSummary(
-            rowsByVariant.get(candidateId) ?? [],
-            rowsByVariant.get(baselineId) ?? [],
-            row => row.observation.precipitationState === 'dry'
-          );
-          temperatureGate.push(temperatureGateEvidence({ model, variant: candidateId, baseline: baselineId, paired }));
-        }
+    for (const [model, definitions] of definitionsByModel) {
+      const baselineId = `${replayModel(model).prefix}-uncorrected`;
+      for (const { id: candidateId } of definitions.filter(variant => variant.kind === 'kernel')) {
+        const paired = pairedGateSummary(
+          rowsByVariant.get(candidateId) ?? [],
+          rowsByVariant.get(baselineId) ?? [],
+          row => row.observation.precipitationState === 'dry'
+        );
+        temperatureGate.push(temperatureGateEvidence({ model, variant: candidateId, baseline: baselineId, paired }));
       }
     }
-    const identityAfter = await buildIdentity(iconProduct, coverageHash, undefined, [], repoRoot);
+    const identityAfter = await buildIdentity(product, coverageHash, undefined, [], repoRoot);
     assertBuildComponentsUnchanged(identityBefore.components, identityAfter.components);
     const candidate: StationReplayReport['candidate'] = {
       revision: identityBefore.recipe.sourceRevision,
@@ -905,10 +882,10 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
       temperatureGate,
       frames,
       totals: {
-        requestedFrames: CYCLES.length * HOURS.length * 2,
+        requestedFrames: CYCLES.length * HOURS.length * profile.models.length,
         completedFrames,
         failedFrames,
-        models: ['icon-eu', 'gfs'],
+        models: profile.models.map(entry => entry.modelId),
         cycles: CYCLES,
         hours: [...HOURS],
         observationRows: frozen.rows
@@ -935,7 +912,7 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
         'Global fetch is replaced with an offline throw for the run and restored in finally.',
         'Cached hindcast acquisitions use explicit frozen cycles; no cycle discovery.',
         'Cache misses fail their frame explicitly; no network fallback and no silent day skip.',
-        'Both controls must be the current 325x339 full zone with sourceDirty false.',
+        `Both controls must be the current ${profile.target.width}x${profile.target.height} full zone with sourceDirty false.`,
         'Old 128x128 pilot grid eligibility is not used.',
         'Live station snapshots are not hindcast inputs.',
         'Per-frame probe diagnostics describe native surface excess.'
@@ -956,24 +933,16 @@ function requiredString(values: Record<string, string | boolean | undefined>, na
 }
 
 async function main(): Promise<void> {
+  const flags = ['observations', 'out', ...profile.models.flatMap(entry => [entry.controlFlag, entry.cacheFlag])];
   const { values } = parseArgs({
-    options: {
-      observations: { type: 'string' },
-      out: { type: 'string' },
-      'icon-control': { type: 'string' },
-      'gfs-control': { type: 'string' },
-      'icon-cache-dir': { type: 'string' },
-      'gfs-cache-dir': { type: 'string' }
-    },
-    allowPositionals: false
+    options: Object.fromEntries(flags.map(flag => [flag, { type: 'string' as const }])), allowPositionals: false
   });
   const result = await runStationReplay({
     observations: requiredString(values, 'observations'),
     out: requiredString(values, 'out'),
-    iconControl: requiredString(values, 'icon-control'),
-    gfsControl: requiredString(values, 'gfs-control'),
-    iconCacheDir: values['icon-cache-dir'] as string | undefined,
-    gfsCacheDir: values['gfs-cache-dir'] as string | undefined
+    controls: Object.fromEntries(profile.models.map(entry => [entry.modelId, {
+      manifestPath: requiredString(values, entry.controlFlag), cacheDir: values[entry.cacheFlag] as string | undefined
+    }]))
   });
   process.stdout.write(JSON.stringify({
     status: result.report.status,

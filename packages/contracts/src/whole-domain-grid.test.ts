@@ -1,7 +1,8 @@
+import { INDEXED_GRID, SPLIT_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { getBit } from './coverage.js';
 import { geographicToGrid, gridToGeographic, snapGridCoordinate, type RegularLatLonGrid } from './geometry.js';
-import { GFS_GRID, ICON_EU_GRID } from './products.js';
+
 import { assertWholeDomainDonorsActive, planWholeDomainGrid, wholeDomainDonorSupport } from './whole-domain-grid.js';
 
 const native = (grid: Partial<RegularLatLonGrid> & Pick<RegularLatLonGrid, 'width' | 'height' | 'lon0' | 'lat0' | 'dx' | 'dy' | 'wrapLongitude'>): RegularLatLonGrid =>
@@ -46,9 +47,9 @@ function expectMatchesReference(grid: RegularLatLonGrid, k: number): ReturnType<
 
 describe('whole-domain fine grid', () => {
   it('derives configured wrap and regional dimensions with signed native spacing', () => {
-    const gfs = planWholeDomainGrid(GFS_GRID, 10);
-    expect(gfs.fine).toMatchObject({ width: 14400, height: 7201, dx: 0.025, dy: -0.025, lon0: -180, lat0: 90, wrapLongitude: true, earthRadiusM: GFS_GRID.earthRadiusM });
-    const icon = planWholeDomainGrid(ICON_EU_GRID, 5);
+    const gfs = planWholeDomainGrid(INDEXED_GRID, 10);
+    expect(gfs.fine).toMatchObject({ width: 14400, height: 7201, dx: 0.025, dy: -0.025, lon0: -180, lat0: 90, wrapLongitude: true, earthRadiusM: INDEXED_GRID.earthRadiusM });
+    const icon = planWholeDomainGrid(SPLIT_GRID, 5);
     expect(icon.fine).toMatchObject({ width: 6881, height: 3281, dx: 0.0125, dy: -0.0125, lon0: -23.5, lat0: 70.5, wrapLongitude: false });
     const positive = planWholeDomainGrid(southwardGrid, 4);
     expect(positive.fine).toMatchObject({ width: 13, height: 9, dx: 0.625, dy: 0.625 });

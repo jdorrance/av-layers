@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, MAX_NATIVE_ZOOM, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { PRODUCTS, MAX_NATIVE_ZOOM, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
 import { createApp } from '../src/index';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture } from './v5-fixture';
 
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
-const upgrades = [
-  { product: GFS_PRODUCT, olderZoom: 7, zoom: 8 },
-  { product: ICON_EU_PRODUCT, olderZoom: 8, zoom: 9 },
-  { product: GFS_PRODUCT, olderZoom: 8, zoom: 9 },
-  { product: ICON_EU_PRODUCT, olderZoom: 9, zoom: 10 }
-];
+const upgrades = PRODUCTS.map(product => ({ product, olderZoom: MAX_NATIVE_ZOOM - 2, zoom: MAX_NATIVE_ZOOM }));
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 afterEach(() => { vi.useRealTimers(); });
@@ -42,7 +37,7 @@ describe('retained v5 zoom compatibility', () => {
       expect(body.frames.map(frame => frame.id)).toEqual(manifest.frames.map(frame => frame.id));
       expect(body.frames[0].layers['usable-lift-msl']).toMatchObject({ value: 310.25, status: 'valid', surfaceId: 'fine' });
       expect(body.frames[0].layers['usable-lift-agl']).toMatchObject({ value: 610.25, status: 'valid', surfaceId: 'fine' });
-      if (product.modelId === 'gfs') expect(body.frames[0].layers['precip-rate']).toMatchObject({ value: 7, status: 'valid', surfaceId: 'native' });
+      if (product.layers.includes('precip-rate')) expect(body.frames[0].layers['precip-rate']).toMatchObject({ value: 7, status: 'valid', surfaceId: 'native' });
       else expect(body.frames[0].layers).not.toHaveProperty('precip-rate');
 
       for (const surface of manifest.surfaces) for (const layer of surface.layers) {
@@ -61,13 +56,13 @@ describe('retained v5 zoom compatibility', () => {
     }
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('retains cached $modelId builds after decreasing the configured zoom', async product => {
-    const fixture = createV5Fixture({ product, maxZoom: product.maxNativeZoom });
+  it.each(PRODUCTS)('retains cached $modelId builds after decreasing the configured zoom', async product => {
+    const fixture = createV5Fixture({ product, maxZoom: MAX_NATIVE_ZOOM });
     const path = `/v1/models/${product.modelId}/latest?expand=manifest`;
     const accepted = await fixture.request(path);
     expect(accepted.status).toBe(200);
     await accepted.body?.cancel();
-    const limited = createApp({ products: { [product.modelId]: { ...fixture.product, maxNativeZoom: product.maxNativeZoom - 1 } } });
+    const limited = createApp({ products: { [product.modelId]: { ...fixture.product, maxNativeZoom: 0 } } });
     const response = await limited.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ manifest: { buildId: fixture.buildId } });
@@ -78,7 +73,7 @@ describe('retained v5 zoom compatibility', () => {
     expect(sampleResponseV5Schema.parse(await retainedSample.json()).frames[0].layers['usable-lift-msl'].value).toBe(310.25);
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('serves distinct $modelId zooms and sample layouts from one immutable master', async product => {
+  it.each(PRODUCTS)('serves distinct $modelId zooms and sample layouts from one immutable master', async product => {
     const older = createV5Fixture({ product, maxZoom: MAX_NATIVE_ZOOM, renderZoom: 6 });
     const current = createGroupedV5Fixture({ product, maxZoom: MAX_NATIVE_ZOOM, renderZoom: 8, groups: [[1], [2]],
       buildId: '20261101T000000Z-00000000-0000-0000-0000-000000000002' });
@@ -107,8 +102,8 @@ describe('retained v5 zoom compatibility', () => {
   it('rejects a manifest above the hard wire zoom limit', async () => {
     const fixture = createV5Fixture({ maxZoom: MAX_NATIVE_ZOOM });
     fixture.manifest.surfaces[0].coverage.maxZoom = MAX_NATIVE_ZOOM + 1;
-    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, json(fixture.manifest));
-    const response = await fixture.request('/v1/models/gfs/latest?expand=manifest');
+    fixture.objects.set(`builds/${fixture.product.modelId}/${fixture.buildId}/manifest.json`, json(fixture.manifest));
+    const response = await fixture.request(`/v1/models/${fixture.product.modelId}/latest?expand=manifest`);
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ title: 'publication-invalid' });
     expect(fixture.get.mock.calls.some(([, options]) => options?.range)).toBe(false);

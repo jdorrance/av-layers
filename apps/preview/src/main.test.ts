@@ -1,6 +1,7 @@
+import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createProductDescriptors, ICON_EU_PRODUCT, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
+import { createProductDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
 
@@ -137,6 +138,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
   manifest = fixtureManifest();
+  vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
   vi.stubGlobal('document', doc); vi.stubGlobal('window', win);
@@ -368,8 +370,8 @@ it('loads ICON layers and hourly frames directly from its published manifest and
   await start();
   ui('layer').value = 'usable-lift-agl';
   ui('layer').dispatchEvent(new Event('change'));
-  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...ICON_EU_PRODUCT.layers],
-    grid: ICON_EU_PRODUCT.grid, descriptors: createProductDescriptors(ICON_EU_PRODUCT),
+  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...SPLIT_PRODUCT.layers],
+    grid: SPLIT_PRODUCT.grid, descriptors: createProductDescriptors(SPLIT_PRODUCT),
     frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
       validTime: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z`,
       intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
@@ -377,7 +379,7 @@ it('loads ICON layers and hourly frames directly from its published manifest and
   });
   ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
-  expect(ui('layer').children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
+  expect(ui('layer').children.map(option => option.value)).toEqual(SPLIT_PRODUCT.layers);
   expect(ui('layer').value).toBe('usable-lift-agl');
   expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f007']);
   expect(fetchMock.mock.calls.at(-1)![0]).toContain('/models/icon-eu/latest?');

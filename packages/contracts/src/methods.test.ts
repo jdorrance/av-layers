@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema } from './index.js';
+import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema } from './index.js';
 
 describe('implemented method snapshots', () => {
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('publishes $modelId whole-domain layers with their actual methods and ground references', product => {
+  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('publishes $modelId whole-domain layers with their actual methods and ground references', product => {
     const descriptors = createWholeDomainDescriptors(product), legacy = createProductDescriptors(product);
     const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     expect(descriptors.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
@@ -15,7 +16,7 @@ describe('implemented method snapshots', () => {
     expect(descriptorSchema.parse(descriptors)).toEqual(descriptors);
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('describes $modelId terrain-column refinement separately from its native atmospheric method and legacy clearance', product => {
+  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('describes $modelId terrain-column refinement separately from its native atmospheric method and legacy clearance', product => {
     const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
     const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     const native = base.methods[base.layers['usable-lift-msl'].methodId];
@@ -43,7 +44,7 @@ describe('implemented method snapshots', () => {
     expect(TERRAIN_CLEARANCE_METHOD.caveats[1]).toContain('All positive-weight contributors must be convective');
   });
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
-    const descriptors = createProductDescriptors(GFS_PRODUCT);
+    const descriptors = createProductDescriptors(INDEXED_PRODUCT);
     expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-v2', 'trailing-precipitation-rate-v1']);
     expect(descriptors.layers['usable-lift-msl'].methodId).toBe(descriptors.layers['usable-lift-agl'].methodId);
     const lift = descriptors.methods['dry-lenschow-1p2-v2']!;
@@ -57,7 +58,7 @@ describe('implemented method snapshots', () => {
   });
 
   it('describes per-column model-level pressure and omits precipitation for ICON-EU lift-only product', () => {
-    const descriptors = createProductDescriptors(ICON_EU_PRODUCT);
+    const descriptors = createProductDescriptors(SPLIT_PRODUCT);
     expect(Object.keys(descriptors.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-model-levels-v2']);
     const lift = descriptors.methods[MODEL_LEVEL_LIFT_METHOD.id]!;
@@ -74,7 +75,7 @@ describe('implemented method snapshots', () => {
     expect(Object.isFrozen(MODEL_LEVEL_LIFT_METHOD.requiredInputs)).toBe(true);
   });
 
-  it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('resolves every current $modelId method ID to its exact input descriptor', product => {
+  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('resolves every current $modelId method ID to its exact input descriptor', product => {
     const descriptors = createProductDescriptors(product);
     const ids = product.layers.map(layer => descriptors.layers[layer].methodId);
     expect(createProductMethodId(product)).toBe([...new Set(ids)].join('+'));
@@ -85,7 +86,7 @@ describe('implemented method snapshots', () => {
   });
 
   it('retains historic ICON snapshots under their original shared ID without rewriting their inputs', () => {
-    const stored = createProductDescriptors(ICON_EU_PRODUCT), historic = stored.methods[MODEL_LEVEL_LIFT_METHOD.id];
+    const stored = createProductDescriptors(SPLIT_PRODUCT), historic = stored.methods[MODEL_LEVEL_LIFT_METHOD.id];
     delete stored.methods[MODEL_LEVEL_LIFT_METHOD.id];
     historic.id = LIFT_METHOD.id;
     stored.methods[LIFT_METHOD.id] = historic;
@@ -97,7 +98,7 @@ describe('implemented method snapshots', () => {
   });
 
   it('admits only the needed precipitation definition for a precipitation-only product', () => {
-    const descriptors = createProductDescriptors({ ...GFS_PRODUCT, layers: ['precip-rate'] });
+    const descriptors = createProductDescriptors({ ...INDEXED_PRODUCT, layers: ['precip-rate'] });
     expect(Object.keys(descriptors.methods)).toEqual(['trailing-precipitation-rate-v1']);
     expect(descriptors.methods[PRECIPITATION_METHOD.id]?.requiredInputs).toEqual(['precipitationMmPerHour']);
     expect(Object.values(descriptors.methods[PRECIPITATION_METHOD.id]!.inputs)).toEqual([
@@ -106,7 +107,7 @@ describe('implemented method snapshots', () => {
   });
 
   it('reads a retained definition without requiring current constants, normalization or an executable kernel', () => {
-    const stored = createProductDescriptors(GFS_PRODUCT), previous = stored.methods[LIFT_METHOD.id];
+    const stored = createProductDescriptors(INDEXED_PRODUCT), previous = stored.methods[LIFT_METHOD.id];
     previous.parameters.sinkRateMps = 1.3;
     previous.parameters.kelvinOffset = 0;
     previous.inputs.temp2mK.units = 'degC';
@@ -122,7 +123,7 @@ describe('implemented method snapshots', () => {
 
   it('rejects absent, misbound, incomplete or structurally invalid method descriptors', () => {
     const invalid = (mutate: (value: ReturnType<typeof JSON.parse>) => void) => {
-      const descriptor = JSON.parse(JSON.stringify(createProductDescriptors(GFS_PRODUCT)));
+      const descriptor = JSON.parse(JSON.stringify(createProductDescriptors(INDEXED_PRODUCT)));
       mutate(descriptor);
       expect(descriptorSchema.safeParse(descriptor).success).toBe(false);
     };

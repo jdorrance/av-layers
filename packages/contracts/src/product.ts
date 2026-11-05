@@ -30,26 +30,17 @@ function validSchedule(value: string): boolean {
 const schedules = z.array(z.string().refine(validSchedule, 'Expected a numeric five-field cron schedule')).refine(
   values => new Set(values).size === values.length, 'Model schedules must be unique'
 ).readonly();
-export const modelExecutionSchema = z.object({
+const modelExecutionSchema = z.object({
   shards: jobLimit, parallelism: jobLimit, workers: workerLimit, schedule: schedules
-}).strict().readonly();
-export type ModelExecution = z.infer<typeof modelExecutionSchema>;
-export const forecastConfigSchema = z.object({
-  parallelism: z.object({ jobs: jobLimit, workers: workerLimit }).strict().readonly(),
-  models: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), z.object({
-    zoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM),
-    shards: jobLimit, parallelism: jobLimit, schedule: schedules,
-    workers: workerLimit.optional()
-  }).strict().readonly()).readonly()
-}).strict().refine(config => Object.keys(config.models).length <= config.parallelism.jobs, {
-  path: ['parallelism', 'jobs'], message: 'Forecast job budget requires at least one slot per model'
-}).readonly();
+}).strict();
+export type ModelExecution = Readonly<z.infer<typeof modelExecutionSchema>>;
+export const MODEL_CONFIG_PATH = 'packages/contracts/config/models.json';
+export const parallelismSchema = z.object({ jobs: jobLimit, workers: workerLimit }).strict().readonly();
 
 export interface ProductDefinition {
   /** Public catalog/URL identity, independent of the upstream family and domain. */
   readonly modelId: string;
   readonly id: string;
-  readonly configPath: string;
   readonly coverageDir: string;
   readonly source: { readonly modelFamily: string; readonly configurationId: string; readonly domainId: string };
   readonly label: string;
@@ -69,12 +60,17 @@ export interface ProductDefinition {
   readonly execution: ModelExecution;
 }
 
+export interface ModelDefinition extends ProductDefinition {
+  readonly upstream: Readonly<Record<string, unknown>>;
+  readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number;
+    readonly cycleHoursUtc: readonly number[]; readonly statisticsResetHours: number | null };
+}
+
 // The shared portion of source JSON. Adapter-specific upstream settings stay in
 // that adapter; adding a model never extends a union of existing config types.
 const identifier = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const productConfigSchema = z.object({
-  modelId: identifier, id: identifier,
-  configPath: z.string().regex(/^packages\/contracts\/config\/[a-z0-9-]+\.json$/),
+  modelId: identifier.refine(id => id !== 'all', 'Model ID is reserved for workflow selection'), id: identifier,
   coverageDir: z.string().regex(/^coverage(?:\/[a-z0-9-]+)*$/),
   source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier }).readonly(),
   label: z.string().min(1), attribution: z.string().min(1),
@@ -82,14 +78,17 @@ const productConfigSchema = z.object({
     layers => new Set(layers).size === layers.length, 'Product requires unique scalar layers'
   ).readonly(),
   capabilities: capabilitiesSchema,
-  execution: modelExecutionSchema,
+  execution: modelExecutionSchema.extend({
+    zoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM), workers: workerLimit.optional() }).strict(),
   grid: gridSchema.readonly(),
   forecast: z.object({
     hours: z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES).refine(
       hours => hours.every((hour, i) => i === 0 || hour > hours[i - 1]),
       'Product requires strictly ascending frame hours'
     ).readonly(),
-    intervalHours: z.number().finite().positive()
+    intervalHours: z.number().finite().positive(),
+    cycleHoursUtc: z.array(z.number().int().min(0).max(23)).min(1).refine(hours => new Set(hours).size === hours.length).readonly(),
+    statisticsResetHours: z.number().finite().positive().nullable()
   }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour'),
   freshness: z.object({ maxCycleAgeHours: z.number().positive(), minHorizonHours: z.number().nonnegative() }).readonly(),
   terrainSubdivisionFactor: z.number().int().positive().max(64).optional(),
@@ -97,25 +96,28 @@ const productConfigSchema = z.object({
     id: identifier, description: z.string().min(1),
     west: z.number().min(-180).max(180), south: z.number().min(-90).max(90),
     east: z.number().min(-180).max(180), north: z.number().min(-90).max(90),
-    maxNativeZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM),
     interpolationHaloCells: z.number().int().nonnegative()
-  }).refine(coverage => coverage.west < coverage.east && coverage.south < coverage.north, 'Invalid coverage bounds')
+  }).refine(coverage => coverage.west < coverage.east && coverage.south < coverage.north, 'Invalid coverage bounds'),
+  upstream: z.record(z.string(), z.unknown()).readonly()
 }).refine(config => config.layers.length * config.forecast.hours.length <= MAX_SAMPLE_VALUES, 'Product exceeds sample value budget');
 
 /** Validate declarative product settings without importing any source adapter. */
-export function defineProduct(raw: unknown): ProductDefinition {
+export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
   const config = productConfigSchema.parse(raw);
+  const { zoom, ...execution } = config.execution;
   return Object.freeze({
-    modelId: config.modelId, id: config.id, configPath: config.configPath,
+    modelId: config.modelId, id: config.id,
     coverageDir: config.coverageDir, source: config.source, label: config.label,
     attribution: config.attribution,
     bounds: Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const),
     coverageDescription: config.coverage.description, freshness: config.freshness,
     grid: config.grid, coverageId: config.coverage.id,
-    maxNativeZoom: config.coverage.maxNativeZoom,
+    maxNativeZoom: zoom,
     supportHaloCells: config.coverage.interpolationHaloCells,
     ...(config.terrainSubdivisionFactor === undefined ? {} : { terrainSubdivisionFactor: config.terrainSubdivisionFactor }),
     frameHours: config.forecast.hours, intervalHours: config.forecast.intervalHours,
-    layers: config.layers, capabilities: config.capabilities, execution: config.execution
+    layers: config.layers, capabilities: config.capabilities,
+    execution: Object.freeze({ ...execution, workers: workerLimit.parse(execution.workers ?? workers) }),
+    forecast: config.forecast, upstream: config.upstream
   });
 }

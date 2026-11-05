@@ -1,5 +1,5 @@
 name: Forecast maintenance
-run-name: Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}
+run-name: Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model }} ${{ inputs.action }}
 on:
   workflow_dispatch:
     inputs:
@@ -20,9 +20,7 @@ on:
         required: true
       model:
         description: Model pointer to maintain
-        type: choice
-        options: [gfs, icon-eu]
-        default: gfs
+        type: string
         required: true
       build-id:
         description: Retained build ID for rollback
@@ -32,7 +30,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: forecast-${{ inputs.environment || 'production' }}-${{ inputs.model || 'gfs' }}
+  group: forecast-${{ inputs.environment || 'production' }}-${{ inputs.model }}
   cancel-in-progress: false
 jobs:
   maintain:
@@ -44,7 +42,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TARGET_ENV: ${{ inputs.environment || 'production' }}
       ACTION: ${{ inputs.action }}
-      MODEL: ${{ inputs.model || 'gfs' }}
+      MODEL: ${{ inputs.model }}
       BUILD_ID: ${{ inputs['build-id'] }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

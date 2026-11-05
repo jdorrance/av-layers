@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { expectedTiles, GFS_PRODUCT, ICON_EU_PRODUCT, type LayerId } from '@av/contracts';
+import { DEFAULT_MODEL, MAX_MODEL_WORKERS, coverageAtZoom, expectedTiles, getProduct, type LayerId } from '@av/contracts';
 import { createRasterizer } from './raster.js';
 import { createRasterPool, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
 
-const product = process.argv[2] === 'gfs' ? GFS_PRODUCT : process.argv[2] === 'icon-eu' ? ICON_EU_PRODUCT : undefined;
-const count = Number(process.argv[3]);
-if (!product || ![0, 2, 3].includes(count)) throw new Error('Usage: node --import tsx apps/batch/src/raster-pool.bench.ts gfs|icon-eu 0|2|3');
-const mask = (await loadBundledFineCoverage(product, wholeDomainPlan(product)!)).mask;
+const product = getProduct(process.argv[2] ?? DEFAULT_MODEL);
+const count = Number(process.argv[3] ?? product?.execution.workers);
+if (!product || !Number.isSafeInteger(count) || count < 0 || count > MAX_MODEL_WORKERS) throw new Error('Usage: node --import tsx apps/batch/src/raster-pool.bench.ts [MODEL] [WORKERS]');
+const mask = coverageAtZoom((await loadBundledFineCoverage(product, wholeDomainPlan(product)!)).mask, product.maxNativeZoom);
 const active = mask.coverage.offsets[mask.coverage.blockIds.length]!;
 const fields = [0, 1].map(layer => {
   const values = new Float32Array(active), flags = new Uint8Array(active);

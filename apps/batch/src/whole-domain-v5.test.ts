@@ -1,9 +1,10 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveFrame, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
@@ -115,7 +116,7 @@ async function verifySampleServing(store: PublicationStore, manifest: Awaited<Re
 }
 
 const product: ProductDefinition = {
-  ...GFS_PRODUCT,
+  ...INDEXED_PRODUCT,
   modelId: 'whole-domain-fixture', id: 'whole-domain-fixture-recipe',
   source: { modelFamily: 'fixture-model', configurationId: 'whole-domain-fixture-provider', domainId: 'synthetic' },
   label: 'Whole-domain fixture', attribution: 'Synthetic test data',
@@ -261,20 +262,20 @@ describe('whole-domain v5 production', () => {
   }, 60_000);
 
   it('binds bundled fine coverage to product policy before loading sparse assets', async () => {
-    const plan = wholeDomainPlan(GFS_PRODUCT);
+    const plan = wholeDomainPlan(INDEXED_PRODUCT);
     if (!plan) throw new Error('Missing GFS whole-domain plan');
-    const fine = await loadBundledFineCoverage(GFS_PRODUCT, plan);
-    expect(fine.descriptor.id).toBe(GFS_PRODUCT.coverageId);
-    expect(fine.descriptor.bounds).toEqual(GFS_PRODUCT.bounds);
-    expect(fine.descriptor.maxZoom).toBeGreaterThanOrEqual(GFS_PRODUCT.maxNativeZoom);
-    const lowered = await loadBundledFineCoverage({ ...GFS_PRODUCT, maxNativeZoom: 0 }, plan);
+    const fine = await loadBundledFineCoverage(INDEXED_PRODUCT, plan);
+    expect(fine.descriptor.id).toBe(INDEXED_PRODUCT.coverageId);
+    expect(fine.descriptor.bounds).toEqual(INDEXED_PRODUCT.bounds);
+    expect(fine.descriptor.maxZoom).toBeGreaterThanOrEqual(INDEXED_PRODUCT.maxNativeZoom);
+    const lowered = await loadBundledFineCoverage({ ...INDEXED_PRODUCT, maxNativeZoom: 0 }, plan);
     expect(lowered.hash).toBe(fine.hash);
     expect(lowered.mask.maxZoom).toBe(fine.mask.maxZoom);
     vi.mocked(readLocalFile).mockClear();
     for (const changed of [
-      { ...GFS_PRODUCT, coverageId: 'wrong-policy' },
-      { ...GFS_PRODUCT, bounds: [-179, -50, 180, 65] as const },
-      { ...GFS_PRODUCT, maxNativeZoom: fine.descriptor.maxZoom + 1 }
+      { ...INDEXED_PRODUCT, coverageId: 'wrong-policy' },
+      { ...INDEXED_PRODUCT, bounds: [-179, -50, 180, 65] as const },
+      { ...INDEXED_PRODUCT, maxNativeZoom: fine.descriptor.maxZoom + 1 }
     ]) await expect(loadBundledFineCoverage(changed, plan)).rejects.toThrow('Fine coverage does not match');
     expect(vi.mocked(readLocalFile).mock.calls).toHaveLength(3);
     expect(vi.mocked(readLocalFile).mock.calls.every(([path]) => path.endsWith('/manifest.json'))).toBe(true);

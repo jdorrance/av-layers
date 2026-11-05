@@ -1,13 +1,14 @@
+import { INDEXED_GRID, SPLIT_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import configuredZones from '../config/refinement.json';
-import { GFS_GRID, ICON_EU_GRID } from './products.js';
+
 import { prepareGridGeometry, type GeographicBounds } from './geometry.js';
 import { containsRefinement, parseRefinementConfig, planRefinements, refinementCandidate, refinementGeometrySchema, REFINEMENT_SPACING_M } from './refinement.js';
 
 const rectangle = (w: number, s: number, e: number, n: number) => [[w, s], [e, s], [e, n], [w, n], [w, s]];
 const feature = (id: string, coordinates = [rectangle(10, 39, 12, 41)]) => ({ type: 'Feature', id, properties: {}, geometry: { type: 'Polygon', coordinates } });
 const config = (...features: ReturnType<typeof feature>[]) => parseRefinementConfig({ type: 'FeatureCollection', features });
-const options = { sourceGrid: GFS_GRID, bounds: [-180, -55, 180, 65] as GeographicBounds, haloCells: 1 };
+const options = { sourceGrid: INDEXED_GRID, bounds: [-180, -55, 180, 65] as GeographicBounds, haloCells: 1 };
 
 describe('configured refinement geometry', () => {
   it('validates standalone patch geometry and selects by exact polygon and supported layer', () => {
@@ -31,7 +32,7 @@ describe('configured refinement geometry', () => {
   it('plans the configured polygon using each existing source without changing source geometry', () => {
     const configured = parseRefinementConfig(configuredZones);
     expect(configured.features).toHaveLength(1);
-    for (const sourceGrid of [GFS_GRID, ICON_EU_GRID]) {
+    for (const sourceGrid of [INDEXED_GRID, SPLIT_GRID]) {
       const [plan] = planRefinements(configured, { ...options, sourceGrid });
       expect(plan.id).toBe('zone-001');
       expect(plan.bounds).toEqual([43.2, 38.6, 46.9, 41.6]);
@@ -63,7 +64,7 @@ describe('configured refinement geometry', () => {
 
   it('clips ownership to product and native center bounds without altering the polygon', () => {
     const input = config(feature('zone-001'));
-    const sourceGrid = { ...GFS_GRID, width: 5, height: 5, lon0: 10, lat0: 41, dx: 0.25, dy: -0.25, wrapLongitude: false };
+    const sourceGrid = { ...INDEXED_GRID, width: 5, height: 5, lon0: 10, lat0: 41, dx: 0.25, dy: -0.25, wrapLongitude: false };
     const [plan] = planRefinements(input, { ...options, sourceGrid, bounds: [9, 39, 12, 40.75] });
     expect(plan.bounds).toEqual([10, 40, 11, 40.75]);
     expect(plan.sourceBounds).toEqual([10, 40, 11, 41]);
@@ -226,7 +227,7 @@ describe('configured refinement geometry', () => {
     expect(() => config(...Array.from({ length: 5 }, (_, i) => feature(`zone-${i}`, [coordinates])))).toThrow('coordinate budget');
     expect(() => config(feature('zone-001', [Array.from({ length: 257 }, () => [10, 40])]))).toThrow();
     expect(() => planRefinements(config(feature('zone-001')), { ...options, bounds: [170, -55, -170, 65] })).toThrow('nonwrapping');
-    for (const sourceGrid of [{ ...GFS_GRID, lat0: 91 }, { ...GFS_GRID, width: 100 }, { ...GFS_GRID, lon0: 170, width: 100, wrapLongitude: false }]) {
+    for (const sourceGrid of [{ ...INDEXED_GRID, lat0: 91 }, { ...INDEXED_GRID, width: 100 }, { ...INDEXED_GRID, lon0: 170, width: 100, wrapLongitude: false }]) {
       expect(() => planRefinements(config(feature('zone-001')), { ...options, sourceGrid })).toThrow();
     }
     const excessive = config(feature('zone-001', [rectangle(-10, 20, 10, 40)]));

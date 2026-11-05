@@ -1,7 +1,7 @@
 import z from 'zod';
 import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, methodDescriptorSchema, methodIdSchema } from './methods.js';
 import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
-import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layers.js';
+import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, layerSurface, paletteSchema, sampleStatusSchema } from './layers.js';
 import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
 import type { CoverageDescriptor } from './coverage.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM } from './format.js';
@@ -190,7 +190,7 @@ export const sampleResponseV5Schema = z.strictObject({
     if (ids.has(surface.id) || kinds.has(surface.kind)) ctx.addIssue({ code: 'custom', message: 'Duplicate surface identity' });
     ids.add(surface.id); kinds.add(surface.kind);
     for (const layer of surface.layers) {
-      if (owners.has(layer) || (layer === 'precip-rate' ? surface.kind !== 'native' : surface.kind !== 'fine')) ctx.addIssue({ code: 'custom', message: 'Invalid layer ownership' });
+      if (owners.has(layer) || surface.kind !== layerSurface(layer)) ctx.addIssue({ code: 'custom', message: 'Invalid layer ownership' });
       owners.set(layer, surface.id);
     }
   }
@@ -232,7 +232,7 @@ function validateV5Records(manifest: ManifestV5): void {
     let previous = -1;
     for (const layer of surface.layers) {
       const index = manifest.layers.indexOf(layer);
-      if (index <= previous || owned.has(layer) || (layer === 'precip-rate' ? surface.kind !== 'native' : surface.kind !== 'fine')) throw new Error('Invalid layer ownership or order');
+      if (index <= previous || owned.has(layer) || surface.kind !== layerSurface(layer)) throw new Error('Invalid layer ownership or order');
       previous = index; owned.add(layer);
     }
     const samples = surface.samples, expectedChannels = manifest.frames.length * surface.layers.length;

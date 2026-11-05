@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProduct, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -80,7 +80,7 @@ export async function manifest(
   build: string,
   entry: Awaited<ReturnType<typeof admit>>,
   ctx?: WaitContext,
-  product = getProduct(model)
+  product: ProductDefinition | undefined = getProduct(model)
 ): Promise<PublishedManifest> {
   let entries = manifestCache.get(bucket);
   if (!entries) { entries = new ByteCache(64, 4 * 1024 * 1024); manifestCache.set(bucket, entries); }

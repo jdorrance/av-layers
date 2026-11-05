@@ -100,8 +100,6 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
   const sample = (lat: number, lon: number, layers: readonly LayerId[], selection: 'all' | readonly string[]) =>
     client.sample(build, { lat, lon, frames: selection, layers, signal });
   if (manifest.version === 5) {
-    const kinds = new Set(manifest.surfaces.map(surface => surface.kind));
-    if (manifest.model === 'gfs') invariant(kinds.has('native') && kinds.has('fine'), 'GFS v5 requires native precipitation and fine lift surfaces');
     for (const surface of manifest.surfaces) {
       invariant(surface.layers.length > 0, `Surface ${surface.id} has no layers`);
       const point = await coveredPoint(client, build, surface.layers, signal);
