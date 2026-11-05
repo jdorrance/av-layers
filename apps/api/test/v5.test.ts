@@ -228,7 +228,7 @@ describe('API v5 metadata', () => {
 
 describe('API v5 sampling', () => {
   it('roundtrips projected native and fine frame groups through the client with bounded reads', async () => {
-    const grid = gridSchema.parse({ kind: 'lambert-conformal', width: 32, height: 18, earthRadiusM: 6371229,
+    const grid = gridSchema.parse({ kind: 'lambert-conformal', width: 32, height: 10, earthRadiusM: 6371229,
       centralMeridianDeg: -100, latitudeOfOriginDeg: 40, standardParallel1Deg: 30, standardParallel2Deg: 60,
       x0M: -10000, y0M: -10000, dxM: 3000, dyM: 3000, wrapLongitude: false });
     const fixture = createGroupedV5Fixture({ grid, bounds: [-101, 39, -98, 41], groups: [[1], [2]] });
@@ -246,13 +246,17 @@ describe('API v5 sampling', () => {
     expect(ranges.reduce((bytes, [, options]) => bytes + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
     const single = await api.sample(build, { ...point, frames: ['h002'], layers: ['usable-lift-agl'] });
     expect(single.frames[0].layers['usable-lift-agl']).toMatchObject({ value: 620.25, surfaceId: 'fine' });
+    const edge = await api.sample(build, { ...gridToGeographic(grid, 8.25, 9)!, frames: 'all' });
+    expect(edge.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'valid'))).toBe(true);
     const outside = gridToGeographic(grid, 8, 12)!;
     const before = fixture.get.mock.calls.filter(([, options]) => options?.range).length;
     const empty = await api.sample(build, { ...outside, frames: 'all' });
     expect(empty.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'outside-domain'))).toBe(true);
-    const rim = gridToGeographic(grid, -0.25, 2)!;
-    const rimResult = await api.sample(build, { ...rim, frames: 'all' });
-    expect(rimResult.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'outside-domain'))).toBe(true);
+    for (const [x, y] of [[-0.1, 8.25], [31.1, 8.25], [8.25, 9.1]]) {
+      const rim = await api.sample(build, { ...gridToGeographic(grid, x, y)!, frames: 'all' });
+      expect(rim.frames.every(frame => Object.values(frame.layers).every(cell =>
+        cell.status === 'outside-domain' && cell.value === null && cell.support === 0))).toBe(true);
+    }
     expect(fixture.get.mock.calls.filter(([, options]) => options?.range)).toHaveLength(before);
     const tilejson = await fixture.request(`/v1/models/${fixture.product.modelId}/runs/${fixture.buildId}/layers/usable-lift-msl/h001/tilejson.json`);
     expect(tilejson.status).toBe(200);
