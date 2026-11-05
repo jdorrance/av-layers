@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GFS_PRODUCT, ICON_EU_PRODUCT, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema, type ManifestV5 } from '@av/contracts';
+import { ApiClient, layerMaxZoom, previewRasterSource, windyTileOptions } from '@av/contracts/client';
 import { createApp } from '../src/index';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture, finePoint } from './v5-fixture';
 
+const iconGroups = [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]];
 const cases = [
-  { product: GFS_PRODUCT, maxZoom: 8, groups: [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24]] },
-  { product: ICON_EU_PRODUCT, maxZoom: 9, groups: [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]] }
+  { product: GFS_PRODUCT, maxZoom: 9, groups: Array.from({ length: 12 }, (_, i) => [i * 2 + 1, i * 2 + 2]),
+    retainedGroups: [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24]] },
+  { product: ICON_EU_PRODUCT, maxZoom: 10, groups: iconGroups, retainedGroups: iconGroups }
 ];
 
 function merge(target: ReturnType<typeof createV5Fixture>, source: ReturnType<typeof createV5Fixture>) {
@@ -35,20 +38,37 @@ function expectFrames(body: ReturnType<typeof sampleResponseV5Schema.parse>, man
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 afterEach(() => { vi.useRealTimers(); });
 
-describe('eight-group v5 serving', () => {
-  it.each(cases)('maps all $product.modelId frames and every group boundary while retaining the legacy layout', async options => {
+describe('frame-group v5 serving', () => {
+  it.each(cases)('maps all $product.modelId frames and every group boundary while retaining earlier groups and the legacy layout', async options => {
     const fixture = createGroupedV5Fixture({ ...options, buildId: '20261101T000000Z-00000000-0000-0000-0000-000000000002' });
     const legacy = createV5Fixture(options);
-    merge(fixture, legacy);
+    const retained = createGroupedV5Fixture({ product: options.product, maxZoom: options.maxZoom - 1, groups: options.retainedGroups,
+      buildId: '20261101T000000Z-00000000-0000-0000-0000-000000000003' });
+    merge(fixture, legacy); merge(fixture, retained);
     fixture.objects.set(`catalog/${options.product.modelId}/latest.json`, new TextEncoder().encode(JSON.stringify({
       version: 1, model: options.product.modelId, latestBuildId: fixture.buildId,
-      retained: [legacy.manifest, fixture.manifest].map(({ buildId, cycle, expiresAt }) => ({ buildId, cycle, expiresAt, manifestKey: `builds/${options.product.modelId}/${buildId}/manifest.json` }))
+      retained: [legacy.manifest, retained.manifest, fixture.manifest].map(({ buildId, cycle, expiresAt }) => ({ buildId, cycle, expiresAt, manifestKey: `builds/${options.product.modelId}/${buildId}/manifest.json` }))
     })));
     const legacyPath = `/v1/models/${options.product.modelId}/runs/${legacy.buildId}/sample?lat=${commonPoint.lat}&lon=${commonPoint.lon}&frame=all`;
     const previous = await sampleBody(await fixture.request(legacyPath));
     expectFrames(previous, legacy.manifest, [0, 1]);
+    const retainedPath = `/v1/models/${options.product.modelId}/runs/${retained.buildId}/sample?lat=${commonPoint.lat}&lon=${commonPoint.lon}&frame=all`;
+    const retainedBefore = await sampleBody(await fixture.request(retainedPath));
+    expectFrames(retainedBefore, retained.manifest, retained.manifest.frames.map((_, index) => index));
+    const api = new ApiClient({ baseUrl: 'https://api.test', now: () => NOW, fetchImpl: async input => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      return fixture.request(url.pathname + url.search);
+    } });
+    const pinned = await api.latest(options.product.modelId);
+    for (const layer of pinned.manifest.layers) {
+      const zoom = layerMaxZoom(pinned.manifest, layer);
+      expect(zoom).toBe(options.maxZoom);
+      expect(previewRasterSource(pinned.templates[layer], pinned.manifest.frames[0].id, zoom, 'Fixture').maxzoom).toBe(zoom);
+      expect(windyTileOptions(zoom, 0.5, 'Fixture').maxNativeZoom).toBe(zoom);
+    }
     const indices = fixture.manifest.frames.map((_, index) => index);
-    expectFrames(await sampleBody(await fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=all')), fixture.manifest, indices);
+    const series = await api.sample(pinned, { ...commonPoint, frames: 'all' });
+    expectFrames(sampleResponseV5Schema.parse(series), fixture.manifest, indices);
     let firstFrame = 0;
     for (const group of options.groups) {
       for (const index of [firstFrame, firstFrame + group.length - 1]) {
@@ -58,6 +78,7 @@ describe('eight-group v5 serving', () => {
       firstFrame += group.length;
     }
     expect(await sampleBody(await fixture.request(legacyPath))).toEqual(previous);
+    expect(await sampleBody(await fixture.request(retainedPath))).toEqual(retainedBefore);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
     expect(inFlightAllocationBytes()).toBe(0);
   });
@@ -76,7 +97,7 @@ describe('eight-group v5 serving', () => {
     const body = await sampleBody(await pending);
     expectFrames(body, fixture.manifest, fixture.manifest.frames.map((_, index) => index));
     const ranges = fixture.get.mock.calls.flatMap(([, options]) => options?.range ? [options.range] : []);
-    expect(ranges).toHaveLength(options.product.modelId === 'gfs' ? 16 : 8);
+    expect(ranges).toHaveLength(options.groups.length * (options.product.modelId === 'gfs' ? 2 : 1));
     const bytes = ranges.reduce((total, range) => total + range.length, 0);
     expect(bytes).toBe(options.product.modelId === 'gfs' ? 360 : 170);
     expect(bytes).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);

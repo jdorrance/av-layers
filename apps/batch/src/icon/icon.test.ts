@@ -714,7 +714,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       frameCount: daylightHours.length
     });
     expect(capacity.violations).toEqual([]);
-    expect(capacity.tilesByZoom).toEqual([1, 2, 4, 8, 16, 42, 134, 434, 1514, 5580]);
+    expect(capacity.tilesByZoom).toEqual([1, 2, 4, 8, 16, 42, 134, 434, 1514, 5580, 21280]);
   });
 
   it.skipIf(!PROBE_DIR)(

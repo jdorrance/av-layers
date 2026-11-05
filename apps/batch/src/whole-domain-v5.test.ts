@@ -493,7 +493,7 @@ describe('whole-domain v5 production', () => {
   }, 60_000);
 
   it.each([
-    { receiptsOnly: true, hours: [3, 6, 9, 12, 15, 18, 21, 24] },
+    { receiptsOnly: true, hours: Array.from({ length: 12 }, (_, i) => (i + 1) * 2) },
     { receiptsOnly: false, hours: [12, 24] }
   ])('finalizes $hours.length frame groups and serves samples with receipt-only mode $receiptsOnly', async ({ receiptsOnly, hours }) => {
     const setup = await fixture(), out = await root('wd-remote'), store = new PublicationStore(), source = fixtureProvider();
@@ -512,6 +512,11 @@ describe('whole-domain v5 production', () => {
     const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store: receiptsOnly ? store : undefined });
     const manifest = await readV5(path);
     expect(manifest.surfaces.every(surface => surface.samples.format === 'frame-group-block-shards-v1')).toBe(true);
+    for (const surface of manifest.surfaces) {
+      if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Missing frame groups');
+      expect([...new Set(surface.samples.shards.map(shard => shard.group))]).toEqual(hours.map((_, i) => i));
+      expect(surface.samples.shards.at(-1)).toMatchObject({ group: hours.length - 1, firstFrame: hours.length - 1, frameCount: 1 });
+    }
     const manifestBytes = await readFile(path);
     store.objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, { bytes: manifestBytes, etag: 'manifest' });
     await verifySampleServing(store, manifest, configured);

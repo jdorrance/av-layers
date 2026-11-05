@@ -10,7 +10,7 @@ import { refinementInputSchema } from '../apps/batch/src/refinement/prepare.js';
 import { localPath } from '../apps/batch/src/validate.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn() }));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
-vi.mock('../apps/batch/src/parallel.js', () => ({ MAX_FORECAST_SHARDS: 4, createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize, verifyBuildReceipts: fake.verifyReceipts }));
+vi.mock('../apps/batch/src/parallel.js', () => ({ createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize, verifyBuildReceipts: fake.verifyReceipts }));
 vi.mock('../apps/batch/src/providers.js', async () => {
   const { validateCycle } = await import('../apps/batch/src/gfs/fields.js');
   return { getForecastProvider: () => ({ async resolveCycle({ cycle, ...options }: { cycle?: string }) { return validateCycle(cycle || (await fake.discover(options)).cycle); } }) };
@@ -93,7 +93,7 @@ it.each([null, retainedPointer(['2026-10-29T18:00:00Z'])])('plans a discovered n
   expect(fake.discover).toHaveBeenCalledOnce();
   expect(fake.discover).toHaveBeenCalledWith({ cacheDir: '.cache/gfs', signal: expect.any(AbortSignal) });
   expect(fake.pointer).toHaveBeenCalledWith({}, 'gfs', expect.any(AbortSignal));
-  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), shards: 4, signal: expect.any(AbortSignal), store: {}, wholeDomain: { catalogRef, storage: {}, cacheOnly: true } });
+  expect(fake.plan).toHaveBeenCalledWith('gfs', { out: 'output', cycle: manifest.cycle.replace('.000Z', 'Z'), signal: expect.any(AbortSignal), store: {}, wholeDomain: { catalogRef, storage: {}, cacheOnly: true } });
 });
 
 it.each(MODEL_IDS)('passes the same global catalog pin for configured %s zones', async model => {

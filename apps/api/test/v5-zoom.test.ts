@@ -6,7 +6,9 @@ import { NOW, commonPoint, createV5Fixture } from './v5-fixture';
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
 const upgrades = [
   { product: GFS_PRODUCT, olderZoom: 7, zoom: 8 },
-  { product: ICON_EU_PRODUCT, olderZoom: 8, zoom: 9 }
+  { product: ICON_EU_PRODUCT, olderZoom: 8, zoom: 9 },
+  { product: GFS_PRODUCT, olderZoom: 8, zoom: 9 },
+  { product: ICON_EU_PRODUCT, olderZoom: 9, zoom: 10 }
 ];
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
@@ -60,12 +62,12 @@ describe('retained v5 zoom compatibility', () => {
   });
 
   it.each([GFS_PRODUCT, ICON_EU_PRODUCT])('rejects a cached $modelId manifest above its configured maximum', async product => {
-    const fixture = createV5Fixture({ product, maxZoom: 9 });
+    const fixture = createV5Fixture({ product, maxZoom: product.maxNativeZoom });
     const path = `/v1/models/${product.modelId}/latest?expand=manifest`;
     const accepted = await fixture.request(path);
     expect(accepted.status).toBe(200);
     await accepted.body?.cancel();
-    const limited = createApp({ products: { [product.modelId]: { ...fixture.product, maxNativeZoom: 8 } } });
+    const limited = createApp({ products: { [product.modelId]: { ...fixture.product, maxNativeZoom: product.maxNativeZoom - 1 } } });
     const response = await limited.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ title: 'publication-invalid' });

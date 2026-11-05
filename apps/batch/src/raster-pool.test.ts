@@ -77,7 +77,7 @@ describe('bounded per-frame raster workers', () => {
     await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');
   });
 
-  it.each([[GFS_PRODUCT, 14_583_173, 150_268_641], [ICON_EU_PRODUCT, 9_981_126, 102_783_051]] as const)('admits the actual $0.modelId packed snapshot within a bounded whole-domain budget', async (product, active, expectedBytes) => {
+  it.each([[GFS_PRODUCT, 14_583_173, 150_301_409], [ICON_EU_PRODUCT, 9_981_126, 102_914_123]] as const)('admits each configured packed snapshot within a bounded whole-domain budget', async (product, active, expectedBytes) => {
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(active);
     const fields = (['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => ({ layer, field: { values: new Float32Array(active), flags: new Uint8Array(active), coverage: fine.coverage } }));

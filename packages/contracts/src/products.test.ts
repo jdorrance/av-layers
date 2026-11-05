@@ -12,7 +12,7 @@ describe('production product registry', () => {
     expect(getProduct('gfs')).toBe(GFS_PRODUCT);
     expect(getProduct('icon-eu')).toBe(ICON_EU_PRODUCT);
     expect(GFS_PRODUCT.id).toBe('gfs-soaring');
-    expect(GFS_PRODUCT.maxNativeZoom).toBe(8);
+    expect(GFS_PRODUCT.maxNativeZoom).toBe(9);
     expect(GFS_PRODUCT.source).toEqual({ modelFamily: 'gfs', configurationId: 'noaa-gfs-0p25', domainId: 'global' });
     expect(GFS_PRODUCT.capabilities).toEqual({
       verticalCoordinate: 'isobaric',
@@ -22,7 +22,7 @@ describe('production product registry', () => {
     expect(ICON_EU_PRODUCT.id).toBe('icon-eu-soaring');
     expect(ICON_EU_PRODUCT.source).toEqual({ modelFamily: 'icon', configurationId: 'dwd-icon-eu-regular-0p0625', domainId: 'europe' });
     expect(ICON_EU_PRODUCT.layers).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(ICON_EU_PRODUCT.maxNativeZoom).toBe(9);
+    expect(ICON_EU_PRODUCT.maxNativeZoom).toBe(10);
     expect(ICON_EU_PRODUCT.capabilities).toEqual({
       verticalCoordinate: 'model-levels',
       maxVerticalLevels: 30,

@@ -61,7 +61,7 @@
                     "type": "string"
                   },
                   "maxZoom": {
-                    "maximum": 9,
+                    "maximum": 10,
                     "minimum": 0,
                     "type": "integer"
                   }
@@ -650,7 +650,7 @@
                           "type": "string"
                         },
                         "maxZoom": {
-                          "maximum": 9,
+                          "maximum": 10,
                           "minimum": 0,
                           "type": "integer"
                         }
@@ -2097,7 +2097,7 @@
                           "type": "string"
                         },
                         "maxZoom": {
-                          "maximum": 9,
+                          "maximum": 10,
                           "minimum": 0,
                           "type": "integer"
                         }
@@ -3043,7 +3043,7 @@
                                 "type": "string"
                               },
                               "maxZoom": {
-                                "maximum": 9,
+                                "maximum": 10,
                                 "minimum": 0,
                                 "type": "integer"
                               }
@@ -3131,7 +3131,7 @@
                                       "type": "string"
                                     },
                                     "maxZoom": {
-                                      "maximum": 9,
+                                      "maximum": 10,
                                       "minimum": 0,
                                       "type": "integer"
                                     }
@@ -4434,7 +4434,7 @@
                               "type": "string"
                             },
                             "maxZoom": {
-                              "maximum": 9,
+                              "maximum": 10,
                               "minimum": 0,
                               "type": "integer"
                             }
@@ -4737,7 +4737,7 @@
                                     "type": "string"
                                   },
                                   "maxZoom": {
-                                    "maximum": 9,
+                                    "maximum": 10,
                                     "minimum": 0,
                                     "type": "integer"
                                   }

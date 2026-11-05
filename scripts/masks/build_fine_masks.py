@@ -166,7 +166,7 @@ def build_hierarchy(settings, k, source):
     bounds = (coverage['west'], coverage['south'], coverage['east'], coverage['north'])
     if not (-180 <= bounds[0] < bounds[2] <= 180 and -90 <= bounds[1] < bounds[3] <= 90):
         raise ValueError('Expected non-crossing coverage bounds')
-    if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= 9:
+    if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= 10:
         raise ValueError('Invalid maximum native zoom')
     grid_hash = hashlib.sha256(canonical_grid_json(fine).encode()).hexdigest()
     with build_masks.tempfile.TemporaryDirectory(prefix='fine-mask-') as tmp:

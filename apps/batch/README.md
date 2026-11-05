@@ -59,7 +59,8 @@ The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
 [model workflow](../../.github/workflows/forecast-model.yml) per model.
 `forecast-terrain` prepares or validates each model's reusable terrain cache in
 R2. Planning then resolves the cycle and daylight-filtered hours, loads cached
-terrain, and freezes coverage, terrain and recipe identities in the plan. Up to eight
+terrain, and freezes coverage, terrain and recipe identities in the plan. The
+[planner](src/parallel.ts) partitions the selected hours into bounded groups.
 `forecast-shard` workers stage verified terrain from R2 and upload validated
 archives and frame-group sample shards directly. Each acquired native frame
 supplies its native layers and packed fine lift fields. Assembly verifies the
