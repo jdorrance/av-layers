@@ -14,7 +14,8 @@ export async function readLocalFile(path: string, maxBytes: number, expectedByte
       offset += result.bytesRead;
     }
     const after = await file.stat();
-    if (after.size !== size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) throw new Error(`Local file changed during read: ${path}`);
+    // A read can move ctime when Linux updates atime. Content changes move mtime.
+    if (after.size !== size || after.mtimeMs !== before.mtimeMs) throw new Error(`Local file changed during read: ${path}`);
     return bytes;
   } finally { await file.close(); }
 }
