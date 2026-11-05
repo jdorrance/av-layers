@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { assertWholeDomainDonorsActive, coverageAtZoom, type LayerId, type Manifest } from '@av/contracts';
+import { assertWholeDomainDonorsActive, coverageAtZoom, layerSurface, type LayerId, type Manifest } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
 import { createNormalizedFrameTarget, type ForecastProvider } from '../provider.js';
 import type { NormalizedFrame } from '@av/forecast/inputs';
@@ -179,7 +179,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       const fineTargets: { path: string; field: PackedGridField; layer: LayerId }[] = [];
       for (const layer of product.layers) {
         const tilesKey = `${prefix}/${layer}/${id}.pmtiles`, path = localPath(root, tilesKey);
-        if (layer === 'precip-rate') nativeTargets.push({ path, field: nativeFields[layer]!, layer });
+        if (layerSurface(layer) === 'native') nativeTargets.push({ path, field: nativeFields[layer]!, layer });
         else fineTargets.push({ path, field: fineFields[layer as keyof typeof fineFields]!, layer });
       }
       if (nativeTargets.length) await nativeRenderer.renderArchives(nativeTargets);

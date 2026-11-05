@@ -2,7 +2,7 @@ import { renderBuildDiagnostics, renderPaletteLegend, renderSampleTable } from '
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { type LayerId, type ModelId } from '@av/contracts';
+import { DEFAULT_MODEL, type LayerId, type ModelId } from '@av/contracts';
 import {
   ApiClient,
   createRasterTileProtocol,
@@ -53,7 +53,7 @@ const seriesStatus = element<HTMLParagraphElement>('series-status');
 const seriesPanel = element<HTMLDivElement>('series');
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
-const initialModel = import.meta.env.VITE_MODEL ?? 'gfs';
+const initialModel = import.meta.env.VITE_MODEL ?? DEFAULT_MODEL;
 if (offlineFixture) {
   const warning = document.createElement('p');
   warning.className = 'notice';

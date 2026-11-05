@@ -1,6 +1,7 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, MAX_SAMPLE_RANGE_BYTES, encodeSparseCoverage, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
+import { MAX_SAMPLE_RANGE_BYTES, encodeSparseCoverage, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
 import { planSample, planShardedPackedSample, prepareShardedSamplePackLayout } from '@av/forecast';
 import { describeSparseCoverage, loadCoverage } from '../../batch/src/coverage';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from '../../batch/src/whole-domain/coverage';
@@ -28,7 +29,7 @@ async function fixture(product: ProductDefinition, native = false) {
 }
 
 it('retains both current fine masks and native coverage within the cache budget', async () => {
-  const fixtures = await Promise.all([fixture(GFS_PRODUCT), fixture(ICON_EU_PRODUCT), fixture(GFS_PRODUCT, true)]);
+  const fixtures = await Promise.all([fixture(INDEXED_PRODUCT), fixture(SPLIT_PRODUCT), fixture(INDEXED_PRODUCT, true)]);
   const objects = new Map<string, Uint8Array>();
   for (const item of fixtures) {
     const prefix = `coverage/${item.surface.coverage.hash}`;
@@ -79,7 +80,7 @@ it('retains both current fine masks and native coverage within the cache budget'
 }, 120_000);
 
 it('bounds rotating retained masks and coalesces leases until delayed reads settle', async () => {
-  const item = await fixture(GFS_PRODUCT), objects = new Map<string, Uint8Array>();
+  const item = await fixture(INDEXED_PRODUCT), objects = new Map<string, Uint8Array>();
   const surfaces = Array.from({ length: 8 }, (_, i) => {
     const bytes = new TextEncoder().encode(JSON.stringify({ ...item.descriptor, policy: `rotation-${i}` })), hash = digest(bytes), prefix = `coverage/${hash}`;
     objects.set(`${prefix}/manifest.json`, bytes); objects.set(`${prefix}/sparse.bin`, item.sparse); objects.set(`${prefix}/tiles.bin`, item.tiles);

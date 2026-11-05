@@ -1,6 +1,7 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError } from './client';
-import { GFS_PRODUCT, createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD, type LayerId, type ManifestV5 } from './index';
+import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD, type LayerId, type ManifestV5 } from './index';
 import { computeFreshness, latestSchema } from './publication';
 
 const expiresAt = '2026-11-02T00:00:00.000Z';
@@ -9,12 +10,12 @@ const buildId = '20261101T000000Z-12345678-1234-4234-8234-123456789abc';
 const prefix = `builds/gfs/${buildId}`;
 const hash = (char: string) => char.repeat(64);
 const gridHash = hash('1');
-const descriptors = createWholeDomainDescriptors(GFS_PRODUCT);
+const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
 
 const manifest: ManifestV5 = manifestV5Schema.parse({
   version: 5, model: 'gfs', buildId, cycle: created, createdAt: created, expiresAt,
-  descriptors, recipe: createRecipeIdentity(GFS_PRODUCT, hash('a')),
-  method: { id: [...new Set(GFS_PRODUCT.layers.map(layer => descriptors.layers[layer].methodId))].join('+'), hash: hash('a') },
+  descriptors, recipe: createRecipeIdentity(INDEXED_PRODUCT, hash('a')),
+  method: { id: [...new Set(INDEXED_PRODUCT.layers.map(layer => descriptors.layers[layer].methodId))].join('+'), hash: hash('a') },
   frames: [{ id: 'h001', validTime: created, intervalStart: '2026-10-31T23:00:00.000Z', intervalEnd: created }],
   layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'],
   artifacts: (['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] as LayerId[]).map(layer => ({ layer, frame: 'h001', tilesKey: `${prefix}/${layer}/h001.pmtiles`, tilesSha256: hash('b') })),

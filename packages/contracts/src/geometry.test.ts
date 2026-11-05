@@ -1,7 +1,8 @@
+import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { earthVectorToGrid, geographicToGrid, gridSchema, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type LambertConformalGrid } from './geometry.js';
-import { GFS_GRID, isCovered, type CoverageMask } from './index.js';
+import { isCovered, type CoverageMask } from './index.js';
 
 const grid = gridSchema.parse(fixture.grid) as LambertConformalGrid;
 
@@ -49,9 +50,9 @@ describe('native spherical grid geometry', () => {
     const reversed = prepareGridGeometry({ ...grid, dxM: -grid.dxM, dyM: -grid.dyM }).rotationAndMetrics(45, -90)!;
     expect(reversed).toEqual(metrics);
     for (const lat of [30, 60]) expect(prepareGridGeometry(grid).rotationAndMetrics(lat, -100)!.mapScale).toBeCloseTo(1, 12);
-    const spherical = prepareGridGeometry(GFS_GRID).rotationAndMetrics(60, 0)!;
+    const spherical = prepareGridGeometry(INDEXED_GRID).rotationAndMetrics(60, 0)!;
     expect(spherical.metersPerColumn / spherical.metersPerRow).toBeCloseTo(0.5, 12);
-    expect(prepareGridGeometry(GFS_GRID).rotationAndMetrics(90, 0)).toBeNull();
+    expect(prepareGridGeometry(INDEXED_GRID).rotationAndMetrics(90, 0)).toBeNull();
   });
 
   it('requires an explicit admitted geometry and rejects singular/oversized inputs', () => {
@@ -68,9 +69,9 @@ describe('native spherical grid geometry', () => {
   });
 
   it('preserves periodic regular-grid nodes and removes global latitude policy from coverage', () => {
-    expect(geographicToGrid(GFS_GRID, 10.125, 179.875)).toEqual({ x: 1439.5, y: 319.5 });
-    expect(geographicToGrid(GFS_GRID, 90, 180)).toEqual({ x: 0, y: -0 });
-    const mask: CoverageMask = { grid: { ...GFS_GRID, width: 2, height: 2, lon0: 0, lat0: 71, dx: 1, dy: -1, wrapLongitude: false }, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
+    expect(geographicToGrid(INDEXED_GRID, 10.125, 179.875)).toEqual({ x: 1439.5, y: 319.5 });
+    expect(geographicToGrid(INDEXED_GRID, 90, 180)).toEqual({ x: 0, y: -0 });
+    const mask: CoverageMask = { grid: { ...INDEXED_GRID, width: 2, height: 2, lon0: 0, lat0: 71, dx: 1, dy: -1, wrapLongitude: false }, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
     expect(isCovered(mask, 70.5, 0.5)).toBe(true);
     expect(isCovered({ ...mask, bounds: [-180, -55, 180, 65] }, 70.5, 0.5)).toBe(false);
     expect(withinGeographicBounds(0, 179, [170, -10, -170, 10])).toBe(true);

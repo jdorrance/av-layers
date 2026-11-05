@@ -1,35 +1,29 @@
-import gfs from '../config/gfs.json' with { type: 'json' };
-import iconEu from '../config/icon-eu.json' with { type: 'json' };
-import forecast from '../config/forecast.json' with { type: 'json' };
-import { regularLatLonGridSchema, type RegularLatLonGrid } from './geometry.js';
-import { defineProduct, forecastConfigSchema, type ProductDefinition } from './product.js';
+import z from 'zod';
+import configuration from '../config/models.json' with { type: 'json' };
+import { MAX_SAMPLE_VALUES } from './format.js';
+import { defineProduct, parallelismSchema, type ModelDefinition } from './product.js';
 export * from './product.js';
 
-export const FORECAST_CONFIG_PATH = 'packages/contracts/config/forecast.json';
-const tuning = forecastConfigSchema.parse(forecast);
-export const FORECAST_PARALLELISM = tuning.parallelism;
+const config = z.object({
+  defaultModel: z.string(), parallelism: parallelismSchema,
+  models: z.array(z.unknown()).min(1).max(MAX_SAMPLE_VALUES)
+}).strict().parse(configuration);
 
-function settings<T extends { modelId: string; coverage: object }>(source: T) {
-  const configured = Object.hasOwn(tuning.models, source.modelId) ? tuning.models[source.modelId] : undefined;
-  if (!configured) throw new Error(`Missing forecast settings for ${source.modelId}`);
-  const { zoom, workers = tuning.parallelism.workers, ...execution } = configured;
-  return { ...source, coverage: { ...source.coverage, maxNativeZoom: zoom }, execution: { ...execution, workers } };
-}
-
-/** Shared source facts consumed by adapters and the offline mask generator. */
-export const GFS_SETTINGS = settings(gfs);
-export const ICON_EU_SETTINGS = settings(iconEu);
-export const GFS_PRODUCT = defineProduct(GFS_SETTINGS);
-export const ICON_EU_PRODUCT = defineProduct(ICON_EU_SETTINGS);
-export const GFS_GRID: RegularLatLonGrid = Object.freeze(regularLatLonGridSchema.parse(GFS_PRODUCT.grid));
-export const ICON_EU_GRID: RegularLatLonGrid = Object.freeze(regularLatLonGridSchema.parse(ICON_EU_PRODUCT.grid));
-
-/** Only production products belong here; fixtures are imported explicitly by tests/dev. */
-export const PRODUCTS: readonly ProductDefinition[] = Object.freeze([GFS_PRODUCT, ICON_EU_PRODUCT]);
+export const FORECAST_PARALLELISM = config.parallelism;
+export const PRODUCTS: readonly ModelDefinition[] = Object.freeze(config.models.map(model => defineProduct(model, config.parallelism.workers)));
 export const MODEL_IDS: readonly string[] = Object.freeze(PRODUCTS.map(product => product.modelId));
-for (const modelId of Object.keys(tuning.models)) {
-  if (!MODEL_IDS.includes(modelId)) throw new Error(`Forecast settings reference unregistered model ${modelId}`);
+if (new Set(MODEL_IDS).size !== PRODUCTS.length || new Set(PRODUCTS.map(product => product.id)).size !== PRODUCTS.length) {
+  throw new Error('Model and product IDs must be unique');
 }
-export function getProduct(modelId: string): ProductDefinition | undefined {
+if (PRODUCTS.reduce((jobs, product) => jobs + product.execution.parallelism, 0) > FORECAST_PARALLELISM.jobs) {
+  throw new Error('Combined model parallelism exceeds the forecast job budget');
+}
+
+export function getProduct(modelId: string): ModelDefinition | undefined {
   return PRODUCTS.find(product => product.modelId === modelId);
 }
+
+const defaultProduct = getProduct(config.defaultModel);
+if (!defaultProduct) throw new Error(`Unknown default model ${config.defaultModel}`);
+export const DEFAULT_PRODUCT = defaultProduct;
+export const DEFAULT_MODEL = defaultProduct.modelId;

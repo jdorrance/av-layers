@@ -40,21 +40,16 @@ encoded coverage to its grid and validates its halo.
 
 ## Configuration
 
-[forecast.json](config/forecast.json) owns job and worker parallelism, per-model
-zoom, schedules and shard targets. [products.ts](src/products.ts) resolves worker
-defaults and validates each registered model. Run `pnpm docs:generate` after
-editing it to update workflow schedules, model choices and the reference.
-
-[gfs.json](config/gfs.json) and [icon-eu.json](config/icon-eu.json) configure
-each model's grid, forecast hours, layers, vertical coordinate, daylight policy,
-and coverage mask; [products.ts](src/products.ts) loads them with
-`defineProduct`. Coverage masks exclude Africa, Russia, China, Antarctica and
-Greenland. `terrainSubdivisionFactor` configures whole-domain lift grids.
+[models.json](config/models.json) owns model identities, source protocols and
+fields, grids, coverage, forecast hours, capabilities and execution settings.
+[products.ts](src/products.ts) validates the registry and resolves worker
+defaults. Run `pnpm docs:generate` after editing it to update workflow schedules
+and the reference. `terrainSubdivisionFactor` configures whole-domain lift grids.
 [layers.ts](src/layers.ts) defines layer units and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.
 See [extensions](../../docs/extensions.md) to add a model or layer.
 
-[refinement.json](config/refinement.json) selects refinement areas.
+[refinement.json](config/refinement.json) selects research refinement areas.
 [planRefinements](src/refinement.ts) builds grids within the source bounds, with
 halo cells. Inspect the result with `pnpm refinement --model icon-eu`.
 

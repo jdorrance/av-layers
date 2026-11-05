@@ -1,9 +1,10 @@
+import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, MAX_PROVENANCE_BYTES, LAYER_IDS, RETENTION_DAYS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
+import { MAX_PROVENANCE_BYTES, LAYER_IDS, RETENTION_DAYS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { writeCoverage } from './coverage.js';
@@ -70,8 +71,8 @@ async function fixture(): Promise<{ root: string; manifest: Manifest }> {
   const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString(), intervalStart: new Date(Date.parse('2026-10-30T00:00:00.000Z') + i * 10800000).toISOString(), intervalEnd: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString() }));
   const artifacts = LAYER_IDS.flatMap(layer => frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
   for (const key of [...artifacts.map(a => a.tilesKey), `${prefix}/samples.bin`]) { const path = localPath(root, key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
-  const coverageHash = await writeCoverage(root, { grid: GFS_GRID, bounds: GFS_PRODUCT.bounds, output: new Uint8Array(129780), halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }, GFS_PRODUCT);
-  const manifest: Manifest = { version: 3, descriptors: createProductDescriptors(GFS_PRODUCT), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: createProductMethodId(GFS_PRODUCT), hash }, coverage: { id: GFS_PRODUCT.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 7 }, grid: GFS_GRID, frames, layers: [...LAYER_IDS], artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 24, bytes: 120, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash }, tool: {}, palettes: ['lift'], metrics: {} };
+  const coverageHash = await writeCoverage(root, { grid: INDEXED_GRID, bounds: INDEXED_PRODUCT.bounds, output: new Uint8Array(129780), halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }, INDEXED_PRODUCT);
+  const manifest: Manifest = { version: 3, descriptors: createProductDescriptors(INDEXED_PRODUCT), recipe: createRecipeIdentity(INDEXED_PRODUCT, hash), model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: createProductMethodId(INDEXED_PRODUCT), hash }, coverage: { id: INDEXED_PRODUCT.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 7 }, grid: INDEXED_GRID, frames, layers: [...LAYER_IDS], artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 24, bytes: 120, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash }, tool: {}, palettes: ['lift'], metrics: {} };
   {
     const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: id, cycle: manifest.cycle, frames: [{ hour: 3 }] }));
     await writeFile(localPath(root, provenanceKey), receipt);

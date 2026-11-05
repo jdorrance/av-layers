@@ -1,5 +1,6 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, GFS_PRODUCT, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
+import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
@@ -78,8 +79,8 @@ describe('contracts', () => {
     const hash = 'a'.repeat(64);
     const twoFrameManifest = {
       model: 'gfs',
-      descriptors: createProductDescriptors({ ...GFS_PRODUCT, layers: ['precip-rate'] }),
-      recipe: createRecipeIdentity(GFS_PRODUCT, hash),
+      descriptors: createProductDescriptors({ ...INDEXED_PRODUCT, layers: ['precip-rate'] }),
+      recipe: createRecipeIdentity(INDEXED_PRODUCT, hash),
       method: { id: 'trailing-precipitation-rate-v1', hash },
       buildId: 'b1',
       frames: [

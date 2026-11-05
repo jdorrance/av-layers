@@ -4,7 +4,7 @@ import { open, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, publishedManifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, layerSurface, sameGrid, publishedManifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, type ShardedSampleBlock } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
@@ -271,7 +271,7 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     }
   }
   for (const artifact of remote ? [] : manifest.artifacts) {
-    const view = masks.get(artifact.layer === 'precip-rate' ? 'native' : 'fine');
+    const view = masks.get(layerSurface(artifact.layer));
     if (!view || await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
     await validateArchive(localPath(root, artifact.tilesKey), view);
   }

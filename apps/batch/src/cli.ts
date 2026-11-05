@@ -1,7 +1,7 @@
 import { validateLocalBuild } from './local-build.js';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { getProduct, modelIdSchema } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct, layerSurface, modelIdSchema } from '@av/contracts';
 import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
 
 export async function runBatch(args = process.argv.slice(2)): Promise<void> {
@@ -15,7 +15,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     }
     if (values['terrain-store-dir'] && !values['terrain-catalog-ref']) throw new Error('--terrain-store-dir requires --terrain-catalog-ref');
     const { buildProduct } = await import('./build.js');
-    const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
+    const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
     let terrain, refinement, wholeDomain;
     if (values['terrain-ref']) {
@@ -32,7 +32,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     }
     console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], ...(terrain ? { terrain } : {}), ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain } : {}) }));
   } else if (command === 'capacity') {
-    const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
+    const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
     const [{ loadCoverage }, { estimateCapacity, prepareBuild }, { getForecastProvider }, { planRefinementCoverage }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js'), import('./refinement/coverage.js')]);
     const mask = await loadCoverage(product);
@@ -50,8 +50,8 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
       const native = nativeSparseMask(mask);
       const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask: mask, fine: fine.mask,
         nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
-        nativeLayers: product.layers.filter(layer => layer === 'precip-rate').length,
-        fineLayers: product.layers.filter(layer => layer !== 'precip-rate').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });
+        nativeLayers: product.layers.filter(layer => layerSurface(layer) === 'native').length,
+        fineLayers: product.layers.filter(layer => layerSurface(layer) === 'fine').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });
       const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity, violations: capacity.violations };
       console.log(JSON.stringify(report, null, 2));
       if (capacity.violations.length) process.exitCode = 1;
@@ -64,7 +64,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     console.log(JSON.stringify({ ...report, currentProductAdmission: { model: product.modelId, frames: product.frameHours.length, layers: product.layers.length, nativeZoom: product.maxNativeZoom, rasterWorkers: capacity.rasterWorkers, workingSet: capacity.workingSet, estimatedPeakBytes: capacity.estimatedPeakBytes, budgetBytes: capacity.budgets.peakRssBytes, scope: 'Configured refinement grids included. Scenario changes need their own memory estimate.' } }, null, 2));
     if (report.violations.length) process.exitCode = 1;
   } else if (command === 'input-proof') {
-    const product = getProduct(modelIdSchema.parse(values.model ?? 'gfs'));
+    const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
     const { getForecastProvider } = await import('./providers.js');
     console.log(JSON.stringify(await getForecastProvider(product.modelId).proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));

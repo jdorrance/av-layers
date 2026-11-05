@@ -1,6 +1,7 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT, INDEXED_GRID } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_GRID, GFS_PRODUCT, ICON_EU_PRODUCT, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { PRODUCTS, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -26,7 +27,7 @@ const now = Date.parse('2026-10-30T00:00:00Z');
 const cycle = '2026-10-29T18:00:00Z';
 const hash = 'a'.repeat(64);
 const coverageHash = (await coverageFixture).hash;
-const sampleLayout = prepareSamplePackLayout(GFS_GRID, new Uint8Array((await coverageFixture).output), new Uint8Array((await coverageFixture).halo));
+const sampleLayout = prepareSamplePackLayout(INDEXED_GRID, new Uint8Array((await coverageFixture).output), new Uint8Array((await coverageFixture).halo));
 const layers = [...LAYER_IDS];
 const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); }, passThroughOnException() {}, props: {} };
 let pending: Promise<unknown>[] = [];
@@ -35,7 +36,7 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString(), 
   const prefix = `builds/gfs/${id}`;
   const frames = Array.from({ length: frameCount }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(now + i * 10_800_000).toISOString(), intervalStart: new Date(now + (i - 1) * 10_800_000).toISOString(), intervalEnd: new Date(now + i * 10_800_000).toISOString() }));
   const artifacts = frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
-  const manifest = { version: 3, descriptors: createProductDescriptors(GFS_PRODUCT), recipe: createRecipeIdentity(GFS_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: createProductMethodId(GFS_PRODUCT), hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: GFS_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
+  const manifest = { version: 3, descriptors: createProductDescriptors(INDEXED_PRODUCT), recipe: createRecipeIdentity(INDEXED_PRODUCT, hash), model: 'gfs', buildId: id, cycle, createdAt: new Date(now - 1000).toISOString(), expiresAt: expiry, method: { id: createProductMethodId(INDEXED_PRODUCT), hash }, coverage: { id: 'soaring-land-v1', hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 5 }, grid: INDEXED_GRID, frames, layers, artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: SAMPLE_BLOCK_SIZE, storedCells: sampleLayout.storedCells, channelCount: frames.length * layers.length, bytes: sampleLayout.storedCells * frames.length * layers.length * 5, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash } as Record<string, unknown>, tool: { liftRenderStyle: 'transparent-no-lift-v2' } as Record<string, unknown>, palettes: ['lift', 'rain'], metrics: {} };
   const retained = { buildId: id, manifestKey: `${prefix}/manifest.json`, cycle, expiresAt: expiry };
   return { manifest, retained };
 }
@@ -191,7 +192,7 @@ async function realPublication(product: ProductDefinition, buildId: string) {
   const fine = await realSurface(product, 'fine', prefix);
   const surfaces: ManifestV5['surfaces'] = [fine.surface];
   const objects = new Map(fine.objects), shards = new Map(fine.shardInfo);
-  if (product.modelId === 'gfs') {
+  if (product.layers.includes('precip-rate')) {
     const native = await realSurface(product, 'native', prefix);
     surfaces.push(native.surface);
     for (const [key, value] of native.objects) objects.set(key, value);
@@ -251,7 +252,7 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('read-only worker', () => {
   it('serves both real fine coverages concurrently and reuses warm sparse masks', async () => {
-    const publications = await Promise.all([realPublication(GFS_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789abc'), realPublication(ICON_EU_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789def')]);
+    const publications = await Promise.all([realPublication(INDEXED_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789abc'), realPublication(SPLIT_PRODUCT, '20261030T000000Z-12345678-1234-4234-8234-123456789def')]);
     const sparse = new SparseMemoryBucket(new Map(publications.flatMap(item => [...item.objects])), new Map(publications.flatMap(item => [...item.shards])));
     const paths = publications.map(({ manifest, samplePoint }) => `/v1/models/${manifest.model}/runs/${manifest.buildId}/sample?lat=${samplePoint.lat}&lon=${samplePoint.lon}&frame=${manifest.frames[0].id}&layers=usable-lift-msl`);
     for (const response of await Promise.all(paths.map(path => callSparse(sparse, path)))) {
@@ -551,7 +552,7 @@ describe('read-only worker', () => {
   });
   it('advertises only admitted production products and returns 503 when a published manifest is invalid', async () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
-    expect(catalog.models.map(m => m.model)).toEqual(['gfs', 'icon-eu']);
+    expect(catalog.models.map(m => m.model)).toEqual(PRODUCTS.map(product => product.modelId));
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
     bucket = new MemoryBucket();
     const broken = publication('build-broken');
@@ -562,10 +563,7 @@ describe('read-only worker', () => {
     const unavailable = await call('/v1/catalog');
     expect(unavailable.status).toBe(200);
     expect(await unavailable.json()).toMatchObject({
-      models: [
-        { model: 'gfs', available: false, error: 'publication-unavailable' },
-        { model: 'icon-eu', available: false, error: 'publication-unavailable' }
-      ]
+      models: PRODUCTS.map(product => ({ model: product.modelId, available: false, error: 'publication-unavailable' }))
     });
   });
   it('validates resource and expiry before cached blank and reduces TTL on hits', async () => {
@@ -736,7 +734,7 @@ describe('read-only worker', () => {
     const pub = publication('ordered');
     pub.manifest.frames.reverse();
     pub.manifest.layers = [...layers].reverse();
-    pub.manifest.method.id = createProductMethodId({ ...GFS_PRODUCT, layers: pub.manifest.layers });
+    pub.manifest.method.id = createProductMethodId({ ...INDEXED_PRODUCT, layers: pub.manifest.layers });
     bucket.install(pub);
     const first = await call('/v1/models/gfs/runs/ordered/sample?lat=0&lon=0&frame=f006,f003&layers=usable-lift-agl,precip-rate');
     expect(first.status).toBe(200);

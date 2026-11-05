@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { type CoverageMask, type ProductDefinition } from '@av/contracts';
 import { buildShard, createBuildPlan, type BuildPlan } from '../parallel.js';
 import type { ForecastProvider } from '../provider.js';
 import * as localFiles from '../local-file.js';
@@ -10,7 +11,7 @@ import { prepareTerrain } from './prepare.js';
 import { TerrainTestStorage, terrainCatalogFixture } from './test-fixtures.js';
 
 vi.mock('./reader.js', () => ({ createTerrainReader: async () => ({ sample: async () => ({ elevationM: 42, source: 'dem' }), close: async () => {}, stats: () => ({ requests: 0, bytesRead: 0, decodedPixels: 0, outputPixels: 4, cacheHits: 0 }) }) }));
-const product: ProductDefinition = { ...GFS_PRODUCT, modelId: 'terrain-fixture', id: 'terrain-fixture', bounds: [0, 0, 1, 1],
+const product: ProductDefinition = { ...INDEXED_PRODUCT, modelId: 'terrain-fixture', id: 'terrain-fixture', bounds: [0, 0, 1, 1],
   grid: { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false },
   coverageId: 'terrain-fixture', coverageDescription: 'Synthetic terrain staging test', maxNativeZoom: 0, frameHours: [1], terrainSubdivisionFactor: undefined };
 const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, maxZoom: 0, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1) };

@@ -51,9 +51,9 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 ## Configured models
 
-Source: [product registry](../packages/contracts/src/products.ts) and [forecast settings](../packages/contracts/config/forecast.json). See [deployments](status.md) for live applications and runs.
+Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
-Global forecast parallelism: 20 shard jobs; worker ceiling 3.
+Global forecast parallelism: 20 shard jobs; default workers 3.
 
 ### GFS (gfs-soaring)
 

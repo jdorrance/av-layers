@@ -1,8 +1,8 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { vi } from 'vitest';
 import {
   CELL_BYTES,
-  GFS_PRODUCT,
   SAMPLE_BLOCK_SIZE,
   canonicalGridJson,
   createWholeDomainDescriptors,
@@ -106,7 +106,7 @@ function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 
 
 interface FixtureOptions { product?: ProductDefinition; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[] }
 
-export function createV5Fixture({ product: base = GFS_PRODUCT, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2] }: FixtureOptions = {}) {
+export function createV5Fixture({ product: base = INDEXED_PRODUCT, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2] }: FixtureOptions = {}) {
   const product: ProductDefinition = { ...base, grid: NATIVE_GRID, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds: BOUNDS, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
   const model = product.modelId, prefix = `builds/${model}/${buildId}`;
   const cycle = new Date(NOW).toISOString(), expiresAt = new Date(NOW + 86_400_000).toISOString();
@@ -127,7 +127,7 @@ export function createV5Fixture({ product: base = GFS_PRODUCT, maxZoom = 1, rend
     frames, layers,
     artifacts: frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))),
     surfaces,
-    source: { provider: model === 'gfs' ? 'NOAA' : 'DWD', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) },
+    source: { provider: 'Fixture', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) },
     tool: {}, palettes: ['lift', 'rain'], metrics: {}
   });
   const objects = new Map<string, Uint8Array>([

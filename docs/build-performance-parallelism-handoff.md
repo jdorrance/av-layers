@@ -47,10 +47,10 @@ When splitting this handoff across multiple tasks or subagents, every task must 
 
 Inspect the current checkout before editing:
 
-- **Contracts & Schemas:** [publication.ts](../packages/contracts/src/publication.ts), [coverage.ts](../packages/contracts/src/coverage.ts), [sparse-coverage.ts](../packages/contracts/src/sparse-coverage.ts), [format.ts](../packages/contracts/src/format.ts), [gfs.json](../packages/contracts/config/gfs.json), [icon-eu.json](../packages/contracts/config/icon-eu.json)
+- **Contracts & Schemas:** [publication.ts](../packages/contracts/src/publication.ts), [coverage.ts](../packages/contracts/src/coverage.ts), [sparse-coverage.ts](../packages/contracts/src/sparse-coverage.ts), [format.ts](../packages/contracts/src/format.ts), [gfs.json](../packages/contracts/config/models.json), [icon-eu.json](../packages/contracts/config/models.json)
 - **Whole-Domain Batch Pipeline:** [whole-domain/prepare.ts](../apps/batch/src/whole-domain/prepare.ts), [whole-domain/capacity.ts](../apps/batch/src/whole-domain/capacity.ts), [whole-domain/frames.ts](../apps/batch/src/whole-domain/frames.ts), [whole-domain/finish.ts](../apps/batch/src/whole-domain/finish.ts), [whole-domain/coverage.ts](../apps/batch/src/whole-domain/coverage.ts), [whole-domain/terrain.ts](../apps/batch/src/whole-domain/terrain.ts)
 - **Sample Packing, Validation & Publication:** [sample-pack-v5.ts](../apps/batch/src/sample-pack-v5.ts), [forecast/sample-pack.ts](../packages/forecast/src/sample-pack.ts), [parallel.ts](../apps/batch/src/parallel.ts), [build.ts](../apps/batch/src/build.ts), [local-build.ts](../apps/batch/src/local-build.ts), [cli.ts](../apps/batch/src/cli.ts), [validate.ts](../apps/batch/src/validate.ts), [publication.ts](../apps/batch/src/publication.ts), [immutable-upload.ts](../apps/batch/src/immutable-upload.ts), [terrain/sparse.ts](../apps/batch/src/terrain/sparse.ts)
-- **Providers, Rendering & Workers:** [provider.ts](../apps/batch/src/provider.ts), [gfs/acquire.ts](../apps/batch/src/gfs/acquire.ts), [icon/acquire.ts](../apps/batch/src/icon/acquire.ts), [render.ts](../apps/batch/src/render.ts), [raster.ts](../apps/batch/src/raster.ts), [raster-pool.ts](../apps/batch/src/raster-pool.ts), [raster-worker.ts](../apps/batch/src/raster-worker.ts), [webp.ts](../apps/batch/src/webp.ts), [sampler.ts](../packages/forecast/src/sampler.ts)
+- **Providers, Rendering & Workers:** [provider.ts](../apps/batch/src/provider.ts), [gfs/acquire.ts](../apps/batch/src/indexed-grib/acquire.ts), [icon/acquire.ts](../apps/batch/src/split-grib/acquire.ts), [render.ts](../apps/batch/src/render.ts), [raster.ts](../apps/batch/src/raster.ts), [raster-pool.ts](../apps/batch/src/raster-pool.ts), [raster-worker.ts](../apps/batch/src/raster-worker.ts), [webp.ts](../apps/batch/src/webp.ts), [sampler.ts](../packages/forecast/src/sampler.ts)
 - **API & Workflows:** [api/coverage.ts](../apps/api/src/coverage.ts), [api/sample.ts](../apps/api/src/sample.ts), [api/resources.ts](../apps/api/src/resources.ts), [publication-workflow.ts](../scripts/publication-workflow.ts), [operations.ts](../scripts/operations.ts), [forecast.yml](../.github/workflows/forecast.yml), [forecast-model.yml](../.github/workflows/forecast-model.yml)
 
 ---
@@ -201,7 +201,7 @@ across all three manifest families:
 ## 6. Milestone 4: Target `buildWholeDomainFrames` for Persistent Workers, Direct-to-Ring Prefetch & Memory Accounting
 
 ### 6.1 Exact Live Memory Figures from Current Product Configs
-Using the current product configurations ([gfs.json](../packages/contracts/config/gfs.json#L25): `maxVerticalLevels: 21`, `verticalCoordinate: 'isobaric'`, `fieldsPerLevel = 2`; [icon-eu.json](../packages/contracts/config/icon-eu.json): `maxVerticalLevels: 30`, `verticalCoordinate: 'model-levels'`, `fieldsPerLevel = 3`) and `admitWholeDomain` in [whole-domain/capacity.ts](../apps/batch/src/whole-domain/capacity.ts#L57):
+Using the current product configurations ([gfs.json](../packages/contracts/config/models.json#L25): `maxVerticalLevels: 21`, `verticalCoordinate: 'isobaric'`, `fieldsPerLevel = 2`; [icon-eu.json](../packages/contracts/config/models.json): `maxVerticalLevels: 30`, `verticalCoordinate: 'model-levels'`, `fieldsPerLevel = 3`) and `admitWholeDomain` in [whole-domain/capacity.ts](../apps/batch/src/whole-domain/capacity.ts#L57):
 $$\text{nativeFrameBytes} = \text{nativeActive} \times (7 + \text{fieldsPerLevel} \times \text{maxLevels}) \times 5$$
 
 | Model | `nativeActive` (No-Africa + Donor Support) | `maxLevels` | `fieldsPerLevel` | Bytes per Active Cell | 1 `NormalizedFrame` (`MiB`) | 2-Slot Ring (`current + prefetch`, `MiB`) | Fine `PackedGridField` (`2 layers × 5 B`, `MiB`) |
@@ -213,7 +213,7 @@ $$\text{nativeFrameBytes} = \text{nativeActive} \times (7 + \text{fieldsPerLevel
 Apply all per-frame compute and I/O optimizations directly to `buildWholeDomainFrames` and `admitWholeDomain`:
 
 1. **Direct Field-Level Decoding into a 2-Slot `SharedArrayBuffer` Ring (No Transient 3rd Frame Copy):**
-   - Allocate a 2-slot `SharedArrayBuffer` ring (`slot = frameOrdinal & 1`) once in `buildWholeDomainFrames` and pass the target slot's views into `acquisition.acquire(hour, targetSlot)` in [gfs/acquire.ts](../apps/batch/src/gfs/acquire.ts) and [icon/acquire.ts](../apps/batch/src/icon/acquire.ts#L456).
+   - Allocate a 2-slot `SharedArrayBuffer` ring (`slot = frameOrdinal & 1`) once in `buildWholeDomainFrames` and pass the target slot's views into `acquisition.acquire(hour, targetSlot)` in [gfs/acquire.ts](../apps/batch/src/indexed-grib/acquire.ts) and [icon/acquire.ts](../apps/batch/src/split-grib/acquire.ts#L456).
    - Scatter decoded GRIB values directly into the target slot's typed arrays using a bounded single-field decoder buffer (`<= 8 MiB`), never constructing a third full `NormalizedFrame` on the heap.
    - Keep at most **one** `acquire()` call in flight at any time.
 2. **Immediate Local Abort on Failure Before Draining Prefetch:**

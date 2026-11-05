@@ -41,7 +41,7 @@ describe('real contract-shaped fixtures', () => {
     expect(() => validateArtifactRecords(duplicate)).toThrow(/duplicate artifact record/);
 
     const wrongPath = structuredClone(manifestFixture());
-    wrongPath.artifacts[0]!.tilesKey = 'builds/gfs/other/usable-lift-msl/f003.pmtiles';
+    wrongPath.artifacts[0]!.tilesKey = `builds/${wrongPath.model}/other/usable-lift-msl/f003.pmtiles`;
     expect(() => validateArtifactRecords(wrongPath)).toThrow(/unexpected tilesKey/);
   });
 
@@ -88,7 +88,7 @@ describe('declarative workflows', () => {
 
   it('scopes terrain, planning, publication and maintenance credentials to the selected environment', () => {
     expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}");
-    expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model || 'gfs' }} ${{ inputs.action }}");
+    expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model }} ${{ inputs.action }}");
     const forecastJobs = record(workflow('forecast-model.yml').jobs);
     for (const name of ['terrain', 'prepare', 'build-publish']) {
       const job = record(forecastJobs[name]);
@@ -98,10 +98,25 @@ describe('declarative workflows', () => {
     const maintenance = record(record(workflow('maintenance.yml').jobs).maintain);
     expect(maintenance.environment).toBe("${{ inputs.environment || 'production' }}");
     expect(record(maintenance.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
+    const caller = record(record(workflow('forecast.yml').jobs).forecast), lock = record(caller.concurrency);
+    expect(workflow('forecast.yml').concurrency).toBeUndefined();
+    expect(workflow('forecast-model.yml').concurrency).toBeUndefined();
+    expect(workflow('maintenance.yml').concurrency).toEqual({ ...lock, group: String(lock.group).replace('matrix.model', 'inputs.model') });
+    for (const name of ['forecast.yml', 'health.yml', 'maintenance.yml']) {
+      const model = record(record(record(record(workflow(name).on).workflow_dispatch).inputs).model);
+      expect(model).toMatchObject({ type: 'string', required: true });
+      expect(model.default).toBe(name === 'maintenance.yml' ? undefined : 'all');
+    }
   });
 
   it('isolates forecast shards from publication credentials and preserves the resume path', () => {
     const forecast = workflow('forecast-model.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
+    const terrain = record(jobs.terrain), prepare = record(jobs.prepare);
+    expect(prepare.needs).toBe('terrain');
+    expect(terrain.if).toBe("${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}");
+    expect(prepare.if).toBe(terrain.if);
+    expect(terrain.env).toEqual(prepare.env);
+    expect(list(terrain.steps).map(record).some(step => step.run === 'pnpm operations forecast-terrain')).toBe(true);
     expect(record(shard.strategy)['max-parallel']).toBe('${{ inputs.parallelism }}');
     expect(record(shard.strategy)['fail-fast']).toBe(false);
     expect(shard.needs).toBe('prepare');
@@ -109,6 +124,9 @@ describe('declarative workflows', () => {
     expect(shard.permissions).toEqual({ contents: 'read' });
     const caller = record(record(workflow('forecast.yml').jobs).forecast);
     expect(caller.concurrency).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}", 'cancel-in-progress': false });
+    expect(record(caller.with).parallelism).toBe('${{ matrix.parallelism }}');
+    const selection = list(record(record(workflow('forecast.yml').jobs).select).steps).map(record).find(step => step.id === 'models')!;
+    expect(record(selection.env).MODEL_SCHEDULE).toBe("${{ github.event.schedule || '' }}");
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) expect(env[key]).toBeUndefined();
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'FORECAST_SHARD_CREDENTIAL_KEY']) expect(env[key]).toBeUndefined();
     const shardBuild = list(shard.steps).map(record).find(step => step.run === 'pnpm operations forecast-shard')!;
@@ -116,7 +134,10 @@ describe('declarative workflows', () => {
     expect(record(shardBuild.env)).toEqual({ FORECAST_SHARD_CREDENTIAL_KEY: selected });
     const prepareStep = list(record(jobs.prepare).steps).map(record).find(step => step.run === 'pnpm operations forecast-plan')!;
     expect(record(prepareStep.env)).toEqual({ CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}', GH_CREDENTIAL_ISSUER_TOKEN: '${{ secrets.GH_CREDENTIAL_ISSUER_TOKEN }}' });
-    for (const env of [record(forecast.env), record(shard.env), record(publisher.env), record(record(jobs.prepare).env)]) for (const key of ['CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) expect(env[key]).toBeUndefined();
+    for (const env of [record(forecast.env), record(shard.env), record(publisher.env), record(prepare.env)]) {
+      for (const key of ['CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN']) expect(env[key]).toBeUndefined();
+      expect(Object.keys(env).filter(key => /^FORECAST_.+_SHARD_CREDENTIAL_KEY$/.test(key))).toEqual([]);
+    }
     expect(record(jobs.prepare).outputs).toEqual({ ready: '${{ steps.plan.outputs.ready }}', shards: '${{ steps.plan.outputs.shards }}', artifact: '${{ steps.plan.outputs.artifact }}', 'credential-secret': '${{ steps.plan.outputs.credential-secret }}' });
     expect(record(publisher.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeUndefined();
     for (const step of list(publisher.steps).map(record)) expect(step.env && record(step.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeFalsy();
@@ -141,12 +162,21 @@ describe('declarative workflows', () => {
     expect(record(bundle.with).name).toBe('forecast-${{ env.MODEL }}-${{ github.run_id }}');
     for (const part of ['output/plan.json', 'output/workflow.json', 'output/shards/*/*.json', 'output/builds/*/*/*.json', 'output/coverage/']) expect(String(record(bundle.with).path)).toContain(part);
     const full = steps.find(step => String(step.name).startsWith('Upload full build artifacts'))!;
+    expect(full.if).toBe("${{ always() && env.RETAIN_FULL_ARTIFACTS == 'true' }}");
     for (const step of [...list(shard.steps).map(record), ...steps]) if (step.uses === 'actions/upload-artifact@v4') expect(String(record(step.with).path)).not.toContain('shard-credentials.json');
     expect(String(record(full.with).path)).toContain('output/coverage/');
     expect(String(record(full.with).path)).toContain('output/terrain/');
     for (const [job, command] of [[record(jobs.prepare), 'forecast-plan'], [shard, 'forecast-shard']] as const) {
       expect(list(job.steps).map(record).some(step => step.run === `pnpm operations ${command}`)).toBe(true);
     }
+  });
+
+  it('checks all selected models independently and retains separate health records', () => {
+    const check = record(record(workflow('health.yml').jobs).check);
+    expect(record(check.strategy)['fail-fast']).toBe(false);
+    const steps = list(check.steps).map(record);
+    expect(record(steps.find(step => step.run === 'pnpm health')!.env).MODEL).toBe('${{ matrix.model }}');
+    expect(record(steps.find(step => step.uses === 'actions/upload-artifact@v4')!.with).name).toBe("health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}");
   });
 
 });

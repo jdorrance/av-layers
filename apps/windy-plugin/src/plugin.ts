@@ -1,4 +1,4 @@
-import type { LayerId, ModelId } from '@av/contracts';
+import { DEFAULT_MODEL, type LayerId, type ModelId } from '@av/contracts';
 import { ApiClient, formatBuildFreshness, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
 import { PluginController, type WindyHost } from './controller';
 import { PluginPanel } from './view';
@@ -171,7 +171,7 @@ export const onopen = (_params: unknown): void => {
     document.addEventListener('visibilitychange', refreshTime);
     listenersBound = true;
   }
-  void startController('gfs');
+  void startController(DEFAULT_MODEL);
 };
 
 export function onclose(): void {

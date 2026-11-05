@@ -1,11 +1,12 @@
+import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { deriveFrame } from '@av/forecast';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, GFS_GRID, GFS_PRODUCT, LIFT_STEP_RENDER_STYLE, liftRenderStyle, PALETTES, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
+import { CELL_BYTES, LIFT_STEP_RENDER_STYLE, liftRenderStyle, PALETTES, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest } from '@av/contracts';
 import { sampleGrid, type GridField } from '@av/forecast';
-import type { GfsFrameAcquisition } from './gfs/types.js';
+import type { IndexedGribFrameAcquisition } from './indexed-grib/types.js';
 import type { NormalizedFrame } from '@av/forecast';
 
 const CYCLE = '2026-10-30T00:00:00.000Z';
@@ -22,21 +23,21 @@ vi.mock('./render.js', async () => {
   return { renderArchive, createRenderer: vi.fn((mask: CoverageMask) => ({ renderArchive: (path: string, field: GridField, layer: Manifest['layers'][number]) => renderArchive(path, field, mask, layer), renderArchives: async (targets: { path: string; field: GridField; layer: Manifest['layers'][number] }[]) => { for (const { path, field, layer } of targets) await renderArchive(path, field, mask, layer); }, metrics: () => ({}) })) };
 });
 vi.mock('./coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('./coverage.js')>(),
-  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; const maxZoom = GFS_PRODUCT.maxNativeZoom; return { grid: GFS_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8)), maxZoom }; }),
+  loadCoverage: vi.fn(async () => { const output = new Uint8Array(129780); output[0] = 1; const maxZoom = INDEXED_PRODUCT.maxNativeZoom; return { grid: INDEXED_GRID, output, halo: new Uint8Array(129780), tiles: new Uint8Array(Math.ceil(((4 ** (maxZoom + 1) - 1) / 3) / 8)), maxZoom }; }),
   writeCoverage: vi.fn(async () => 'a'.repeat(64)) }));
 vi.mock('./summary.js', () => ({ summarizeFields: vi.fn(() => ({})) }));
-vi.mock('./gfs/discover.js', () => ({ discoverGfsRun: vi.fn() }));
-vi.mock('./gfs/acquire.js', async () => {
-  const { discoverGfsRun } = await import('./gfs/discover.js');
-  const acquireGfsFrame = vi.fn();
-  return { acquireGfsFrame, discoverGfsRun, createGfsAcquisitionSession: vi.fn(async (options: { cycle?: string; cacheDir?: string; activeIndices: Uint32Array }) => {
-    const cycle = options.cycle ?? (await discoverGfsRun({ cacheDir: options.cacheDir })).cycle;
-    return { cycle, acquire: (hour: number) => acquireGfsFrame({ ...options, cycle, hour }), close: vi.fn(async () => {}), stats: {} };
+vi.mock('./indexed-grib/discover.js', () => ({ discoverIndexedGribRun: vi.fn() }));
+vi.mock('./indexed-grib/acquire.js', async () => {
+  const { discoverIndexedGribRun } = await import('./indexed-grib/discover.js');
+  const acquireIndexedGribFrame = vi.fn();
+  return { acquireIndexedGribFrame, discoverIndexedGribRun, createIndexedGribAcquisitionSession: vi.fn(async (_profile: unknown, options: { cycle?: string; cacheDir?: string; activeIndices: Uint32Array }) => {
+    const cycle = options.cycle ?? (await discoverIndexedGribRun(_profile as never, { cacheDir: options.cacheDir })).cycle;
+    return { cycle, acquire: (hour: number) => acquireIndexedGribFrame(_profile, { ...options, cycle, hour }), close: vi.fn(async () => {}), stats: {} };
   }) };
 });
 
-import { acquireGfsFrame, createGfsAcquisitionSession } from './gfs/acquire.js';
-import { discoverGfsRun } from './gfs/discover.js';
+import { acquireIndexedGribFrame, createIndexedGribAcquisitionSession } from './indexed-grib/acquire.js';
+import { discoverIndexedGribRun } from './indexed-grib/discover.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { getForecastProvider } from './providers.js';
@@ -48,9 +49,9 @@ import * as coverageModule from './coverage.js';
 const ms = (hour: number): string => new Date(Date.parse(CYCLE) + hour * 3600000).toISOString();
 const noMs = (hour: number): string => ms(hour).replace('.000Z', 'Z');
 
-function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
+function frame(hour: number): IndexedGribFrameAcquisition & NormalizedFrame {
   const empty = () => new Float32Array(1);
-  const startHour = hour - GFS_PRODUCT.intervalHours;
+  const startHour = hour - INDEXED_PRODUCT.intervalHours;
   const blockStart = Math.floor(startHour / 6) * 6;
   return {
     schemaVersion: 1,
@@ -59,7 +60,7 @@ function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
     hour,
     validAt: noMs(hour),
     capturedAt: '2026-10-30T08:25:13.148Z',
-    grid: GFS_GRID,
+    grid: INDEXED_GRID,
     activeIndices: Uint32Array.of(0),
     terrainM: empty(),
     surfacePressurePa: empty(),
@@ -88,10 +89,10 @@ function frame(hour: number): GfsFrameAcquisition & NormalizedFrame {
       precipitationWindow: { start: ms(startHour), end: ms(hour) },
       fluxSourceWindow: { start: ms(blockStart), end: ms(hour) },
       precipitationSourceWindow: { start: ms(blockStart), end: ms(hour) },
-      usedCompanion: hour - blockStart > GFS_PRODUCT.intervalHours,
+      usedCompanion: hour - blockStart > INDEXED_PRODUCT.intervalHours,
     },
     receipt: { schemaVersion: 1, cycle: noMs(0), hour, validAt: noMs(hour), capturedAt: '2026-10-30T08:25:13.148Z' },
-  } as unknown as GfsFrameAcquisition & NormalizedFrame;
+  } as unknown as IndexedGribFrameAcquisition & NormalizedFrame;
 }
 
 const temp: string[] = [];
@@ -99,11 +100,11 @@ afterEach(async () => {
   await Promise.all(temp.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-async function run(acquire: (hour: number) => GfsFrameAcquisition, cycle = CYCLE, onValidated?: (result: validateModule.ValidatedBuild, path: string) => Promise<void>): Promise<Manifest> {
-  vi.mocked(acquireGfsFrame).mockImplementation(async options => acquire(options.hour));
+async function run(acquire: (hour: number) => IndexedGribFrameAcquisition, cycle = CYCLE, onValidated?: (result: validateModule.ValidatedBuild, path: string) => Promise<void>): Promise<Manifest> {
+  vi.mocked(acquireIndexedGribFrame).mockImplementation(async (_profile, options) => acquire(options.hour));
   const out = await mkdtemp(join(tmpdir(), 'av-build-test-'));
   temp.push(out);
-  const nativeProduct = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined };
+  const nativeProduct = { ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined };
   const path = await buildForecast({ out, cycle, cacheDir: join(out, 'cache'), onValidated, product: nativeProduct,
     mask: await coverageModule.loadCoverage(nativeProduct), provider: getForecastProvider('gfs') });
   return JSON.parse((await readFile(path)).toString()) as Manifest;
@@ -118,7 +119,7 @@ describe('build sample acquisition intervals', () => {
       const duration = timeout.mock.calls[0][0];
       expect(duration).toBeGreaterThan(0);
       expect(duration).toBeLessThanOrEqual(BUILD_BUDGETS.elapsedMs);
-      expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      expect(acquireIndexedGribFrame).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     } finally { timeout.mockRestore(); }
   });
   it('builds the native forecast when no terrain catalog is supplied', async () => {
@@ -140,12 +141,12 @@ describe('build sample acquisition intervals', () => {
   it('forwards the cache directory to discovery and acquisition', async () => {
     const out = await mkdtemp(join(tmpdir(), 'av-build-cache-')); temp.push(out);
     const cacheDir = join(out, 'cache');
-    vi.mocked(discoverGfsRun).mockResolvedValue({ cycle: noMs(0) } as Awaited<ReturnType<typeof discoverGfsRun>>);
-    vi.mocked(acquireGfsFrame).mockImplementation(async options => frame(options.hour));
-    const nativeProduct = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined };
+    vi.mocked(discoverIndexedGribRun).mockResolvedValue({ cycle: noMs(0) } as Awaited<ReturnType<typeof discoverIndexedGribRun>>);
+    vi.mocked(acquireIndexedGribFrame).mockImplementation(async (_profile, options) => frame(options.hour));
+    const nativeProduct = { ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined };
     await buildForecast({ out, cacheDir, product: nativeProduct, mask: await coverageModule.loadCoverage(nativeProduct), provider: getForecastProvider('gfs') });
-    expect(discoverGfsRun).toHaveBeenCalledWith({ cacheDir });
-    expect(acquireGfsFrame).toHaveBeenCalledWith(expect.objectContaining({ cacheDir }));
+    expect(discoverIndexedGribRun).toHaveBeenCalledWith(expect.anything(), { cacheDir });
+    expect(acquireIndexedGribFrame).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ cacheDir }));
   });
   it.each([CYCLE, noMs(0)])('accepts UTC cycle %s, writes external provenance.json, and records phase timings', async cycle => {
     const manifest = await run(frame, cycle);
@@ -167,7 +168,7 @@ describe('build sample acquisition intervals', () => {
 
   it('rejects a frame cycle with a different actual instant', async () => {
     await expect(run(hour => ({ ...frame(hour), cycle: noMs(1) }))).rejects.toThrow('Acquisition interval mismatch f1');
-    const session = await vi.mocked(createGfsAcquisitionSession).mock.results.at(-1)!.value;
+    const session = await vi.mocked(createIndexedGribAcquisitionSession).mock.results.at(-1)!.value;
     expect(session.close).toHaveBeenCalledOnce();
   });
 
@@ -185,10 +186,10 @@ describe('build sample acquisition intervals', () => {
 });
 
 describe('frame derivation', () => {
-  function fixture(hour = 12): { input: GfsFrameAcquisition & NormalizedFrame; mask: CoverageMask; index: number } {
-    const index = 360 * GFS_GRID.width + 720;
-    const bits = Math.ceil(GFS_GRID.width * GFS_GRID.height / 8);
-    const mask: CoverageMask = { grid: GFS_GRID, output: new Uint8Array(bits), halo: new Uint8Array(bits), tiles: new Uint8Array(1), maxZoom: 0 };
+  function fixture(hour = 12): { input: IndexedGribFrameAcquisition & NormalizedFrame; mask: CoverageMask; index: number } {
+    const index = 360 * INDEXED_GRID.width + 720;
+    const bits = Math.ceil(INDEXED_GRID.width * INDEXED_GRID.height / 8);
+    const mask: CoverageMask = { grid: INDEXED_GRID, output: new Uint8Array(bits), halo: new Uint8Array(bits), tiles: new Uint8Array(1), maxZoom: 0 };
     setBit(mask.output, index); setBit(mask.halo, index + 1);
     const values = (v: number) => new Float32Array([v, v]);
     const missing = () => new Uint8Array(2);
@@ -200,10 +201,10 @@ describe('frame derivation', () => {
     const { input, mask, index } = fixture(12), fields = deriveFrame(input, mask);
     expect(fields['precip-rate']!.flags[index + 1]).toBe(STATUS_VALID);
     expect(fields['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
-    const sample = sampleGrid(GFS_GRID, fields['precip-rate']!, 0, 0.1, 'precip-rate', mask);
+    const sample = sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.1, 'precip-rate', mask);
     expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
     expect(sample.value).toBeCloseTo(2.8);
-    expect(sampleGrid(GFS_GRID, fields['precip-rate']!, 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
   });
 
   it('drops finite subterranean heights but not missing profile levels', () => {
@@ -241,20 +242,20 @@ describe('bounded end-to-end build pipeline integration', () => {
     const actualRender = await vi.importActual<typeof import('./render.js')>('./render.js');
     const actualSummary = await vi.importActual<typeof import('./summary.js')>('./summary.js');
 
-    const index = 360 * GFS_GRID.width + 720;
+    const index = 360 * INDEXED_GRID.width + 720;
     const boundedMask: CoverageMask = {
-      grid: GFS_GRID,
+      grid: INDEXED_GRID,
       output: new Uint8Array(129780),
       halo: new Uint8Array(129780),
-      tiles: new Uint8Array(Math.ceil(((4 ** (GFS_PRODUCT.maxNativeZoom + 1) - 1) / 3) / 8)),
-      maxZoom: GFS_PRODUCT.maxNativeZoom,
+      tiles: new Uint8Array(Math.ceil(((4 ** (INDEXED_PRODUCT.maxNativeZoom + 1) - 1) / 3) / 8)),
+      maxZoom: INDEXED_PRODUCT.maxNativeZoom,
     };
     setBit(boundedMask.output, index);
     setBit(boundedMask.halo, index + 1);
     setBit(boundedMask.tiles, 0);
     const side = 2 ** boundedMask.maxZoom;
     setBit(boundedMask.tiles, (4 ** boundedMask.maxZoom - 1) / 3 + side / 2 * side + side / 2);
-    const coverageHash = coverageModule.describeCoverage(boundedMask, GFS_PRODUCT).hash;
+    const coverageHash = coverageModule.describeCoverage(boundedMask, INDEXED_PRODUCT).hash;
 
     vi.mocked(coverageModule.loadCoverage).mockResolvedValueOnce(boundedMask);
     vi.mocked(coverageModule.writeCoverage).mockResolvedValueOnce(coverageHash);

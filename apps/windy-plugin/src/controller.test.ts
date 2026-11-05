@@ -1,6 +1,7 @@
+import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
-import { createProductDescriptors, ICON_EU_PRODUCT, CELL_BYTES, manifestV5Schema } from '@av/contracts';
+import { createProductDescriptors, CELL_BYTES, manifestV5Schema } from '@av/contracts';
 import type { PinnedBuild } from '@av/contracts/client';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
@@ -342,7 +343,7 @@ describe('PluginController', () => {
     const previousLayer = previous.selectLayer('precip-rate').layerId!;
     previous.dispose();
     const build = fixtureBuild({ model: 'icon-eu', buildId: 'build-1', createdAt: created, expiresAt,
-      layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) });
+      layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) });
     const controller = new PluginController({ model: 'icon-eu', initialLayer: previousLayer, loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
     try {
       expect(await controller.start()).toMatchObject({ phase: 'ready', model: 'icon-eu', layerId: build.manifest.layers[0] });
@@ -363,7 +364,7 @@ describe('PluginController', () => {
     });
     const stub = stubHost(Date.parse(sparseFrames[1].validTime));
     const loadBuild = vi.fn(async () => fixtureBuild({ model: 'icon-eu', createdAt: cycle, cycle, expiresAt, frames: sparseFrames,
-      layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) }));
+      layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) }));
     const controller = new PluginController({ model: 'icon-eu', loadBuild, host: stub.host, now: () => Date.parse(created) });
     try {
       expect(await controller.start()).toMatchObject({ frameId: 'f007' });

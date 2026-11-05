@@ -1,5 +1,6 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { GFS_PRODUCT, MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, PRODUCTS, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
+import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, PRODUCTS, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { spawnSync } from 'node:child_process';
@@ -15,8 +16,8 @@ const TOTAL_TILES = 30;
 const SAMPLE_PACK_BYTES = 180;
 function input() {
   const grid = { kind: 'regular-latlon' as const, width: 2, height: 2, earthRadiusM: 6371229, lon0: -180, lat0: 1, dx: 180, dy: -1, wrapLongitude: true };
-  const product = { ...GFS_PRODUCT, grid, maxNativeZoom: 1, frameHours: [1, 2], intervalHours: 1,
-    execution: { ...GFS_PRODUCT.execution, workers: 1 } };
+  const product = { ...INDEXED_PRODUCT, grid, maxNativeZoom: 1, frameHours: [1, 2], intervalHours: 1,
+    execution: { ...INDEXED_PRODUCT.execution, workers: 1 } };
   const mask: CoverageMask = { grid, maxZoom: 1, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(31) };
   return { mask, product };
 }
@@ -37,7 +38,7 @@ describe('build capacity admission and performance budgets', () => {
   it('rejects missing fine coverage independently of bundled assets', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'capacity-coverage-'));
     try {
-      const product = { ...GFS_PRODUCT, coverageDir: directory };
+      const product = { ...INDEXED_PRODUCT, coverageDir: directory };
       await expect(loadBundledFineCoverage(product, wholeDomainPlan(product)!)).rejects.toThrow('Fine coverage is missing');
     } finally { await rm(directory, { recursive: true, force: true }); }
   });

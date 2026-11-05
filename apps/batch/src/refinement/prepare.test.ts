@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getBit, GFS_PRODUCT, isCovered, MAX_GRID_CELLS, prepareGridGeometry, setBit, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { getBit, isCovered, MAX_GRID_CELLS, prepareGridGeometry, setBit, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import { containsRefinement } from '@av/contracts/refinement';
 import { sha256 } from '../terrain/contract.js';
 import { seedTerrainCatalog, TerrainTestStorage } from '../terrain/test-fixtures.js';
@@ -21,7 +22,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, {
 async function fixture() {
   const out = await mkdtemp(join(tmpdir(), 'av-refinement-')); roots.push(out);
   const storage = new TerrainTestStorage(), catalogRef = seedTerrainCatalog(storage);
-  const product: ProductDefinition = { ...GFS_PRODUCT, grid: { kind: 'regular-latlon', width: 7, height: 7, earthRadiusM: 6371229, lon0: 0.47, lat0: 0.53, dx: 0.01, dy: -0.01, wrapLongitude: false }, bounds: [0.47, 0.47, 0.53, 0.53], maxNativeZoom: 2 };
+  const product: ProductDefinition = { ...INDEXED_PRODUCT, grid: { kind: 'regular-latlon', width: 7, height: 7, earthRadiusM: 6371229, lon0: 0.47, lat0: 0.53, dx: 0.01, dy: -0.01, wrapLongitude: false }, bounds: [0.47, 0.47, 0.53, 0.53], maxNativeZoom: 2 };
   const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, output: new Uint8Array(7), halo: new Uint8Array(7), tiles: new Uint8Array(3), maxZoom: 2 };
   for (let i = 0; i < 49; i++) setBit(mask.output, i);
   setBit(mask.output, 3 * 7 + 4, false);

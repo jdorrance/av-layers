@@ -45,13 +45,13 @@ verification.
 
 ## Publish a forecast
 
-Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow, or run:
+Enter a configured model ID or **all** in the Forecast workflow:
 
 ```sh
 gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
-`all` expands to `MODEL_IDS`. [forecast.json](../packages/contracts/config/forecast.json)
+`all` expands to `MODEL_IDS`. [models.json](../packages/contracts/config/models.json)
 owns per-model UTC schedules, rendered zoom, shard targets and parallelism.
 Run `pnpm docs:generate` after editing it, then `pnpm verify` and `pnpm capacity --model MODEL`.
 Generated workflow triggers select models by the cron expression that fired,
@@ -70,10 +70,10 @@ planning.
 
 The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
 the configured shard target. Set that target to the candidate frame count for
-one hour per shard. The job budget assigns fixed fair shares across registered
-models in each environment, including overlapping schedules. Each model's
-parallelism caps its allocation. Worker ceilings apply beneath CPU and
-memory admission and may be overridden per model. Plans freeze rendered zoom,
+one hour per shard. Each model uses its configured parallelism cap; their sum
+must fit the global job budget, including overlapping schedules. The global
+worker default may be overridden per model; CPU and memory admission bounds
+actual workers. Plans freeze rendered zoom,
 worker ceilings and frame groups for their workers.
 
 Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
@@ -218,19 +218,15 @@ Inspect the run's uploaded receipt artifacts:
 - `serving.json`: records live API verification after commit.
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
-checks each model's live API responses, remaining horizon, and recent workflow
-runs:
+checks each model's live API integrity, configured cycle age, remaining horizon
+and expiry. Actions reports publisher and cleanup failures:
 
-- **Missed schedule or publication:** verify `forecast.yml` is enabled and
-  trigger a run if needed.
 - **Upstream lag, shrinking horizon, or expiry:** publish a newer upstream cycle.
 - **Serving integrity:** check Worker deployment and retained R2 build objects,
   or roll back to a verified retained build.
 - **Publisher or maintenance failure:** inspect `publication.json`,
   `failure.json`, and `maintenance.json`; resume interrupted uploads or rerun
   `cleanup`.
-- **Workflow observation failure:** check GitHub API status and `actions: read`
-  permissions.
 
 Re-verify after recovery:
 

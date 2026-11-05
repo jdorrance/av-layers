@@ -1,12 +1,10 @@
+import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  GFS_GRID, GFS_PRODUCT, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES,
-  canonicalGridJson, encodeSparseCoverage, sparseCoverageFromDense, type SparseCoverageMask
-} from '@av/contracts';
+import { MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, canonicalGridJson, encodeSparseCoverage, sparseCoverageFromDense, type SparseCoverageMask } from '@av/contracts';
 import { readLocalFile } from '../local-file.js';
 import { loadBundledFineCoverage, stageFineCoverage, wholeDomainPlan } from './coverage.js';
 
@@ -18,7 +16,7 @@ vi.mock('../local-file.js', async importOriginal => {
 const read = vi.mocked(readLocalFile);
 
 function fineCoverage(): { hash: string; bytes: Buffer; mask: SparseCoverageMask } {
-  const grid = { ...GFS_GRID, width: 3, height: 3, wrapLongitude: false };
+  const grid = { ...INDEXED_GRID, width: 3, height: 3, wrapLongitude: false };
   const gridHash = createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
   const coverage = sparseCoverageFromDense({ width: 3, height: 3, wrapLongitude: false, gridHash, output: Uint8Array.of(0x10, 0), halo: Uint8Array.of(0xef, 1) });
   return { hash: 'a'.repeat(64), bytes: Buffer.from('{}'), mask: { grid, coverage, tiles: Uint8Array.of(1), maxZoom: 0 } };
@@ -48,7 +46,7 @@ describe('bounded fine coverage reads', () => {
 
   it('bounds bundled manifest, sparse and tile reads by descriptor and schema budgets', async () => {
     read.mockClear();
-    const product = GFS_PRODUCT, plan = wholeDomainPlan(product)!;
+    const product = INDEXED_PRODUCT, plan = wholeDomainPlan(product)!;
     const fine = await loadBundledFineCoverage(product, plan);
     expect(read.mock.calls[0]).toEqual([expect.stringMatching(/coverage\/fine\/manifest\.json$/), MAX_COVERAGE_DESCRIPTOR_BYTES]);
     expect(read.mock.calls[1]).toEqual([expect.stringMatching(/coverage\/fine\/sparse\.bin$/), MAX_SPARSE_COVERAGE_BYTES, fine.descriptor.files.sparse.bytes]);

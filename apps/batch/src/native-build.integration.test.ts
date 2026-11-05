@@ -1,10 +1,11 @@
+import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { deriveFrame, type NormalizedFrame } from '@av/forecast';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { GFS_GRID, GFS_PRODUCT, MODEL_IDS, getProduct, gridSchema, manifestSchema, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { MODEL_IDS, getProduct, gridSchema, manifestSchema, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, sampleGrid } from '@av/forecast';
 import fixture from '../../../packages/contracts/src/fixtures/lambert.json';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
@@ -22,8 +23,8 @@ const CYCLE = '2026-06-21T15:00:00.000Z';
 describe('offline native-grid build integration', () => {
   it('rejects invalid product shapes before opening a provider or writing coverage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-product-admission-')); temporary.push(root);
-    const grid = gridSchema.parse({ ...GFS_GRID, width: 3, height: 3, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false });
-    const base: ProductDefinition = { ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, grid, maxNativeZoom: 0 };
+    const grid = gridSchema.parse({ ...INDEXED_GRID, width: 3, height: 3, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false });
+    const base: ProductDefinition = { ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined, grid, maxNativeZoom: 0 };
     const mask: CoverageMask = { grid, bounds: base.bounds, output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1), maxZoom: 0 };
     const open = vi.fn(async () => { throw new Error('Provider must not open'); });
     const provider: ForecastProvider = { id: 'admission-fixture', provider: 'fixture', maxLevels: 3, open };
@@ -37,13 +38,13 @@ describe('offline native-grid build integration', () => {
   });
 
   it.each([
-    { name: 'regular', grid: gridSchema.parse({ ...GFS_GRID, width: 3, height: 3, lon0: 10, lat0: 72, dx: 1, dy: -1, wrapLongitude: false }), hours: [1, 2], interval: 1, layers: ['precip-rate'] as const, point: { lat: 71.5, lon: 10.5 }, expectedRain: 1.375 },
+    { name: 'regular', grid: gridSchema.parse({ ...INDEXED_GRID, width: 3, height: 3, lon0: 10, lat0: 72, dx: 1, dy: -1, wrapLongitude: false }), hours: [1, 2], interval: 1, layers: ['precip-rate'] as const, point: { lat: 71.5, lon: 10.5 }, expectedRain: 1.375 },
     { name: 'lambert', grid: gridSchema.parse(fixture.grid), hours: [3], interval: 3, layers: ['usable-lift-msl', 'precip-rate'] as const, point: { lat: 45, lon: -90 }, expectedRain: 3 + ((757366.5627555264 + 2000000) / 100000) * 0.25 + ((585230.9026221943 + 1000000) / 100000) * 0.5 }
   ])('builds, packs, renders and validates the $name fixture with fixed method parameters without admitting a live provider', async scenario => {
     const registeredModels = [...MODEL_IDS];
     const root = await mkdtemp(join(tmpdir(), `av-native-${scenario.name}-`)); temporary.push(root);
     const product: ProductDefinition = {
-      ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
+      ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
       label: `Offline ${scenario.name} fixture`, attribution: 'Synthetic infrastructure fixture', coverageDescription: 'Synthetic native-grid cells only; no forecast claims',
       bounds: [-180, -85, 180, 85], grid: scenario.grid, coverageId: `fixture-${scenario.name}`, maxNativeZoom: 0,
       frameHours: scenario.hours, intervalHours: scenario.interval, layers: scenario.layers

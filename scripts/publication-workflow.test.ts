@@ -12,8 +12,10 @@ const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: v
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize, verifyBuildReceipts: fake.verifyReceipts }));
 vi.mock('../apps/batch/src/providers.js', async () => {
-  const { validateCycle } = await import('../apps/batch/src/gfs/fields.js');
-  return { getForecastProvider: () => ({ async resolveCycle({ cycle, ...options }: { cycle?: string }) { return validateCycle(cycle || (await fake.discover(options)).cycle); } }) };
+  const { sourceCycle } = await import('../apps/batch/src/source.js');
+  return { getForecastProvider: () => ({ async resolveCycle({ cycle, ...options }: { cycle?: string }) {
+    return sourceCycle(cycle || (await fake.discover(options)).cycle, Array.from({ length: 24 }, (_, hour) => hour)).replace('.000Z', 'Z');
+  } }) };
 });
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer, verifyV5Dependencies: fake.verifyDependencies }));
 vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
@@ -263,7 +265,7 @@ it.each(['discover', 'pointer'] as const)('does not plan or publish when %s fail
 });
 it('rejects malformed explicit cycles before comparison instead of silently skipping them', async () => {
   vi.stubEnv('CYCLE', '2026-10-30'); vi.stubEnv('GITHUB_EVENT_NAME', 'schedule');
-  await expect(planForecast()).rejects.toThrow('GFS cycle must be an exact ISO UTC');
+  await expect(planForecast()).rejects.toThrow('Cycle must');
   expect(fake.discover).not.toHaveBeenCalled(); expect(fake.pointer).not.toHaveBeenCalled(); expect(fake.plan).not.toHaveBeenCalled();
 });
 it('does not report a successful skip after cancellation during the pointer read', async () => {

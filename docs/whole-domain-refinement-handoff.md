@@ -44,8 +44,8 @@ Read the [architecture](architecture.md), nearest READMEs and public types
 before implementation. This handoff was reviewed against `0702cae`; refresh
 the inventory from the actual starting checkout.
 
-- [GFS](../packages/contracts/config/gfs.json) and
-  [ICON-EU](../packages/contracts/config/icon-eu.json) own native grids,
+- [GFS](../packages/contracts/config/models.json) and
+  [ICON-EU](../packages/contracts/config/models.json) own native grids,
   levels, coverage policy, layers and forecast hours.
 - [Coverage](../packages/contracts/src/coverage.ts),
   [geometry](../packages/contracts/src/geometry.ts),

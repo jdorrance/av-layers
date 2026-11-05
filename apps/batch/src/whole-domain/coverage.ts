@@ -7,7 +7,7 @@ import {
   encodeSparseCoverage, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES,
   parseBoundedJson, planWholeDomainGrid, SAMPLE_BLOCK_SIZE,
   sameGrid, sparseCoverageDescriptorSchema, sparseCoverageFromDense, wholeDomainDonorSupport, type CoverageMask,
-  type ProductDefinition, type RegularLatLonGrid, type SparseCoverage, type SparseCoverageDescriptor, type SparseCoverageMask, type WholeDomainGrid
+  type ProductDefinition, type SparseCoverage, type SparseCoverageDescriptor, type SparseCoverageMask, type WholeDomainGrid
 } from '@av/contracts';
 import { describeSparseCoverage, writeSparseCoverage } from '../coverage.js';
 import { readLocalFile } from '../local-file.js';
@@ -15,16 +15,12 @@ import { readLocalFile } from '../local-file.js';
 const digest = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
 const packageRoot = fileURLToPath(new URL('../../../../packages/contracts/', import.meta.url));
 
-export function configuredTerrainSubdivision(product: ProductDefinition): number | undefined {
+export function wholeDomainPlan(product: ProductDefinition): WholeDomainGrid | undefined {
   const k = product.terrainSubdivisionFactor;
   if (k === undefined) return undefined;
   if (!Number.isSafeInteger(k) || k < 1 || k > 64) throw new Error('Product terrain subdivision factor is invalid');
-  return k;
-}
-
-export function wholeDomainPlan(product: ProductDefinition): WholeDomainGrid | undefined {
-  const k = configuredTerrainSubdivision(product);
-  return k === undefined ? undefined : planWholeDomainGrid(product.grid as RegularLatLonGrid, k);
+  if (product.grid.kind !== 'regular-latlon') throw new Error('Whole-domain subdivision requires a regular latitude/longitude grid');
+  return planWholeDomainGrid(product.grid, k);
 }
 
 export async function stageFineCoverage(root: string, fine: { hash: string; bytes: Uint8Array; mask: SparseCoverageMask }): Promise<void> {

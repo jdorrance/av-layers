@@ -183,7 +183,7 @@ it('samples every v5 surface through one, listed and all frame selections', asyn
   const surfaces = [surface('native', ['precip-rate']), surface('fine', ['usable-lift-msl', 'usable-lift-agl'])];
   const manifest = { ...legacy, version: 5, surfaces } as unknown as PublishedManifest;
   const build: PinnedBuild = { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: {} as PinnedBuild['templates'] };
-  const latest = vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
+  vi.spyOn(ApiClient.prototype, 'latest').mockResolvedValue(build);
   const sample = vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async (_build, request) => {
     const ids = Array.isArray(request.frames) ? request.frames : legacy.frames.map(frame => frame.id), value = (layer: string, surfaceId: string) => ({ value: 1, status: 'valid' as const, support: 0, interpolated: false, surfaceId });
     return { version: 5 as const, model: manifest.model, buildId: manifest.buildId, lat: request.lat, lon: request.lon, method: manifest.method, source: manifest.source, expiresAt: manifest.expiresAt, surfaces: [],
@@ -202,8 +202,6 @@ it('samples every v5 surface through one, listed and all frame selections', asyn
     [['precip-rate'], [frames[0]]], [['precip-rate'], frames], [['precip-rate'], 'all'],
     [['usable-lift-msl', 'usable-lift-agl'], [frames[0]]], [['usable-lift-msl', 'usable-lift-agl'], frames], [['usable-lift-msl', 'usable-lift-agl'], 'all']
   ]);
-  latest.mockResolvedValue({ ...build, manifest: { ...manifest, surfaces: [surface('native', ['precip-rate'])] } as unknown as PublishedManifest });
-  await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl })).rejects.toThrow('native precipitation and fine lift');
 });
 
 it('uses a bounded covered land candidate when the descriptor center is outside coverage', async () => {

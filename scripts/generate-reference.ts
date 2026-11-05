@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { parseDocument } from 'yaml';
 import * as contracts from '@av/contracts';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { CLI_COMMANDS, CLI_OPTIONS } from '../apps/batch/src/commands.js';
@@ -9,7 +10,6 @@ import { TERRAIN_COMMANDS } from '../apps/batch/src/terrain/cli.js';
 import { REFINEMENT_OPTIONS } from '../apps/batch/src/refinement/cli.js';
 import { TERRAIN_READ_LIMITS } from '../apps/batch/src/terrain/reader.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_NATIVE_RESERVE_MB, RASTER_WORKER_RESERVE_BYTES, RASTER_WORKER_RESOURCE_LIMITS } from '../apps/batch/src/raster-pool.js';
-import { workflowArtifacts } from './generate-workflows.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const regenerate = 'pnpm docs:generate';
@@ -57,8 +57,8 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   lines.push('', '## Refinement grids', '',
     'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts) and [forecast settings](../packages/contracts/config/forecast.json). See [deployments](status.md) for live applications and runs.', '',
-    `Global forecast parallelism: ${contracts.FORECAST_PARALLELISM.jobs} shard jobs; worker ceiling ${contracts.FORECAST_PARALLELISM.workers}.`, '');
+  lines.push('', '## Configured models', '', 'Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.', '',
+    `Global forecast parallelism: ${contracts.FORECAST_PARALLELISM.jobs} shard jobs; default workers ${contracts.FORECAST_PARALLELISM.workers}.`, '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
@@ -128,7 +128,12 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [path, operations] of entries(api.paths)) for (const method of Object.keys(operations).sort()) {
     if (['get', 'head', 'post', 'put', 'patch', 'delete', 'options'].includes(method)) lines.push(`- ${code(`${method.toUpperCase()} ${path}`)}.`);
   }
-  return { 'docs/reference.md': `${lines.join('\n')}\n`, 'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n`, ...await workflowArtifacts() };
+  const path = '.github/workflows/forecast.yml', workflow = parseDocument(await readFile(resolve(repository, path), 'utf8'));
+  if (workflow.errors.length) throw new Error(`Invalid forecast workflow: ${workflow.errors[0].message}`);
+  const schedules = [...new Set(contracts.PRODUCTS.flatMap(product => product.execution.schedule))];
+  if (schedules.length) workflow.setIn(['on', 'schedule'], schedules.map(cron => ({ cron })));
+  else workflow.deleteIn(['on', 'schedule']);
+  return { 'docs/reference.md': `${lines.join('\n')}\n`, 'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n`, [path]: workflow.toString({ lineWidth: 0, flowCollectionPadding: false }) };
 }
 
 async function checkDocumentation(): Promise<string[]> {

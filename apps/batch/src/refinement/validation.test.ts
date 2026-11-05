@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
-import { createRefinementDescriptors, GFS_PRODUCT, manifestSchema, setBit, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
+import { createRefinementDescriptors, manifestSchema, setBit, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
 import { fixturePatch } from '../../../../tests/forecast-fixture.js';
@@ -19,7 +20,7 @@ vi.mock('../raster-pool.js', async importOriginal => ({
 
 const cycle = '2026-06-21T12:00:00.000Z';
 const product: ProductDefinition = {
-  ...GFS_PRODUCT, terrainSubdivisionFactor: undefined, modelId: 'refinement-fixture', id: 'refinement-fixture-recipe',
+  ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined, modelId: 'refinement-fixture', id: 'refinement-fixture-recipe',
   coverageId: 'refinement-fixture-coverage', coverageDescription: 'Synthetic bounded validation grid',
   bounds: [-1, -1, 1, 1], maxNativeZoom: 0, frameHours: [1], intervalHours: 1, layers: ['usable-lift-msl', 'usable-lift-agl'],
   grid: { kind: 'regular-latlon', width: 3, height: 3, earthRadiusM: 6371229, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }

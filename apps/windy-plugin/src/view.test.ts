@@ -1,6 +1,7 @@
+import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
-import { createProductDescriptors, ICON_EU_PRODUCT } from '@av/contracts';
+import { createProductDescriptors } from '@av/contracts';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -61,10 +62,10 @@ it('replaces GFS precipitation and frame options with the selected ICON build co
     { id: 'f020', validTime: '2026-10-30T08:00:00.000Z', intervalStart: '2026-10-30T07:00:00.000Z', intervalEnd: '2026-10-30T08:00:00.000Z' }
   ];
   panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: state.buildId!, frames,
-    layers: [...ICON_EU_PRODUCT.layers], descriptors: createProductDescriptors(ICON_EU_PRODUCT) }));
+    layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) }));
   expect(nodes.find(element => element.id === 'av-model')?.value).toBe('icon-eu');
-  expect(layer.children.map(option => option.value)).toEqual(ICON_EU_PRODUCT.layers);
-  expect(layer.value).toBe(ICON_EU_PRODUCT.layers[0]);
+  expect(layer.children.map(option => option.value)).toEqual(SPLIT_PRODUCT.layers);
+  expect(layer.value).toBe(SPLIT_PRODUCT.layers[0]);
   expect(frame.children.map(option => [option.value, option.textContent])).toEqual(frames.map(value => [value.id, `${value.id} · ${value.validTime}`]));
   const legend = nodes.find(element => element.className === 'av-legend')!;
   expect(visit(legend).some(element => element.textContent === 'rain · mm/h')).toBe(false);

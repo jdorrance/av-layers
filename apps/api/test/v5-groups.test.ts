@@ -1,16 +1,17 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, ICON_EU_PRODUCT, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema, type ManifestV5 } from '@av/contracts';
+import { CELL_BYTES, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema, type ManifestV5 } from '@av/contracts';
 import { ApiClient, layerMaxZoom, previewRasterSource, windyTileOptions } from '@av/contracts/client';
 import { createApp } from '../src/index';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture, finePoint } from './v5-fixture';
 
-const iconGroups = [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]];
+const regionalGroups = [[1, 9, 10], [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22], [23, 24]];
 const cases = [
-  { product: GFS_PRODUCT, maxZoom: 9, groups: Array.from({ length: 12 }, (_, i) => [i * 2 + 1, i * 2 + 2]),
+  { product: INDEXED_PRODUCT, maxZoom: 9, groups: Array.from({ length: 12 }, (_, i) => [i * 2 + 1, i * 2 + 2]),
     retainedGroups: [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24]] },
-  { product: ICON_EU_PRODUCT, maxZoom: 10, groups: iconGroups, retainedGroups: iconGroups }
+  { product: SPLIT_PRODUCT, maxZoom: 10, groups: regionalGroups, retainedGroups: regionalGroups }
 ];
 
 function merge(target: ReturnType<typeof createV5Fixture>, source: ReturnType<typeof createV5Fixture>) {
@@ -31,7 +32,7 @@ function expectFrames(body: ReturnType<typeof sampleResponseV5Schema.parse>, man
     expect(Object.keys(layers).sort()).toEqual([...manifest.layers].sort());
     expect(layers['usable-lift-msl']).toMatchObject({ value: 310.25 + index * 10, status: 'valid', surfaceId: 'fine' });
     expect(layers['usable-lift-agl']).toMatchObject({ value: 610.25 + index * 10, status: 'valid', surfaceId: 'fine' });
-    if (manifest.model === 'gfs') expect(layers['precip-rate']).toMatchObject({ value: 7 + index, status: 'valid', surfaceId: 'native' });
+    if (manifest.layers.includes('precip-rate')) expect(layers['precip-rate']).toMatchObject({ value: 7 + index, status: 'valid', surfaceId: 'native' });
   }
 }
 
@@ -97,9 +98,9 @@ describe('frame-group v5 serving', () => {
     const body = await sampleBody(await pending);
     expectFrames(body, fixture.manifest, fixture.manifest.frames.map((_, index) => index));
     const ranges = fixture.get.mock.calls.flatMap(([, options]) => options?.range ? [options.range] : []);
-    expect(ranges).toHaveLength(options.groups.length * (options.product.modelId === 'gfs' ? 2 : 1));
+    expect(ranges).toHaveLength(options.groups.length * fixture.manifest.surfaces.length);
     const bytes = ranges.reduce((total, range) => total + range.length, 0);
-    expect(bytes).toBe(options.product.modelId === 'gfs' ? 360 : 170);
+    expect(bytes).toBe(fixture.manifest.frames.length * fixture.manifest.layers.length * CELL_BYTES);
     expect(bytes).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
     expect(peak).toBe(4);
     expect(inFlightAllocationBytes()).toBe(0);

@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
 """Build coverage bitsets from pinned Natural Earth 1:50m admin-0.
 
-Regenerate GFS (soaring-land-v1) with:
-  uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
-    --with pyshp==2.3.1 python scripts/masks/build_masks.py \
-    --config packages/contracts/config/gfs.json \
-    --source ne_50m_admin_0_countries.zip \
-    --output packages/contracts/coverage
-
-Regenerate ICON-EU (icon-eu-land-v1) with:
-  uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
-    --with pyshp==2.3.1 python scripts/masks/build_masks.py \
-    --config packages/contracts/config/icon-eu.json \
-    --source ne_50m_admin_0_countries.zip \
-    --output packages/contracts/coverage/icon-eu-land-v1
+uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
+  --with pyshp==2.3.1 python scripts/masks/build_masks.py --source ne_50m_admin_0_countries.zip
 """
 
 from __future__ import annotations
@@ -59,6 +48,15 @@ TILE_HALF_DEG = TILE_DEG / 2.0
 TILE_LON_PAD = 4.0
 TILE_LAT_PAD = 2.0
 BUFFER_QUAD_SEGS = 16
+
+
+def model_settings(path: Path, model: str | None = None):
+    config = json.loads(path.read_text())
+    model = config['defaultModel'] if model is None else model
+    try:
+        return next(item for item in config['models'] if item['modelId'] == model)
+    except StopIteration:
+        raise SystemExit(f'Unknown model: {model}') from None
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -308,7 +306,7 @@ def regeneration_command(args: argparse.Namespace) -> str:
         "uv", "run", "--python", "3.14.7",
         "--with", "shapely==2.1.2", "--with", "pyproj==3.7.2", "--with", "pyshp==2.3.1",
         "python", "scripts/masks/build_masks.py",
-        "--config", str(args.config), "--output", str(args.output),
+        "--config", str(args.config), "--model", args.model, "--output", str(args.output),
     ]
     if args.source is not None:
         command.extend(["--source", str(args.source)])
@@ -322,16 +320,20 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("packages/contracts/config/gfs.json"),
+        default=Path("packages/contracts/config/models.json"),
     )
+    parser.add_argument("--model")
     parser.add_argument("--source", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--allow-local-libs", action="store_true")
     args = parser.parse_args()
 
-    settings = json.loads(args.config.resolve().read_text())
+    settings = model_settings(args.config.resolve(), args.model)
+    args.model = settings["modelId"]
     grid = settings["grid"]
     coverage = settings["coverage"]
+    if not any(case[3] for case in coverage["probes"]):
+        raise SystemExit("Coverage requires a positive regression probe")
     coverage["maxNativeZoom"] = max_native_zoom()
     if args.output is None:
         args.output = Path("packages/contracts") / settings["coverageDir"]
@@ -343,8 +345,6 @@ def main() -> None:
         grid["lon0"] != -180 or not math.isclose(grid["width"] * grid["dx"], 360)
     ):
         raise SystemExit("This generator requires wrapping grids to start at -180 and cover 360 degrees")
-    if coverage["id"] not in ("soaring-land-v1", "icon-eu-land-v1"):
-        raise SystemExit("Add coverage-specific regression probes before generating a new policy")
     if coverage["maxNativeZoom"] < 2:
         raise SystemExit("Coverage regression probes require zoom 2")
 
@@ -531,39 +531,7 @@ def main() -> None:
         return row, col, lat0 + row * dy, lon0 + col * dx
 
     def run_tests(output_bits: bytes, halo_bits: bytes, tile_bits: bytes):
-        if policy_id == "soaring-land-v1":
-            cases = [
-                ("torrey_pines", 32.9200, -117.2400, True),
-                ("karioitahi_offshore_4km", -37.2900, 174.6400, True),
-                ("big_sur_coast", 36.2700, -121.8100, True),
-                ("azores_sao_miguel", 37.7410, -25.6750, True),
-                ("canaries_tenerife", 28.2910, -16.6290, True),
-                ("caucasus_40n_44e", 40.1790, 44.4990, True),
-                ("new_zealand_wellington", -41.2865, 174.7762, True),
-                ("aleutians_unalaska", 53.8750, -166.5360, True),
-                ("dateline_east_attu", 52.9000, 173.2000, True),
-                ("dateline_west_taveuni", -16.8500, -179.9700, True),
-                ("exclude_russia_moscow", 55.7558, 37.6173, False),
-                ("exclude_greenland_nuuk", 64.1814, -51.6941, False),
-                ("exclude_antarctica", -77.8500, 166.6700, False),
-                ("exclude_china_beijing", 39.9042, 116.4074, False),
-                ("exclude_africa_lagos", 6.5244, 3.3792, False),
-                ("exclude_africa_cape_town", -33.9249, 18.4241, False),
-                ("outside_band_north", 66.0000, 20.0000, False),
-                ("outside_band_south", -56.0000, 10.0000, False),
-                ("open_ocean_atlantic", 30.0000, -40.0000, False),
-            ]
-        else:
-            cases = [
-                ("caucasus_40n_44e", 40.1790, 44.4990, True),
-                ("alps_chamonix", 45.9237, 6.8694, True),
-                ("pyrenees_ager", 42.0000, 0.7620, True),
-                ("dolomites_marmolada", 46.4336, 11.8511, True),
-                ("exclude_russia_moscow", 55.7558, 37.6173, False),
-                ("exclude_africa_cairo", 30.0444, 31.2357, False),
-                ("exclude_africa_tunis", 36.8065, 10.1815, False),
-                ("open_ocean_atlantic", 45.0000, -20.0000, False),
-            ]
+        cases = coverage["probes"]
         results = []
         for name, lat, lon, expected in cases:
             row, col, cell_lat, cell_lon = nearest_cell(lat, lon)
@@ -593,11 +561,12 @@ def main() -> None:
         if failures:
             raise SystemExit(f"coverage test failures: {', '.join(failures)}")
 
-        z2x = 2
-        z2y = 1
+        _, lat, lon, _ = next(case for case in cases if case[3])
+        z2x = max(0, min(3, int((lon + 180) / 360 * 4)))
+        z2y = max(0, min(3, int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * 4)))
         tile_index = tile_offsets["2"] + z2y * 4 + z2x
         tile_observed = bool(tile_bits[tile_index >> 3] & (1 << (tile_index & 7)))
-        return results, tile_observed, "2/2/1"
+        return results, tile_observed, f"2/{z2x}/{z2y}"
 
     args.output.mkdir(parents=True, exist_ok=True)
 

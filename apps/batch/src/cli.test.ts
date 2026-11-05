@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BuildOptions } from './build.js';
-import { getProduct, MODEL_IDS, planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct, MODEL_IDS, planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
 
 const fake = vi.hoisted(() => ({ build: vi.fn(), read: vi.fn(), storage: vi.fn() }));
 vi.mock('./build.js', () => ({ buildProduct: fake.build }));
@@ -35,7 +35,7 @@ it('passes a pinned global catalog to the build and opens one terrain store', as
 
 it('does not construct terrain storage when no catalog was supplied', async () => {
   await runBatch(['build']);
-  expect(fake.build).toHaveBeenCalledWith('gfs', { out: 'output', cycle: undefined, cacheDir: undefined });
+  expect(fake.build).toHaveBeenCalledWith(DEFAULT_MODEL, { out: 'output', cycle: undefined, cacheDir: undefined });
   expect(fake.storage).not.toHaveBeenCalled();
   expect(fake.read).not.toHaveBeenCalled();
 });
@@ -73,7 +73,7 @@ it('preserves the staged native-grid terrain option without remote storage', asy
   const terrain = { key: `terrain/prepared/${'a'.repeat(64)}/manifest.json`, sha256: 'b'.repeat(64), bytes: 100, arrayBytes: 20 };
   fake.read.mockResolvedValue(Buffer.from(JSON.stringify(terrain)));
   await runBatch(['build', '--terrain-ref', 'prepared.json']);
-  expect(fake.build).toHaveBeenCalledWith('gfs', expect.objectContaining({ terrain }));
+  expect(fake.build).toHaveBeenCalledWith(DEFAULT_MODEL, expect.objectContaining({ terrain }));
   expect(fake.storage).not.toHaveBeenCalled();
 });
 

@@ -1,9 +1,10 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, TERRAIN_CLEARANCE_METHOD, canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type Manifest, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { TERRAIN_CLEARANCE_METHOD, canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type Manifest, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { describeSparseCoverage } from './coverage.js';
@@ -241,7 +242,7 @@ describe('refined hour-group builds', () => {
 
 describe('whole-domain parallel receipt integrity', () => {
   const wholeProduct: ProductDefinition = {
-    ...GFS_PRODUCT,
+    ...INDEXED_PRODUCT,
     modelId: 'whole-domain-receipt-fixture', id: 'whole-domain-receipt-recipe',
     source: { modelFamily: 'fixture-model', configurationId: 'whole-domain-receipt-provider', domainId: 'synthetic' },
     label: 'Whole-domain receipt fixture', attribution: 'Synthetic test data',

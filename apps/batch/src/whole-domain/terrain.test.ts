@@ -1,8 +1,9 @@
+import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { canonicalGridJson, encodeSparseCoverage, GFS_PRODUCT, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type ProductDefinition, type RegularLatLonGrid } from '@av/contracts';
+import { canonicalGridJson, encodeSparseCoverage, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type ProductDefinition, type RegularLatLonGrid } from '@av/contracts';
 import { describeSparseCoverage } from '../coverage.js';
 import { sha256 } from '../terrain/contract.js';
 import { createTerrainReader } from '../terrain/reader.js';
@@ -29,7 +30,7 @@ async function fixture() {
   const out = await mkdtemp(join(tmpdir(), 'av-whole-domain-terrain-')); temporary.push(out);
   const native: RegularLatLonGrid = { kind: 'regular-latlon', width: 3, height: 2, earthRadiusM: 6371229,
     lon0: 0.25, lat0: 0.75, dx: 0.25, dy: -0.25, wrapLongitude: false };
-  const product: ProductDefinition = { ...GFS_PRODUCT, grid: native, terrainSubdivisionFactor: 2,
+  const product: ProductDefinition = { ...INDEXED_PRODUCT, grid: native, terrainSubdivisionFactor: 2,
     modelId: 'terrain-fixture', id: 'terrain-fixture', bounds: [0, 0, 1, 1], maxNativeZoom: 0 };
   const plan = planWholeDomainGrid(native, 2), grid = plan.fine;
   const dense = (cells: number) => {

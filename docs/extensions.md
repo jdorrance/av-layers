@@ -3,62 +3,51 @@
 Follow [development](development.md) for setup and
 [architecture](architecture.md) for package ownership.
 
-## Change existing settings
+## Configure a model
 
-[forecast.json](../packages/contracts/config/forecast.json) owns job and worker
-parallelism, per-model zoom, schedules and shard targets. Edit it, run
-`pnpm docs:generate`, then `pnpm capacity --model MODEL` and `pnpm verify`.
-
-Edit [gfs.json](../packages/contracts/config/gfs.json) or
-[icon-eu.json](../packages/contracts/config/icon-eu.json) for model settings;
-[product.ts](../packages/contracts/src/product.ts) validates shared fields.
-Physical constants and defaults live in
-[`@av/solar`](../packages/solar/README.md),
-[`@av/thermodynamics`](../packages/thermodynamics/README.md), and
-[`@av/soaring`](../packages/soaring/README.md) and are re-exported into
-[method descriptors](../packages/contracts/src/methods.ts).
-
-After changing a grid or coverage policy, regenerate its masks:
+[models.json](../packages/contracts/config/models.json) owns each model's source
+profile, grid, coverage, capabilities, schedule, zoom and shard settings, with
+shared job and worker defaults. Model parallelism is its fixed job cap; the sum
+must fit the shared job budget. Edit this file, then run:
 
 ```sh
-pnpm masks:build --config packages/contracts/config/icon-eu.json
-```
-
-Then run `pnpm docs:generate` and rebuild forecast data.
-
-## Add a weather model
-
-1. Add `packages/contracts/config/<model>.json` and its entry in
-   [forecast.json](../packages/contracts/config/forecast.json), resolve both through `settings`, call `defineProduct` in
-   [products.ts](../packages/contracts/src/products.ts), and include it in
-   `PRODUCTS`.
-2. Create `apps/batch/src/<model>/` with a `provider.ts` implementing
-   [`ResolvableForecastProvider`](../apps/batch/src/provider.ts) (`resolveCycle`,
-   `proveInputs`, and `open({ cycle, activeIndices, cacheDir, signal })`). Keep
-   downloads, caching, decoding, and unit/interval normalization inside the
-   adapter.
-3. Register the provider in [providers.ts](../apps/batch/src/providers.ts) keyed
-   by `product.source.configurationId`, using dynamic imports so model selection
-   stays lightweight. Set `maxLevels` and `retainedGeometryFields` for capacity
-   accounting.
-4. Add unit and integration tests for decoding, metadata verification, flux/rate
-   interval recovery, missingness, and session cleanup.
-5. Run `pnpm docs:generate` to update workflow model choices and schedules,
-   and record attribution in [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt).
-
-Verify offline and with live upstream data:
-
-```sh
-pnpm test packages/forecast/src/inputs.test.ts apps/batch/src/providers.test.ts
-pnpm test apps/batch/src/native-build.integration.test.ts apps/batch/src/parallel.test.ts
+pnpm docs:generate
 pnpm capacity --model MODEL
-pnpm input:proof --model MODEL --cache-dir .cache/MODEL
-pnpm forecast --model MODEL --out output --cache-dir .cache/MODEL \
-  --terrain-catalog-ref output/terrain-catalog-ref.json
+pnpm verify
 ```
 
-[Development](development.md#build-a-real-forecast) covers catalog access for
-configured refinement zones.
+Adding a model with an existing source protocol requires one registry entry.
+Choose its URL template, fields, grid, forecast hours and coverage in that entry.
+After changing a grid or coverage policy, generate its native and fine masks:
+
+```sh
+pnpm masks:build --model MODEL
+uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 \
+  python scripts/masks/build_fine_masks.py --model MODEL
+```
+
+The hosted workflow prepares its terrain cache. Record source attribution in
+[THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt), then verify live acquisition:
+
+```sh
+pnpm input:proof --model MODEL --cache-dir .cache/MODEL
+```
+
+## Add a source protocol
+
+The [provider registry](../apps/batch/src/providers.ts) binds model settings to
+configured [indexed GRIB](../apps/batch/src/indexed-grib/README.md) or
+[split GRIB](../apps/batch/src/split-grib/README.md) factories. A new source format
+adds a factory implementing
+[ResolvableForecastProvider](../apps/batch/src/provider.ts) and one protocol entry
+in that registry. Keep source metadata validation, downloads, decoding, interval
+recovery and resource accounting inside the adapter. Test its real encoded data,
+normalization and session cleanup.
+
+Physical constants live in [`@av/solar`](../packages/solar/README.md),
+[`@av/thermodynamics`](../packages/thermodynamics/README.md), and
+[`@av/soaring`](../packages/soaring/README.md); manifests bind their
+[method descriptors](../packages/contracts/src/methods.ts).
 
 ### Adapter output
 

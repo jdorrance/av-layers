@@ -1,3 +1,4 @@
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { expect, it } from 'vitest';
 import { CELL_BYTES } from './format';
 import { manifestV5Schema } from './publication';
@@ -5,7 +6,7 @@ import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
 import { buildDiagnosticRows, formatSeriesSummary, layerMaxZoom, paletteLegend, seriesTable } from './client-view';
 import { PALETTES, paletteSchema } from './layers';
-import { GFS_PRODUCT, TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
+import { TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
 
 function v5Build(): PinnedBuild {
   const base = fixtureBuild();
@@ -14,7 +15,7 @@ function v5Build(): PinnedBuild {
   if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
   const prefix = `builds/${base.manifest.model}/${base.manifest.buildId}`;
   const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
-  const descriptors = createWholeDomainDescriptors(GFS_PRODUCT);
+  const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
   const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
   const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
     const blockCount = blocks(gridValue), channelCount = base.manifest.frames.length * layers.length;

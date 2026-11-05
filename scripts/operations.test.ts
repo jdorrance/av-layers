@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { open, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
-import { MODEL_IDS } from '@av/contracts';
+import { DEFAULT_MODEL, MODEL_IDS } from '@av/contracts';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { MAX_FORECAST_SHARDS, readBuildPlan } from '../apps/batch/src/parallel.js';
 import { assertBuildBucketLock, r2ShardStorage, sealShardCredentials } from '../apps/batch/src/storage.js';
@@ -34,7 +34,10 @@ const config: WranglerConfig = {
   staging: { name: 'windy-av-api-staging', bucket: 'windy-av-layer-staging' },
   production: { name: 'windy-av-api-production', bucket: 'windy-av-layer' }
 };
-const base = { TARGET_ENV: 'staging', MODEL: 'gfs', CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: 'token', PAGES_PROJECT_NAME: pages, API_BASE_URL: 'https://api-staging.example.com' };
+const otherModel = MODEL_IDS.find(model => model !== DEFAULT_MODEL)!;
+const credentialName = (model: string) => `FORECAST_${model.toUpperCase().replaceAll('-', '_')}_SHARD_CREDENTIAL_KEY`;
+const namedKeys = MODEL_IDS.map(credentialName);
+const base = { TARGET_ENV: 'staging', MODEL: DEFAULT_MODEL, CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: 'token', PAGES_PROJECT_NAME: pages, API_BASE_URL: 'https://api-staging.example.com' };
 
 it('requires an explicit registered model for forecast writes and maintenance', () => {
   const context = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging' };
@@ -56,7 +59,7 @@ it('requires an explicit registered model for forecast writes and maintenance', 
 
 it('accepts explicit operations without ceremonial confirmation and rejects ambiguous write targets', () => {
   expect(() => validateOperationInputs('deploy', base)).not.toThrow();
-  const maintenance = { ...base, ACTION: 'rollback', MODEL: 'gfs', BUILD_ID: '20261030T000000Z-00000000-0000-4000-8000-000000000000' };
+  const maintenance = { ...base, ACTION: 'rollback', BUILD_ID: '20261030T000000Z-00000000-0000-4000-8000-000000000000' };
   expect(() => validateOperationInputs('maintenance', maintenance)).not.toThrow();
   expect(() => validateOperationInputs('maintenance', { ...maintenance, ACTION: 'cleanup', BUILD_ID: '' })).not.toThrow();
   for (const patch of [{ ACTION: 'unknown' }, { ACTION: 'cleanup' }, { MODEL: 'unknown' }, { MODEL: 'constructor' }, { TARGET_ENV: 'preview' }, { BUILD_ID: '../other' }]) expect(() => validateOperationInputs('maintenance', { ...maintenance, ...patch })).toThrow();
@@ -85,12 +88,12 @@ it('requires an encryption key and excludes parent credentials from shards', () 
   const env = { ...base, CLOUDFLARE_API_TOKEN: undefined, FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
   expect(validateShardEnvironment(env, config)).toMatchObject({ r2Bucket: config.staging.bucket, credentialKey: env.FORECAST_SHARD_CREDENTIAL_KEY });
   expect(() => validateShardEnvironment({ ...env, FORECAST_SHARD_CREDENTIAL_KEY: 'short' }, config)).toThrow('FORECAST_SHARD_CREDENTIAL_KEY');
-  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY', 'FORECAST_FUTURE_MODEL_SHARD_CREDENTIAL_KEY']) expect(() => validateShardEnvironment({ ...env, [key]: 'publisher' }, config)).toThrow(key);
+  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...namedKeys, 'FORECAST_EXAMPLE_SHARD_CREDENTIAL_KEY']) expect(() => validateShardEnvironment({ ...env, [key]: 'publisher' }, config)).toThrow(key);
 });
 
 it('opens scoped shard storage from the validated plan and encrypted artifact', async () => {
   const deadlineAt = new Date(Date.now() + 30 * 60_000).toISOString();
-  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt };
+  const plan = { model: DEFAULT_MODEL, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt };
   vi.mocked(readBuildPlan).mockResolvedValue(plan as Awaited<ReturnType<typeof readBuildPlan>>);
   const shardEnv = { CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
   const envelope = Buffer.from(sealShardCredentials({ ...shardEnv, R2_ACCESS_KEY_ID: 'publisher', R2_SECRET_ACCESS_KEY: 'publisher-secret' }, plan as Parameters<typeof sealShardCredentials>[1]));
@@ -100,7 +103,7 @@ it('opens scoped shard storage from the validated plan and encrypted artifact', 
     return { bytesRead, buffer };
   }, close: async () => {} } as never);
   for (const [key, value] of Object.entries({ ...base, SHARD_ID: '1', FORECAST_SHARD_CREDENTIAL_KEY: shardEnv.FORECAST_SHARD_CREDENTIAL_KEY })) vi.stubEnv(key, value);
-  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) vi.stubEnv(key, undefined);
+  for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...namedKeys]) vi.stubEnv(key, undefined);
   try {
     await runOperation('forecast-shard');
     expect(readBuildPlan).toHaveBeenCalledWith('output/plan.json');
@@ -110,16 +113,16 @@ it('opens scoped shard storage from the validated plan and encrypted artifact', 
     expect(r2ShardStorage).toHaveBeenCalledWith(shardEnv, plan, envelope);
     expect(store).toBe(vi.mocked(r2ShardStorage).mock.results[0]!.value);
     await expect(store!.list('')).rejects.toThrow('cannot list');
-    vi.mocked(readBuildPlan).mockResolvedValueOnce({ ...plan, model: 'icon-eu' } as Awaited<ReturnType<typeof readBuildPlan>>);
+    vi.mocked(readBuildPlan).mockResolvedValueOnce({ ...plan, model: otherModel } as Awaited<ReturnType<typeof readBuildPlan>>);
     await expect(runOperation('forecast-shard')).rejects.toThrow('differs from the workflow model');
     expect(runForecastShard).toHaveBeenCalledOnce();
   } finally { vi.unstubAllEnvs(); vi.mocked(open).mockReset(); vi.mocked(runForecastShard).mockReset(); vi.mocked(readBuildPlan).mockReset(); vi.mocked(r2ShardStorage).mockClear(); }
 });
 
 it('rotates model keys after the bucket lock and seals them only for new plans', async () => {
-  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
+  const plan = { model: DEFAULT_MODEL, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
   const asPlan = (value: unknown) => value as Awaited<ReturnType<typeof planForecast>>;
-  vi.mocked(planForecast).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan({ ...plan, model: 'icon-eu' })).mockResolvedValueOnce(null);
+  vi.mocked(planForecast).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan(plan)).mockResolvedValueOnce(asPlan({ ...plan, model: otherModel })).mockResolvedValueOnce(null);
   vi.mocked(writeFile).mockResolvedValue(undefined);
   const root = mkdtempSync(join(tmpdir(), 'av-key-'));
   const output = join(root, 'output'), summary = join(root, 'summary');
@@ -134,7 +137,7 @@ it('rotates model keys after the bucket lock and seals them only for new plans',
     expect(sealShardCredentials).not.toHaveBeenCalled();
     await runOperation('forecast-plan');
     await runOperation('forecast-plan');
-    vi.stubEnv('MODEL', 'icon-eu');
+    vi.stubEnv('MODEL', otherModel);
     await runOperation('forecast-plan');
     const keys = vi.mocked(sealShardCredentials).mock.calls.map(([env]) => env.FORECAST_SHARD_CREDENTIAL_KEY!);
     expect(keys).toHaveLength(3);
@@ -146,7 +149,7 @@ it('rotates model keys after the bucket lock and seals them only for new plans',
     for (let i = 0; i < 3; i++) {
       const [command, args, options] = vi.mocked(spawn).mock.calls[i]!;
       expect(command).toBe('gh');
-      expect(args).toEqual(['secret', 'set', i === 2 ? 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY' : 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', '--env', 'staging', '--repo', 'owner/repo']);
+      expect(args).toEqual(['secret', 'set', credentialName(i === 2 ? otherModel : DEFAULT_MODEL), '--env', 'staging', '--repo', 'owner/repo']);
       expect(options).toMatchObject({ env: { GH_TOKEN: 'issuer-secret' }, stdio: ['pipe', 'ignore', 'pipe'] });
       const child = vi.mocked(spawn).mock.results[i]!.value;
       expect(child.stdin!.read().toString()).toBe(keys[i]);
@@ -159,8 +162,7 @@ it('rotates model keys after the bucket lock and seals them only for new plans',
     expect(() => r2ShardStorage({ CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: keys[0] }, plan as Parameters<typeof r2ShardStorage>[1], Buffer.from(String(envelope)))).not.toThrow();
     expect(() => r2ShardStorage({ CLOUDFLARE_ACCOUNT_ID: account, R2_BUCKET: config.staging.bucket, FORECAST_SHARD_CREDENTIAL_KEY: keys[0] }, plan as Parameters<typeof r2ShardStorage>[1], Buffer.from(String(vi.mocked(writeFile).mock.calls[1]![1])))).toThrow();
     const visible = [readFileSync(output, 'utf8'), readFileSync(summary, 'utf8'), ...vi.mocked(writeFile).mock.calls.map(call => String(call[1])), JSON.stringify(log.mock.calls), JSON.stringify(error.mock.calls)].join('\n');
-    expect(readFileSync(output, 'utf8')).toContain('credential-secret=FORECAST_GFS_SHARD_CREDENTIAL_KEY\n');
-    expect(readFileSync(output, 'utf8')).toContain('credential-secret=FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY\n');
+    for (const model of [DEFAULT_MODEL, otherModel]) expect(readFileSync(output, 'utf8')).toContain(`credential-secret=${credentialName(model)}\n`);
     for (const key of [...keys, 'issuer-secret', 'publisher-secret']) expect(visible).not.toContain(key);
     await runOperation('forecast-plan');
     expect(spawn).toHaveBeenCalledTimes(3);
@@ -169,7 +171,7 @@ it('rotates model keys after the bucket lock and seals them only for new plans',
 });
 
 it('fails closed and sanitizes issuer failures and timeouts', async () => {
-  const plan = { model: 'gfs', buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
+  const plan = { model: DEFAULT_MODEL, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt: new Date(Date.now() + 30 * 60_000).toISOString(), groups: [[1]], cycle: new Date().toISOString() };
   const root = mkdtempSync(join(tmpdir(), 'av-issuer-')), output = join(root, 'output');
   writeFileSync(output, '');
   vi.mocked(planForecast).mockResolvedValue(plan as Awaited<ReturnType<typeof planForecast>>);
@@ -335,15 +337,14 @@ describe('Pages deployment revision verification', () => {
 });
 
 it('lists exact model-specific hour batches and UTC times, including gaps and omitted nights', () => {
-  const report = forecastPlanReport({ model: 'icon-eu', cycle: '2026-11-03T00:00:00.000Z', groups: [[7, 8], [12, 16]] }, 'icon-eu');
+  const report = forecastPlanReport({ model: DEFAULT_MODEL, cycle: '2026-11-03T00:00:00.000Z', groups: [[7, 8], [12, 16]] }, DEFAULT_MODEL);
   expect(report.shards).toEqual([{ id: 0, hours: 'f007, f008' }, { id: 1, hours: 'f012, f016' }]);
   expect(report.summary).toContain('2026-11-03T16:00:00.000Z');
   expect(report.summary).not.toContain('f001');
-  expect(forecastPlanReport(null, 'gfs')).toEqual({ shards: [], summary: expect.stringContaining('already published') });
+  expect(forecastPlanReport(null, DEFAULT_MODEL)).toEqual({ shards: [], summary: expect.stringContaining('already published') });
 });
 
 it('routes each model credential name through the same generic plan output', () => {
-  for (const [model, name] of [['gfs', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY'], ['icon-eu', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY'], ['future-model-v2', 'FORECAST_FUTURE_MODEL_V2_SHARD_CREDENTIAL_KEY']]) {
-    expect(forecastPlanReport({ model, cycle: '2026-11-03T00:00:00.000Z', groups: [[1]] }, model).credentialSecret).toBe(name);
-  }
+  const model = 'sample-model-v2';
+  expect(forecastPlanReport({ model, cycle: '2026-11-03T00:00:00.000Z', groups: [[1]] }, model).credentialSecret).toBe('FORECAST_SAMPLE_MODEL_V2_SHARD_CREDENTIAL_KEY');
 });

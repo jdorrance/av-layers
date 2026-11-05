@@ -1,12 +1,13 @@
+import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { expect, it } from 'vitest';
 import { assertSparseCoverageHalo, coverageAtZoom, expectedTiles, isCovered, isTileCovered, prepareCoverageTester, setBit, type CoverageMask } from './coverage.js';
 import { prepareGridGeometry, type Grid } from './geometry.js';
 import { sparseCoverageFromDense } from './sparse-coverage.js';
 import fixture from './fixtures/lambert.json';
-import { GFS_GRID } from './products.js';
+
 
 it('selects rendered levels while preserving immutable cells and clearing prefix padding', () => {
-  const master: CoverageMask = { grid: GFS_GRID, output: Uint8Array.of(1), halo: Uint8Array.of(2), tiles: Uint8Array.of(255, 255, 31), maxZoom: 2 };
+  const master: CoverageMask = { grid: INDEXED_GRID, output: Uint8Array.of(1), halo: Uint8Array.of(2), tiles: Uint8Array.of(255, 255, 31), maxZoom: 2 };
   for (const [zoom, bytes] of [[0, [1]], [1, [31]]] as const) {
     const view = coverageAtZoom(master, zoom);
     expect(view.tiles).toEqual(Uint8Array.from(bytes));
@@ -26,7 +27,7 @@ it('selects rendered levels while preserving immutable cells and clearing prefix
 });
 
 it('compiled coverage preserves exact direct ownership at grid edges, half-cell ties, bounds and wrap', () => {
-  for (const grid of [GFS_GRID, { ...GFS_GRID, width: 3, height: 3, lon0: 10, lat0: 40, dx: 1, dy: -1, wrapLongitude: false }, fixture.grid] as Grid[]) {
+  for (const grid of [INDEXED_GRID, { ...INDEXED_GRID, width: 3, height: 3, lon0: 10, lat0: 40, dx: 1, dy: -1, wrapLongitude: false }, fixture.grid] as Grid[]) {
     const mask: CoverageMask = { grid, output: new Uint8Array(Math.ceil(grid.width * grid.height / 8)).fill(0x55), halo: new Uint8Array(Math.ceil(grid.width * grid.height / 8)), tiles: Uint8Array.of(1), maxZoom: 0 };
     const geometry = prepareGridGeometry(grid), covered = prepareCoverageTester(mask);
     for (const y of [-0.500001, -0.5, -0.499999, 0, 0.5, 1, grid.height - 1, grid.height - 0.5]) {
@@ -42,7 +43,7 @@ it('compiled coverage preserves exact direct ownership at grid edges, half-cell 
 });
 
 it.each([false, true])('validates exact sparse halo and preserves dense admission with wrap=%s', wrapLongitude => {
-  const grid = { ...GFS_GRID, width: 35, height: 20, lon0: -20, lat0: 20, dx: 1, dy: -1, wrapLongitude };
+  const grid = { ...INDEXED_GRID, width: 35, height: 20, lon0: -20, lat0: 20, dx: 1, dy: -1, wrapLongitude };
   const output = new Uint8Array(Math.ceil(grid.width * grid.height / 8)), halo = new Uint8Array(output.length);
   const points = [[0, 0], [15, 15], [16, 16], [34, 19], [25, 1]];
   const out = new Set(points.map(([x, y]) => y * grid.width + x));

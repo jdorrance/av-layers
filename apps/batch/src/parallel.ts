@@ -2,7 +2,7 @@ import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import z from 'zod';
 import { resolveProductFrameHours } from '@av/forecast';
-import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
+import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, layerSurface, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
 import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, prepareBuild, type PreparedBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
@@ -266,7 +266,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
         await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), { channels: surface.layout.channelCount, shards: surface.shards! });
       }
       for (const artifact of result.artifacts) {
-        const coverage = artifact.layer === 'precip-rate' ? whole.native : whole.fine;
+        const coverage = layerSurface(artifact.layer) === 'native' ? whole.native : whole.fine;
         if (await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
         await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
       }

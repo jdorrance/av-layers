@@ -1,17 +1,18 @@
 import { getProduct } from '@av/contracts';
 import type { ResolvableForecastProvider } from './provider.js';
-import { gfsProvider } from './gfs/provider.js';
-import { iconEuProvider } from './icon/provider.js';
+import { createIndexedGribProvider } from './indexed-grib/provider.js';
+import { createSplitGribProvider } from './split-grib/provider.js';
 
-const PROVIDERS_BY_CONFIG_ID: Readonly<Record<string, ResolvableForecastProvider>> = Object.freeze({
-  [gfsProvider.id]: gfsProvider,
-  [iconEuProvider.id]: iconEuProvider
-});
+const factories = { 'indexed-grib2': createIndexedGribProvider, 'split-grib2': createSplitGribProvider };
+const providers = new Map<string, ResolvableForecastProvider>();
 
-/** Explicit production binding; test providers are passed directly to buildForecast. */
+/** Bind a configured model to its source protocol; fixtures may inject providers directly. */
 export function getForecastProvider(modelId: string): ResolvableForecastProvider {
-  const product = getProduct(modelId);
-  const provider = product ? PROVIDERS_BY_CONFIG_ID[product.source.configurationId] : undefined;
-  if (!product || !provider) throw new Error(`No forecast provider for ${modelId}`);
+  const model = getProduct(modelId);
+  if (!model) throw new Error(`No forecast provider for ${modelId}`);
+  const protocol = model.upstream.protocol;
+  if (typeof protocol !== 'string' || !Object.hasOwn(factories, protocol)) throw new Error(`Unsupported source protocol ${String(protocol)}`);
+  let provider = providers.get(modelId);
+  if (!provider) { provider = factories[protocol as keyof typeof factories](model); providers.set(modelId, provider); }
   return provider;
 }

@@ -2,4 +2,4 @@
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { createApp } from '../src/index';
 
-export default createApp({ products: { gfs: OFFLINE_PRODUCT } });
+export default createApp({ products: { [OFFLINE_PRODUCT.modelId]: OFFLINE_PRODUCT } });

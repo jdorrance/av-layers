@@ -1,3 +1,6 @@
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
+import { indexedSource } from '../indexed-grib/source.js';
+import { splitSource } from '../split-grib/source.js';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,9 +27,9 @@ import { writeCoverage } from '../coverage.js';
 import { createSamplePackBuilder } from '../sample-pack.js';
 import { encodeJson, sha256, TERRAIN_SOURCE } from '../terrain/contract.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_METHOD } from '../terrain/prepare.js';
-import { createIconEuAcquisitionSession } from '../icon/acquire.js';
-import { iconRegularFieldUrl } from '../icon/fields.js';
-import { createGfsAcquisitionSession } from '../gfs/acquire.js';
+import { createSplitGribAcquisitionSession } from '../split-grib/acquire.js';
+import { splitGribRegularFieldUrl } from '../split-grib/fields.js';
+import { createIndexedGribAcquisitionSession } from '../indexed-grib/acquire.js';
 import { decodeSamplePack } from './evaluation-input.js';
 import { runEvaluation, runEvaluationCli, sampleNativeTargetFields } from './evaluate.js';
 
@@ -519,14 +522,14 @@ describe('paired evaluation CLI orchestration', () => {
   it('preserves corrupt ICON cache and never fetches in offline read-only mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-offline-icon-')); roots.push(root);
     const cacheDir = join(root, 'cache'), iconCycle = '2026-10-08T00:00:00Z';
-    const url = iconRegularFieldUrl('HSURF', iconCycle, { hour: 0, level: null });
+    const url = splitGribRegularFieldUrl(splitSource(SPLIT_PRODUCT), 'HSURF', iconCycle, { hour: 0, level: null });
     const fileName = url.split('/').at(-1)!, keyHash = createHash('sha256').update(url).digest('hex');
     const cachePath = join(cacheDir, 'objects', `${keyHash.slice(0, 16)}-${fileName}`);
     const corrupt = Buffer.from('corrupt-cache-object');
     await mkdir(dirname(cachePath), { recursive: true });
     await writeFile(cachePath, corrupt);
     let fetches = 0;
-    const session = await createIconEuAcquisitionSession({
+    const session = await createSplitGribAcquisitionSession(splitSource(SPLIT_PRODUCT), {
       cycle: iconCycle, activeIndices: Uint32Array.of(0), cacheDir, readOnlyCache: true, offline: true,
       fetchImpl: async () => { fetches++; throw new Error('unexpected fetch'); }
     });
@@ -542,7 +545,7 @@ describe('paired evaluation CLI orchestration', () => {
   it('rejects a GFS offline cache miss before any fetch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-offline-gfs-')); roots.push(root);
     let fetches = 0;
-    const session = await createGfsAcquisitionSession({
+    const session = await createIndexedGribAcquisitionSession(indexedSource(INDEXED_PRODUCT), {
       cycle: '2026-10-30T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir: join(root, 'cache'), offline: true,
       fetchImpl: async () => { fetches++; throw new Error('unexpected fetch'); }
     });

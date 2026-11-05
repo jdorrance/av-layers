@@ -34,7 +34,7 @@ Run batch tests with `pnpm test apps/batch`.
 
 The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
 surfaces. Each additional zoom level adds about four times the previous level's
-tiles. [Forecast settings](../../packages/contracts/config/forecast.json) select
+tiles. [Forecast settings](../../packages/contracts/config/models.json) select
 the rendered subset of each immutable coverage pyramid;
 elapsed time and memory have separate admission limits.
 
@@ -45,8 +45,8 @@ elapsed time and memory have separate admission limits.
 - [src/frame-build.ts](src/frame-build.ts): frame acquisition, derivation, packing, and tile rendering.
 - [src/parallel.ts](src/parallel.ts): build-plan creation, shard execution, and shard assembly.
 - [src/provider.ts](src/provider.ts) & [src/providers.ts](src/providers.ts): provider interface and model registry lookup.
-- [src/gfs](src/gfs/README.md): NOAA GFS adapter.
-- [src/icon](src/icon/README.md): DWD ICON-EU adapter.
+- [src/indexed-grib](src/indexed-grib/README.md): indexed GRIB2 range acquisition and isobaric normalization.
+- [src/split-grib](src/split-grib/README.md): split GRIB2 acquisition and model-level normalization.
 - [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
 - [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
 - [src/whole-domain](src/whole-domain/prepare.ts): sparse coverage, packed terrain columns, bounded sample shards and frozen whole-domain inputs.
@@ -55,8 +55,8 @@ elapsed time and memory have separate admission limits.
 
 ## Parallel builds
 
-The [forecast workflow](../../.github/workflows/forecast.yml) accepts `all`,
-`gfs`, or `icon-eu` and calls the reusable
+The [forecast workflow](../../.github/workflows/forecast.yml) accepts a configured
+model ID or `all` and calls the reusable
 [model workflow](../../.github/workflows/forecast-model.yml) per model.
 `forecast-terrain` prepares or validates each model's reusable terrain cache in
 R2. Planning then resolves the cycle and daylight-filtered hours, loads cached
@@ -70,19 +70,12 @@ plan, coverage and receipts; full payload retention is opt-in.
 Local forecast builds prepare terrain on first use and reuse it thereafter.
 
 ```mermaid
-flowchart TB
-  selection["Select one model or all registered models"]
-  selection --> gfsTerrain["GFS: prepare or validate terrain cache"]
-  selection --> iconTerrain["ICON-EU: prepare or validate terrain cache"]
-  gfsTerrain --> gfs["GFS: resolve cycle and hours"]
-  iconTerrain --> icon["ICON-EU: resolve cycle and daylight hours"]
-  gfs --> gfsBatches["Parallel GFS hour batches"]
-  icon --> iconBatches["Parallel ICON-EU hour batches"]
-  gfsBatches --> gfsPublish["Assemble, validate, and publish GFS"]
-  iconBatches --> iconPublish["Assemble, validate, and publish ICON-EU"]
-  gfsPublish --> api["Verify each model's new build through the API"]
-  iconPublish --> api
-  api --> pages["Pages reads each published manifest and hour list"]
+flowchart LR
+  model[Configured model] --> terrain[Prepare or validate terrain]
+  terrain --> plan[Resolve cycle and frame groups]
+  plan --> shards[Bounded shard jobs]
+  shards --> publish[Verify receipts and publish]
+  publish --> api[Verify live API]
 ```
 
 Concurrency locks are scoped per environment and model (`forecast-<env>-<model>`),
