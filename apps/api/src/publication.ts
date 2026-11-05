@@ -9,6 +9,7 @@ const MEMBERSHIP_REFRESH_MS = 1_000;
 type PointerEntry = { pointer: ModelPointer; fetchedAt: number } | { problem: Problem };
 const pointerCache = new WeakMap<R2Bucket, ByteCache<ModelId, PointerEntry>>();
 const pointerReads = new WeakMap<R2Bucket, MaterializedReads<ModelPointer>>();
+const pointerStates = new WeakMap<ModelPointer | Problem, { until: number; identity: string }>();
 export type PublishedManifest = Manifest | ManifestV5;
 const manifestCache = new WeakMap<R2Bucket, ByteCache<string, PublishedManifest>>();
 const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: PublishedManifest; bytes: number }>>();
@@ -45,7 +46,9 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     const object = await bucket.get(`catalog/${model}/latest.json`);
     if (!object) {
       const problem = new Problem(503, 'publication-unavailable', `No publication available for ${model}`);
-      entries!.set(model, { problem }, 256, Date.now() + NEGATIVE_POINTER_TTL_MS);
+      const until = Date.now() + NEGATIVE_POINTER_TTL_MS;
+      pointerStates.set(problem, { until, identity: `missing:${model}` });
+      entries!.set(model, { problem }, 256, until);
       throw problem;
     }
     let decoded: Awaited<ReturnType<typeof readObjectJson>>;
@@ -56,9 +59,16 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     }
     const result = modelPointerSchema.safeParse(decoded.value);
     if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
-    entries!.set(model, { pointer: result.data, fetchedAt: Date.now() }, decoded.estimatedBytes, Date.now() + POINTER_TTL_MS);
+    const fetchedAt = Date.now(), until = fetchedAt + POINTER_TTL_MS;
+    const identity = await sha256(new TextEncoder().encode(JSON.stringify(result.data)));
+    pointerStates.set(result.data, { until, identity });
+    entries!.set(model, { pointer: result.data, fetchedAt }, decoded.estimatedBytes + 256, until);
     return result.data;
   }, ctx);
+}
+
+export function pointerCacheState(value: ModelPointer | Problem): { until: number; identity: string } | undefined {
+  return pointerStates.get(value);
 }
 
 export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext, currentPointer?: ModelPointer) {

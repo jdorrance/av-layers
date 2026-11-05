@@ -36,5 +36,16 @@ it('coalesces real R2 reads across requests when the initiating client disconnec
       expect(hit.headers.has('x-av-cached-bytes')).toBe(false);
       expect((await hit.arrayBuffer()).byteLength).toBe(20 * 1024);
     }
+    const discovery = await fetch(`${base}/discovery`);
+    expect(discovery.status).toBe(200);
+    expect(await discovery.json()).toEqual({ loads: 1 });
+    expect(discovery.headers.get('cache-control')).toMatch(/^public, max-age=0, s-maxage=\d+, must-revalidate$/);
+    const remaining = Number(/s-maxage=(\d+)/.exec(discovery.headers.get('cache-control')!)![1]);
+    expect(remaining).toBeGreaterThan(0); expect(remaining).toBeLessThanOrEqual(15);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const shared = await fetch(`${base}/discovery`);
+    expect(shared.status).toBe(200);
+    expect(await shared.json()).toEqual({ loads: 1 });
+    expect(shared.headers.get('cache-control')).toMatch(/^public, max-age=0, s-maxage=\d+, must-revalidate$/);
   } finally { await worker?.stop(); await rm(temporary, { recursive: true, force: true }); }
 });

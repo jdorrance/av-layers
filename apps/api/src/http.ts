@@ -28,6 +28,11 @@ function ttl(expiresAt: string): number {
   return Math.max(0, Math.min(IMMUTABLE_TTL, Math.floor((Date.parse(expiresAt) - Date.now()) / 1000)));
 }
 
+function cacheControl(expiresAt?: string, edgeUntil?: number): string {
+  if (edgeUntil !== undefined) return `public, max-age=0, s-maxage=${Math.max(0, Math.floor((edgeUntil - Date.now()) / 1000))}, must-revalidate`;
+  return expiresAt ? `public, max-age=${ttl(expiresAt)}, immutable` : 'no-store';
+}
+
 export function ensureLive(expiresAt: string): void {
   if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) {
     fail(404, 'not-retained', 'Build is expired or not retained');
@@ -46,7 +51,7 @@ export function response(body: BodyInit | null, type: string, expiresAt?: string
   if (expiresAt) ensureLive(expiresAt);
   const headers = new Headers({
     'content-type': type,
-    'cache-control': expiresAt ? `public, max-age=${ttl(expiresAt)}, immutable` : 'no-store'
+    'cache-control': cacheControl(expiresAt)
   });
   let size = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? body.byteLength : 1024 * 1024;
   if (typeof body === 'string') {
@@ -67,13 +72,14 @@ export function json(value: unknown, expiresAt?: string, etag?: string): Respons
   finally { release(); }
 }
 
-export function finish(request: Request, res: Response, expiresAt?: string): Response {
+export function finish(request: Request, res: Response, expiresAt?: string, edgeUntil?: number): Response {
   if (expiresAt) {
     try { ensureLive(expiresAt); }
     catch (error) { void res.body?.cancel().catch(() => {}); throw error; }
   }
   const headers = new Headers(res.headers);
-  if (expiresAt) headers.set('cache-control', `public, max-age=${ttl(expiresAt)}, immutable`);
+  if (expiresAt || edgeUntil !== undefined) headers.set('cache-control', cacheControl(expiresAt, edgeUntil));
+  if (edgeUntil !== undefined) headers.set('date', new Date().toUTCString());
   headers.set('access-control-allow-origin', '*');
   headers.set('access-control-expose-headers', 'ETag, Cache-Control, Server-Timing, X-Av-R2-Reads, X-Av-R2-Bytes, X-Av-Cache-Hits, X-Av-Coalesced, X-Av-Response-Cache');
   if (
@@ -94,29 +100,33 @@ export function finish(request: Request, res: Response, expiresAt?: string): Res
   return out;
 }
 
-export async function cached(request: Request, expiresAt: string, ctx: WaitContext, build: () => Promise<Response>, representation?: string): Promise<Response> {
-  ensureLive(expiresAt);
+export async function cached(request: Request, expiresAt: string | undefined, ctx: WaitContext, build: () => Promise<Response>, representation?: string, edgeUntil?: number): Promise<Response> {
+  if (expiresAt) ensureLive(expiresAt);
   request.signal.throwIfAborted();
-  if (ctx.responseCacheEnabled === false) {
+  const fresh = () => edgeUntil === undefined ? expiresAt !== undefined && ttl(expiresAt) > 0 : edgeUntil - Date.now() >= 1000;
+  if (ctx.responseCacheEnabled === false || (edgeUntil !== undefined && !fresh())) {
     if (ctx.metrics) ctx.metrics.responseCache = 'bypass';
-    return finish(request, await build(), expiresAt);
+    return finish(request, await build(), expiresAt, edgeUntil);
   }
   const cache = typeof caches !== 'undefined' ? (caches as CacheStorage & { default?: Cache }).default : undefined;
   const cacheUrl = new URL(request.url);
   if (representation) cacheUrl.searchParams.set('__representation', representation);
   const key = new Request(cacheUrl, { method: 'GET' });
-  const hit = cache ? await waitFor(cache.match(key), request.signal, value => { void value?.body?.cancel().catch(() => {}); }) : undefined;
+  let hit = cache ? await waitFor(cache.match(key), request.signal, value => { void value?.body?.cancel().catch(() => {}); }) : undefined;
+  if (hit && edgeUntil !== undefined && !fresh()) { void hit.body?.cancel().catch(() => {}); hit = undefined; }
   if (ctx.metrics) ctx.metrics.responseCache = hit ? 'hit' : 'miss';
-  if (hit) { countCacheHit(ctx); return finish(request, boundCachedResponse(hit), expiresAt); }
+  if (hit) { countCacheHit(ctx); return finish(request, boundCachedResponse(hit), expiresAt, edgeUntil); }
   let result = await build();
-  try { ensureLive(expiresAt); }
+  try { if (expiresAt) ensureLive(expiresAt); }
   catch (error) { void result.body?.cancel().catch(() => {}); throw error; }
-  if (cache && result.status === 200 && ttl(expiresAt) > 0) {
+  if (expiresAt || edgeUntil !== undefined) result.headers.set('cache-control', cacheControl(expiresAt, edgeUntil));
+  if (edgeUntil !== undefined) result.headers.set('date', new Date().toUTCString());
+  if (cache && result.status === 200 && fresh()) {
     const branches = forkResponseForCache(result);
     result = branches.client;
     ctx.waitUntil(cache.put(key, branches.cache).finally(() => { void branches.cache.body?.cancel().catch(() => {}); }));
   }
-  return finish(request, result, expiresAt);
+  return finish(request, result, expiresAt, edgeUntil);
 }
 
 export function validIp(ip: string): boolean {

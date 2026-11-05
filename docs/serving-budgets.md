@@ -10,6 +10,9 @@ apply to the combined work across all grids selected by a request.
 
 - **Pointer cache:** 32 entries, 1 MiB max; 15 s positive TTL, 5 s unavailable
   TTL. A build-ID miss coalesces a pointer refresh throttled to 1 req/s.
+- **Discovery response cache:** catalog, latest and retained-run lists share
+  the remaining pointer freshness and live build deadlines. Browsers revalidate;
+  the Cache API stores bounded bodies under the existing response pool.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
   concurrent cold loads. Successful static product validation follows manifest
   and product identity; retained-entry binding and expiry run on every request.

@@ -16,7 +16,7 @@ Milestones 1–3 are implemented in this branch. [Measurement results](tile-serv
 
 - Both clients keep a committed overlay visible while a replacement loads, use one session protocol, and prefetch viewport candidates after idle. Replacement errors retain the committed selection; expiry clears both slots.
 - The client default is four active requests with the existing queue bound. In a local synthetic Worker workload with 40 ms injected HTTP delay, the 32-tile viewport median fell from 738 ms at two requests to 371 ms at four. Warm client repeats made zero additional network requests.
-- Worker product validation and PMTiles range reads coalesce within the existing serving limits. Retained-entry and expiry checks precede cached delivery. Batch output and published tile formats remain unchanged.
+- Worker product validation and PMTiles range reads coalesce within the existing serving limits. Retained-entry and expiry checks precede cached delivery. Catalog, latest, and retained-run discovery use short edge caching with browser revalidation (§6.1). Batch output and published tile formats remain unchanged.
 - Phase 2 remains an evaluated data-tile prototype. On 48 native ICON-EU tile/frame pairs, the 25 m candidate used 0.90× the raster bytes and changed 7.44% of layer-pixels. The 1 m candidate used 2.78× the bytes and changed 0.30%. Both ran at encoder effort 1 against raster effort 4. Preserve the raster path until a candidate passes the forecast, storage, build-time, and browser gates in §7.
 - Renderable coarse-parent pinning, coarse-byte warm-up, and publication prewarming await their measurement gates. Current idle prefetch covers adjacent frames, sibling lift, and the viewport perimeter.
 
@@ -48,6 +48,7 @@ Every milestone in this handoff must preserve the following repository invariant
 1. **Build Pinning, Rollback & Expiry:**
    - Build-specific tile URLs identify immutable bytes. [Rollback](../apps/batch/src/publication.ts) changes `latestBuildId` and preserves `retained`; clients already pinned to an unexpired retained build keep viewing it. [Operations](operations.md#roll-back-or-clean-up) owns that behavior.
    - Emit `Cache-Control: public, max-age=${ttl(expiresAt)}, immutable` on successful build-specific tile, manifest, provenance, and TileJSON responses. Keep the existing `ttl()` calculation in [http.ts](../apps/api/src/http.ts), which bounds freshness by `expiresAt`.
+   - Catalog, latest, and retained-run discovery use `public, max-age=0, s-maxage=<remaining freshness>, must-revalidate`. Bound edge freshness by the pointer cache's existing deadline and live build expiries. Health checks and errors keep `no-store`.
    - Every Worker tile request passes current retained-entry, expiry, and publication validation before response-cache delivery (§6.1). Clients enforce `expiresAt` on compressed cache hits, queued work, and rendered overlays, including after focus and BFCache restoration.
    - Fresh browser responses can be reused until their freshness deadline under [RFC 8246](https://www.rfc-editor.org/rfc/rfc8246.html). Emergency revocation before expiry requires a separate browser admission protocol; this plan preserves the current retention contract.
 2. **Bounded Worker & Client Memory Budgets:**
@@ -134,12 +135,12 @@ Filter all candidate `(z, x, y)` coordinates against `build.manifest.descriptors
 
 ### 6.1 Reuse Successful Validation & Add `immutable` (`apps/api/src/publication.ts`, `apps/api/src/http.ts`)
 
-1. **Append `immutable` When `expiresAt` Is Present (`apps/api/src/http.ts:38, 63`):**
-   - In `response()` and `finish()` ([apps/api/src/http.ts](../apps/api/src/http.ts#L38)):
-     ```ts
-     const cacheControl = expiresAt ? `public, max-age=${ttl(expiresAt)}, immutable` : 'no-store';
-     ```
-   - Update affected header assertions in `apps/api/test/worker.test.ts` to verify `public, max-age=..., immutable` on live build responses and `no-store` on uncached/error responses.
+1. **Use Response-Specific Cache Policies:**
+   - [http.ts](../apps/api/src/http.ts) owns the policies. Successful build-specific responses use expiry-bounded `public, max-age=..., immutable`.
+   - Successful `/v1/catalog`, `/v1/models/:model/latest` (including `expand=manifest`), and retained-run lists use `public, max-age=0, s-maxage=..., must-revalidate`. Store their bounded bodies through `caches.default`; [Cloudflare honors `s-maxage` separately from browser freshness](https://developers.cloudflare.com/cache/concepts/cache-control/).
+   - Compute each discovery response's deadline from the remaining pointer-cache lifetime and live build expiries. Catalog responses use the earliest participating deadline, including unavailable-model pointers. Cache keys distinguish pointer contents and representation. Keep publication validation before cached delivery.
+   - Browser requests revalidate discovery metadata. Refreshing an edge response preserves the pointer's existing deadline. Health, invalid requests, expired builds, rate limits, and operational errors remain uncached.
+   - Verify browser/edge header behavior and actual response-cache hits in `apps/api/test/worker.test.ts`, including cache-disabled mode.
 2. **Preserve Admission Before Cache Delivery:**
    - Keep the tile handler's order: validate URL syntax, `admit()`, `manifest()`, artifact/frame/layer and coordinate validation, then `cached(..., m.expiresAt, ...)`. Keep existing legacy coverage validation before the response-cache lookup. A cold manifest is loaded and validated even when the tile response is cached.
    - Memoize successful static manifest/product validation inside `publication.ts`, including recipe, descriptors, grids, and grid hashes. Associate the result with the cached manifest and the immutable deployed product identity. Bound retained validation state by the manifest cache; concurrent checks may share pending work, and failures release it for retry.
@@ -200,6 +201,7 @@ Prototype lossless `VP8L` tiles that carry lift, precipitation, status, and supp
      - Verify session protocol and expiry handling across pagehide/pageshow, including BFCache restoration.
    - `apps/api/test/worker.test.ts`:
      - Verify `Cache-Control: public, max-age=..., immutable` on live tile/manifest responses.
+     - Verify discovery responses use browser revalidation and short shared freshness, return response-cache hits, and change with pointer contents. Exercise catalog availability, expanded latest, retained-run expiry, rollback, and configuration changes. Pointer and response-cache lifetimes together must remain within the existing discovery freshness bound; health and error responses keep `no-store`.
      - Verify a response-cache hit passes admission, publication, artifact, and coordinate checks first. With pointer, validated manifest, and required coverage caches warm, expect zero R2 reads. Cold manifests still load and validate before cache delivery.
      - Seed cached responses from an incompatible product configuration or old coverage; reject them before response-cache lookup. Test retained-entry mismatches, failed-validation retries, and manifest eviction followed by revalidation.
      - Verify rollback changes latest discovery while the previous retained build remains viewable until expiry. Test expiry before cache delivery and retention removal after pointer refresh separately.
