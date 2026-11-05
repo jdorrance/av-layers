@@ -290,7 +290,7 @@ describe('R2 S3 client configuration', () => {
       return Reflect.apply(original, this, [command, options]) as never;
     } as typeof S3Client.prototype.send);
     try {
-      const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, () => { order.push('reserve'); }));
+      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, () => { order.push('reserve'); });
       expect([...result!.bytes]).toEqual([1, 2]);
       expect(order).toEqual(['send', 'reserve', 'send']);
       expect(body.destroyed).toBe(true);
