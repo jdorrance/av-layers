@@ -9,6 +9,7 @@ import { TERRAIN_COMMANDS } from '../apps/batch/src/terrain/cli.js';
 import { REFINEMENT_OPTIONS } from '../apps/batch/src/refinement/cli.js';
 import { TERRAIN_READ_LIMITS } from '../apps/batch/src/terrain/reader.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, MAX_RASTER_WORKERS, RASTER_WORKER_NATIVE_RESERVE_MB, RASTER_WORKER_RESERVE_BYTES, RASTER_WORKER_RESOURCE_LIMITS } from '../apps/batch/src/raster-pool.js';
+import { workflowArtifacts } from './generate-workflows.js';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const regenerate = 'pnpm docs:generate';
@@ -56,7 +57,8 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   lines.push('', '## Refinement grids', '',
     'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts). See [deployments](status.md) for live applications and runs.', '');
+  lines.push('', '## Configured models', '', 'Source: [product registry](../packages/contracts/src/products.ts) and [forecast settings](../packages/contracts/config/forecast.json). See [deployments](status.md) for live applications and runs.', '',
+    `Global forecast parallelism: ${contracts.FORECAST_PARALLELISM.jobs} shard jobs; worker ceiling ${contracts.FORECAST_PARALLELISM.workers}.`, '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);
     if (!product) throw new Error(`Model ${model} has no product`);
@@ -72,6 +74,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
       `- Bounds [west, south, east, north]: ${code(product.bounds)}.`,
       `- Coverage: ${code(product.coverageId)}. ${product.coverageDescription}`,
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
+      `- Execution: ${product.execution.shards} target shards; at most ${product.execution.parallelism} simultaneous shard jobs; worker ceiling ${product.execution.workers}; UTC cron schedules ${code(product.execution.schedule)}.`,
       `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
       `- Vertical coordinate: ${code(product.capabilities.verticalCoordinate)}; maximum levels: ${product.capabilities.maxVerticalLevels}.`,
       `- Calculation methods: ${methods.map(method => code(method.id)).join(', ')}.`,
@@ -125,7 +128,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   for (const [path, operations] of entries(api.paths)) for (const method of Object.keys(operations).sort()) {
     if (['get', 'head', 'post', 'put', 'patch', 'delete', 'options'].includes(method)) lines.push(`- ${code(`${method.toUpperCase()} ${path}`)}.`);
   }
-  return { 'docs/reference.md': `${lines.join('\n')}\n`, 'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n` };
+  return { 'docs/reference.md': `${lines.join('\n')}\n`, 'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n`, ...await workflowArtifacts() };
 }
 
 async function checkDocumentation(): Promise<string[]> {

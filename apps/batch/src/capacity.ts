@@ -1,4 +1,4 @@
-import { CELL_BYTES, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageAtZoom, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { prepareTerrainColumns } from '@av/forecast/refinement';
 import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
@@ -27,14 +27,14 @@ export interface CapacityScenario {
   retentionDays?: number;
 }
 
-/** Project deeper levels conservatively; exact coverage must be regenerated before admission. */
+/** Count covered levels and project deeper levels for an explicit capacity scenario. */
 export function estimateCapacity(mask: CoverageMask, product: ProductDefinition, storedCells: number, scenario: CapacityScenario = {}, refinement: { gridCells: number; storedCells: number } = { gridCells: 0, storedCells: 0 }) {
   const frames = scenario.frames ?? product.frameHours.length, layers = scenario.layers ?? product.layers.length;
   const models = scenario.models ?? 1, nativeZoom = scenario.nativeZoom ?? product.maxNativeZoom;
   const cadenceHours = scenario.cadenceHours ?? 12, retentionDays = scenario.retentionDays ?? RETENTION_DAYS;
   if ([frames, layers, models, nativeZoom].some(n => !Number.isSafeInteger(n)) || frames < 1 || layers < 1 || models < 1 || nativeZoom < 0 || nativeZoom > 24 || !Number.isFinite(cadenceHours) || cadenceHours <= 0 || !Number.isFinite(retentionDays) || retentionDays <= 0) throw new RangeError('Invalid capacity scenario');
   if (Object.values(refinement).some(value => !Number.isSafeInteger(value) || value < 0)) throw new RangeError('Invalid refinement capacity');
-  if (mask.maxZoom > product.maxNativeZoom || mask.maxZoom > MAX_NATIVE_ZOOM) throw new Error('Coverage exceeds the admitted native zoom');
+  if (mask.maxZoom > MAX_NATIVE_ZOOM) throw new Error('Coverage exceeds the admitted native zoom');
   const tilesByZoom = Array.from({ length: nativeZoom + 1 }, (_, z) => z <= mask.maxZoom
     ? expectedTiles(mask, z).length
     : expectedTiles(mask, mask.maxZoom).length * 4 ** (z - mask.maxZoom));
@@ -45,7 +45,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   // A two-by-two neighborhood spans at most B + 3 cell records in a (B + 1)-wide block.
   const pointRangeBytes = (SAMPLE_BLOCK_SIZE + 3) * (channels + (refinement.storedCells ? refinementChannels : 0)) * CELL_BYTES;
   const violations: string[] = [];
-  if (nativeZoom > product.maxNativeZoom) violations.push('native zoom exceeds the trusted product; regenerate coverage and prove a benefit before raising it');
+  if (nativeZoom > product.maxNativeZoom) violations.push('native zoom exceeds configured product target');
   if (mask.grid.width * mask.grid.height + refinement.gridCells > BUILD_BUDGETS.gridCells) violations.push('grid-cell budget exceeded');
   if (!Number.isSafeInteger(tiles) || tiles > BUILD_BUDGETS.tiles) violations.push('tile budget exceeded');
   if (!Number.isSafeInteger(samplePackBytes) || samplePackBytes > BUILD_BUDGETS.samplePackBytes) violations.push('sample-pack budget exceeded');
@@ -66,6 +66,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
 export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number; retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
+  mask = coverageAtZoom(mask, product.maxNativeZoom);
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
   if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
@@ -96,7 +97,7 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   const terrainBytes = resources.terrainBytes ?? 0;
   if (!Number.isSafeInteger(terrainBytes) || terrainBytes < 0 || terrainBytes > MAX_PREPARED_TERRAIN_BYTES) throw new Error('Invalid prepared terrain byte budget');
   const cells = mask.grid.width * mask.grid.height, activeCells = indices.active.length;
-  const rasterWorkers = rasterWorkerCount();
+  const rasterWorkers = rasterWorkerCount(undefined, product.execution.workers);
   const fieldsPerLevel = product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2;
   const workingSet = {
     samplePack: capacity.samplePackBytes,

@@ -56,7 +56,7 @@ export async function loadCoverage(product: ProductDefinition): Promise<Coverage
   } catch {
     throw new Error('Coverage does not match the trusted product');
   }
-  if (!sameGrid(result.mask.grid, product.grid) || result.mask.maxZoom !== product.maxNativeZoom || JSON.stringify(result.mask.bounds) !== JSON.stringify(product.bounds) || JSON.stringify(describeCoverage(result.mask, product).descriptor) !== JSON.stringify(result.descriptor)) throw new Error('Coverage does not match the trusted product');
+  if (!sameGrid(result.mask.grid, product.grid) || result.mask.maxZoom < product.maxNativeZoom || JSON.stringify(result.mask.bounds) !== JSON.stringify(product.bounds) || JSON.stringify(describeCoverage(result.mask, product).descriptor) !== JSON.stringify(result.descriptor)) throw new Error('Coverage does not match the trusted product');
   return result.mask;
 }
 

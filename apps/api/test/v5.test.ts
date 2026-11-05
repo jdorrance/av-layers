@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { canonicalGridJson, sampleResponseV5Schema } from '@av/contracts';
+import { canonicalGridJson, MAX_NATIVE_ZOOM, sampleResponseV5Schema } from '@av/contracts';
 import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createV5Fixture, createGroupedV5Fixture, finePoint } from './v5-fixture';
@@ -203,7 +203,7 @@ describe('API v5 metadata', () => {
         const hash = createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
         surface.gridHash = hash; surface.coverage.gridHash = hash; surface.terrain!.gridHash = hash;
       },
-      (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.surfaces[1]!.coverage.maxZoom = 2; },
+      (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.surfaces[1]!.coverage.maxZoom = MAX_NATIVE_ZOOM + 1; },
       (m: ReturnType<typeof createV5Fixture>['manifest']) => { m.descriptors.layers['usable-lift-agl'].verticalReference = 'model-AGL'; }
     ]) {
       const fixture = createV5Fixture();

@@ -34,7 +34,8 @@ Run batch tests with `pnpm test apps/batch`.
 
 The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
 surfaces. Each additional zoom level adds about four times the previous level's
-tiles. Model configuration and regenerated coverage select the rendered zooms;
+tiles. [Forecast settings](../../packages/contracts/config/forecast.json) select
+the rendered subset of each immutable coverage pyramid;
 elapsed time and memory have separate admission limits.
 
 ## Source layout

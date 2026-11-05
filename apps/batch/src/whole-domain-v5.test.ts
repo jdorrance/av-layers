@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GFS_PRODUCT, LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { GFS_PRODUCT, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveFrame, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
@@ -266,12 +266,15 @@ describe('whole-domain v5 production', () => {
     const fine = await loadBundledFineCoverage(GFS_PRODUCT, plan);
     expect(fine.descriptor.id).toBe(GFS_PRODUCT.coverageId);
     expect(fine.descriptor.bounds).toEqual(GFS_PRODUCT.bounds);
-    expect(fine.descriptor.maxZoom).toBe(GFS_PRODUCT.maxNativeZoom);
+    expect(fine.descriptor.maxZoom).toBeGreaterThanOrEqual(GFS_PRODUCT.maxNativeZoom);
+    const lowered = await loadBundledFineCoverage({ ...GFS_PRODUCT, maxNativeZoom: 0 }, plan);
+    expect(lowered.hash).toBe(fine.hash);
+    expect(lowered.mask.maxZoom).toBe(fine.mask.maxZoom);
     vi.mocked(readLocalFile).mockClear();
     for (const changed of [
       { ...GFS_PRODUCT, coverageId: 'wrong-policy' },
       { ...GFS_PRODUCT, bounds: [-179, -50, 180, 65] as const },
-      { ...GFS_PRODUCT, maxNativeZoom: GFS_PRODUCT.maxNativeZoom - 1 }
+      { ...GFS_PRODUCT, maxNativeZoom: fine.descriptor.maxZoom + 1 }
     ]) await expect(loadBundledFineCoverage(changed, plan)).rejects.toThrow('Fine coverage does not match');
     expect(vi.mocked(readLocalFile).mock.calls).toHaveLength(3);
     expect(vi.mocked(readLocalFile).mock.calls.every(([path]) => path.endsWith('/manifest.json'))).toBe(true);
@@ -493,7 +496,7 @@ describe('whole-domain v5 production', () => {
   }, 60_000);
 
   it.each([
-    { receiptsOnly: true, hours: Array.from({ length: 12 }, (_, i) => (i + 1) * 2) },
+    { receiptsOnly: true, hours: Array.from({ length: 24 }, (_, i) => (i + 1) * 2) },
     { receiptsOnly: false, hours: [12, 24] }
   ])('finalizes $hours.length frame groups and serves samples with receipt-only mode $receiptsOnly', async ({ receiptsOnly, hours }) => {
     const setup = await fixture(), out = await root('wd-remote'), store = new PublicationStore(), source = fixtureProvider();
@@ -518,6 +521,13 @@ describe('whole-domain v5 production', () => {
       expect(surface.samples.shards.at(-1)).toMatchObject({ group: hours.length - 1, firstFrame: hours.length - 1, frameCount: 1 });
     }
     const manifestBytes = await readFile(path);
+    expect(() => parseBoundedJson(manifestBytes, MAX_METADATA_JSON_TOKENS)).not.toThrow();
+    expect(checkPerformance(manifest).observed.tiles).toBe(hours.length * configured.layers.length);
+    expect(manifest.metrics.frames).toBeUndefined();
+    expect(manifest.metrics.acquisition).toBeUndefined();
+    const privateReceipt = JSON.parse(await readFile(join(out, 'shards', String(hours.length - 1), 'receipt.json'), 'utf8'));
+    expect(Object.keys(privateReceipt.metrics.frames)).toEqual([manifest.frames.at(-1)!.id]);
+    expect(privateReceipt.metrics.renderer.fine.tiles).toBe(2);
     store.objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, { bytes: manifestBytes, etag: 'manifest' });
     await verifySampleServing(store, manifest, configured);
     const inputs = { product: configured, mask: nativeMask, provider: source.provider };
@@ -538,6 +548,32 @@ describe('whole-domain v5 production', () => {
       store, objects: (await Promise.all(plan.groups.map(async (_, index) => JSON.parse(await readFile(join(out, 'shards', String(index), 'receipt.json'), 'utf8'))))).flatMap(receipt => receipt.objects)
     })).rejects.toThrow('Remote object receipt mismatch');
   }, 60_000);
+
+  it('freezes target zoom and worker ceiling while retaining master coverage identities', async () => {
+    const configured = { ...product, execution: { ...product.execution, shards: 1, workers: 0 } };
+    const master = { ...nativeMask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    const setup = await fixture(configured), fineMask = { ...setup.fine.mask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    setup.fine = { mask: fineMask, ...describeSparseCoverage(fineMask, configured) };
+    const out = await root('wd-frozen-execution'), source = fixtureProvider(), store = new PublicationStore();
+    const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: master, provider: source.provider, wholeDomain: setup, store });
+    expect(plan.execution).toEqual({ zoom: 0, workers: 0 });
+    expect(plan.wholeDomain!.fineCoverage.maxZoom).toBe(1);
+    const changed = { ...configured, maxNativeZoom: 1, execution: { ...configured.execution, workers: 3 } };
+    await buildShard({ out, plan, shard: 0, product: changed, mask: master, provider: source.provider, store });
+    const path = await finalizeBuild({ out, plan, product: changed, mask: master, provider: source.provider, store });
+    const manifest = await readV5(path);
+    expect(manifest.surfaces.every(surface => surface.coverage.maxZoom === 0)).toBe(true);
+    expect(surface(manifest, 'fine').coverage.hash).toBe(setup.fine.hash);
+    expect(manifest.metrics.renderer).toEqual({ native: { tiles: 2 }, fine: { tiles: 4 } });
+    expect(manifest.metrics.capacity).toMatchObject({ rasterWorkers: 0, deriveWorkers: 0, tiles: 6 });
+    const inputs = { product: changed, mask: master, provider: source.provider };
+    await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0);
+    for (let index = 0; index < manifest.surfaces.length; index++) {
+      const forged = structuredClone(manifest);
+      forged.surfaces[index]!.coverage.maxZoom = 1;
+      await expect(verifyBuildReceipts(out, forged, store, undefined, inputs)).rejects.toThrow('Manifest surface receipt mismatch');
+    }
+  });
 
 
   it('uses actual per-shard bytes for v5 performance admission and reports aggregate bytes separately', async () => {
@@ -716,8 +752,7 @@ describe('whole-domain v5 production', () => {
     const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
     const descriptors: Array<typeof prepared.fine.descriptor> = [
       { ...prepared.fine.descriptor, id: 'wrong-policy' },
-      { ...prepared.fine.descriptor, bounds: [-179, 70, 180, 72] },
-      { ...prepared.fine.descriptor, maxZoom: product.maxNativeZoom + 1 }
+      { ...prepared.fine.descriptor, bounds: [-179, 70, 180, 72] }
     ];
     for (const descriptor of descriptors) {
       const bytes = Buffer.from(JSON.stringify(descriptor)), hash = createHash('sha256').update(bytes).digest('hex');
@@ -726,6 +761,8 @@ describe('whole-domain v5 production', () => {
       const frozen = frozenWholeDomain({ ...prepared, fine });
       await expect(loadFrozenWholeDomain({ product, frozen, out, maxLevels: source.provider.maxLevels })).rejects.toThrow('Frozen fine coverage differs from its plan');
     }
+    await expect(loadFrozenWholeDomain({ product: { ...product, maxNativeZoom: prepared.fine.mask.maxZoom + 1 },
+      frozen: frozenWholeDomain(prepared), out, maxLevels: source.provider.maxLevels })).rejects.toThrow('Frozen fine coverage differs from its plan');
     expect(source.open).not.toHaveBeenCalled();
   });
 
@@ -901,7 +938,7 @@ describe('whole-domain v5 production', () => {
       for (let i = 0; i < count; i++) setBit(bytes, i);
       return bytes;
     };
-    const input = { product, plan, nativeBlocks: nativeSparseMask(nativeMask).coverage.blockIds, nativeActive: cells,
+    const input = { product: { ...product, maxNativeZoom: 9 }, plan, nativeBlocks: nativeSparseMask(nativeMask).coverage.blockIds, nativeActive: cells,
       nativeMask: { maxZoom: 9, tiles: tiles(340_000) }, fine: { ...fine, maxZoom: 9, tiles: tiles(330_000) },
       nativeMaskBytes: 0, frames: 4, nativeLayers: 1, fineLayers: 2, maxLevels: 3, retainedGeometryFields: 0,
       columns: { byteLength: 1000, workspaceBufferBytes: 1000, workspaceObjectBudgetBytes: 1000, outputBufferBytes: 1000 }, terrainBytes: 0 };

@@ -4,7 +4,7 @@ import { open, stat } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, publishedManifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, expectedTiles, getBit, getProduct, getProvenanceReference, sameGrid, publishedManifestSchema, parseProvenance, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, type ShardedSampleBlock } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
@@ -212,7 +212,7 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
   }
   for (const artifact of manifest.artifacts) {
     if (await fileSha256(localPath(root, artifact.tilesKey)) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
-    await validateArchive(localPath(root, artifact.tilesKey), mask);
+    await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(mask, manifest.coverage.maxZoom));
   }
   return validatedResult(root, manifest);
 }
@@ -221,7 +221,7 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
   const product = trustedProduct ?? getProduct(manifest.model), plan = product && wholeDomainPlan(product);
   if (!product || !plan || product.modelId !== manifest.model || manifest.recipe.id !== product.id
       || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key])
-      || !sameGrid(mask.grid, product.grid) || mask.maxZoom !== product.maxNativeZoom
+      || !sameGrid(mask.grid, product.grid) || manifest.surfaces.some(surface => mask.maxZoom < surface.coverage.maxZoom)
       || JSON.stringify(manifest.descriptors) !== JSON.stringify(createWholeDomainDescriptors(product))
       || manifest.layers.length !== product.layers.length || product.layers.some((layer, i) => manifest.layers[i] !== layer)) throw new Error('Unsupported model, grid or layers');
   const registered = getProduct(product.modelId);
@@ -239,11 +239,11 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
   const provenance = getProvenanceReference(manifest), receipt = await readLocalFile(localPath(root, provenance.key), MAX_PROVENANCE_BYTES);
   if (sha256(receipt) !== provenance.sha256) throw new Error(`Invalid provenance hash ${provenance.key}`);
   parseProvenance(parseBoundedJson(receipt, MAX_PROVENANCE_JSON_TOKENS), manifest);
-  const masks = new Map<string, Awaited<ReturnType<typeof readSparseCoverage>>>();
+  const masks = new Map<string, Awaited<ReturnType<typeof readSparseCoverage>>['mask']>();
   for (const surface of manifest.surfaces) {
     const coverage = await readSparseCoverage(root, surface.coverage.hash), descriptor = coverage.descriptor;
     if (surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json` || descriptor.id !== product.coverageId
-        || descriptor.id !== surface.coverage.id || descriptor.maxZoom !== product.maxNativeZoom || descriptor.maxZoom !== surface.coverage.maxZoom
+        || descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom
         || descriptor.gridHash !== surface.gridHash || !sameGrid(descriptor.grid, surface.grid)
         || !sameGrid(surface.grid, surface.kind === 'native' ? plan.native : plan.fine)
         || JSON.stringify(descriptor.bounds) !== JSON.stringify(product.bounds)) throw new Error('Sparse coverage descriptor binding mismatch');
@@ -262,7 +262,7 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
         if (layout.shards.length !== group.shards.length || layout.shards.some((shard, i) => shard.firstBlock !== group.shards[i].firstBlock || shard.blockCount !== group.shards[i].blockCount || shard.byteLength !== group.shards[i].bytes)) throw new Error('Noncanonical sample shard layout');
       }
     }
-    masks.set(surface.kind, coverage);
+    masks.set(surface.kind, coverageAtZoom(coverage.mask, surface.coverage.maxZoom));
     if (surface.terrain) {
       const terrain = surface.terrain, path = localPath(root, terrain.key), { size } = await stat(path);
       const ref = { key: terrain.key, sha256: terrain.sha256, bytes: size, arrayBytes: coverage.mask.coverage.offsets[coverage.mask.coverage.blockIds.length] * 5 };
@@ -271,9 +271,9 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     }
   }
   for (const artifact of remote ? [] : manifest.artifacts) {
-    const coverage = masks.get(artifact.layer === 'precip-rate' ? 'native' : 'fine');
-    if (!coverage || await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
-    await validateArchive(localPath(root, artifact.tilesKey), coverage.mask);
+    const view = masks.get(artifact.layer === 'precip-rate' ? 'native' : 'fine');
+    if (!view || await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
+    await validateArchive(localPath(root, artifact.tilesKey), view);
   }
   if (remote) {
     const expected = [...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),

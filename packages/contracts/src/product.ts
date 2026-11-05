@@ -13,6 +13,38 @@ export type ProductCapabilities = z.infer<typeof capabilitiesSchema>;
 export type VerticalCoordinateKind = ProductCapabilities['verticalCoordinate'];
 export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
 
+export const MAX_MODEL_WORKERS = 3;
+const workerLimit = z.number().int().min(0).max(MAX_MODEL_WORKERS);
+const jobLimit = z.number().int().positive().max(MAX_SAMPLE_VALUES);
+function validSchedule(value: string): boolean {
+  const fields = value.split(' '), ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
+  return fields.length === ranges.length && fields.every((field, i) => field.split(',').every(term => {
+    const match = /^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(term);
+    if (!match || (match[1] === '*' && match[2] !== undefined)) return false;
+    const [min, max] = ranges[i], start = match[1] === '*' ? min : Number(match[1]);
+    const end = match[2] === undefined ? start : Number(match[2]);
+    return start >= min && end <= max && start <= end
+      && (match[3] === undefined || (Number.isSafeInteger(Number(match[3])) && Number(match[3]) > 0));
+  }));
+}
+const schedules = z.array(z.string().refine(validSchedule, 'Expected a numeric five-field cron schedule')).refine(
+  values => new Set(values).size === values.length, 'Model schedules must be unique'
+).readonly();
+export const modelExecutionSchema = z.object({
+  shards: jobLimit, parallelism: jobLimit, workers: workerLimit, schedule: schedules
+}).strict().readonly();
+export type ModelExecution = z.infer<typeof modelExecutionSchema>;
+export const forecastConfigSchema = z.object({
+  parallelism: z.object({ jobs: jobLimit, workers: workerLimit }).strict().readonly(),
+  models: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), z.object({
+    zoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM),
+    shards: jobLimit, parallelism: jobLimit, schedule: schedules,
+    workers: workerLimit.optional()
+  }).strict().readonly()).readonly()
+}).strict().refine(config => Object.keys(config.models).length <= config.parallelism.jobs, {
+  path: ['parallelism', 'jobs'], message: 'Forecast job budget requires at least one slot per model'
+}).readonly();
+
 export interface ProductDefinition {
   /** Public catalog/URL identity, independent of the upstream family and domain. */
   readonly modelId: string;
@@ -34,6 +66,7 @@ export interface ProductDefinition {
   readonly intervalHours: number;
   readonly layers: readonly LayerId[];
   readonly capabilities: ProductCapabilities;
+  readonly execution: ModelExecution;
 }
 
 // The shared portion of source JSON. Adapter-specific upstream settings stay in
@@ -49,6 +82,7 @@ const productConfigSchema = z.object({
     layers => new Set(layers).size === layers.length, 'Product requires unique scalar layers'
   ).readonly(),
   capabilities: capabilitiesSchema,
+  execution: modelExecutionSchema,
   grid: gridSchema.readonly(),
   forecast: z.object({
     hours: z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES).refine(
@@ -82,6 +116,6 @@ export function defineProduct(raw: unknown): ProductDefinition {
     supportHaloCells: config.coverage.interpolationHaloCells,
     ...(config.terrainSubdivisionFactor === undefined ? {} : { terrainSubdivisionFactor: config.terrainSubdivisionFactor }),
     frameHours: config.forecast.hours, intervalHours: config.forecast.intervalHours,
-    layers: config.layers, capabilities: config.capabilities
+    layers: config.layers, capabilities: config.capabilities, execution: config.execution
   });
 }

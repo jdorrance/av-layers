@@ -1,4 +1,4 @@
-import { CELL_BYTES, MAX_SAMPLE_VALUES, MAX_TILE_BYTES, RASTER_TILE_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
+import { CELL_BYTES, coverageAtZoom, MAX_SAMPLE_VALUES, MAX_TILE_BYTES, RASTER_TILE_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
 import { prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
 import type { PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from '../capacity.js';
@@ -50,7 +50,8 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   const fineActive = fine.coverage.offsets[fine.coverage.blockIds.length]!;
   const layouts = wholeDomainSampleLayouts(input);
   const nativeSampleBytes = layouts.native?.byteLength ?? 0, fineSampleBytes = layouts.fine.byteLength;
-  const tiles = frames * (nativeLayers * coveredTiles(input.nativeMask) + fineLayers * coveredTiles(fine));
+  const tiles = frames * (nativeLayers * coveredTiles(coverageAtZoom(input.nativeMask, input.product.maxNativeZoom)) +
+    fineLayers * coveredTiles(coverageAtZoom(fine, input.product.maxNativeZoom)));
   if (frames * Math.max(nativeLayers, fineLayers) > MAX_SAMPLE_VALUES) throw new Error('Sample value budget exceeded');
   if (layouts.fine.storedCells < 1 || layouts.fine.blockCount < 1) throw new Error('Fine coverage has no sample blocks');
   const nativeCells = input.plan.native.width * input.plan.native.height;
@@ -86,7 +87,7 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
     runtimeAndNativeReserve: 256 * 1024 * 1024
   };
   const inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
-  const maximumWorkers = rasterWorkerCount();
+  const maximumWorkers = rasterWorkerCount(undefined, input.product.execution.workers);
   let rasterWorkers = 0, deriveWorkers = 0, selectedTotal = -1, selectedImbalance = Number.POSITIVE_INFINITY;
   const deriveSharedInputs = terrainBytes + nativeCells * 10 + fineMaskBytes + nativeActive * 4;
   const workerWorkspace = columns.workspaceBufferBytes - nativeActive * (maxLevels * 16 + 45) + Math.min(4, nativeActive) * (maxLevels * 16 + 45);

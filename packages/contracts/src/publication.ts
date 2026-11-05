@@ -318,7 +318,8 @@ export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [mani
 
 /** A coverage hash binds its geometry and public extent to one numeric surface. */
 export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: Pick<ForecastGrid, 'grid' | 'coverage'> & { descriptors: Pick<ForecastGrid['descriptors'], 'bounds'> }): void {
-  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom
+  if (descriptor.id !== surface.coverage.id || !Number.isSafeInteger(surface.coverage.maxZoom)
+    || surface.coverage.maxZoom < 0 || descriptor.maxZoom < surface.coverage.maxZoom
     || !sameGrid(descriptor.grid, surface.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(surface.descriptors.bounds)
     || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Coverage descriptor binding mismatch');
 }

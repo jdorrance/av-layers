@@ -8,6 +8,9 @@ on:
       model:
         type: string
         required: true
+      parallelism:
+        type: number
+        required: true
       cycle:
         type: string
         default: ''
@@ -80,6 +83,7 @@ jobs:
       ready: ${{ steps.plan.outputs.ready }}
       shards: ${{ steps.plan.outputs.shards }}
       artifact: ${{ steps.plan.outputs.artifact }}
+      credential-secret: ${{ steps.plan.outputs.credential-secret }}
     env: *plan-env
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +132,7 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
-      max-parallel: 12
+      max-parallel: ${{ inputs.parallelism }}
       matrix:
         shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
     env:
@@ -146,7 +150,7 @@ jobs:
           path: output
       - name: Build forecast shard
         env:
-          FORECAST_SHARD_CREDENTIAL_KEY: ${{ inputs.model == 'gfs' && secrets.FORECAST_GFS_SHARD_CREDENTIAL_KEY || secrets.FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY }}
+          FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets[needs.prepare.outputs.credential-secret] }}
         run: pnpm operations forecast-shard
       - name: Upload completed shard
         uses: actions/upload-artifact@v4

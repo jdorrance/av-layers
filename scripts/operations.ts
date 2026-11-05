@@ -66,7 +66,7 @@ export function validateShardEnvironment(env: NodeJS.ProcessEnv, config = loadWr
   const common = environment(env);
   const credentialKey = required(env, 'FORECAST_SHARD_CREDENTIAL_KEY');
   if (!/^[a-f0-9]{64}$/i.test(credentialKey)) throw new Error('FORECAST_SHARD_CREDENTIAL_KEY must be 32 bytes encoded as hex');
-  for (const name of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) {
+  for (const name of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...Object.keys(env).filter(name => /^FORECAST_.+_SHARD_CREDENTIAL_KEY$/.test(name))]) {
     if (env[name]) throw new Error(`${name} must not be present in shard environment`);
   }
   return { ...common, r2Bucket: config[common.targetEnv].bucket, credentialKey };
@@ -120,7 +120,7 @@ export function forecastPlanReport(plan: Pick<BuildPlan, 'model' | 'cycle' | 'gr
   if (!plan) return { shards: [], summary: `## ${model}\n\nThe selected cycle is already published; no batches needed.\n` };
   const shards = plan.groups.map((hours, id) => ({ id, hours: hours.map(hour => `f${String(hour).padStart(3, '0')}`).join(', ') }));
   const rows = plan.groups.map((hours, id) => `| ${id} | ${shards[id].hours} | ${hours.map(hour => new Date(Date.parse(plan.cycle) + hour * 3_600_000).toISOString()).join(', ')} |`);
-  return { shards, summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
+  return { shards, credentialSecret: shardCredentialSecret(plan.model), summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
 }
 
 const OPERATIONS = ['deploy', 'forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
@@ -166,7 +166,7 @@ async function issueShardKey(model: string, targetEnv: EnvironmentName): Promise
   const issuerToken = required(process.env, 'GH_CREDENTIAL_ISSUER_TOKEN');
   const repository = required(process.env, 'GITHUB_REPOSITORY');
   const key = randomBytes(32).toString('hex');
-  const name = model === 'gfs' ? 'FORECAST_GFS_SHARD_CREDENTIAL_KEY' : 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY';
+  const name = shardCredentialSecret(model);
   await new Promise<void>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -193,6 +193,10 @@ async function issueShardKey(model: string, targetEnv: EnvironmentName): Promise
     child.stdin!.end(key);
   });
   return key;
+}
+
+function shardCredentialSecret(model: string): string {
+  return `FORECAST_${model.toUpperCase().replaceAll('-', '_')}_SHARD_CREDENTIAL_KEY`;
 }
 
 export async function runOperation(command: string): Promise<void> {
@@ -237,11 +241,11 @@ export async function runOperation(command: string): Promise<void> {
         const key = await issueShardKey(model, config.targetEnv);
         await writeFile('output/shard-credentials.json', sealShardCredentials({ ...issuer, FORECAST_SHARD_CREDENTIAL_KEY: key }, plan), { mode: 0o600 });
       }
-      const { shards, summary } = forecastPlanReport(plan, model);
+      const { shards, summary, credentialSecret } = forecastPlanReport(plan, model);
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
       if (process.env.GITHUB_OUTPUT) {
         const artifact = `forecast-plan-${model}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
-        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\n`);
+        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\ncredential-secret=${credentialSecret ?? ''}\n`);
       }
     } else if (command === 'forecast') {
       const downloadStarted = process.env.FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT ? Number(process.env.FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT) : Date.now();

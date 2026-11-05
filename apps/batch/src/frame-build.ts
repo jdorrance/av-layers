@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
+import { coverageAtZoom, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
 import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
 import type { ForecastProvider, ForecastSession } from './provider.js';
 import { createRenderer } from './render.js';
@@ -53,6 +53,7 @@ export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frame
 /** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
 export async function buildFrames(options: FrameBuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours?: readonly number[]; samplesKey: string; journalPrefix: string; refinementPrefix?: string }): Promise<FrameBuildResult> {
   options.signal?.throwIfAborted();
+  options = { ...options, mask: coverageAtZoom(options.mask, options.product.maxNativeZoom) };
   const { product, mask, provider, buildId, samplesKey, journalPrefix } = options;
   // Numerical overrides would disagree with the method parameters recorded in the build.
   const deriveOptions = { daylightOnly: options.deriveOptions?.daylightOnly };

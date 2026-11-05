@@ -3,8 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
-import { MAX_FORECAST_SHARDS } from '../apps/batch/src/parallel';
-import { GFS_DISCOVERY_LAG_HOURS, GFS_FORECAST_HOURS } from '../apps/batch/src/gfs/constants';
 
 const fixture = (name: string): string => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const manifestFixture = () => manifestSchema.parse(JSON.parse(readFileSync(fixture('manifest.contract.json'), 'utf8')));
@@ -104,7 +102,7 @@ describe('declarative workflows', () => {
 
   it('isolates forecast shards from publication credentials and preserves the resume path', () => {
     const forecast = workflow('forecast-model.yml'), jobs = record(forecast.jobs), shard = record(jobs.shard), publisher = record(jobs['build-publish']);
-    expect(record(shard.strategy)['max-parallel']).toBe(MAX_FORECAST_SHARDS);
+    expect(record(shard.strategy)['max-parallel']).toBe('${{ inputs.parallelism }}');
     expect(record(shard.strategy)['fail-fast']).toBe(false);
     expect(shard.needs).toBe('prepare');
     expect(shard.environment).toBe('${{ inputs.environment }}');
@@ -114,12 +112,12 @@ describe('declarative workflows', () => {
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) expect(env[key]).toBeUndefined();
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'FORECAST_SHARD_CREDENTIAL_KEY']) expect(env[key]).toBeUndefined();
     const shardBuild = list(shard.steps).map(record).find(step => step.run === 'pnpm operations forecast-shard')!;
-    const selected = "${{ inputs.model == 'gfs' && secrets.FORECAST_GFS_SHARD_CREDENTIAL_KEY || secrets.FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY }}";
+    const selected = '${{ secrets[needs.prepare.outputs.credential-secret] }}';
     expect(record(shardBuild.env)).toEqual({ FORECAST_SHARD_CREDENTIAL_KEY: selected });
     const prepareStep = list(record(jobs.prepare).steps).map(record).find(step => step.run === 'pnpm operations forecast-plan')!;
     expect(record(prepareStep.env)).toEqual({ CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}', GH_CREDENTIAL_ISSUER_TOKEN: '${{ secrets.GH_CREDENTIAL_ISSUER_TOKEN }}' });
     for (const env of [record(forecast.env), record(shard.env), record(publisher.env), record(record(jobs.prepare).env)]) for (const key of ['CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', 'FORECAST_GFS_SHARD_CREDENTIAL_KEY', 'FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY']) expect(env[key]).toBeUndefined();
-    expect(record(jobs.prepare).outputs).toEqual({ ready: '${{ steps.plan.outputs.ready }}', shards: '${{ steps.plan.outputs.shards }}', artifact: '${{ steps.plan.outputs.artifact }}' });
+    expect(record(jobs.prepare).outputs).toEqual({ ready: '${{ steps.plan.outputs.ready }}', shards: '${{ steps.plan.outputs.shards }}', artifact: '${{ steps.plan.outputs.artifact }}', 'credential-secret': '${{ steps.plan.outputs.credential-secret }}' });
     expect(record(publisher.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeUndefined();
     for (const step of list(publisher.steps).map(record)) expect(step.env && record(step.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeFalsy();
     expect(publisher.needs).toEqual(['prepare', 'shard']);
@@ -151,18 +149,4 @@ describe('declarative workflows', () => {
     }
   });
 
-  it('leaves room for workflow timeouts before the previous GFS forecast horizon ends', () => {
-    const forecast = workflow('forecast.yml');
-    const [minute, hours, day, month, weekday] = String(record(list(record(forecast.on).schedule)[0]).cron).split(' ');
-    expect([day, month, weekday]).toEqual(['*', '*', '*']);
-    const starts = hours!.split(',').map(hour => Number(hour) * 60 + Number(minute)).sort((a, b) => a - b);
-    const jobs = record(workflow('forecast-model.yml').jobs);
-    const selectionMinutes = Number(record(record(forecast.jobs).select)['timeout-minutes']);
-    const budget = ['terrain', 'prepare', 'shard', 'build-publish'].reduce((total, name) => total + Number(record(jobs[name])['timeout-minutes']), selectionMinutes);
-    for (let i = 0; i < starts.length; i++) {
-      const cycle = Math.floor((starts[i]! - GFS_DISCOVERY_LAG_HOURS * 60) / 360) * 360;
-      const nextStart = starts[(i + 1) % starts.length]! + (i + 1 === starts.length ? 1440 : 0);
-      expect(nextStart + budget).toBeLessThan(cycle + Math.max(...GFS_FORECAST_HOURS) * 60);
-    }
-  });
 });

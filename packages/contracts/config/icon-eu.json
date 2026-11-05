@@ -41,7 +41,6 @@
     "south": 29.5,
     "east": 62.5,
     "north": 70.5,
-    "maxNativeZoom": 10,
     "seaBufferMeters": 50000,
     "excludedA3": ["RUS", "CHN", "ATA", "GRL"],
     "excludedContinents": ["Africa"],

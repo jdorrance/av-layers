@@ -15,9 +15,9 @@ Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
   `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` with Object Read & Write access
   to that environment's bucket, plus `GH_CREDENTIAL_ISSUER_TOKEN`, a GitHub App
   installation token or fine-grained token with Environments write access to this
-  repository. Keep the token current. Prepare creates or updates
-  `FORECAST_GFS_SHARD_CREDENTIAL_KEY` and `FORECAST_ICON_EU_SHARD_CREDENTIAL_KEY`
-  as environment secrets; precreating them is optional.
+  repository. Keep the token current. Prepare creates or rotates its model's
+  encryption key as an environment secret;
+  [operations.ts](../scripts/operations.ts) derives the name.
 - Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
   `TERRAIN_CATALOG_REF` to select a [terrain catalog](#terrain-data). Bucket names come
   from [wrangler.json](../apps/api/wrangler.json).
@@ -51,9 +51,12 @@ Choose **all**, **gfs**, or **icon-eu** in the Forecast workflow, or run:
 gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
-`all` expands to `MODEL_IDS` (`gfs`, `icon-eu`). Production runs `all` on
-schedule at **05:17 and 17:17 UTC**. Without `cycle`, each model discovers its
-latest complete upstream run (`00`, `06`, `12`, or `18` UTC). Already-published
+`all` expands to `MODEL_IDS`. [forecast.json](../packages/contracts/config/forecast.json)
+owns per-model UTC schedules, rendered zoom, shard targets and parallelism.
+Run `pnpm docs:generate` after editing it, then `pnpm verify` and `pnpm capacity --model MODEL`.
+Generated workflow triggers select models by the cron expression that fired,
+including delayed starts. Without `cycle`, each model discovers its
+latest complete upstream run. Already-published
 cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
@@ -65,7 +68,16 @@ clean up expired builds, and verify live API serving. Terrain preparation has it
 own 50-minute operation budget per attempt; forecast elapsed time starts with
 planning.
 
-The [planner](../apps/batch/src/parallel.ts) owns each model's default frame groups.
+The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
+the configured shard target. Set that target to the candidate frame count for
+one hour per shard. The job budget assigns fixed fair shares across registered
+models in each environment, including overlapping schedules. Each model's
+parallelism caps its allocation. Worker ceilings apply beneath CPU and
+memory admission and may be overridden per model. Plans freeze rendered zoom,
+worker ceilings and frame groups for their workers.
+
+Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
+changes reuse the same terrain cache and preserve retained builds.
 The [build budgets](../apps/batch/src/capacity.ts) gate the complete
 forecast's native and fine render work before weather acquisition.
 

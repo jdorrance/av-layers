@@ -1,0 +1,17 @@
+{
+  "parallelism": { "jobs": 20, "workers": 3 },
+  "models": {
+    "gfs": {
+      "zoom": 9,
+      "shards": 12,
+      "parallelism": 12,
+      "schedule": ["17 5,17 * * *"]
+    },
+    "icon-eu": {
+      "zoom": 10,
+      "shards": 8,
+      "parallelism": 8,
+      "schedule": ["17 5,17 * * *"]
+    }
+  }
+}

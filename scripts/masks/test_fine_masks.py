@@ -12,8 +12,13 @@ from unittest.mock import patch
 
 import build_fine_masks as fine_masks
 import build_masks
+from tile_pyramid import build_tiles, max_native_zoom
 from shapely.geometry import box
 from shapely.ops import unary_union
+
+
+def tile_lat(y, n):
+    return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
 
 
 def reference(grid, bounds, admitted, excluded, zoom):
@@ -49,8 +54,8 @@ def reference(grid, bounds, admitted, excluded, zoom):
         n = 2 ** z
         for y in range(n):
             for x in range(n):
-                tile = box(-180 + x * 360 / n, build_masks.tile_lat(y + 1, n),
-                           -180 + (x + 1) * 360 / n, build_masks.tile_lat(y, n))
+                tile = box(-180 + x * 360 / n, tile_lat(y + 1, n),
+                           -180 + (x + 1) * 360 / n, tile_lat(y, n))
                 tile_bits[offset + y * n + x] = any(part.intersects(tile) for part in all_parts)
         offset += n * n
     return output, halo, build_masks.pack_bits(tile_bits)
@@ -90,6 +95,11 @@ def check_typescript(settings, k, result):
 
 
 class FineMasksTest(unittest.TestCase):
+    def test_tile_pyramid_bounds_come_from_wire_contract(self):
+        for zoom in (-1, max_native_zoom() + 1, 1.5, True):
+            with self.assertRaises(ValueError):
+                build_tiles({}, {}, (), zoom)
+
     def run_case(self, grid, bounds, admitted, excluded, k=1, zoom=3):
         settings = {'modelId': 'test', 'coverageDir': 'coverage/test', 'grid': grid,
                     'coverage': {'id': 'test', 'description': 'test', 'west': bounds[0], 'south': bounds[1],

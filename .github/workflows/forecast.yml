@@ -2,7 +2,7 @@ name: Forecast
 run-name: Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}
 on:
   schedule:
-    - cron: '17 5,17 * * *'
+    - cron: 17 5,17 * * *
   workflow_dispatch:
     inputs:
       environment:
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      models: ${{ steps.models.outputs.models }}
+      matrix: ${{ steps.models.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,14 +61,14 @@ jobs:
         id: models
         env:
           MODEL_SELECTION: ${{ inputs.model || 'all' }}
-        run: node --import tsx scripts/workflow-models.ts
+          MODEL_SCHEDULE: ${{ github.event.schedule || '' }}
+        run: node --import tsx scripts/workflow-models.ts --forecast
   forecast:
     name: Forecast ${{ matrix.model }}
     needs: select
     strategy:
       fail-fast: false
-      matrix:
-        model: ${{ fromJSON(needs.select.outputs.models) }}
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     concurrency:
       group: forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}
       cancel-in-progress: false
@@ -76,6 +76,7 @@ jobs:
     with:
       environment: ${{ inputs.environment || 'production' }}
       model: ${{ matrix.model }}
+      parallelism: ${{ matrix.parallelism }}
       cycle: ${{ inputs.cycle || '' }}
       allow-same-cycle: ${{ inputs['allow-same-cycle'] || false }}
       resume-run-id: ${{ inputs['resume-run-id'] || '' }}

@@ -5,7 +5,8 @@ ground, and precipitation rate. A batch job builds the forecast files; an API
 serves them to a standalone map and a Windy plugin.
 
 The builder supports NOAA GFS and regional DWD ICON-EU. The forecast workflow
-runs either model or both in parallel; scheduled runs build both. Whole-domain
+runs either model or both in parallel; scheduled runs select models from
+[forecast settings](packages/contracts/config/forecast.json). Whole-domain
 terrain columns derive MSL and AGL lift; see [science](docs/science.md#terrain-columns).
 Coverage excludes Africa, Russia, China, Antarctica and Greenland. See
 [deployments](docs/status.md) for live applications and runs.
