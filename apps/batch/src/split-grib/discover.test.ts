@@ -6,6 +6,19 @@ import { candidateSplitGribCycles, discoverSplitGribRun, splitGribRunSentinelUrl
 import { formatSplitGribRunStamp, splitGribRegularFieldUrl } from './fields.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 
+async function withProbeTimers<T>(start: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  let settled = false;
+  const pending = start().then(value => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
+  void pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    for (let step = 0; step < 40 && !settled; step++) await vi.advanceTimersByTimeAsync(250);
+    const result = await pending;
+    if (!result.ok) throw result.error;
+    return result.value;
+  } finally { vi.useRealTimers(); }
+}
+
 const now = new Date('2026-10-08T16:00:00Z');
 const cycles = candidateSplitGribCycles(profile, now);
 const lastHour = profile.model.forecast.hours.at(-1)!;
@@ -63,7 +76,7 @@ describe('ICON-EU run admission', () => {
       const cancel = vi.fn(); cancelled.push(cancel);
       return new Response(new ReadableStream({ cancel }), { status: retry ? Number(failure) : 200 });
     });
-    expect((await discoverSplitGribRun(profile, { now, fetchImpl })).cycle).toBe(cycles[0]);
+    expect((await withProbeTimers(() => discoverSplitGribRun(profile, { now, fetchImpl }))).cycle).toBe(cycles[0]);
     expect(attempts).toBe(3);
     expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(formatSplitGribRunStamp(profile, cycles[0]).runStamp))).toBe(true);
     expect(cancelled.every(cancel => cancel.mock.calls.length === 1)).toBe(true);
@@ -77,7 +90,7 @@ describe('ICON-EU run admission', () => {
   });
   it('reports exhausted probe URLs and transport causes for each candidate cycle', async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect timed out'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) }); });
-    const error = await discoverSplitGribRun(profile, { now, fetchImpl }).catch(error => error);
+    const error = await withProbeTimers(() => discoverSplitGribRun(profile, { now, fetchImpl })).catch(error => error);
     expect(error.message).toContain('UND_ERR_CONNECT_TIMEOUT');
     expect(error.message).toContain('after 3 attempts');
     for (const cycle of cycles) expect(error.message).toContain(splitGribRunSentinelUrls(profile, cycle)[0]);

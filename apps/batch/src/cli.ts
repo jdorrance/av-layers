@@ -44,9 +44,9 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
       }
       const provider = getForecastProvider(product.modelId), fine = await loadBundledFineCoverage(product, plan);
       const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
-      const { preparePackedTerrainColumns } = await import('@av/forecast/refinement');
+      const { packedTerrainColumnBudget } = await import('@av/forecast/refinement');
       const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES } = await import('./whole-domain/capacity.js');
-      const columns = preparePackedTerrainColumns(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
+      const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
       const native = nativeSparseMask(mask);
       const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask: mask, fine: fine.mask,
         nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,

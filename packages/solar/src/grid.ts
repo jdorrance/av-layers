@@ -35,6 +35,69 @@ export interface ProjectedGridShape {
 
 export type DaylightGridShape = RegularLatLonGridShape | ProjectedGridShape;
 
+export interface ProjectedDaylightSamples {
+  readonly sinLat: Float64Array;
+  readonly cosLat: Float64Array;
+  readonly lonDeg: Float64Array;
+}
+
+function projectedSampleInDaylight(
+  sinLatitude: number,
+  cosLatitude: number,
+  longitudeDeg: number,
+  sinDecl: Float64Array,
+  cosDecl: Float64Array,
+  baseSolarMinutes: Float64Array,
+  sinHorizon: number
+): boolean {
+  if (!Number.isFinite(sinLatitude) || !Number.isFinite(cosLatitude) || !Number.isFinite(longitudeDeg)) return false;
+  for (let time = 0; time < sinDecl.length; time += 1) {
+    const trueSolarTimeMin = mod(baseSolarMinutes[time]! + 4 * longitudeDeg, 1440);
+    const hourAngleDeg = trueSolarTimeMin / 4 - 180;
+    const sinElevation = sinLatitude * sinDecl[time]! + cosLatitude * cosDecl[time]! * Math.cos(hourAngleDeg * DEG_TO_RAD);
+    if (sinElevation > sinHorizon) return true;
+  }
+  return false;
+}
+
+/** Projects each requested cell once so repeated hour checks skip Lambert math. */
+export function prepareProjectedDaylightSamples(grid: ProjectedGridShape, cellIndices: ArrayLike<number>): ProjectedDaylightSamples {
+  const { width, height, gridToGeographic } = grid;
+  const totalCells = width * height;
+  const sinLat = new Float64Array(cellIndices.length);
+  const cosLat = new Float64Array(cellIndices.length);
+  const lonDeg = new Float64Array(cellIndices.length);
+  for (let index = 0; index < cellIndices.length; index += 1) {
+    const cell = cellIndices[index]!;
+    if (!Number.isInteger(cell) || cell < 0 || cell >= totalCells) { sinLat[index] = Number.NaN; continue; }
+    const point = gridToGeographic(cell % width, Math.floor(cell / width));
+    if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lon)) { sinLat[index] = Number.NaN; continue; }
+    const latRad = clamp(point.lat, -89.999, 89.999) * DEG_TO_RAD;
+    sinLat[index] = Math.sin(latRad);
+    cosLat[index] = Math.cos(latRad);
+    lonDeg[index] = point.lon;
+  }
+  return { sinLat, cosLat, lonDeg };
+}
+
+export function anyProjectedSampleInDaylight(
+  samples: ProjectedDaylightSamples,
+  timestampsMs: readonly number[],
+  horizonDeg = DEFAULT_HORIZON_DEG
+): boolean {
+  const validTimestamps = timestampsMs.filter((ms): ms is number => Number.isFinite(ms));
+  if (validTimestamps.length === 0) return samples.sinLat.length > 0;
+  const ephemerides = validTimestamps.map((ms) => solarEphemeris(ms));
+  const sinDecl = Float64Array.from(ephemerides, (ephemeris) => ephemeris.sinDeclination);
+  const cosDecl = Float64Array.from(ephemerides, (ephemeris) => ephemeris.cosDeclination);
+  const baseSolarMinutes = Float64Array.from(ephemerides, (ephemeris) => ephemeris.utcMinutes + ephemeris.equationOfTimeMin);
+  const sinHorizon = Math.sin(horizonDeg * DEG_TO_RAD);
+  for (let index = 0; index < samples.sinLat.length; index += 1) {
+    if (projectedSampleInDaylight(samples.sinLat[index]!, samples.cosLat[index]!, samples.lonDeg[index]!, sinDecl, cosDecl, baseSolarMinutes, sinHorizon)) return true;
+  }
+  return false;
+}
+
 /**
  * Precomputes separable row/column ephemeris tables so full-grid daylight checks
  * require zero per-cell trigonometric calls on regular lat/lon grids.
@@ -119,17 +182,6 @@ export const createGridDaylightTester = (
       return false;
     }
     const latRad = clamp(point.lat, -89.999, 89.999) * DEG_TO_RAD;
-    const sLat = Math.sin(latRad);
-    const cLat = Math.cos(latRad);
-    for (let t = 0; t < timeCount; t += 1) {
-      const trueSolarTimeMin = mod(baseSolarMinutesByTime[t]! + 4 * point.lon, 1440);
-      const hourAngleDeg = trueSolarTimeMin / 4 - 180;
-      const sinElevation =
-        sLat * sinDecl[t]! + cLat * cosDecl[t]! * Math.cos(hourAngleDeg * DEG_TO_RAD);
-      if (sinElevation > sinHorizon) {
-        return true;
-      }
-    }
-    return false;
+    return projectedSampleInDaylight(Math.sin(latRad), Math.cos(latRad), point.lon, sinDecl, cosDecl, baseSolarMinutesByTime, sinHorizon);
   };
 };

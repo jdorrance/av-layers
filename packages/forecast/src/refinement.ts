@@ -12,7 +12,7 @@ import { buildIntervalDaylightTimestampsMs, createMaskDaylightTester } from './d
 import { clearanceCell } from './clearance-cell.js';
 import type { FrameDiagnostics } from './frame.js';
 import { planSample, type GridField } from './sampler.js';
-export { preparePackedTerrainColumns, prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './terrain-column.js';
+export { packedTerrainColumnBudget, preparePackedTerrainColumns, prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './terrain-column.js';
 export type { PreparedPackedTerrainColumns, PreparedTerrainColumns, TerrainColumnDerivation, TerrainColumnMetrics, TerrainColumnProbe, TerrainColumnEvaluationOptions, TerrainColumnClearance, TerrainColumnNativeClearance } from './terrain-column.js';
 
 const CONTRIBUTORS_PER_CELL = 4;

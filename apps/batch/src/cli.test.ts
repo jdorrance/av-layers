@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BuildOptions } from './build.js';
 import { DEFAULT_MODEL, getProduct, MODEL_IDS, planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
+import { BUILD_BUDGETS } from './capacity.js';
 
 const fake = vi.hoisted(() => ({ build: vi.fn(), read: vi.fn(), storage: vi.fn() }));
 vi.mock('./build.js', () => ({ buildProduct: fake.build }));
@@ -102,6 +103,13 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
   expect(report.capacity.workingSet.nativeFields).toBeGreaterThan(0);
   expect(report.capacity.workingSet.shardAssembly).toBeGreaterThan(0);
   expect(report.capacity.violations).toEqual([]);
+  expect(report.capacity.tiles).toBeGreaterThan(0);
+  expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
+  expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+  for (const count of [report.capacity.rasterWorkers, report.capacity.deriveWorkers]) {
+    expect(count).toBeGreaterThanOrEqual(0);
+    expect(count).toBeLessThanOrEqual(product.execution.workers);
+  }
   expect(fake.storage).not.toHaveBeenCalled();
 });
 

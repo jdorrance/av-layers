@@ -506,12 +506,18 @@ describe('whole-domain v5 production', () => {
     const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: hours.length, store });
     expect(plan.groups).toEqual(hours.map(hour => [hour]));
     expect(plan.dependencies?.length).toBeGreaterThan(6);
-    for (let shard = 0; shard < plan.groups.length; shard++) {
-      await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
-      const receipt = JSON.parse(await readFile(join(out, 'shards', String(shard), 'receipt.json'), 'utf8')) as { objects: Array<{ key: string }> };
-      expect(receipt.objects.length).toBeGreaterThan(0);
-      if (receiptsOnly) for (const object of receipt.objects) await rm(join(out, object.key));
-    }
+    let nextShard = 0;
+    const runShard = async () => {
+      for (;;) {
+        const shard = nextShard++;
+        if (shard >= plan.groups.length) return;
+        await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+        const receipt = JSON.parse(await readFile(join(out, 'shards', String(shard), 'receipt.json'), 'utf8')) as { objects: Array<{ key: string }> };
+        expect(receipt.objects.length).toBeGreaterThan(0);
+        if (receiptsOnly) for (const object of receipt.objects) await rm(join(out, object.key));
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, plan.groups.length) }, () => runShard()));
     if (receiptsOnly) await rm(join(out, 'terrain'), { recursive: true, force: true });
     const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store: receiptsOnly ? store : undefined });
     const manifest = await readV5(path);

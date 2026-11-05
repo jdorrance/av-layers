@@ -11,6 +11,18 @@ const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4
 const issuer = { ...env, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
 const shard = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: issuer.FORECAST_SHARD_CREDENTIAL_KEY };
 const makeStore = (value: typeof plan | (Omit<typeof plan, 'deadlineAt'> & { deadlineAt: string | undefined })) => r2ShardStorage(shard, value, Buffer.from(sealShardCredentials(issuer, value)));
+async function withBackoff<T>(start: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  let settled = false;
+  const pending = start().then(value => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }));
+  void pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    for (let step = 0; step < 8 && !settled; step++) await vi.advanceTimersByTimeAsync(250);
+    const result = await pending;
+    if (!result.ok) throw result.error;
+    return result.value;
+  } finally { vi.useRealTimers(); }
+}
 
 describe('R2 bucket lock preflight', () => {
   const lockEnv = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: issuer.R2_BUCKET, CLOUDFLARE_API_TOKEN: 'api-token' };
@@ -208,7 +220,7 @@ describe('R2 S3 client configuration', () => {
       .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: failed } as never)
       .mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never);
     try {
-      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2);
+      const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2));
       expect([...result!.bytes]).toEqual([1, 2]);
       expect(failed.destroyed).toBe(true);
       expect(send).toHaveBeenCalledTimes(2);
@@ -221,7 +233,7 @@ describe('R2 S3 client configuration', () => {
     const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValueOnce({ ContentLength: 2, ETag: 'etag', Body: failed } as never);
     const onRetry = vi.fn(() => { throw new Error('transfer budget exceeded'); });
     try {
-      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2, undefined, onRetry)).rejects.toThrow('transfer budget exceeded');
+      await expect(withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2, undefined, onRetry))).rejects.toThrow('transfer budget exceeded');
       expect(onRetry).toHaveBeenCalledOnce();
       expect(send).toHaveBeenCalledOnce();
       expect(failed.destroyed).toBe(true);
@@ -240,7 +252,7 @@ describe('R2 S3 client configuration', () => {
       .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never; });
     const onRetry = vi.fn(() => { order.push('reserve'); });
     try {
-      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry);
+      const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry));
       expect([...result!.bytes]).toEqual([1, 2]);
       expect(order).toEqual(['send', 'reserve', 'send']);
       expect(await (send.mock.contexts[0] as S3Client).config.maxAttempts()).toBe(1);
@@ -254,7 +266,7 @@ describe('R2 S3 client configuration', () => {
       .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never; });
     const onRetry = vi.fn(() => { order.push('reserve'); });
     try {
-      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry);
+      const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry));
       expect([...result!.bytes]).toEqual([1, 2]);
       expect(order).toEqual(['send', 'reserve', 'send', 'reserve', 'send']);
       expect(failed.destroyed).toBe(true);
@@ -273,7 +285,7 @@ describe('R2 S3 client configuration', () => {
       return Reflect.apply(original, this, [command, options]) as never;
     } as typeof S3Client.prototype.send);
     try {
-      const result = await r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, () => { order.push('reserve'); });
+      const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, () => { order.push('reserve'); }));
       expect([...result!.bytes]).toEqual([1, 2]);
       expect(order).toEqual(['send', 'reserve', 'send']);
       expect(body.destroyed).toBe(true);
@@ -300,7 +312,7 @@ describe('R2 S3 client configuration', () => {
     const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('unavailable'), { $metadata: { httpStatusCode: 503 } }));
     const onRetry = vi.fn();
     try {
-      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('unavailable');
+      await expect(withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry))).rejects.toThrow('unavailable');
       expect(send).toHaveBeenCalledTimes(3);
       expect(onRetry).toHaveBeenCalledTimes(2);
     } finally { send.mockRestore(); }
@@ -336,7 +348,7 @@ describe('R2 S3 client configuration', () => {
     const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValue(Object.assign(new Error('reset'), { code: 'ECONNRESET' }));
     const onRetry = vi.fn(() => { throw new Error('transfer budget exceeded'); });
     try {
-      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('transfer budget exceeded');
+      await expect(withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry))).rejects.toThrow('transfer budget exceeded');
       expect(send).toHaveBeenCalledOnce();
       expect(onRetry).toHaveBeenCalledOnce();
     } finally { send.mockRestore(); }
@@ -351,7 +363,7 @@ describe('R2 S3 client configuration', () => {
       return { ContentLength: 2, ETag: 'etag', Body: body } as never;
     });
     try {
-      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2))
+      await expect(withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif', { offset: 7, length: 2 }, 2)))
         .rejects.toMatchObject({ message: 'R2 GET terrain/tile.tif (bytes 7–8): aborted [ECONNRESET]', cause: failure });
       expect(send).toHaveBeenCalledTimes(3);
       expect(bodies.every(body => body.destroyed)).toBe(true);
@@ -368,6 +380,7 @@ describe('R2 S3 client configuration', () => {
       const pending = r2Storage({ ...env, R2_BUCKET: 'test' }).get('terrain/tile.tif');
       await nextTurn();
       await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(250);
       expect([...(await pending)!.bytes]).toEqual([1, 2]);
       expect(stalled.destroyed).toBe(true);
       expect(send).toHaveBeenCalledTimes(2);

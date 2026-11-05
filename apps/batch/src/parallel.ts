@@ -119,7 +119,20 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
   }
 }
 
+const terrainStaging = new Map<string, Promise<void>>();
+
 async function stagePlanTerrain(root: string, plan: BuildPlan, whole: WholeDomainPrepared, store: ObjectStorage, signal?: AbortSignal): Promise<void> {
+  const key = `${root}\0${plan.buildId}`;
+  const current = terrainStaging.get(key);
+  if (current) return current;
+  const pending = stagePlanTerrainOnce(root, plan, whole, store, signal).finally(() => {
+    if (terrainStaging.get(key) === pending) terrainStaging.delete(key);
+  });
+  terrainStaging.set(key, pending);
+  return pending;
+}
+
+async function stagePlanTerrainOnce(root: string, plan: BuildPlan, whole: WholeDomainPrepared, store: ObjectStorage, signal?: AbortSignal): Promise<void> {
   if (!plan.dependencies) throw new Error('Forecast plan lacks dependency receipts');
   await verifyObjectReceipts(store, plan.dependencies, signal);
   await stageSparsePreparedTerrain({ ref: whole.terrain, storage: store, out: root, grid: whole.plan.fine,

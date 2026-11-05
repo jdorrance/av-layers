@@ -1,9 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { addAbortSignal, Readable } from 'node:stream';
-import { setTimeout as delay } from 'node:timers/promises';
 import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { BUILD_BUDGETS } from './capacity.js';
 import type { BuildPlan } from './parallel.js';
+import { pause } from './pause.js';
 
 const R2_BODY_TIMEOUT_MS = 30_000;
 const R2_MAX_ATTEMPTS = 3;
@@ -244,7 +244,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           catch (error) {
             signal?.throwIfAborted();
             if (!onRetry || attempt >= R2_MAX_ATTEMPTS - 1 || !retryableRequestError(error)) throw error;
-            await delay(250 * (attempt + 1), undefined, { signal });
+            await pause(250 * (attempt + 1), signal);
             continue;
           }
           if (!(result.Body instanceof Readable) || !result.ETag) {
@@ -260,7 +260,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           catch (error) {
             signal?.throwIfAborted();
             if (attempt >= R2_MAX_ATTEMPTS - 1 || !retryableBodyError(error)) throw error;
-            await delay(250 * (attempt + 1), undefined, { signal });
+            await pause(250 * (attempt + 1), signal);
             continue;
           }
           if (bytes.length !== result.ContentLength) throw new Error(`Incorrect object response length for ${key}`);
