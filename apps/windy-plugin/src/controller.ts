@@ -26,7 +26,10 @@ export interface HostTileEvent {
 export type HostTileEventName = 'tileloadstart' | 'tileerror' | 'tileload' | 'tileunload';
 
 export interface HostTileLayer {
-  setUrl(url: string): unknown;
+  setUrl(url: string, maxNativeZoom?: number): unknown;
+  setBuild?(build: PinnedBuild): void;
+  freeze?(): void;
+  onStatus?(listener: (status: 'loading' | 'ready' | 'error', displayedUrl: string) => void): void;
   setOpacity?(opacity: number): unknown;
   on?(event: HostTileEventName, listener: (event: HostTileEvent) => void): unknown;
   off?(event: HostTileEventName, listener: (event: HostTileEvent) => void): unknown;
@@ -62,6 +65,7 @@ export interface ControllerState {
   opacity: number;
   badge: string;
   message: string | null;
+  notice: string | null;
   horizonNotice: string | null;
 }
 
@@ -78,6 +82,10 @@ export interface ControllerOptions {
 }
 
 const TILE_ERROR_MESSAGE = 'Overlay tile failed to load — forecast display may be incomplete.';
+
+export function forecastCommitted(state: ControllerState): boolean {
+  return state.phase === 'ready' && state.notice === null && (state.message === null || state.message === TILE_ERROR_MESSAGE);
+}
 
 function preferredLiftLayer(layers: readonly LayerId[]): LayerId | null {
   if (layers.includes('usable-lift-msl')) return 'usable-lift-msl';
@@ -101,15 +109,18 @@ export class PluginController {
   private badge = 'No frame selected';
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
+  private notice: string | null = null;
   // Successful LeafletGL tiles can move into the host cache without an unload
   // event. Membership must not keep those otherwise collectible tiles alive.
   private activeTiles = new WeakSet<object>();
   private readonly failedTiles = new Set<object>();
   private tileUrl: string | null = null;
+  private displayedUrl: string | null = null;
   private tileMaxZoom: number | null = null;
   private timeTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
   private disposed = false;
+  private frozen = false;
   private readonly onTimestamp = (value: unknown): void => {
     this.syncHost(value);
   };
@@ -142,6 +153,12 @@ export class PluginController {
     return this.build;
   }
 
+  get displayedForecast(): string | null {
+    if (!this.displayedUrl) return null;
+    const parts = this.displayedUrl.split('/');
+    return `${parts.at(-7)} ${parts.at(-4)} ${parts.at(-5)}`;
+  }
+
   state(): ControllerState {
     return {
       phase: this.phase,
@@ -152,6 +169,7 @@ export class PluginController {
       opacity: this.opacity,
       badge: this.badge,
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
+      notice: this.notice,
       horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice(this.build.manifest, this.now()) : null
     };
   }
@@ -163,6 +181,7 @@ export class PluginController {
   private fail(message: string): void {
     this.phase = 'error';
     this.message = message;
+    this.notice = null;
     this.emit();
   }
 
@@ -171,13 +190,14 @@ export class PluginController {
     this.started = true;
     this.phase = 'loading';
     this.message = null;
+    this.notice = null;
     this.clearTileState();
     this.emit();
     const loadAbort = new AbortController();
     this.loadAbort = loadAbort;
     try {
       const build = await this.options.loadBuild(this.options.model, { signal: loadAbort.signal });
-      if (this.disposed || loadAbort.signal.aborted) return null;
+      if (this.disposed || this.frozen || loadAbort.signal.aborted) return null;
       if (build.manifest.model !== this.options.model) {
         this.fail('Loaded build model does not match the requested model');
         return this.state();
@@ -225,13 +245,13 @@ export class PluginController {
     const frame = selectExplicitFrame(this.build!.manifest.frames, id);
     if (!frame) {
       this.message = `Unknown frame ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     this.frameId = frame.id;
     this.applyUrl();
     this.badge = frameBadge(frame, null, null).text;
-    this.message = null;
     this.emit();
     if (options.syncHost !== false) {
       const timestamp = syncTimestampForFrame(frame, this.options.hostRange?.() ?? null);
@@ -244,28 +264,21 @@ export class PluginController {
     if (!this.canUse()) return this.state();
     if (!this.build!.manifest.layers.includes(id)) {
       this.message = `Unknown layer ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     const template = this.build!.templates[id];
     if (!template || !this.frameId) {
       this.message = `No tile template for ${id}`;
+      this.notice = null;
       this.emit();
       return this.state();
     }
     const maxZoom = layerMaxZoom(this.build!.manifest, id);
     this.layerId = id;
-    if (maxZoom !== this.tileMaxZoom) {
-      this.clearTileState();
-      this.unmountLayer();
-      try {
-        this.mountLayer(frameTileUrl(template, this.frameId), maxZoom);
-      } catch (error) {
-        this.fail(error instanceof Error ? error.message : String(error));
-        return this.state();
-      }
-    } else this.applyUrl();
-    this.message = null;
+    this.tileMaxZoom = maxZoom;
+    this.applyUrl();
     this.emit();
     return this.state();
   }
@@ -307,6 +320,14 @@ export class PluginController {
     if (this.phase === 'ready') this.emit();
   }
 
+  freeze(): void {
+    if (this.frozen || this.disposed) return;
+    this.frozen = true;
+    this.loadAbort?.abort(); this.loadAbort = null;
+    if (this.subscribed) { this.subscribed = false; this.host.store.off?.('timestamp', this.onTimestamp); }
+    this.layer?.freeze?.();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -318,7 +339,7 @@ export class PluginController {
   }
 
   private canUse(): boolean {
-    if (!this.build || this.disposed || this.phase === 'expired' || this.phase === 'error') return false;
+    if (!this.build || this.frozen || this.disposed || this.phase === 'expired' || this.phase === 'error') return false;
     if (this.checkExpiry()) return false;
     return true;
   }
@@ -331,7 +352,7 @@ export class PluginController {
     if (url === this.tileUrl) return;
     this.clearTileState();
     this.tileUrl = url;
-    this.layer.setUrl(url);
+    this.layer.setUrl(url, this.tileMaxZoom ?? undefined);
   }
 
   private mountLayer(url: string, maxZoom: number): void {
@@ -343,6 +364,16 @@ export class PluginController {
     layer.on?.('tileerror', this.onTileError);
     layer.on?.('tileunload', this.onTileUnload);
     layer.on?.('tileload', this.onTileLoad);
+    layer.setBuild?.(this.build!);
+    layer.onStatus?.((status, displayedUrl) => {
+      if (this.layer !== layer || !this.canUse()) return;
+      this.displayedUrl = displayedUrl || null;
+      const showing = this.displayedForecast ? `Showing ${this.displayedForecast}.` : '';
+      if (status === 'ready') { this.clearTileState(); this.message = null; this.notice = null; }
+      else if (status === 'error') { this.notice = null; this.message = showing ? `Forecast replacement failed. ${showing}` : 'Forecast replacement failed.'; }
+      else { this.message = null; this.notice = showing ? `Loading selected forecast. ${showing}` : 'Loading selected forecast.'; }
+      this.emit();
+    });
     this.host.map.addLayer(layer);
   }
 
@@ -351,6 +382,7 @@ export class PluginController {
     this.layer = null;
     this.tileUrl = null;
     this.tileMaxZoom = null;
+    this.displayedUrl = null;
     if (!layer) return;
     try {
       layer.off?.('tileloadstart', this.onTileStart);
@@ -407,6 +439,7 @@ export class PluginController {
     this.clearTileState();
     this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
+    this.notice = null;
     this.releaseResources();
     this.emit();
   }

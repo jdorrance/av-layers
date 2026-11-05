@@ -18,14 +18,15 @@ import {
   sampleResponseSchema,
   sampleResponseV5Schema,
   type LayerId,
-  type ModelId
+  type ModelId,
+  type ModelPointer
 } from '@av/contracts';
 import { serveSample } from './sample';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveCoverage, resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, waitFor, type WaitContext } from './resources';
-import { pointer, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
+import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
 
 type Env = {
@@ -48,6 +49,19 @@ function layerId(value: string): LayerId {
 }
 
 export function createApp({ products = Object.fromEntries(PRODUCTS.map(product => [product.modelId, product])) }: { products?: Record<string, ProductDefinition> } = {}) {
+let discoveryConfig: Promise<string> | undefined;
+async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string): Promise<Response> {
+  const states = observed.map(pointerCacheState), now = Date.now();
+  const deadlines = states.map(state => state?.until ?? now);
+  for (const expiry of expiries) {
+    const deadline = Date.parse(expiry);
+    if (deadline > now) deadlines.push(deadline);
+  }
+  const until = deadlines.length ? Math.min(...deadlines) : now;
+  const config = await (discoveryConfig ??= sha256(new TextEncoder().encode(JSON.stringify(products))));
+  const representation = `discovery-v1:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
+  return cached(c.req.raw, expiresAt, c.executionCtx, async () => json(build()), representation, until);
+}
 const modelId = (value: string): ModelId => {
   if (!Object.hasOwn(products, value)) fail(404, 'unknown-model', 'Unknown model');
   return value;
@@ -139,12 +153,14 @@ registerJsonRoute(
   {},
   z.object({ models: z.array(catalogModelSchema) }),
   async c => {
+    const observed = new Map<string, ModelPointer | Problem>(), expiries: string[] = [];
     const models = await Promise.all(
       Object.keys(products).map(async model => {
         try {
           const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
           const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx, ptr);
           const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
+          observed.set(model, ptr); expiries.push(m.expiresAt);
           const freshness = computeFreshness(m);
           return {
             model,
@@ -159,13 +175,15 @@ registerJsonRoute(
           };
         } catch (e) {
           if (e instanceof Problem && e.code === 'publication-unavailable') {
+            observed.set(model, e);
             return { model, label: products[model].label, available: false, error: e.code };
           }
           throw e;
         }
       })
     );
-    return json({ models });
+    const expiresAt = expiries.length ? new Date(Math.min(...expiries.map(Date.parse))).toISOString() : undefined;
+    return discovery(c, () => ({ models }), Object.keys(products).map(model => observed.get(model)!), expiries, expiresAt);
   }
 );
 
@@ -180,14 +198,14 @@ registerJsonRoute(
     const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx, ptr);
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
     const servedManifest = { ...m, source: servedSource(m, url.origin) };
-    return json({
+    return discovery(c, () => ({
       pointer: ptr,
       ...(url.searchParams.has('expand') ? {
         manifest: servedManifest,
         templates: Object.fromEntries(m.layers.map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
       } : {}),
       freshness: computeFreshness(m)
-    });
+    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt);
   }
 );
 
@@ -199,7 +217,8 @@ registerJsonRoute(
   async c => {
     const model = modelId(requiredParam(c, 'model'));
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
-    return json({ model, retained: ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now()) });
+    const retained = ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now());
+    return discovery(c, () => ({ model, retained: ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now()) }), [ptr], retained.map(item => item.expiresAt));
   }
 );
 
@@ -321,7 +340,7 @@ app.get('/v1/palettes/:asset', async c => {
   const palette = PALETTES[id];
   const expiry = new Date(Date.now() + 86400000).toISOString();
   const bytes = new TextEncoder().encode(format === 'json' ? JSON.stringify(palette) : paletteSvg(palette));
-  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes));
+  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes), false);
 });
 
 const tileParamSchema = z.object({ model: param, buildId: param, layer: param, frame: param, z: param, x: param, y: param });

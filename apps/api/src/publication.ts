@@ -9,10 +9,12 @@ const MEMBERSHIP_REFRESH_MS = 1_000;
 type PointerEntry = { pointer: ModelPointer; fetchedAt: number } | { problem: Problem };
 const pointerCache = new WeakMap<R2Bucket, ByteCache<ModelId, PointerEntry>>();
 const pointerReads = new WeakMap<R2Bucket, MaterializedReads<ModelPointer>>();
+const pointerStates = new WeakMap<ModelPointer | Problem, { until: number; identity: string }>();
 export type PublishedManifest = Manifest | ManifestV5;
 const manifestCache = new WeakMap<R2Bucket, ByteCache<string, PublishedManifest>>();
 const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: PublishedManifest; bytes: number }>>();
 const artifactIndexes = new WeakMap<PublishedManifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
+const productValidations = new WeakMap<PublishedManifest, { product: ProductDefinition; pending: Promise<void> }>();
 
 function isOperationalReadFailure(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) return true;
@@ -44,7 +46,9 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     const object = await bucket.get(`catalog/${model}/latest.json`);
     if (!object) {
       const problem = new Problem(503, 'publication-unavailable', `No publication available for ${model}`);
-      entries!.set(model, { problem }, 256, Date.now() + NEGATIVE_POINTER_TTL_MS);
+      const until = Date.now() + NEGATIVE_POINTER_TTL_MS;
+      pointerStates.set(problem, { until, identity: `missing:${model}` });
+      entries!.set(model, { problem }, 256, until);
       throw problem;
     }
     let decoded: Awaited<ReturnType<typeof readObjectJson>>;
@@ -55,9 +59,16 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     }
     const result = modelPointerSchema.safeParse(decoded.value);
     if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
-    entries!.set(model, { pointer: result.data, fetchedAt: Date.now() }, decoded.estimatedBytes, Date.now() + POINTER_TTL_MS);
+    const fetchedAt = Date.now(), until = fetchedAt + POINTER_TTL_MS;
+    const identity = await sha256(new TextEncoder().encode(JSON.stringify(result.data)));
+    pointerStates.set(result.data, { until, identity });
+    entries!.set(model, { pointer: result.data, fetchedAt }, decoded.estimatedBytes + 256, until);
     return result.data;
   }, ctx);
+}
+
+export function pointerCacheState(value: ModelPointer | Problem): { until: number; identity: string } | undefined {
+  return pointerStates.get(value);
 }
 
 export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext, currentPointer?: ModelPointer) {
@@ -113,7 +124,44 @@ export async function manifest(
     fail(503, 'publication-invalid', 'Manifest does not match retained entry');
   }
   ensureLive(m.expiresAt);
-  if (!product || m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
+  await validateProduct(m, product);
+  const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;
+  if (!artifactIndexes.has(m)) {
+    provenanceReference(m);
+    try { if (m.version === 5) validateArtifactRecordsV5(m); else validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
+    if (m.version !== 5 && m.samples.storedCells !== sampleLayout!.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
+    const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
+    const layers = new Map(m.layers.map((layer, i) => [layer, i]));
+    const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
+    for (const item of m.artifacts) {
+      index.set(`${item.layer}/${item.frame}`, { ...item, channel: frames.get(item.frame)! * m.layers.length + layers.get(item.layer)! });
+    }
+    artifactIndexes.set(m, index);
+  }
+  if (decodedBytes) {
+    // Count validation state and artifact records retained with the manifest.
+    decodedBytes += 128;
+    for (const [key, item] of artifactIndexes.get(m)!) decodedBytes += 64 + key.length * 2 + estimateJsonBytes(item);
+    entries.set(cacheKey, m, decodedBytes, Date.parse(m.expiresAt));
+  }
+  return m;
+}
+
+async function validateProduct(m: PublishedManifest, product: ProductDefinition | undefined): Promise<void> {
+  if (!product) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+  const cached = productValidations.get(m);
+  if (cached?.product === product) return cached.pending;
+  const entry = { product, pending: checkProduct(m, product) };
+  productValidations.set(m, entry);
+  try { await entry.pending; }
+  catch (error) {
+    if (productValidations.get(m) === entry) productValidations.delete(m);
+    throw error;
+  }
+}
+
+async function checkProduct(m: PublishedManifest, product: ProductDefinition): Promise<void> {
+  if (m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.layers.some(layer => !product.layers.includes(layer))
       || (m.version === 5 ? false
@@ -134,25 +182,6 @@ export async function manifest(
           || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > MAX_NATIVE_ZOOM) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
     }
   }
-  const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;
-  if (!artifactIndexes.has(m)) {
-    provenanceReference(m);
-    try { if (m.version === 5) validateArtifactRecordsV5(m); else validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
-    if (m.version !== 5 && m.samples.storedCells !== sampleLayout!.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
-    const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
-    const layers = new Map(m.layers.map((layer, i) => [layer, i]));
-    const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
-    for (const item of m.artifacts) {
-      index.set(`${item.layer}/${item.frame}`, { ...item, channel: frames.get(item.frame)! * m.layers.length + layers.get(item.layer)! });
-    }
-    artifactIndexes.set(m, index);
-  }
-  if (decodedBytes) {
-    // The artifact lookup duplicates records and keys retained with this manifest.
-    for (const [key, item] of artifactIndexes.get(m)!) decodedBytes += 64 + key.length * 2 + estimateJsonBytes(item);
-    entries.set(cacheKey, m, decodedBytes, Date.parse(m.expiresAt));
-  }
-  return m;
 }
 
 export function provenanceReference(m: PublishedManifest) {

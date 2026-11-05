@@ -30,6 +30,11 @@ pnpm --filter @av/api build
 3. Pin `buildId` for subsequent `GET /tiles/:model/:buildId/:layer/:frame/:z/:x/:y.webp`
    and `GET /v1/models/:model/runs/:buildId/sample` requests.
 
+Catalog, latest and retained-run lists use short edge caching within the
+[pointer freshness budget](../../docs/serving-budgets.md); browsers revalidate.
+Build-specific responses cache through their expiry bound. Health and error
+responses use `no-store`.
+
 See the [OpenAPI spec](../../docs/reference/openapi.json) for parameters and
 [the data guide](../../docs/data.md) for units and status flags.
 

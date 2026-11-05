@@ -167,6 +167,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-size: 13px;
 }
 
+.toast.status { background: #f4f7f8; color: #243140; }
 .toast.error { background: #fff1f1; color: #8d1d1d; }
 
 .sr-only {

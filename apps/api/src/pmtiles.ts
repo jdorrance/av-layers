@@ -2,6 +2,7 @@ import { countRead, MaterializedReads, type WaitContext, readBoundedStream, read
 import { Compression, EtagMismatch, PMTiles, ResolvedValueCache, TileType, type RangeResponse, type Source } from 'pmtiles';
 
 const MAX_ARCHIVE_RANGE_BYTES = 1024 * 1024;
+const TILE_READ_CONCURRENCY = 4;
 export async function decompress(buffer: ArrayBuffer, compression: Compression): Promise<ArrayBuffer> {
   if (buffer.byteLength > MAX_ARCHIVE_RANGE_BYTES) throw new ResourceLimitError('Archive range exceeds byte budget');
   if (compression === Compression.None) return buffer;
@@ -36,6 +37,7 @@ export class DirectoryCache extends ResolvedValueCache {
 const cache = new DirectoryCache();
 const bucketIds = new WeakMap<object, number>();
 let nextBucketId = 0;
+const archiveRangeReads = new WeakMap<R2Bucket, MaterializedReads<RangeResponse>>();
 
 export class R2Source implements Source {
   constructor(private bucket: R2Bucket, private key: string, private ctx?: WaitContext, private signal?: AbortSignal) {}
@@ -43,20 +45,25 @@ export class R2Source implements Source {
     if (!bucketIds.has(this.bucket)) bucketIds.set(this.bucket, ++nextBucketId);
     return `${bucketIds.get(this.bucket)}:${this.key}`;
   }
-  async getBytes(offset: number, length: number, _signal?: AbortSignal, etag?: string): Promise<RangeResponse> {
+  async getBytes(offset: number, length: number, signal?: AbortSignal, etag?: string): Promise<RangeResponse> {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || length > MAX_ARCHIVE_RANGE_BYTES) throw new ResourceLimitError('Invalid or oversized archive range');
-    countRead(this.ctx);
-    const object = await this.bucket.get(this.key, { range: { offset, length }, ...(etag ? { onlyIf: { etagMatches: etag } } : {}) });
-    if (!object) throw new Error('Archive not found');
-    if (!('body' in object)) throw new EtagMismatch();
-    return { data: (await readObjectBytes(object, length, true, this.ctx, this.signal ?? _signal)).buffer as ArrayBuffer, etag: object.etag, cacheControl: object.httpMetadata?.cacheControl, expires: object.httpMetadata?.cacheExpiry?.toISOString() };
+    let reads = archiveRangeReads.get(this.bucket);
+    if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY); archiveRangeReads.set(this.bucket, reads); }
+    const waiterSignal = this.signal && signal ? AbortSignal.any([this.signal, signal]) : this.signal ?? signal;
+    return reads.run(`${this.key}:${offset}:${length}:${etag ?? ''}`, async operationSignal => {
+      countRead(this.ctx);
+      const object = await this.bucket.get(this.key, { range: { offset, length }, ...(etag ? { onlyIf: { etagMatches: etag } } : {}) });
+      if (!object) throw new Error('Archive not found');
+      if (!('body' in object)) throw new EtagMismatch();
+      return { data: (await readObjectBytes(object, length, true, this.ctx, operationSignal)).buffer as ArrayBuffer, etag: object.etag, cacheControl: object.httpMetadata?.cacheControl, expires: object.httpMetadata?.cacheExpiry?.toISOString() };
+    }, this.ctx, waiterSignal);
   }
 }
 
 const tileReads = new WeakMap<R2Bucket, MaterializedReads<ArrayBuffer>>();
 export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext): Promise<ArrayBuffer> {
   let reads = tileReads.get(bucket);
-  if (!reads) { reads = new MaterializedReads(4); tileReads.set(bucket, reads); }
+  if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY); tileReads.set(bucket, reads); }
   return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx);
 }
 async function loadTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, signal?: AbortSignal): Promise<ArrayBuffer> {
