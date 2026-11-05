@@ -230,6 +230,7 @@ it.each([
   expect(map.removeLayer).not.toHaveBeenCalled();
   expect(store.off).not.toHaveBeenCalled();
   expect(removeWindowListener).not.toHaveBeenCalled();
+  expect(removeVisibilityListener).not.toHaveBeenCalled();
   expect(target.children).toHaveLength(0);
   expect(protocols.size).toBe(1);
 
@@ -263,6 +264,7 @@ it.each([
   expect(protocols.size).toBe(0);
   expect(store.off).toHaveBeenCalledTimes(1);
   expect(removeWindowListener).not.toHaveBeenCalled();
+  expect(removeVisibilityListener).not.toHaveBeenCalled();
   reopened.$destroy();
   expect(target.children).toHaveLength(0);
 });
