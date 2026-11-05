@@ -1,0 +1,89 @@
+{
+  "source": {
+    "url": "https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.20261105/00/rrfs.t00z.2dfld.3km.f008.conus.grib2",
+    "idxLine": "119:104468399:d=2026110500:SHTFL:surface:7-8 hour ave fcst:",
+    "range": "bytes=104468399-106193085",
+    "size": 1724687,
+    "sha256": "ba84cba6cf12436a1d03458dc691c3c1788b44f8e59a10fcbef49227f738a54c",
+    "centre": 7,
+    "discipline": 0,
+    "pdt": 8,
+    "category": 0,
+    "parameter": 11,
+    "forecastUnit": 1,
+    "forecastTime": 7,
+    "fixedSurfaceType": 1,
+    "end": [
+      2026,
+      11,
+      5,
+      8,
+      0,
+      0
+    ],
+    "numberOfTimeRanges": 1,
+    "missingInStatisticalProcess": 0,
+    "statisticalProcess": 0,
+    "timeIncrementType": 2,
+    "durationUnit": 1,
+    "duration": 1,
+    "gridTemplate": 30,
+    "gridDefinitionSha256": "c111f2a92d175a3632fe1dc9d99be9316e76ea6c83a3d9076636a5cb3313f4d6",
+    "gridPoints": 1905141,
+    "nx": 1799,
+    "ny": 1059,
+    "scanningMode": 64
+  },
+  "construction": "Original GRIB sections1,3,4 and full Lambert grid retained. Synthetic simple packing and bitmap store only these four original decoded values; other cells are missing.",
+  "grid": {
+    "kind": "lambert-conformal",
+    "width": 1799,
+    "height": 1059,
+    "earthRadiusM": 6371229,
+    "centralMeridianDeg": -97.5,
+    "latitudeOfOriginDeg": 38.5,
+    "standardParallel1Deg": 38.5,
+    "standardParallel2Deg": 38.5,
+    "x0M": -2697520.1425219304,
+    "y0M": -1587306.1525566643,
+    "dxM": 3000,
+    "dyM": 3000,
+    "wrapLongitude": false
+  },
+  "points": [
+    {
+      "name": "Dallas",
+      "latitude": 32.784857419289665,
+      "longitude": 263.1970361618344,
+      "index": 571204,
+      "distanceKm": 0.6070643204114052,
+      "valueWm2": -7.6000000000000005
+    },
+    {
+      "name": "Phoenix",
+      "latitude": 33.44034623911937,
+      "longitude": 247.94038115867045,
+      "index": 678672,
+      "distanceKm": 1.4422824433445338,
+      "valueWm2": -1.9000000000000001
+    },
+    {
+      "name": "Boulder",
+      "latitude": 40.02698741855303,
+      "longitude": 254.73640244196463,
+      "index": 1071084,
+      "distanceKm": 1.440178773707025,
+      "valueWm2": -29.6
+    },
+    {
+      "name": "Blanchard",
+      "latitude": 48.60031519299029,
+      "longitude": 237.59006036309916,
+      "index": 1779497,
+      "distanceKm": 1.5759517573024848,
+      "valueWm2": -3.3000000000000003
+    }
+  ],
+  "fixtureSha256": "0ca4ec5c2934caf0ed1b2a9f3ba217181d78f3539d82be44ab572b8a24037c5f",
+  "metadataSha256": "d8cace36de734b57055e7e1210fd4995e9661877b424f95ce49a1e84037e072b"
+}

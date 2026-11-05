@@ -12,9 +12,13 @@ from unittest.mock import patch
 
 import build_fine_masks as fine_masks
 import build_masks
+from argparse import Namespace
+from pyproj import Transformer
+from shapely import segmentize
 from tile_pyramid import build_tiles, max_native_zoom
 from shapely.geometry import box
 from shapely.ops import unary_union
+from shapely.ops import transform
 
 
 def tile_lat(y, n):
@@ -95,6 +99,79 @@ def check_typescript(settings, k, result):
 
 
 class FineMasksTest(unittest.TestCase):
+    def projected_settings(self, step=3000):
+        return {'modelId': 'projected-test', 'grid': {
+            'kind': 'lambert-conformal', 'width': 33, 'height': 20, 'earthRadiusM': 6371229,
+            'centralMeridianDeg': -97.5, 'latitudeOfOriginDeg': 38.5,
+            'standardParallel1Deg': 38.5, 'standardParallel2Deg': 38.5,
+            'x0M': -1500000, 'y0M': -800000, 'dxM': step, 'dyM': step, 'wrapLongitude': False},
+            'coverage': {'id': 'projected-test', 'description': 'Projected test', 'west': -120, 'south': 20,
+                         'east': -95, 'north': 45, 'maxNativeZoom': 8, 'seaBufferMeters': 0,
+                         'excludedA3': [], 'interpolationHaloCells': 1}}
+
+    def projected_hierarchy(self, settings, admitted, excluded, k=2):
+        admitted = unary_union(admitted)
+        def tile(parts, lon, lat, lat_min, lat_max, buffer, lon_min, lon_max, wrap):
+            return admitted.intersection(box(max(lon_min, lon - 5), max(lat_min, lat - 5), min(lon_max, lon + 5), min(lat_max, lat + 5)))
+        with patch.object(build_masks, 'materialize_source', return_value=(Path('fixture.zip'), Path('fixture.shp'))), \
+             patch.object(build_masks, 'load_features', return_value=([], unary_union(excluded), [], [])), \
+             patch.object(build_masks, 'build_tile_geometry', side_effect=tile):
+            return fine_masks.build_hierarchy(settings, k, None)
+
+    def projected_inverse(self):
+        return Transformer.from_crs('+proj=lcc +R=6371229 +lat_0=38.5 +lon_0=-97.5 +lat_1=38.5 +lat_2=38.5 +units=m',
+                                    '+proj=longlat +R=6371229', always_xy=True).transform
+
+    def test_projected_positive_y_subdivision_exclusions_and_block_halo(self):
+        settings = self.projected_settings()
+        grid = fine_masks.fine_grid(settings['grid'], 2)
+        self.assertEqual((grid['width'], grid['height'], grid['dxM'], grid['dyM']), (65, 39, 1500, 1500))
+        def region(x0, x1, y0, y1):
+            return transform(self.projected_inverse(), box(grid['x0M'] + x0 * 1500, grid['y0M'] + y0 * 1500,
+                                                          grid['x0M'] + x1 * 1500, grid['y0M'] + y1 * 1500))
+        result = self.projected_hierarchy(settings, [region(31.2, 33.3, 10.1, 14.1)], [region(31.9, 32.1, 11.9, 12.1)])
+        out, halo = unpack(result['sparseBytes'])
+        self.assertEqual(out, {(x, y) for x in range(31, 34) for y in range(10, 15)} - {(32, 12)})
+        expected_halo = {(x + dx, y + dy) for x, y in out for dx in (-1, 0, 1) for dy in (-1, 0, 1)} - out
+        self.assertEqual(halo, expected_halo)
+        check_typescript(settings, 2, result)
+
+    def test_projected_tiles_clip_curved_source_footprint(self):
+        settings = self.projected_settings(step=30000)
+        bounds = tuple(settings['coverage'][key] for key in ('west', 'south', 'east', 'north'))
+        result = self.projected_hierarchy(settings, [box(*bounds)], [], k=1)
+        self.assertEqual(len(unpack(result['sparseBytes'])[0]), 33 * 20)
+        grid = settings['grid']
+        rectangle = box(grid['x0M'] - 15000, grid['y0M'] - 15000,
+                        grid['x0M'] + 32.5 * 30000, grid['y0M'] + 19.5 * 30000)
+        reference = transform(self.projected_inverse(), segmentize(rectangle, 1000))
+        zoom, missed_corners = 8, 0
+        n, offset = 1 << zoom, sum(4**z for z in range(zoom))
+        for y in range(n):
+            for x in range(n):
+                tile = box(-180 + x * 360 / n, tile_lat(y + 1, n), -180 + (x + 1) * 360 / n, tile_lat(y, n))
+                expected = reference.intersects(tile)
+                index = offset + y * n + x
+                self.assertEqual(bool(result['tilesBytes'][index >> 3] & (1 << (index & 7))), expected)
+                missed_corners += box(*reference.bounds).intersects(tile) and not expected
+        self.assertGreater(missed_corners, 0)
+        check_typescript(settings, 1, result)
+
+    def test_projected_native_dense_view_checks_actual_footprint(self):
+        settings = self.projected_settings()
+        center_lon, center_lat = self.projected_inverse()(-1500000, -800000)
+        settings['coverage']['probes'] = [['centre', center_lat, center_lon, True], ['bbox-only', 44, -119, False]]
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(source=None, output=Path(tmp), config=Path('fixture.json'), model='projected-test', allow_local_libs=False)
+            with patch.object(build_masks, 'materialize_source', return_value=(Path('fixture.zip'), Path('fixture.shp'))), \
+                 patch.object(build_masks, 'load_features', return_value=([box(-120, 20, -95, 45)], build_masks.Polygon(), [], [])), \
+                 patch.object(build_masks, 'build_tile_geometry', side_effect=lambda *args: box(-120, 20, -95, 45)):
+                build_masks.write_projected_masks(settings, args)
+            output = (Path(tmp) / 'output.bin').read_bytes()
+            self.assertEqual(sum(byte.bit_count() for byte in output), 33 * 20)
+            receipt = json.loads((Path(tmp) / 'source.json').read_text())
+            self.assertEqual([test['observedOutput'] for test in receipt['tests']['cases']], [True, False])
+
     def test_model_selection_uses_configured_default_and_explicit_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'models.json'

@@ -3,6 +3,7 @@ run-name: Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model ||
 on:
   schedule:
     - cron: 17 5,17 * * *
+    - cron: 27 3,9,15,21 * * *
   workflow_dispatch:
     inputs:
       environment:

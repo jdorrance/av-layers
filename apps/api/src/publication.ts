@@ -121,7 +121,7 @@ export async function manifest(
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
   if (m.version === 5) {
-    if (product.grid.kind !== 'regular-latlon' || product.terrainSubdivisionFactor === undefined
+    if (product.terrainSubdivisionFactor === undefined
         || JSON.stringify(m.layers) !== JSON.stringify(product.layers)
         || JSON.stringify(m.descriptors) !== JSON.stringify(createWholeDomainDescriptors(product))) fail(503, 'publication-invalid', 'Publication does not match admitted product');
     let plan: ReturnType<typeof planWholeDomainGrid>;

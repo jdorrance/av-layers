@@ -1,0 +1,226 @@
+{
+  "source": {
+    "dataset": "Natural Earth 1:50m Admin 0 Countries",
+    "release": "5.1.1",
+    "url": "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip",
+    "sha256": "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139",
+    "archiveBytes": 799734,
+    "license": "public-domain",
+    "excludedA3": [],
+    "excludedContinents": [],
+    "isoExceptions": [
+      {
+        "admin": "Ashmore and Cartier Islands",
+        "adm0_a3": "ATC",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Northern Cyprus",
+        "adm0_a3": "CYN",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "France",
+        "adm0_a3": "FRA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "FRA",
+        "iso_a2": "-99",
+        "iso_a2_eh": "FR"
+      },
+      {
+        "admin": "Indian Ocean Territories",
+        "adm0_a3": "IOA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Siachen Glacier",
+        "adm0_a3": "KAS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "Kosovo",
+        "adm0_a3": "KOS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "XK"
+      },
+      {
+        "admin": "Norway",
+        "adm0_a3": "NOR",
+        "iso_a3": "-99",
+        "iso_a3_eh": "NOR",
+        "iso_a2": "-99",
+        "iso_a2_eh": "NO"
+      },
+      {
+        "admin": "Somaliland",
+        "adm0_a3": "SOL",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      }
+    ],
+    "continentExclusions": []
+  },
+  "grid": {
+    "kind": "lambert-conformal",
+    "width": 1799,
+    "height": 1059,
+    "earthRadiusM": 6371229,
+    "centralMeridianDeg": -97.5,
+    "latitudeOfOriginDeg": 38.5,
+    "standardParallel1Deg": 38.5,
+    "standardParallel2Deg": 38.5,
+    "x0M": -2697520.1425219304,
+    "y0M": -1587306.1525566643,
+    "dxM": 3000,
+    "dyM": 3000,
+    "wrapLongitude": false
+  },
+  "output": {
+    "bytes": 238143,
+    "sha256": "a6176c8beaf60758e2ca5eb08d3f004ea6b50bb8d25292e90287f6a1d4a8bdbc",
+    "counts": {
+      "activeCells": 1362742
+    }
+  },
+  "halo": {
+    "bytes": 238143,
+    "sha256": "f522f7a37390edb3e918b11b4469f0f933f1efb1713a0cab71172dc47260f2fa",
+    "counts": {
+      "haloOnlyCells": 7011
+    }
+  },
+  "tiles": {
+    "bytes": 174763,
+    "sha256": "543379abfa2415d0cb6bbeaaf733d033b38afab8c64085a1796a0e3b12d3ee95",
+    "countsByZoom": {
+      "0": 1,
+      "1": 1,
+      "2": 2,
+      "3": 4,
+      "4": 8,
+      "5": 26,
+      "6": 78,
+      "7": 272,
+      "8": 975,
+      "9": 3697,
+      "10": 14315
+    }
+  },
+  "tests": {
+    "cases": [
+      {
+        "name": "blanchard",
+        "lat": 48.6097,
+        "lon": -122.426,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "torrey_pines",
+        "lat": 32.92,
+        "lon": -117.24,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "boulder",
+        "lat": 40.015,
+        "lon": -105.27,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "phoenix",
+        "lat": 33.4484,
+        "lon": -112.074,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "vancouver",
+        "lat": 49.2827,
+        "lon": -123.1207,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "golden",
+        "lat": 51.3,
+        "lon": -116.96,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "miami",
+        "lat": 25.7617,
+        "lon": -80.1918,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "northwest_bbox_only",
+        "lat": 52,
+        "lon": -133,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      },
+      {
+        "name": "northeast_bbox_only",
+        "lat": 52,
+        "lon": -62,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      },
+      {
+        "name": "outside_south",
+        "lat": 20,
+        "lon": -100,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      },
+      {
+        "name": "pacific_ocean",
+        "lat": 35,
+        "lon": -128,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      }
+    ]
+  },
+  "regeneration": {
+    "command": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model rrfs --output packages/contracts/coverage/rrfs-conus-land-v1",
+    "toolingSha256": "10c1a1e1ee5ee3d1a068ce141fddd93c845344f0ea150b92d83f7d1ef8a6ac4a",
+    "rasterizerSha256": "b635a4fed2dd81a9b8fe62c1908fb8531ab8ef2acb8b28d5bf93c04370d42d06",
+    "geometrySha256": "29643301dfdb465f43590341ef31853c0d7bfd0df93b0e2390c612750c1df9b5",
+    "tilesSha256": "1fca1cbf92ef6e3501211af235270e64232b92e86fbd9018f1e58f07147219a4",
+    "GEOS": "3.13.1",
+    "PROJ": "9.5.1"
+  }
+}

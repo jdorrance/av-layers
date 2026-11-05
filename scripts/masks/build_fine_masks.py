@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_masks
+from grid_geometry import ProjectedFootprints
 from tile_pyramid import build_tiles, max_native_zoom
 
 BLOCK_SIZE = 16
@@ -21,9 +22,10 @@ MASK_BYTES = 32
 
 
 def fine_grid(native, k):
-    if not isinstance(k, int) or not 1 <= k <= 64 or native['kind'] != 'regular-latlon':
-        raise ValueError('Expected a regular grid and positive subdivision')
-    if native['dx'] <= 0 or native['dy'] >= 0:
+    if type(k) is not int or not 1 <= k <= 64 or native['kind'] not in ('regular-latlon', 'lambert-conformal'):
+        raise ValueError('Expected a supported grid and positive subdivision')
+    projected = native['kind'] == 'lambert-conformal'
+    if not projected and (native['dx'] <= 0 or native['dy'] >= 0):
         raise ValueError('Grid must run west to east and north to south')
     if native['wrapLongitude'] and (native['lon0'] != -180 or not math.isclose(native['width'] * native['dx'], 360)):
         raise ValueError('Wrapping grid must start at -180 and span 360 degrees')
@@ -31,11 +33,16 @@ def fine_grid(native, k):
     height = (native['height'] - 1) * k + 1
     if width < 1 or height < 1 or width * height >= 0xffffffff:
         raise ValueError('Fine grid exceeds the index space')
-    return {**native, 'width': width, 'height': height, 'dx': native['dx'] / k, 'dy': native['dy'] / k}
+    steps = ('dxM', 'dyM') if projected else ('dx', 'dy')
+    if projected and (native['wrapLongitude'] or any(not math.isfinite(native[key]) or native[key] == 0 for key in steps)):
+        raise ValueError('Projected grid requires finite nonzero spacing without wrap')
+    return {**native, 'width': width, 'height': height, **{key: native[key] / k for key in steps}}
 
 
 def canonical_grid_json(grid):
-    keys = ['kind', 'width', 'height', 'earthRadiusM', 'lon0', 'lat0', 'dx', 'dy', 'wrapLongitude']
+    axes = ['lon0', 'lat0', 'dx', 'dy'] if grid['kind'] == 'regular-latlon' else [
+        'centralMeridianDeg', 'latitudeOfOriginDeg', 'standardParallel1Deg', 'standardParallel2Deg', 'x0M', 'y0M', 'dxM', 'dyM']
+    keys = ['kind', 'width', 'height', 'earthRadiusM', *axes, 'wrapLongitude']
     ordered = {key: grid[key] for key in keys}
     return subprocess.run(['node', '-e', "process.stdout.write(JSON.stringify(JSON.parse(require('fs').readFileSync(0,'utf8'))))"],
                           input=json.dumps(ordered), text=True, capture_output=True, check=True).stdout
@@ -124,10 +131,14 @@ def build_hierarchy(settings, k, source):
     if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= max_native_zoom():
         raise ValueError('Invalid maximum native zoom')
     grid_hash = hashlib.sha256(canonical_grid_json(fine).encode()).hexdigest()
+    projected = ProjectedFootprints(fine, bounds) if fine['kind'] == 'lambert-conformal' else None
+    cells = projected.footprints if projected else lambda *indices: footprint(fine, bounds, *indices)
     with build_masks.tempfile.TemporaryDirectory(prefix='fine-mask-') as tmp:
         _, shp = build_masks.materialize_source(source, Path(tmp))
         admitted, excluded, iso_exceptions, continent_exclusions = build_masks.load_features(
             shp, tuple(coverage['excludedA3']), tuple(coverage.get('excludedContinents', ())))
+        if projected:
+            excluded = projected.project(excluded)
         build_masks.prepare(excluded)
         lat_min, lat_max = bounds[1], bounds[3]
         lat_steps = int(math.ceil((lat_max - lat_min) / build_masks.TILE_DEG)) + 1
@@ -144,6 +155,10 @@ def build_hierarchy(settings, k, source):
                 geom = build_masks.build_tile_geometry(admitted, lon_center, lat_center, lat_min, lat_max,
                                                        coverage['seaBufferMeters'], bounds[0], bounds[2], wrap)
                 if geom is not None and not geom.is_empty:
+                    if projected:
+                        geom = projected.project(geom)
+                    if geom.is_empty:
+                        continue
                     build_masks.prepare(geom)
                     geoms.append(geom)
         tree = build_masks.STRtree(geoms)
@@ -153,21 +168,21 @@ def build_hierarchy(settings, k, source):
             for bx in range(columns):
                 x, y = bx * 16, by * 16
                 bw, bh = min(16, width - x), min(16, height - y)
-                parts = footprint(fine, bounds, x, x + bw - 1, y, y + bh - 1)
+                parts = cells(x, x + bw - 1, y, y + bh - 1)
                 matches = set(int(i) for part in parts for i in tree.query(part, predicate='intersects'))
                 if not matches:
                     continue
                 union = geoms[next(iter(matches))] if len(matches) == 1 else build_masks.unary_union([geoms[i] for i in matches])
                 build_masks.prepare(union)
-                full = bool(footprint(fine, bounds, x, x, y, y)) and bool(footprint(fine, bounds, x + bw - 1, x + bw - 1, y + bh - 1, y + bh - 1))
+                full = projected.region.covers(projected.rectangle(x, x + bw - 1, y, y + bh - 1)) if projected else bool(cells(x, x, y, y)) and bool(cells(x + bw - 1, x + bw - 1, y + bh - 1, y + bh - 1))
                 full = full and all(union.covers(part) for part in parts) and (excluded.is_empty or all(not excluded.intersects(part) for part in parts))
                 mask = bytearray(MASK_BYTES)
                 for r in range(bh):
                     bits = (1 << bw) - 1 if full else 0
                     if not full:
                         for c in range(bw):
-                            cells = footprint(fine, bounds, x + c, x + c, y + r, y + r)
-                            if any(union.intersects(cell) for cell in cells) and (excluded.is_empty or all(not excluded.intersects(cell) for cell in cells)):
+                            footprints = cells(x + c, x + c, y + r, y + r)
+                            if any(union.intersects(cell) for cell in footprints) and (excluded.is_empty or all(not excluded.intersects(cell) for cell in footprints)):
                                 bits |= 1 << c
                     mask[r * 2:r * 2 + 2] = bits.to_bytes(2, 'little')
                 if any(mask):
@@ -221,6 +236,8 @@ def main():
                'seaBufferMeters': settings['coverage']['seaBufferMeters'], 'files': descriptor(settings, k, result)['files'],
                'generator': {'path': 'scripts/masks/build_fine_masks.py', 'sha256': build_masks.sha256_file(Path(__file__)),
                              'policySha256': build_masks.sha256_file(Path(build_masks.__file__)), 'python': platform.python_version(),
+                             'geometrySha256': build_masks.sha256_file(Path(__file__).with_name('grid_geometry.py')),
+                             'tilesSha256': build_masks.sha256_file(Path(__file__).with_name('tile_pyramid.py')),
                              'geos': build_masks.geos_version_string, 'proj': build_masks.proj_version_str,
                              'packages': {name: version(name) for name in ('shapely', 'pyproj', 'pyshp')},
                              'arguments': sys.argv[1:]}}

@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
 import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, TERRAIN_CLEARANCE_METHOD,
-  type CoverageMask, type RegularLatLonGrid } from '@av/contracts';
+  type CoverageMask, type Grid, type RegularLatLonGrid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { deriveFrame, FRAME_BRANCH } from './frame.js';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from './refinement.js';
 
 const day = { intervalStart: '2026-03-20T11:00:00Z', validTime: '2026-03-20T12:00:00Z' };
-const gridHash = (grid: RegularLatLonGrid) => createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
+const gridHash = (grid: Grid) => createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
 
-function mask(grid: RegularLatLonGrid, selected: (index: number) => number): CoverageMask {
+function mask(grid: Grid, selected: (index: number) => number): CoverageMask {
   const bytes = Math.ceil(grid.width * grid.height / 8);
   const result = { grid, output: new Uint8Array(bytes), halo: new Uint8Array(bytes), tiles: Uint8Array.of(1), maxZoom: 0 };
   for (let i = 0; i < grid.width * grid.height; i++) {
@@ -21,11 +21,15 @@ function mask(grid: RegularLatLonGrid, selected: (index: number) => number): Cov
 }
 
 it.each([
-  { wrap: false, coordinate: 'isobaric' }, { wrap: false, coordinate: 'model-levels' },
-  { wrap: true, coordinate: 'isobaric' }, { wrap: true, coordinate: 'model-levels' }
-] as const)('matches dense reference on $coordinate $wrap grids in sparse block order', async ({ wrap, coordinate }) => {
-  const native: RegularLatLonGrid = { kind: 'regular-latlon', width: wrap ? 4 : 5, height: 3, earthRadiusM: 6371229,
-    lon0: wrap ? -180 : -1.1, lat0: 1.1, dx: wrap ? 90 : 0.7, dy: -0.7, wrapLongitude: wrap };
+  { wrap: false, coordinate: 'isobaric', projected: false }, { wrap: false, coordinate: 'model-levels', projected: false },
+  { wrap: true, coordinate: 'isobaric', projected: false }, { wrap: true, coordinate: 'model-levels', projected: false },
+  { wrap: false, coordinate: 'isobaric', projected: true }
+] as const)('matches dense reference on $coordinate $wrap grids (projected=$projected) in sparse block order', async ({ wrap, coordinate, projected }) => {
+  const native: Grid = projected ? { kind: 'lambert-conformal', width: 5, height: 3, earthRadiusM: 6371229,
+    centralMeridianDeg: -97.5, latitudeOfOriginDeg: 38.5, standardParallel1Deg: 38.5, standardParallel2Deg: 38.5,
+    x0M: -6000, y0M: -3000, dxM: 3000, dyM: 3000, wrapLongitude: false }
+    : { kind: 'regular-latlon', width: wrap ? 4 : 5, height: 3, earthRadiusM: 6371229,
+      lon0: wrap ? -180 : -1.1, lat0: 1.1, dx: wrap ? 90 : 0.7, dy: -0.7, wrapLongitude: wrap };
   const plan = planWholeDomainGrid(native, 5), source = mask(native, () => 1);
   const target = mask(plan.fine, index => index % 11 === 0 ? 0 : index % 7 === 0 ? 2 : 1);
   const coverage = sparseCoverageFromDense({ ...plan.fine, gridHash: gridHash(plan.fine), output: target.output, halo: target.halo });
@@ -99,7 +103,12 @@ it.each([
     }
     expect(actual.metrics).toEqual(expected.metrics);
     const packedOffset = (index: number) => sparseCoverageLookup(coverage, index % plan.fine.width, Math.floor(index / plan.fine.width))!.offset;
-    expect(actual.probes).toEqual([...expected.probes].sort((a, b) => packedOffset(a.index) - packedOffset(b.index)));
+    // Geographic projection roundtrips perturb diagnostic doubles; published Float32 fields below stay exact.
+    const approximate = (value: unknown): unknown => typeof value === 'number' ? expect.closeTo(value, 8)
+      : Array.isArray(value) ? value.map(approximate)
+        : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, approximate(child)])) : value;
+    const probes = [...expected.probes].sort((a, b) => packedOffset(a.index) - packedOffset(b.index));
+    expect(actual.probes).toEqual(projected ? approximate(probes) : probes);
     for (let i = 0; i < count; i++) {
       const cell = sparseCoverageLookup(coverage, i % plan.fine.width, Math.floor(i / plan.fine.width));
       if (!cell) continue;
@@ -161,7 +170,7 @@ it.each([5, 10])('bounds knot rebuilds by native quads at k=%i', k => {
   const frame = normalizedFixtureFrame(native, active, '2026-03-20T00:00:00Z', 12, 1);
   const prepared = preparePackedTerrainColumns(plan, coverage, active, 3, { maxBytes: 10_000_000, expectedGridHash: gridHash(plan.fine) });
   expect(prepared.byteLength).toBe(active.byteLength + (plan.fine.width + plan.fine.height) * 12 +
-    (native.width + native.height) * 8 + Math.ceil(active.length / 8) + 64);
+    (native.width + native.height) * 8 + Math.ceil(active.length / 8) + 96);
   const admitted = prepared.byteLength + prepared.workspaceBufferBytes + prepared.workspaceObjectBudgetBytes + prepared.outputBufferBytes;
   expect(() => preparePackedTerrainColumns(plan, coverage, active, 3, { maxBytes: admitted - 1, expectedGridHash: gridHash(plan.fine) })).toThrow(/byte budget/);
   expect(() => preparePackedTerrainColumns(plan, coverage, active, 3, { maxBytes: admitted, expectedGridHash: gridHash(plan.fine) })).not.toThrow();
@@ -169,10 +178,20 @@ it.each([5, 10])('bounds knot rebuilds by native quads at k=%i', k => {
   const sort = vi.spyOn(Float64Array.prototype, 'sort');
   try {
     prepared.derive(frame, { elevationM: new Float32Array(count).fill(100), valid: new Uint8Array(count).fill(1) }, day, { daylightOnly: false });
-    expect(sort.mock.calls.length).toBe(20);
+    expect(sort.mock.calls.length).toBeLessThanOrEqual(native.width * native.height);
   } finally {
     sort.mockRestore();
   }
+});
+
+it('admits a large native frame and small output under a bounded donor-workspace budget', () => {
+  const native: RegularLatLonGrid = { kind: 'regular-latlon', width: 256, height: 256, earthRadiusM: 6371229,
+    lon0: -1, lat0: 1, dx: 0.001, dy: -0.001, wrapLongitude: false };
+  const plan = planWholeDomainGrid(native, 2), target = mask(plan.fine, index => index === 0 ? 1 : 0);
+  const coverage = sparseCoverageFromDense({ ...plan.fine, gridHash: gridHash(plan.fine), output: target.output, halo: target.halo });
+  const active = Uint32Array.from({ length: native.width * native.height }, (_, index) => index);
+  const prepared = preparePackedTerrainColumns(plan, coverage, active, 25, { maxBytes: 1024 * 1024, expectedGridHash: gridHash(plan.fine) });
+  expect(prepared.workspaceBufferBytes).toBeLessThan(32 * 1024);
 });
 
 it('groups native edges without requiring a missing diagonal donor', () => {

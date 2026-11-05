@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { canonicalGridJson, MAX_NATIVE_ZOOM, sampleResponseV5Schema } from '@av/contracts';
+import { canonicalGridJson, gridSchema, gridToGeographic, MAX_NATIVE_ZOOM, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema } from '@av/contracts';
+import { ApiClient } from '@av/contracts/client';
 import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createV5Fixture, createGroupedV5Fixture, finePoint } from './v5-fixture';
@@ -226,6 +227,37 @@ describe('API v5 metadata', () => {
 });
 
 describe('API v5 sampling', () => {
+  it('roundtrips projected native and fine frame groups through the client with bounded reads', async () => {
+    const grid = gridSchema.parse({ kind: 'lambert-conformal', width: 32, height: 18, earthRadiusM: 6371229,
+      centralMeridianDeg: -100, latitudeOfOriginDeg: 40, standardParallel1Deg: 30, standardParallel2Deg: 60,
+      x0M: -10000, y0M: -10000, dxM: 3000, dyM: 3000, wrapLongitude: false });
+    const fixture = createGroupedV5Fixture({ grid, bounds: [-101, 39, -98, 41], groups: [[1], [2]] });
+    const api = new ApiClient({ baseUrl: 'https://api.test', now: () => NOW, fetchImpl: input => {
+      const url = new URL(String(input)); return fixture.request(url.pathname + url.search);
+    } });
+    const build = await api.latest(fixture.product.modelId);
+    expect(build.manifest).toMatchObject({ version: 5, surfaces: [{ grid: { kind: 'lambert-conformal', dxM: 1500, dyM: 1500 } }, { grid }] });
+    const point = gridToGeographic(grid, 8.25, 8.25)!;
+    const result = await api.sample(build, { ...point, frames: 'all' });
+    expect(result.frames.map(frame => frame.layers['usable-lift-msl'])).toEqual([315.25, 325.25].map(value => ({ value, status: 'valid', support: 4, interpolated: true, surfaceId: 'fine' })));
+    expect(result.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 8]);
+    const ranges = fixture.get.mock.calls.filter(([, options]) => options?.range);
+    expect(ranges).toHaveLength(4);
+    expect(ranges.reduce((bytes, [, options]) => bytes + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
+    const single = await api.sample(build, { ...point, frames: ['h002'], layers: ['usable-lift-agl'] });
+    expect(single.frames[0].layers['usable-lift-agl']).toMatchObject({ value: 620.25, surfaceId: 'fine' });
+    const outside = gridToGeographic(grid, 8, 12)!;
+    const before = fixture.get.mock.calls.filter(([, options]) => options?.range).length;
+    const empty = await api.sample(build, { ...outside, frames: 'all' });
+    expect(empty.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'outside-domain'))).toBe(true);
+    expect(fixture.get.mock.calls.filter(([, options]) => options?.range)).toHaveLength(before);
+    const tilejson = await fixture.request(`/v1/models/${fixture.product.modelId}/runs/${fixture.buildId}/layers/usable-lift-msl/h001/tilejson.json`);
+    expect(tilejson.status).toBe(200);
+    expect(await tilejson.json()).toMatchObject({ bounds: fixture.product.bounds, maxzoom: 1 });
+    expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
   it('charges new group layouts added to a shared cached and leased mask', async () => {
     const fixture = groupedFixture(), legacy = await resolveSparseCoverage(fixture.bucket, fixture.fine.surface);
     const before = coverageMemory(fixture.bucket);

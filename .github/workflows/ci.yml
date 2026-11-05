@@ -24,5 +24,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.8.17'
+      - name: Verify coverage geometry
+        run: uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/test_fine_masks.py
       - name: Verify lossless terrain packing
         run: uv run --python 3.12 --with rasterio==1.4.3 --with numpy==2.2.6 python apps/batch/src/terrain/test_repack.py

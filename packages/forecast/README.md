@@ -93,7 +93,7 @@ limits in the reconstructed profile. Donor relative humidity uses the supported
 weights before conversion to fine-cell specific humidity;
 [science](../../docs/science.md#terrain-columns) owns the equations.
 [Method descriptors](../contracts/src/methods.ts) select the pressure coordinate
-for GFS or ICON-EU and publish the shared parameters.
+and publish the shared parameters.
 
 `clearanceFallback: 'unsupported'` accepts same-frame `nativeClearance`
 diagnostics and flags. The shared cell calculation runs when a column exceeds

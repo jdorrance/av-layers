@@ -56,6 +56,7 @@ export function contractIndexToNativeIndex(source: IndexedSource, index: number)
   if (!Number.isInteger(index) || index < 0 || index >= (source.grid.width * source.grid.height)) {
     throw new IndexedGribError('invalid-option', `Contract index ${index} is outside the Indexed GRIB grid`);
   }
+  if (source.columnOffset === 0) return index;
   const row = Math.floor(index / source.grid.width);
   const column = index - row * source.grid.width;
   const nativeColumn = (column + source.columnOffset + source.grid.width) % source.grid.width;
@@ -216,8 +217,8 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     if (!terrainSpec) throw new IndexedGribError('invalid-option', 'Indexed GRIB terrain spec missing');
     const terrainField = await load(terrainSpec, hour, hour);
     const sourceGrid = terrainField.grid;
-    if (sourceGrid.kind !== 'latlon') {
-      throw new IndexedGribError('unsupported-grid', 'Indexed GRIB terrain is not regular lat-lon');
+    if (sourceGrid.kind !== 'latlon' && sourceGrid.kind !== 'lambert') {
+      throw new IndexedGribError('unsupported-grid', 'Indexed GRIB terrain grid is unsupported');
     }
     const terrain = await instant(terrainField, target?.terrainM, target?.missing.terrain);
 
@@ -403,8 +404,14 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
           nj: sourceGrid.nj,
           lon0: sourceGrid.longitudeOfFirstGridPoint,
           lat0: sourceGrid.latitudeOfFirstGridPoint,
-          dlon: sourceGrid.iDirectionIncrement,
-          dlat: -sourceGrid.jDirectionIncrement,
+          ...(sourceGrid.kind === 'latlon' ? {
+            dlon: sourceGrid.iDirectionIncrement, dlat: -sourceGrid.jDirectionIncrement,
+          } : {
+            dxM: sourceGrid.dxM * (sourceGrid.iScansNegatively ? -1 : 1),
+            dyM: sourceGrid.dyM * (sourceGrid.jScansPositively ? 1 : -1),
+            laD: sourceGrid.laD, loV: sourceGrid.loV, latin1: sourceGrid.latin1, latin2: sourceGrid.latin2,
+            scanningMode: sourceGrid.scanningMode, projectionCentreFlag: sourceGrid.projectionCentreFlag,
+          }),
           earthRadiusM: sourceGrid.earthRadiusM,
           gridKey: sourceGrid.gridKey,
           gridDefinitionTemplateNumber: sourceGrid.gridDefinitionTemplateNumber,

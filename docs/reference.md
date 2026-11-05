@@ -53,7 +53,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
-Global forecast parallelism: 20 shard jobs; default workers 3.
+Global forecast parallelism: 32 shard jobs; default workers 3.
 
 ### GFS (gfs-soaring)
 
@@ -88,6 +88,23 @@ Global forecast parallelism: 20 shard jobs; default workers 3.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
+
+### RRFS (CONUS) (rrfs-conus-soaring)
+
+- Public model ID: `rrfs`; model family: `rrfs`; source configuration: `noaa-rrfs-conus-3km`; domain: `conus`.
+- Attribution: NOAA RRFS · Aviation Forecast Layers.
+- Grid: `lambert-conformal`; 1799 columns × 1059 rows; spherical Earth radius 6371229 m; periodic longitude: false.
+- Terrain subdivision factor: `2`; fine grid: 3597 columns × 2117 rows.
+- Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
+- Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
+- Native tile zoom: 0–10.
+- Execution: 24 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["27 3,9,15,21 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
+- Vertical coordinate: `isobaric`; maximum levels: 25.
+- Calculation methods: `supported-terrain-column-1p2-v1`, `trailing-precipitation-rate-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `precipitationMmPerHour`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`.
+- Publication timing: cycle age at most 12 hours; remaining horizon at least 6 hours.
 
 ## Scalar quantities and units
 

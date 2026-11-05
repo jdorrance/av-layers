@@ -1,6 +1,6 @@
 {
   "defaultModel": "gfs",
-  "parallelism": {"jobs": 20, "workers": 3},
+  "parallelism": {"jobs": 32, "workers": 3},
   "models": [
     {
       "modelId": "gfs",
@@ -65,10 +65,7 @@
       "upstream": {
         "nativeLongitudeOrigin": 0,
         "products": {"primary": "pgrb2.0p25", "secondary": "pgrb2b.0p25"},
-        "pressureLevelsHpa": {
-          "primary": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400],
-          "secondary": [875, 825, 775, 725, 675, 625]
-        },
+        "pressureLevelsHpa": {"primary": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400], "secondary": [875, 825, 775, 725, 675, 625]},
         "surfaceProduct": "primary",
         "discoveryLagHours": 4,
         "discoveryCandidates": 6,
@@ -171,6 +168,96 @@
       },
       "terrainSubdivisionFactor": 5,
       "execution": {"zoom": 10, "shards": 8, "parallelism": 8, "schedule": ["17 5,17 * * *"]}
+    },
+    {
+      "modelId": "rrfs",
+      "id": "rrfs-conus-soaring",
+      "coverageDir": "coverage/rrfs-conus-land-v1",
+      "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus"},
+      "label": "RRFS (CONUS)",
+      "attribution": "NOAA RRFS · Aviation Forecast Layers",
+      "layers": ["usable-lift-msl", "usable-lift-agl", "precip-rate"],
+      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 25, "daylightFrames": "all-hours"},
+      "grid": {
+        "kind": "lambert-conformal",
+        "width": 1799,
+        "height": 1059,
+        "earthRadiusM": 6371229,
+        "centralMeridianDeg": -97.5,
+        "latitudeOfOriginDeg": 38.5,
+        "standardParallel1Deg": 38.5,
+        "standardParallel2Deg": 38.5,
+        "x0M": -2697520.1425219304,
+        "y0M": -1587306.1525566643,
+        "dxM": 3000,
+        "dyM": 3000,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "intervalHours": 1,
+        "cycleHoursUtc": [0, 6, 12, 18],
+        "statisticsResetHours": 1
+      },
+      "freshness": {"maxCycleAgeHours": 12, "minHorizonHours": 6},
+      "coverage": {
+        "id": "rrfs-conus-land-v1",
+        "description": "Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.",
+        "west": -134.121428,
+        "south": 21.122192,
+        "east": -60.891244,
+        "north": 52.628704,
+        "seaBufferMeters": 50000,
+        "excludedA3": [],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["blanchard", 48.6097, -122.426, true],
+          ["torrey_pines", 32.92, -117.24, true],
+          ["boulder", 40.015, -105.27, true],
+          ["phoenix", 33.4484, -112.074, true],
+          ["vancouver", 49.2827, -123.1207, true],
+          ["golden", 51.3, -116.96, true],
+          ["miami", 25.7617, -80.1918, true],
+          ["northwest_bbox_only", 52, -133, false],
+          ["northeast_bbox_only", 52, -62, false],
+          ["outside_south", 20, -100, false],
+          ["pacific_ocean", 35, -128, false]
+        ]
+      },
+      "upstream": {
+        "products": {"surface": "2dfld", "profile": "prslev"},
+        "pressureLevelsHpa": {"profile": [1000, 975, 950, 925, 900, 875, 850, 825, 800, 775, 750, 725, 700, 675, 650, 625, 600, 575, 550, 525, 500, 475, 450, 425, 400]},
+        "surfaceProduct": "surface",
+        "discoveryLagHours": 3,
+        "discoveryCandidates": 6,
+        "protocol": "indexed-grib2",
+        "provider": "NOAA",
+        "centre": 7,
+        "urlTemplate": "https://noaa-rrfs-ops-pds.s3.amazonaws.com/rrfs.{date}/{cycleHour}/rrfs.t{cycleHour}z.{product}.3km.f{hour}.conus.grib2",
+        "parameters": {
+          "HGT": [3, 5, "m"],
+          "PRES": [3, 0, "Pa"],
+          "TMP": [0, 0, "K"],
+          "SPFH": [1, 0, "kg/kg"],
+          "SHTFL": [0, 11, "W/m2"],
+          "LHTFL": [0, 10, "W/m2"],
+          "APCP": [1, 8, "kg/m2"]
+        },
+        "fields": {
+          "terrain": ["HGT", "surface"],
+          "surfacePressure": ["PRES", "surface"],
+          "temp2m": ["TMP", "2 m above ground"],
+          "spfh2m": ["SPFH", "2 m above ground"],
+          "sensibleHeatFlux": ["SHTFL", "surface", 1],
+          "latentHeatFlux": ["LHTFL", "surface", 1],
+          "precipitation": ["APCP", "surface"],
+          "height": ["HGT"],
+          "temperature": ["TMP"]
+        }
+      },
+      "terrainSubdivisionFactor": 2,
+      "execution": {"zoom": 10, "shards": 24, "parallelism": 12, "schedule": ["27 3,9,15,21 * * *"]}
     }
   ]
 }

@@ -1,4 +1,5 @@
 import type { IndexedSource } from './source.js';
+import { normalizeLon } from '@av/contracts';
 import { parseFields, parseGrid, parseProduct, type GribField, type Grid, type ProductDefinition } from '@azohra/meteo.grib';
 import { IndexedGribError } from './errors.ts';
 import { indexedGribFirstFixedSurface } from './fields.ts';
@@ -22,28 +23,41 @@ function sameRun(cycle: string, id: GribField['identification']): boolean {
 }
 
 function validateGrid(source: IndexedSource, grid: Grid): void {
-  if (grid.kind !== 'latlon') refuse('unsupported-grid', `Unsupported Indexed GRIB grid template: ${grid.kind}`);
-  if (grid.gridDefinitionTemplateNumber !== 0) {
-    refuse('unsupported-grid', `Unsupported Indexed GRIB grid definition template 3.${grid.gridDefinitionTemplateNumber}`);
-  }
+  const expected = source.grid;
   if (
-    grid.ni !== source.nativeGrid.ni ||
-    grid.nj !== source.nativeGrid.nj ||
-    grid.numberOfDataPoints !== source.nativeGrid.ni * source.nativeGrid.nj ||
-    grid.latitudeOfFirstGridPoint !== source.nativeGrid.lat0 ||
-    grid.longitudeOfFirstGridPoint !== source.nativeGrid.lon0 ||
-    grid.iDirectionIncrement !== source.nativeGrid.dlon ||
-    grid.jDirectionIncrement !== -source.nativeGrid.dlat ||
-    grid.iScansNegatively ||
-    grid.jScansPositively ||
+    grid.ni !== expected.width || grid.nj !== expected.height ||
+    grid.numberOfDataPoints !== expected.width * expected.height ||
     grid.jPointsAreConsecutive ||
-    grid.alternativeRowScanning ||
-    grid.uvRelativeToGrid
+    grid.alternativeRowScanning
   ) {
     refuse('unsupported-grid', 'Indexed GRIB grid geometry or scanning mode is unsupported');
   }
-  if (grid.earthRadiusM !== source.nativeGrid.earthRadiusM) {
+  if (grid.earthRadiusM !== expected.earthRadiusM) {
     refuse('unsupported-earth', `Unsupported Indexed GRIB earth radius ${grid.earthRadiusM}`);
+  }
+  if (expected.kind === 'regular-latlon') {
+    if (grid.kind !== 'latlon' || grid.gridDefinitionTemplateNumber !== 0 ||
+      grid.latitudeOfFirstGridPoint !== expected.lat0 || grid.longitudeOfFirstGridPoint !== source.upstream.nativeLongitudeOrigin ||
+      grid.iDirectionIncrement !== expected.dx || grid.jDirectionIncrement !== -expected.dy ||
+      grid.iScansNegatively || grid.jScansPositively || grid.uvRelativeToGrid) {
+      refuse('unsupported-grid', 'Indexed GRIB grid geometry or scanning mode is unsupported');
+    }
+  } else {
+    if (grid.kind !== 'lambert' || grid.gridDefinitionTemplateNumber !== 30 ||
+      grid.projectionCentreFlag !== (expected.latitudeOfOriginDeg < 0 ? 128 : 0) ||
+      normalizeLon(grid.loV) !== expected.centralMeridianDeg || grid.laD !== expected.latitudeOfOriginDeg ||
+      grid.latin1 !== expected.standardParallel1Deg || grid.latin2 !== expected.standardParallel2Deg ||
+      grid.scanningMode !== ((expected.dxM < 0 ? 128 : 0) | (expected.dyM > 0 ? 64 : 0)) ||
+      grid.dxM * (grid.iScansNegatively ? -1 : 1) !== expected.dxM ||
+      grid.dyM * (grid.jScansPositively ? 1 : -1) !== expected.dyM ||
+      grid.southPoleLatitude !== -90 || normalizeLon(grid.southPoleLongitude) !== 0) {
+      refuse('unsupported-grid', 'Indexed GRIB Lambert geometry or scanning mode is unsupported');
+    }
+    const first = source.geometry.geographicToGrid(grid.latitudeOfFirstGridPoint, grid.longitudeOfFirstGridPoint);
+    // Allow projection rounding within one millionth of a cell.
+    if (!first || Math.abs(first.x) > 1e-6 || Math.abs(first.y) > 1e-6) {
+      refuse('unsupported-grid', 'Indexed GRIB Lambert first cell differs from the configured grid');
+    }
   }
 }
 

@@ -6,15 +6,15 @@ plugin, and API clients.
 
 ```mermaid
 flowchart LR
-  sources["NOAA GFS / DWD ICON-EU"] --> batch["Batch builder"]
+  sources["Configured weather sources"] --> batch["Batch builder"]
   batch --> files["Tiles, point data<br/>and manifest"]
   files --> r2["Private R2 bucket"]
   r2 --> api["API Worker"]
   api --> clients["Preview / Windy<br/>API clients"]
 ```
 
-GFS and ICON-EU share the build and serving pipeline. The scheduled workflow
-runs each model on its configured schedule; manual runs can target one model. Whole-domain lift
+Models share the build and serving pipeline. The scheduled workflow runs each
+model on its configured schedule; manual runs can target one model. Whole-domain lift
 surfaces share each model's cycle, timeline, publication and URLs. See
 [deployments](status.md) for live apps and workflow runs.
 

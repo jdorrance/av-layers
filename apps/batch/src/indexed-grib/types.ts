@@ -211,12 +211,14 @@ export interface IndexedGribFrameAcquisition extends IsobaricFrame {
       nj: number;
       lon0: number;
       lat0: number;
-      dlon: number;
-      dlat: number;
       earthRadiusM: number;
       gridKey: string;
       gridDefinitionTemplateNumber: number;
-    };
+    } & ({ dlon: number; dlat: number } | {
+      dxM: number; dyM: number;
+      laD: number; loV: number; latin1: number; latin2: number;
+      scanningMode: number; projectionCentreFlag: number;
+    });
     activeCount: number;
     products: Record<string, string>;
     fields: DecodedFieldReceipt[];

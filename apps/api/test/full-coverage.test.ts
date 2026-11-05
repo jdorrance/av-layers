@@ -1,7 +1,7 @@
-import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { MAX_SAMPLE_RANGE_BYTES, encodeSparseCoverage, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
+import { MAX_SAMPLE_RANGE_BYTES, PRODUCTS, encodeSparseCoverage, gridToGeographic, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
 import { planSample, planShardedPackedSample, prepareShardedSamplePackLayout } from '@av/forecast';
 import { describeSparseCoverage, loadCoverage } from '../../batch/src/coverage';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from '../../batch/src/whole-domain/coverage';
@@ -28,8 +28,9 @@ async function fixture(product: ProductDefinition, native = false) {
   return { surface, descriptor: description.descriptor, bytes: description.bytes, sparse, tiles: mask.tiles, layout };
 }
 
-it('retains both current fine masks and native coverage within the cache budget', async () => {
-  const fixtures = await Promise.all([fixture(INDEXED_PRODUCT), fixture(SPLIT_PRODUCT), fixture(INDEXED_PRODUCT, true)]);
+it('retains configured fine and native masks within the cache budget', async () => {
+  const fine = await Promise.all(PRODUCTS.map(product => fixture(product)));
+  const fixtures = [...fine, ...await Promise.all(PRODUCTS.filter(product => product.layers.includes('precip-rate')).map(product => fixture(product, true)))];
   const objects = new Map<string, Uint8Array>();
   for (const item of fixtures) {
     const prefix = `coverage/${item.surface.coverage.hash}`;
@@ -44,13 +45,11 @@ it('retains both current fine masks and native coverage within the cache budget'
   const receipts = [];
   for (const item of fixtures) {
     const grid = item.surface.grid;
-    if (grid.kind !== 'regular-latlon') throw new Error('Expected regular grid');
-    let ordinal = 0, block = item.layout.block(ordinal);
-    while ((block.width !== 17 || block.height !== 17) && ++ordinal < item.layout.blockCount) block = item.layout.block(ordinal);
-    expect(block.width).toBe(17); expect(block.height).toBe(17);
-    const sample = planSample(grid, grid.lat0 + (block.row + 15.5) * grid.dy, grid.lon0 + (block.column + 15.5) * grid.dx)!;
+    const block = item.layout.block(0);
+    const point = gridToGeographic(grid, block.column + block.width - 1.5, block.row + block.height - 1.5)!;
+    const sample = planSample(grid, point.lat, point.lon)!;
     const plan = planShardedPackedSample(item.layout, sample, Array.from({ length: item.surface.samples.channelCount }, (_, i) => i));
-    expect(plan.byteRange.length).toBe(19 * item.surface.samples.channelCount * 5);
+    expect(plan.byteRange.length).toBe((block.width + 2) * item.surface.samples.channelCount * 5);
     expect(plan.byteRange.length).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
     const start = performance.now(), lease = await resolveSparseCoverage(bucket, item.surface, undefined, item.descriptor.bounds);
     receipts.push({ blocks: lease.coverage.layout.blockCount, sparseBytes: item.sparse.byteLength, maxRangeBytes: plan.byteRange.length, coldMs: Math.round(performance.now() - start), ...coverageMemory(bucket) });
@@ -72,7 +71,7 @@ it('retains both current fine masks and native coverage within the cache budget'
     const bytes = objects.get(key);
     return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null;
   } } as unknown as R2Bucket;
-  const concurrentLeases = await Promise.all(fixtures.slice(0, 2).map(item => resolveSparseCoverage(concurrent, item.surface, undefined, item.descriptor.bounds)));
+  const concurrentLeases = await Promise.all(fine.map(item => resolveSparseCoverage(concurrent, item.surface, undefined, item.descriptor.bounds)));
   for (const lease of concurrentLeases) lease.release();
   expect(peakCold).toBeLessThanOrEqual(32 * 1024 * 1024);
   expect(coverageMemory(concurrent).leasedBytes).toBe(0);
