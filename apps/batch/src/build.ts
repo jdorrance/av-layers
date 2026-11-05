@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, liftRenderStyle, manifestSchema, PALETTES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE } from '@av/contracts';
+import { getProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, liftRenderStyle, manifestSchema, PALETTES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE } from '@av/contracts';
 import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
@@ -140,7 +140,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
     });
     const path = localPath(root, `${prefix}/manifest.json`);
     phase = 'write-manifest';
-    await writeFile(path, encodeBoundedJson(completed.manifest, MAX_MANIFEST_BYTES), { flag: 'wx' });
+    await writeFile(path, encodeBoundedJson(completed.manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS), { flag: 'wx' });
     await writeFile(localPath(root, `${prefix}/progress.json`), JSON.stringify({ state: 'validated', buildId, elapsedMs: Date.now() - started }));
     options.signal?.throwIfAborted();
     phase = 'on-validated';

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCTS, MAX_NATIVE_ZOOM, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { PRODUCTS, MAX_NATIVE_ZOOM, renderedLayers, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
 import { createApp } from '../src/index';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture } from './v5-fixture';
 
@@ -40,7 +40,7 @@ describe('retained v5 zoom compatibility', () => {
       if (product.layers.includes('precip-rate')) expect(body.frames[0].layers['precip-rate']).toMatchObject({ value: 7, status: 'valid', surfaceId: 'native' });
       else expect(body.frames[0].layers).not.toHaveProperty('precip-rate');
 
-      for (const surface of manifest.surfaces) for (const layer of surface.layers) {
+      for (const surface of manifest.surfaces) for (const layer of renderedLayers(surface.layers)) {
         const frame = manifest.frames[0].id, maxZoom = surface.coverage.maxZoom;
         const tilejson = await current.request(`${root}/layers/${layer}/${frame}/tilejson.json`);
         expect(tilejson.status).toBe(200);

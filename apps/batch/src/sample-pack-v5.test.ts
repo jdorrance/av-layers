@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, setBit, sparseCoverageFromDense, sparseCoverageLookup, type RegularLatLonGrid } from '@av/contracts';
-import { packedCellsFromRange, planSample, planShardedPackedSample, prepareSamplePackLayout, prepareShardedSamplePackLayout, type GridField } from '@av/forecast';
+import { packedCellsFromRange, packedRecordsFromRange, profileRecordBytes, readProfileRecord, validateProfileRecord, writeProfileRecord, planSample, planShardedPackedSample, prepareSamplePackLayout, prepareShardedSamplePackLayout, type GridField } from '@av/forecast';
 import { createSamplePackBuilder } from './sample-pack.js';
 import { createShardedSamplePackWriter, mergeShardedSamplePacks, sampleShardKey } from './sample-pack-v5.js';
 import { localPath } from './validate.js';
@@ -464,5 +464,137 @@ it('rejects corrupt, truncated, incomplete and cancelled worker packs without cr
     controller.abort(new Error('merge cancelled'));
     await expect(mergeShardedSamplePacks(layout, [cancelled], target(join(root, 'cancelled')), { signal: controller.signal })).rejects.toThrow('merge cancelled');
     expect(await readdir(join(root, 'cancelled')).catch(() => [])).toEqual([]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('writes and merges sparse profile records with explicit outside columns and non-scalar strides', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-profiles-'));
+  try {
+    const g = grid(33, 19, true), coverage = coverageFor(g, [0, 1, 2, 3, 4, 5]), recordBytes = profileRecordBytes(2);
+    const outsideRecord = new Uint8Array(recordBytes);
+    writeProfileRecord(outsideRecord, { modelTerrainM: null, status: 'outside-domain', levels: [] });
+    const recordsFor = (channel: number) => {
+      const count = coverage.offsets[coverage.offsets.length - 1], parent = new Uint8Array(count * recordBytes + 7);
+      const records = parent.subarray(3, -4);
+      for (let i = 0; i < count; i++) writeProfileRecord(records.subarray(i * recordBytes, (i + 1) * recordBytes), {
+        modelTerrainM: i * 10 + channel, status: 'valid', levels: [{ pressureHpa: 900, heightM: 1000 + i,
+          temperatureC: 20 + channel, dewPointC: null, uWindMps: i, vWindMps: -i, omegaPaS: null }]
+      });
+      return records;
+    };
+    const workers = [];
+    for (const channel of [0, 1]) {
+      const workerRoot = join(root, `worker-${channel}`), layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 1, channel ? 40_000 : 12_000, recordBytes);
+      const writer = createShardedSamplePackWriter(layout, coverage, { ...target(workerRoot, 'native'), kind: 'profiles', group: channel });
+      await expect(writer.writeChannel(0, { values: new Float32Array(coverage.offsets.at(-1)!), flags: new Uint8Array(coverage.offsets.at(-1)!), coverage } as GridField)).rejects.toThrow('five-byte');
+      await expect(writer.writeRawChannel(0, recordsFor(channel), { outsideRecord: outsideRecord.subarray(1) })).rejects.toThrow('shape');
+      await writer.writeRawChannel(0, recordsFor(channel), { outsideRecord });
+      await expect(writer.writeRawChannel(0, recordsFor(channel), { outsideRecord })).rejects.toThrow('already written');
+      const shards = await writer.finish();
+      expect(shards.every(shard => shard.key.includes(`/native/profiles/g${channel}-b`))).toBe(true);
+      workers.push({ root: workerRoot, channelCount: 1, recordBytes, shards });
+    }
+    expect(workers[0].shards.length).toBeGreaterThan(workers[1].shards.length);
+    const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 2, 30_000, recordBytes), out = join(root, 'merged');
+    await expect(mergeShardedSamplePacks(layout, [{ ...workers[0], recordBytes: 5 }, workers[1]], target(out))).rejects.toThrow('width mismatch');
+    const shards = await mergeShardedSamplePacks(layout, workers, { ...target(out, 'native'), kind: 'profiles' });
+    const files = await Promise.all(shards.map(async shard => {
+      const bytes = await readFile(localPath(out, shard.key));
+      expect(shard.sha256).toBe(sha(bytes));
+      expect(bytes.byteLength).toBe(shard.bytes);
+      return bytes;
+    }));
+    for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+      const block = layout.block(ordinal), bytes = files[block.shard];
+      for (let row = 0; row < block.height; row++) for (let column = 0; column < block.width; column++) {
+        const lookup = sparseCoverageLookup(coverage, (block.column + column) % g.width, block.row + row);
+        for (let channel = 0; channel < 2; channel++) {
+          const offset = block.byteOffset + ((row * block.width + column) * 2 + channel) * recordBytes;
+          const record = bytes.subarray(offset, offset + recordBytes);
+          validateProfileRecord(record);
+          if (lookup) expect(record).toEqual(Buffer.from(recordsFor(channel).subarray(lookup.offset * recordBytes, (lookup.offset + 1) * recordBytes)));
+          else expect(record).toEqual(Buffer.from(outsideRecord));
+        }
+      }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('aligns raw profile transposition across the 1 MiB write boundary', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-profile-chunks-'));
+  try {
+    const g = { ...grid(256, 256, true), lat0: 80, dx: 360 / 256, dy: -0.5 }, output = new Uint8Array(g.width * g.height / 8).fill(255), halo = new Uint8Array(output.length);
+    const coverage = sparseCoverageFromDense({ width: g.width, height: g.height, wrapLongitude: true, gridHash: 'a'.repeat(64), output, halo });
+    const recordBytes = 22, count = coverage.offsets[coverage.offsets.length - 1], outsideRecord = new Uint8Array(recordBytes);
+    writeProfileRecord(outsideRecord, { modelTerrainM: null, status: 'outside-domain', levels: [] });
+    const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 2, 64 * 1024 * 1024, recordBytes), writer = createShardedSamplePackWriter(layout, coverage, { ...target(root, 'native'), kind: 'profiles' });
+    for (const channel of [1, 0]) {
+      const records = new Uint8Array(count * recordBytes);
+      for (let i = 0; i < count; i++) writeProfileRecord(records.subarray(i * recordBytes, (i + 1) * recordBytes), {
+        modelTerrainM: i % 2000, status: 'valid', levels: [{ pressureHpa: 900, heightM: 3000,
+          temperatureC: channel, dewPointC: null, uWindMps: i % 100, vWindMps: null, omegaPaS: null }]
+      });
+      await writer.writeRawChannel(channel, records, { outsideRecord });
+    }
+    const shards = await writer.finish(), bytes = await readFile(localPath(root, shards[0].key));
+    expect(layout.byteLength / 2).toBeGreaterThan(1024 * 1024);
+    for (const index of [0, 40000, 65535]) {
+      const active = sparseCoverageLookup(coverage, index % g.width, Math.floor(index / g.width))!.offset;
+      const sample = planSample(g, g.lat0 + Math.floor(index / g.width) * g.dy, (index % g.width) * g.dx)!, plan = planShardedPackedSample(layout, sample, [0, 1]);
+      const range = bytes.subarray(plan.byteRange.offset, plan.byteRange.offset + plan.byteRange.length);
+      for (const channel of [0, 1]) expect(readProfileRecord(packedRecordsFromRange(plan, range, channel)[0])).toMatchObject({
+        modelTerrainM: active % 2000, levels: [{ temperatureC: channel, uWindMps: active % 100 }]
+      });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('streams a raw block larger than the write chunk without losing records', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-wide-block-'));
+  try {
+    const g = grid(17, 17, false), coverage = coverageFor(g, [0]), recordBytes = 4096;
+    const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 1, 64 * 1024 * 1024, recordBytes);
+    expect(layout.block(0).byteLength).toBeGreaterThan(1024 * 1024);
+    const writer = createShardedSamplePackWriter(layout, coverage, { ...target(root, 'native'), kind: 'profiles' });
+    const record = new Uint8Array(recordBytes).fill(23), outsideRecord = new Uint8Array(recordBytes).fill(47);
+    await writer.writeRawChannel(0, record, { outsideRecord });
+    const shards = await writer.finish(), bytes = await readFile(localPath(root, shards[0].key));
+    expect(bytes.byteLength).toBe(layout.byteLength);
+    expect(bytes.subarray(0, recordBytes).every(value => value === 23)).toBe(true);
+    expect(bytes.subarray(recordBytes).every(value => value === 47)).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('streams borrowed raw records at global grid indices with byte-identical halos', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-callback-'));
+  try {
+    const g = grid(33, 19, true), coverage = coverageFor(g, [0, 1, 2, 3, 4, 5]), recordBytes = profileRecordBytes(1);
+    const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 1, 12_000, recordBytes), count = coverage.offsets.at(-1)!;
+    const records = new Uint8Array(count * recordBytes), outsideRecord = new Uint8Array(recordBytes), scratch = new Uint8Array(recordBytes);
+    writeProfileRecord(outsideRecord, { modelTerrainM: null, status: 'outside-domain', levels: [] });
+    for (let i = 0; i < count; i++) writeProfileRecord(records.subarray(i * recordBytes, (i + 1) * recordBytes), {
+      modelTerrainM: i, surfacePressureHpa: 1000 - i, status: 'valid', levels: [{ pressureHpa: 900, heightM: 1000,
+        temperatureC: i, dewPointC: null, uWindMps: null, vWindMps: null, omegaPaS: null }]
+    });
+    const arrayRoot = join(root, 'array'), callbackRoot = join(root, 'callback');
+    const arrayWriter = createShardedSamplePackWriter(layout, coverage, { ...target(arrayRoot, 'native'), kind: 'profiles' });
+    await arrayWriter.writeRawChannel(0, records, { outsideRecord });
+    const arrayShards = await arrayWriter.finish(), calls: number[] = [];
+    const callbackWriter = createShardedSamplePackWriter(layout, coverage, { ...target(callbackRoot, 'native'), kind: 'profiles' });
+    await callbackWriter.writeRawChannel(0, index => {
+      calls.push(index);
+      const offset = sparseCoverageLookup(coverage, index % g.width, Math.floor(index / g.width))!.offset;
+      scratch.set(records.subarray(offset * recordBytes, (offset + 1) * recordBytes));
+      return scratch;
+    }, { outsideRecord });
+    const callbackShards = await callbackWriter.finish();
+    expect(callbackShards).toEqual(arrayShards);
+    expect(calls).toContain(16);
+    expect(calls.filter(index => index === 16).length).toBeGreaterThan(1);
+    for (const shard of callbackShards) expect(await readFile(localPath(callbackRoot, shard.key))).toEqual(await readFile(localPath(arrayRoot, shard.key)));
+    const failedRoot = join(root, 'failed'), invalid = createShardedSamplePackWriter(layout, coverage, { ...target(failedRoot, 'native'), kind: 'profiles' });
+    await expect(invalid.writeRawChannel(0, () => scratch.subarray(1), { outsideRecord })).rejects.toThrow('callback record width');
+    await invalid.close();
+    expect(await readdir(dirname(localPath(failedRoot, sampleShardKey('gfs', '20261104T000000Z', 'native', 0, undefined, 'profiles')))).catch(() => [])).toEqual([]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

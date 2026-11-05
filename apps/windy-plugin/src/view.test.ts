@@ -87,8 +87,8 @@ it('associates visible labels with the model and opacity controls', () => {
   const panel = new PluginPanel(callbacks());
   const nodes = visit(panel.root as unknown as FakeElement);
   const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
-  expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity']);
-  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity']);
+  expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity', 'av-units']);
+  expect(controls.map(control => nodes.find(node => node.tag === 'label' && node.htmlFor === control.id)?.textContent)).toEqual(['Model', 'Opacity', 'Units']);
   expect(nodes.find(node => node.className === 'av-notice')?.role).toBe('status');
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');

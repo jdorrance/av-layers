@@ -39,11 +39,12 @@ it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId',
   const manifest = fixture(product), cycle = Date.parse(manifest.cycle);
   const deadline = cycle + Math.min(product.freshness.maxCycleAgeHours, product.frameHours.at(-1)! - product.freshness.minHorizonHours) * HOUR;
   expect((await observe(manifest, deadline)).healthy).toBe(true);
-  const stale = await observe(manifest, cycle + (product.freshness.maxCycleAgeHours + product.frameHours.at(-1)! + 1) * HOUR);
+  const staleAt = cycle + (product.freshness.maxCycleAgeHours + product.frameHours.at(-1)! + 1) * HOUR;
+  const stale = await observe(manifest, staleAt);
   expect(stale.findings.join(';')).toContain('upstream-lag');
   expect(stale.findings.join(';')).toContain('shrinking-horizon');
   expect(stale.findings.join(';')).toContain('exhausted-horizon');
-  expect(stale.findings.join(';')).not.toContain('expired-publication');
+  expect(stale.findings.some(finding => finding.startsWith('expired-publication'))).toBe(staleAt >= Date.parse(manifest.expiresAt));
 });
 
 it.each(PRODUCTS.filter(product => product.capabilities.daylightFrames === 'regional-daylight'))('keeps $modelId daylight-filtered horizons aligned with health', async product => {

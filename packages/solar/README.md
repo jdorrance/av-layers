@@ -1,7 +1,6 @@
 # `@av/solar`
 
-NOAA-style solar position, sunrise/sunset times, top-of-atmosphere flux factor,
-and grid daylight testers.
+Solar position, daylight, clear/cloudy irradiance and terrain illumination.
 
 ## Usage
 
@@ -20,8 +19,12 @@ milliseconds.
 - [`@av/solar`](src/index.ts): `solarPosition`, `sunriseSunset` (returns UTC
   sunrise/sunset timestamps, day length, and polar day/night `kind`), and
   `solarFluxFactor`.
+- [Irradiance](src/irradiance.ts): `clearSky`, `withClouds`, `onSurface`,
+  `litFraction` and `azimuthWeights` preserve the Windgrams sunlight model.
 - [`@av/solar/grid`](src/grid.ts): `createGridDaylightTester` for regular
   lat/lon and projected grids.
+- [`irradiance.ts`](src/irradiance.ts): `clearSky`, `withClouds`, `onSurface`,
+  `litFraction` and `azimuthWeights`; irradiance is W/m², cloud cover is a fraction.
 - [`@av/solar/parameters`](src/parameters.ts): `DEFAULT_HORIZON_DEG` (`-0.833°`).
 
 See [science](../../docs/science.md).

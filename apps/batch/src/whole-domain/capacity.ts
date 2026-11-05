@@ -1,5 +1,5 @@
-import { CELL_BYTES, coverageAtZoom, MAX_SAMPLE_VALUES, MAX_TILE_BYTES, RASTER_TILE_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
-import { prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
+import { CELL_BYTES, coverageAtZoom, LAYERS, layerSurface, MAX_TILE_BYTES, RASTER_TILE_SIZE, renderedLayers, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
+import { prepareShardedSamplePackLayout, profileRecordBytes, type ShardedSamplePackLayout } from '@av/forecast';
 import type { PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from '../capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from '../raster-pool.js';
@@ -15,25 +15,31 @@ export interface WholeDomainCapacityInput {
   nativeMask: Pick<CoverageMask, 'tiles' | 'maxZoom'>;
   maxLevels?: number;
   retainedGeometryFields?: number;
+  auxiliarySurfaceFields?: number;
+  auxiliaryLevelFields?: number;
+  groupFrames?: number;
   fine: SparseCoverageMask;
   nativeMaskBytes: number;
   frames: number;
+  mapFrames?: number;
   nativeLayers: number;
   fineLayers: number;
   columns: Pick<PreparedPackedTerrainColumns, 'byteLength' | 'workspaceBufferBytes' | 'workspaceObjectBudgetBytes' | 'outputBufferBytes'>;
   terrainBytes: number;
 }
 
-export function wholeDomainSampleLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout } {
-  const fine = prepareShardedSamplePackLayout(input.plan.fine, input.fine.coverage.blockIds, input.frames * input.fineLayers, MAX_V5_SHARD_BYTES);
-  const native = input.nativeLayers ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, input.frames * input.nativeLayers, MAX_V5_SHARD_BYTES) : null;
+export function wholeDomainSampleLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout | null } {
+  const frames = input.groupFrames ?? input.frames;
+  const fineFrames = Math.min(input.mapFrames ?? input.frames, frames);
+  const fine = fineFrames ? prepareShardedSamplePackLayout(input.plan.fine, input.fine.coverage.blockIds, fineFrames * input.fineLayers, MAX_V5_SHARD_BYTES) : null;
+  const native = input.nativeLayers ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, frames * input.nativeLayers, MAX_V5_SHARD_BYTES) : null;
   return { native, fine };
 }
 
 export interface WholeDomainCapacity {
-  frames: number; nativeLayers: number; fineLayers: number; tiles: number;
-  nativeStoredCells: number; fineStoredCells: number; nativeSampleBytes: number; fineSampleBytes: number;
-  rasterWorkers: number; deriveWorkers: number; deriveFrameCopyBytes: number; rasterSharedInputBytes: number; workingSet: Record<string, number>; estimatedPeakBytes: number; violations: string[];
+  frames: number; mapFrames: number; nativeLayers: number; fineLayers: number; tiles: number;
+  nativeStoredCells: number; fineStoredCells: number; nativeSampleBytes: number; fineSampleBytes: number; profileBytes: number;
+  rasterWorkers: number; deriveWorkers: number; prefetchFrameCount: 0 | 1; deriveFrameCopyBytes: number; rasterSharedInputBytes: number; workingSet: Record<string, number>; estimatedPeakBytes: number; violations: string[];
 }
 
 function coveredTiles(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>): number {
@@ -45,38 +51,48 @@ function coveredTiles(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>): number {
 
 export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCapacity {
   const { columns, fine, frames, nativeActive, nativeLayers, fineLayers, terrainBytes, nativeMaskBytes } = input;
+  const mapFrames = input.mapFrames ?? frames;
+  if (!Number.isSafeInteger(frames) || frames < 1 || !Number.isSafeInteger(mapFrames) || mapFrames < 0 || mapFrames > frames) throw new Error('Invalid frame capacity');
   const maxLevels = input.maxLevels ?? 256, retainedGeometryFields = input.retainedGeometryFields ?? 257;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(retainedGeometryFields) || retainedGeometryFields < 0 || retainedGeometryFields > 257) throw new Error('Invalid provider capacity');
   const fineActive = fine.coverage.offsets[fine.coverage.blockIds.length]!;
   const layouts = wholeDomainSampleLayouts(input);
-  const nativeSampleBytes = layouts.native?.byteLength ?? 0, fineSampleBytes = layouts.fine.byteLength;
-  const tiles = frames * (nativeLayers * coveredTiles(coverageAtZoom(input.nativeMask, input.product.maxNativeZoom)) +
+  const nativeSampleBytes = (layouts.native?.storedCells ?? 0) * frames * nativeLayers * CELL_BYTES, fineSampleBytes = fineActive * mapFrames * fineLayers * CELL_BYTES;
+  const nativeSampleOnly = input.product.layers.filter(layer => layerSurface(layer) === 'native' && LAYERS[layer].delivery === 'samples-only').length;
+  const renderedNativeLayers = nativeLayers - nativeSampleOnly;
+  const tiles = mapFrames * (renderedNativeLayers * coveredTiles(coverageAtZoom(input.nativeMask, input.product.maxNativeZoom)) +
     fineLayers * coveredTiles(coverageAtZoom(fine, input.product.maxNativeZoom)));
-  if (frames * Math.max(nativeLayers, fineLayers) > MAX_SAMPLE_VALUES) throw new Error('Sample value budget exceeded');
-  if (layouts.fine.storedCells < 1 || layouts.fine.blockCount < 1) throw new Error('Fine coverage has no sample blocks');
+  if (fineActive < 1 || fine.coverage.blockIds.length < 1) throw new Error('Fine coverage has no sample blocks');
   const nativeCells = input.plan.native.width * input.plan.native.height;
-  const nativeFields = nativeCells * input.product.layers.length * CELL_BYTES;
-  const fineFields = fineActive * TERRAIN_COLUMN_METHOD.outputs.length * CELL_BYTES;
+  const nativeFields = nativeCells * (mapFrames ? renderedLayers(input.product.layers).length : renderedNativeLayers) * CELL_BYTES;
+  const fineFields = mapFrames ? fineActive * TERRAIN_COLUMN_METHOD.outputs.length * CELL_BYTES : 0;
   const coverageBytes = (mask: SparseCoverageMask) => mask.tiles.byteLength + mask.coverage.blockIds.byteLength + mask.coverage.offsets.byteLength + mask.coverage.output.byteLength + mask.coverage.halo.byteLength;
   const fineMaskBytes = coverageBytes(fine);
-  const sharedInputBytes = Math.max(nativeCells * nativeLayers * CELL_BYTES + nativeMaskBytes, fineActive * fineLayers * CELL_BYTES + fineMaskBytes);
-  const shards = [...(layouts.native?.shards ?? []), ...layouts.fine.shards];
+  const sharedInputBytes = Math.max(nativeCells * renderedNativeLayers * CELL_BYTES + nativeMaskBytes, fineActive * fineLayers * CELL_BYTES + fineMaskBytes);
+  const profileLayout = nativeSampleOnly ? prepareShardedSamplePackLayout(input.plan.native, input.nativeBlocks, input.groupFrames ?? frames, MAX_V5_SHARD_BYTES, profileRecordBytes(maxLevels)) : null;
+  const profileBytes = (profileLayout?.storedCells ?? 0) * frames * profileRecordBytes(maxLevels);
+  const shards = [...(layouts.native?.shards ?? []), ...(layouts.fine?.shards ?? []), ...(profileLayout?.shards ?? [])];
   const largestShard = shards.reduce((max, shard) => Math.max(max, shard.byteLength), 0);
   const largestShardBlocks = shards.reduce((max, shard) => Math.max(max, shard.blockCount), 0);
+  const auxiliarySurface = input.auxiliarySurfaceFields ?? 0, auxiliaryLevels = input.auxiliaryLevelFields ?? 0;
+  if (![auxiliarySurface, auxiliaryLevels].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 32)) throw new RangeError('Invalid auxiliary field capacity');
+  const nativeFrame = nativeActive * (7 + auxiliarySurface + ((input.product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2) + auxiliaryLevels) * maxLevels) * CELL_BYTES;
   const workingSet = {
-    nativeFrame: nativeActive * (7 + (input.product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2) * maxLevels) * CELL_BYTES,
-    prefetchFrame: nativeActive * (7 + (input.product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2) * maxLevels) * CELL_BYTES,
+    nativeFrame,
+    prefetchFrame: nativeFrame,
     nativeFields,
-    diagnostics: nativeCells * 9,
+    packedNativeFields: nativeActive * nativeSampleOnly * CELL_BYTES,
+    profiles: nativeSampleOnly ? nativeCells * 4 + profileRecordBytes(maxLevels) : 0,
+    diagnostics: mapFrames ? nativeCells * 9 : 0,
     retainedGeometry: nativeActive * retainedGeometryFields * CELL_BYTES,
     rawCompanions: nativeActive * 6 * 9,
-    terrain: terrainBytes,
-    terrainValidation: Math.min(terrainBytes, ASSET_MAX_BYTES * 1.25),
-    columns: columns.byteLength + columns.workspaceBufferBytes + columns.workspaceObjectBudgetBytes + columns.outputBufferBytes,
+    terrain: mapFrames ? terrainBytes : 0,
+    terrainValidation: mapFrames ? Math.min(terrainBytes, ASSET_MAX_BYTES * 1.25) : 0,
+    columns: columns.byteLength + (mapFrames ? columns.workspaceBufferBytes + columns.workspaceObjectBudgetBytes + columns.outputBufferBytes : 0),
     coverage: fineMaskBytes + nativeMaskBytes + input.nativeBlocks.length * 72 + 4 + 2 * Math.ceil(nativeCells / 8),
     indices: nativeActive * 4 + nativeCells * 4,
-    layouts: (layouts.native?.indexBytes ?? 0) + layouts.fine.indexBytes,
-    rasterInline: 2 * 24 * 1024 * 1024 + 8 * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES),
+    layouts: (layouts.native?.indexBytes ?? 0) + (layouts.fine?.indexBytes ?? 0) + (profileLayout?.indexBytes ?? 0),
+    rasterInline: mapFrames ? 2 * 24 * 1024 * 1024 + 8 * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES) : 0,
     rasterSharedInputs: 0,
     rasterWorkerRuntimes: 0,
     deriveWorkerRuntimes: 0,
@@ -86,8 +102,14 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
     archivesAndValidation: largestShard + 64 * 1024 * 1024,
     runtimeAndNativeReserve: 256 * 1024 * 1024
   };
-  const inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
-  const maximumWorkers = rasterWorkerCount(undefined, input.product.execution.workers);
+  let inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
+  let prefetchFrameCount: 0 | 1 = 1;
+  if (inlinePeakBytes > BUILD_BUDGETS.peakRssBytes) {
+    prefetchFrameCount = 0;
+    inlinePeakBytes -= workingSet.prefetchFrame;
+    workingSet.prefetchFrame = 0;
+  }
+  const maximumWorkers = mapFrames ? rasterWorkerCount(undefined, input.product.execution.workers) : 0;
   let rasterWorkers = 0, deriveWorkers = 0, selectedTotal = -1, selectedImbalance = Number.POSITIVE_INFINITY;
   const deriveSharedInputs = terrainBytes + nativeCells + nativeActive * 4;
   const workerColumns = columns.byteLength + columns.workspaceBufferBytes + columns.workspaceObjectBudgetBytes;
@@ -110,6 +132,6 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   if (!Number.isSafeInteger(tiles) || tiles > BUILD_BUDGETS.tiles) violations.push('tile budget exceeded');
   if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) violations.push('whole-domain working set exceeds the 2 GiB process budget');
   if (fineFields > 512 * 1024 * 1024) violations.push('live fine packed fields exceed the inline budget');
-  return { frames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine.storedCells,
-    nativeSampleBytes, fineSampleBytes, rasterWorkers, deriveWorkers, deriveFrameCopyBytes: Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes), rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
+  return { frames, mapFrames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: fineActive,
+    nativeSampleBytes, fineSampleBytes, profileBytes, rasterWorkers, deriveWorkers, prefetchFrameCount, deriveFrameCopyBytes: Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes), rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
 }

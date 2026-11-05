@@ -2,7 +2,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { getProduct, gridSchema, modelIdSchema, type Grid, type GeographicBounds } from '@av/contracts';
+import z from 'zod';
+import { getProduct, gridSchema, solarSiteSchema, modelIdSchema, type Grid, type GeographicBounds } from '@av/contracts';
 import { putImmutable } from '../immutable-upload.js';
 import { readLocalFile } from '../local-file.js';
 import { r2Storage } from '../storage.js';
@@ -23,7 +24,8 @@ export const TERRAIN_COMMANDS: Readonly<Record<string, readonly string[]>> = {
   prepare: [...COMMON, 'catalog-ref', 'grid'],
   'prepare-model': [...COMMON, 'catalog-ref', 'model', 'source-cache-dir'],
   stage: [...COMMON, 'prepared-ref', 'grid'],
-  inspect: [...COMMON, 'catalog-ref', 'bounds']
+  inspect: [...COMMON, 'catalog-ref', 'bounds'],
+  solar: [...COMMON, 'catalog-ref', 'sites', 'site']
 };
 export function terrainArguments(args: string[]) {
   const command = args[0], allowed = Object.hasOwn(TERRAIN_COMMANDS, command) ? TERRAIN_COMMANDS[command] : undefined;
@@ -33,8 +35,9 @@ export function terrainArguments(args: string[]) {
   if (positionals.length || typeof values.out !== 'string' || !values.out) throw new Error('--out is required');
   if (values['store-dir'] !== undefined && !values['store-dir'].trim()) throw new Error('--store-dir must be a nonempty directory');
   if (values['source-cache-dir'] !== undefined && !values['source-cache-dir'].trim()) throw new Error('--source-cache-dir must be a nonempty directory');
-  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], prepare: ['catalog-ref', 'grid'], 'prepare-model': ['catalog-ref', 'model'], stage: ['prepared-ref', 'grid'], inspect: ['catalog-ref', 'bounds'] };
+  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], prepare: ['catalog-ref', 'grid'], 'prepare-model': ['catalog-ref', 'model'], stage: ['prepared-ref', 'grid'], inspect: ['catalog-ref', 'bounds'], solar: ['catalog-ref', 'sites', 'site'] };
   for (const option of required[command] ?? []) if (!values[option]) throw new Error(`--${option} is required`);
+  if (command === 'solar') solarSiteSchema.shape.slug.parse(values.site);
   return { command, values: values as Record<string, string> };
 }
 function integer(value: string | undefined, fallback: number, minimum: number, maximum: number) {
@@ -102,6 +105,17 @@ export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
       return;
     }
     const catalog = await loadTerrainCatalog(catalogRef, store, signal);
+    if (command === 'solar') {
+      const sites = parseJson(await readLocalFile(values.sites, 512 * 1024), z.object({ schemaVersion: z.literal(2),
+        sites: z.array(solarSiteSchema).min(1).max(512).refine(items => new Set(items.map(item => item.slug)).size === items.length, 'Duplicate solar site') }).strict(), 512 * 1024);
+      const site = sites.sites.find(item => item.slug === values.site);
+      if (!site) throw new Error(`Unknown solar site ${values.site}`);
+      const { publishSolarTerrain } = await import('./solar/publish.js');
+      const result = await publishSolarTerrain({ catalog, catalogRef, storage: store, site, signal, log: message => console.error(message) });
+      await writeJson(values.out, result);
+      console.log(JSON.stringify({ key: result.key, generation: result.index.generation, reused: result.reused, elapsedMs: result.elapsedMs }));
+      return;
+    }
     if (command === 'prepare') {
       const ref = await prepareTerrain({ catalog, storage: store, grid: await readGrid(values.grid), signal, onReport: report => console.error(JSON.stringify(report)) });
       await writeJson(values.out, ref);

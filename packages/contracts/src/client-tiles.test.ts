@@ -6,6 +6,7 @@ describe('tile template and options', () => {
     const url = frameTileUrl('https://api.test/tiles/gfs/build/usable-lift-msl/{frame}/{z}/{x}/{y}.webp', 'f003');
     expect(url).toBe('https://api.test/tiles/gfs/build/usable-lift-msl/f003/{z}/{x}/{y}.webp');
     expect(() => frameTileUrl('https://api.test/{z}/{x}/{y}.webp', 'f003')).toThrow(RangeError);
+    expect(() => frameTileUrl(undefined, 'f003')).toThrow('Layer has no tile template');
   });
 
   it('builds a MapLibre 256px raster source limited to the native max zoom', () => {

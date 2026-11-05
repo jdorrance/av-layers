@@ -1,0 +1,970 @@
+{
+  "flat": {
+    "index": {
+      "schemaVersion": 1,
+      "slug": "flat",
+      "generatedAt": "2026-11-05T00:00:00Z",
+      "generation": "f69867851d61",
+      "inputs": {
+        "latitude": 40,
+        "longitude": 44,
+        "area": {
+          "name": "flat",
+          "south": 39.9999,
+          "west": 43.9999,
+          "north": 40.0001,
+          "east": 44.0001
+        },
+        "maxDistanceKm": 2,
+        "algorithmVersion": 1,
+        "sources": {
+          "surface": "fixture-native-dem",
+          "horizon": "fixture-native-dem"
+        }
+      },
+      "sources": {
+        "surface": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        },
+        "horizon": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        }
+      },
+      "bounds": {
+        "south": 39.993956,
+        "west": 43.989258,
+        "north": 40.010787,
+        "east": 44.01123
+      },
+      "referenceElevationM": 1000,
+      "tiles": {
+        "path": "f69867851d61/{z}/{x}/{y}.bin.gz",
+        "size": 256,
+        "minZoom": 11,
+        "maxZoom": 14,
+        "ranges": {
+          "11": [
+            1274,
+            775,
+            1274,
+            775
+          ],
+          "12": [
+            2548,
+            1550,
+            2548,
+            1550
+          ],
+          "13": [
+            5097,
+            3101,
+            5097,
+            3101
+          ],
+          "14": [
+            10194,
+            6202,
+            10194,
+            6202
+          ]
+        },
+        "count": 4,
+        "bytes": 1911
+      },
+      "encoding": {
+        "planes": [
+          "nx",
+          "ny",
+          "nz",
+          "svf"
+        ],
+        "normal": "nx, ny: byte / 127.5 - 1 (east, north components); nz, svf: byte / 255; nz = 0 marks no data",
+        "horizonCells": 64,
+        "horizonBorder": 1,
+        "azimuthsDeg": [
+          0,
+          20,
+          40,
+          60,
+          80,
+          100,
+          120,
+          140,
+          160,
+          180,
+          200,
+          220,
+          240,
+          260,
+          280,
+          300,
+          320,
+          340
+        ],
+        "horizonStepDeg": 0.3,
+        "delta": "row",
+        "compression": "gzip"
+      },
+      "launch": {
+        "elevationM": 1000,
+        "slopeDeg": 0,
+        "aspectDeg": 0,
+        "skyViewFactor": 1,
+        "horizonDeg": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "relief": {
+        "version": 1,
+        "path": "f69867851d61/relief-v1.bin.gz",
+        "zoom": 11,
+        "x0": 326208,
+        "y0": 198464,
+        "width": 33,
+        "height": 33,
+        "offsetM": 500,
+        "scale": 10,
+        "minM": 1000,
+        "maxM": 1000,
+        "encoding": "uint16 little-endian, (elevation m + offsetM) * scale, 0 = no data; row-delta (mod 65536); gzip",
+        "bytes": 38
+      }
+    },
+    "tiles": [
+      {
+        "z": 11,
+        "x": 1274,
+        "y": 775,
+        "bytes": 434,
+        "sha256": "5ab170c96741027c5326e0a44e07360d083d63ea0db5a605fa1b424c61b3b2f2"
+      },
+      {
+        "z": 12,
+        "x": 2548,
+        "y": 1550,
+        "bytes": 493,
+        "sha256": "be36eb52048d725d7a02b56f458fe05ea9d752c6f7b7dc4bbfa55a1c65bdb720"
+      },
+      {
+        "z": 13,
+        "x": 5097,
+        "y": 3101,
+        "bytes": 612,
+        "sha256": "59f3007a1042f7083716faf44aad227cda0b47668b8d737cb67c5b9b4e96a6f8"
+      },
+      {
+        "z": 14,
+        "x": 10194,
+        "y": 6202,
+        "bytes": 372,
+        "sha256": "1b7c8e96471e1021f6248a251bcccebc2e15abd6fa550fee4ac0fa02a33ae4b3"
+      }
+    ],
+    "reliefSha256": "83604322d63ffcc08ef92690b1b37631a986704d593c73b7443d0dbab5631d90"
+  },
+  "plane": {
+    "index": {
+      "schemaVersion": 1,
+      "slug": "plane",
+      "generatedAt": "2026-11-05T00:00:00Z",
+      "generation": "9bc61c2611e7",
+      "inputs": {
+        "latitude": 40,
+        "longitude": 44,
+        "area": {
+          "name": "plane",
+          "south": 39.9999,
+          "west": 43.9999,
+          "north": 40.0001,
+          "east": 44.0001
+        },
+        "maxDistanceKm": 2,
+        "algorithmVersion": 1,
+        "sources": {
+          "surface": "fixture-native-dem",
+          "horizon": "fixture-native-dem"
+        }
+      },
+      "sources": {
+        "surface": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        },
+        "horizon": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        }
+      },
+      "bounds": {
+        "south": 39.993956,
+        "west": 43.989258,
+        "north": 40.010787,
+        "east": 44.01123
+      },
+      "referenceElevationM": 1031,
+      "tiles": {
+        "path": "9bc61c2611e7/{z}/{x}/{y}.bin.gz",
+        "size": 256,
+        "minZoom": 11,
+        "maxZoom": 14,
+        "ranges": {
+          "11": [
+            1274,
+            775,
+            1274,
+            775
+          ],
+          "12": [
+            2548,
+            1550,
+            2548,
+            1550
+          ],
+          "13": [
+            5097,
+            3101,
+            5097,
+            3101
+          ],
+          "14": [
+            10194,
+            6202,
+            10194,
+            6202
+          ]
+        },
+        "count": 4,
+        "bytes": 2493
+      },
+      "encoding": {
+        "planes": [
+          "nx",
+          "ny",
+          "nz",
+          "svf"
+        ],
+        "normal": "nx, ny: byte / 127.5 - 1 (east, north components); nz, svf: byte / 255; nz = 0 marks no data",
+        "horizonCells": 64,
+        "horizonBorder": 1,
+        "azimuthsDeg": [
+          0,
+          20,
+          40,
+          60,
+          80,
+          100,
+          120,
+          140,
+          160,
+          180,
+          200,
+          220,
+          240,
+          260,
+          280,
+          300,
+          320,
+          340
+        ],
+        "horizonStepDeg": 0.3,
+        "delta": "row",
+        "compression": "gzip"
+      },
+      "launch": {
+        "elevationM": 1000,
+        "slopeDeg": 12.6,
+        "aspectDeg": 244,
+        "skyViewFactor": 0.988,
+        "horizonDeg": [
+          5.7,
+          9.2,
+          11.6,
+          12.6,
+          12.1,
+          10.2,
+          7,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1.5
+        ]
+      },
+      "relief": {
+        "version": 1,
+        "path": "9bc61c2611e7/relief-v1.bin.gz",
+        "zoom": 11,
+        "x0": 326208,
+        "y0": 198464,
+        "width": 33,
+        "height": 33,
+        "offsetM": 500,
+        "scale": 10,
+        "minM": 749,
+        "maxM": 1312,
+        "encoding": "uint16 little-endian, (elevation m + offsetM) * scale, 0 = no data; row-delta (mod 65536); gzip",
+        "bytes": 118
+      }
+    },
+    "tiles": [
+      {
+        "z": 11,
+        "x": 1274,
+        "y": 775,
+        "bytes": 540,
+        "sha256": "1b024b7be455ad6155da6c309a611502b6aa36902f484d678388dfd0c1994f62"
+      },
+      {
+        "z": 12,
+        "x": 2548,
+        "y": 1550,
+        "bytes": 654,
+        "sha256": "4438216948fd9c0fe7a1258f3736b35393af781bf462ebe878f3cae81b11c566"
+      },
+      {
+        "z": 13,
+        "x": 5097,
+        "y": 3101,
+        "bytes": 889,
+        "sha256": "5e83ada5006e8cca3d2f9b4729e3a324fcf809dde40dc8c543a926440ca8f329"
+      },
+      {
+        "z": 14,
+        "x": 10194,
+        "y": 6202,
+        "bytes": 410,
+        "sha256": "fe97b875968b77356c2668123956c1029e9961e19d60fc4032eac4a7a126810e"
+      }
+    ],
+    "reliefSha256": "b73376634c6ffc817938ff0dd1837093fd7e7f92683e5c03b7794d24059bd29e"
+  },
+  "ridge": {
+    "index": {
+      "schemaVersion": 1,
+      "slug": "ridge",
+      "generatedAt": "2026-11-05T00:00:00Z",
+      "generation": "e2f8540facd6",
+      "inputs": {
+        "latitude": 40,
+        "longitude": 44,
+        "area": {
+          "name": "ridge",
+          "south": 39.9999,
+          "west": 43.9999,
+          "north": 40.0001,
+          "east": 44.0001
+        },
+        "maxDistanceKm": 2,
+        "algorithmVersion": 1,
+        "sources": {
+          "surface": "fixture-native-dem",
+          "horizon": "fixture-native-dem"
+        }
+      },
+      "sources": {
+        "surface": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        },
+        "horizon": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        }
+      },
+      "bounds": {
+        "south": 39.993956,
+        "west": 43.989258,
+        "north": 40.010787,
+        "east": 44.01123
+      },
+      "referenceElevationM": 353,
+      "tiles": {
+        "path": "e2f8540facd6/{z}/{x}/{y}.bin.gz",
+        "size": 256,
+        "minZoom": 11,
+        "maxZoom": 14,
+        "ranges": {
+          "11": [
+            1274,
+            775,
+            1274,
+            775
+          ],
+          "12": [
+            2548,
+            1550,
+            2548,
+            1550
+          ],
+          "13": [
+            5097,
+            3101,
+            5097,
+            3101
+          ],
+          "14": [
+            10194,
+            6202,
+            10194,
+            6202
+          ]
+        },
+        "count": 4,
+        "bytes": 59375
+      },
+      "encoding": {
+        "planes": [
+          "nx",
+          "ny",
+          "nz",
+          "svf"
+        ],
+        "normal": "nx, ny: byte / 127.5 - 1 (east, north components); nz, svf: byte / 255; nz = 0 marks no data",
+        "horizonCells": 64,
+        "horizonBorder": 1,
+        "azimuthsDeg": [
+          0,
+          20,
+          40,
+          60,
+          80,
+          100,
+          120,
+          140,
+          160,
+          180,
+          200,
+          220,
+          240,
+          260,
+          280,
+          300,
+          320,
+          340
+        ],
+        "horizonStepDeg": 0.3,
+        "delta": "row",
+        "compression": "gzip"
+      },
+      "launch": {
+        "elevationM": 300,
+        "slopeDeg": 0,
+        "aspectDeg": 0,
+        "skyViewFactor": 0.932,
+        "horizonDeg": [
+          0,
+          0,
+          2.5,
+          23.4,
+          42.3,
+          42.2,
+          23.1,
+          2.4,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "relief": {
+        "version": 1,
+        "path": "e2f8540facd6/relief-v1.bin.gz",
+        "zoom": 11,
+        "x0": 326208,
+        "y0": 198464,
+        "width": 33,
+        "height": 33,
+        "offsetM": 500,
+        "scale": 10,
+        "minM": 300,
+        "maxM": 1197,
+        "encoding": "uint16 little-endian, (elevation m + offsetM) * scale, 0 = no data; row-delta (mod 65536); gzip",
+        "bytes": 558
+      }
+    },
+    "tiles": [
+      {
+        "z": 11,
+        "x": 1274,
+        "y": 775,
+        "bytes": 3122,
+        "sha256": "fe63d9be5ca99ba5408e2503701918eb591e2d77ed9408edc2985abdd4affb6d"
+      },
+      {
+        "z": 12,
+        "x": 2548,
+        "y": 1550,
+        "bytes": 6853,
+        "sha256": "ad0f3dfdb50b45224bb1d0144d4bb912f829f82eef90e30ad641a6a4998a16a2"
+      },
+      {
+        "z": 13,
+        "x": 5097,
+        "y": 3101,
+        "bytes": 15203,
+        "sha256": "dd128ef0e64f0655451c24037c4e60f2efed3dba280a8873d34f467685c6c815"
+      },
+      {
+        "z": 14,
+        "x": 10194,
+        "y": 6202,
+        "bytes": 34197,
+        "sha256": "7b61d2b7f5817acb41fe87ee22a34458a257537d3e05006d04aa58c9bda2d12b"
+      }
+    ],
+    "reliefSha256": "7a8a0969c0e034503c6e93062ea9a7b531b9ac7bc32739a418ed77d57c32b7cb"
+  },
+  "missing": {
+    "index": {
+      "schemaVersion": 1,
+      "slug": "missing",
+      "generatedAt": "2026-11-05T00:00:00Z",
+      "generation": "10eaa64c61cf",
+      "inputs": {
+        "latitude": 40,
+        "longitude": 44,
+        "area": {
+          "name": "missing",
+          "south": 39.9999,
+          "west": 43.9999,
+          "north": 40.0001,
+          "east": 44.0001
+        },
+        "maxDistanceKm": 2,
+        "algorithmVersion": 1,
+        "sources": {
+          "surface": "fixture-native-dem",
+          "horizon": "fixture-native-dem"
+        }
+      },
+      "sources": {
+        "surface": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        },
+        "horizon": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        }
+      },
+      "bounds": {
+        "south": 39.993956,
+        "west": 43.989258,
+        "north": 40.010787,
+        "east": 44.01123
+      },
+      "referenceElevationM": 1032,
+      "tiles": {
+        "path": "10eaa64c61cf/{z}/{x}/{y}.bin.gz",
+        "size": 256,
+        "minZoom": 11,
+        "maxZoom": 14,
+        "ranges": {
+          "11": [
+            1274,
+            775,
+            1274,
+            775
+          ],
+          "12": [
+            2548,
+            1550,
+            2548,
+            1550
+          ],
+          "13": [
+            5097,
+            3101,
+            5097,
+            3101
+          ],
+          "14": [
+            10194,
+            6202,
+            10194,
+            6202
+          ]
+        },
+        "count": 4,
+        "bytes": 3362
+      },
+      "encoding": {
+        "planes": [
+          "nx",
+          "ny",
+          "nz",
+          "svf"
+        ],
+        "normal": "nx, ny: byte / 127.5 - 1 (east, north components); nz, svf: byte / 255; nz = 0 marks no data",
+        "horizonCells": 64,
+        "horizonBorder": 1,
+        "azimuthsDeg": [
+          0,
+          20,
+          40,
+          60,
+          80,
+          100,
+          120,
+          140,
+          160,
+          180,
+          200,
+          220,
+          240,
+          260,
+          280,
+          300,
+          320,
+          340
+        ],
+        "horizonStepDeg": 0.3,
+        "delta": "row",
+        "compression": "gzip"
+      },
+      "launch": {
+        "elevationM": null,
+        "slopeDeg": null,
+        "aspectDeg": null,
+        "skyViewFactor": null,
+        "horizonDeg": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "relief": {
+        "version": 1,
+        "path": "10eaa64c61cf/relief-v1.bin.gz",
+        "zoom": 11,
+        "x0": 326208,
+        "y0": 198464,
+        "width": 33,
+        "height": 33,
+        "offsetM": 500,
+        "scale": 10,
+        "minM": 749,
+        "maxM": 1312,
+        "encoding": "uint16 little-endian, (elevation m + offsetM) * scale, 0 = no data; row-delta (mod 65536); gzip",
+        "bytes": 184
+      }
+    },
+    "tiles": [
+      {
+        "z": 11,
+        "x": 1274,
+        "y": 775,
+        "bytes": 706,
+        "sha256": "ab42077bda9146e60359a95f37cef06b71c939c1343c9128a3cbf4ee9c4e7aad"
+      },
+      {
+        "z": 12,
+        "x": 2548,
+        "y": 1550,
+        "bytes": 849,
+        "sha256": "501c08bfe2fe7d263138282057bf0fcd064d25c21e789574af200298c80cb3da"
+      },
+      {
+        "z": 13,
+        "x": 5097,
+        "y": 3101,
+        "bytes": 1053,
+        "sha256": "b82443ef8b095fe02e58052e0bf623b7b24c4c2124932b363744c327c6335ed2"
+      },
+      {
+        "z": 14,
+        "x": 10194,
+        "y": 6202,
+        "bytes": 754,
+        "sha256": "6685d04699ab3ef0bad4851a851a8bcd4b800d9a8911af700f891e18030a550c"
+      }
+    ],
+    "reliefSha256": "b29a2738cc0966db4a49d94b963a866ce3beebd0f5dee0763356f6a661750324"
+  },
+  "seam": {
+    "index": {
+      "schemaVersion": 1,
+      "slug": "seam",
+      "generatedAt": "2026-11-05T00:00:00Z",
+      "generation": "7cb2649eca8c",
+      "inputs": {
+        "latitude": 40,
+        "longitude": 44.296875,
+        "area": {
+          "name": "seam",
+          "south": 39.9999,
+          "west": 44.296775,
+          "north": 40.0001,
+          "east": 44.296975
+        },
+        "maxDistanceKm": 2,
+        "algorithmVersion": 1,
+        "sources": {
+          "surface": "fixture-native-dem",
+          "horizon": "fixture-native-dem"
+        }
+      },
+      "sources": {
+        "surface": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        },
+        "horizon": {
+          "id": "fixture-native-dem",
+          "name": "Fixture DEM",
+          "resolutionM": 90,
+          "licence": "test",
+          "url": "https://example.test/dem"
+        }
+      },
+      "bounds": {
+        "south": 39.993956,
+        "west": 44.274902,
+        "north": 40.010787,
+        "east": 44.318848
+      },
+      "referenceElevationM": 1026,
+      "tiles": {
+        "path": "7cb2649eca8c/{z}/{x}/{y}.bin.gz",
+        "size": 256,
+        "minZoom": 11,
+        "maxZoom": 14,
+        "ranges": {
+          "11": [
+            1275,
+            775,
+            1276,
+            775
+          ],
+          "12": [
+            2551,
+            1550,
+            2552,
+            1550
+          ],
+          "13": [
+            5103,
+            3101,
+            5104,
+            3101
+          ],
+          "14": [
+            10207,
+            6202,
+            10208,
+            6202
+          ]
+        },
+        "count": 8,
+        "bytes": 4952
+      },
+      "encoding": {
+        "planes": [
+          "nx",
+          "ny",
+          "nz",
+          "svf"
+        ],
+        "normal": "nx, ny: byte / 127.5 - 1 (east, north components); nz, svf: byte / 255; nz = 0 marks no data",
+        "horizonCells": 64,
+        "horizonBorder": 1,
+        "azimuthsDeg": [
+          0,
+          20,
+          40,
+          60,
+          80,
+          100,
+          120,
+          140,
+          160,
+          180,
+          200,
+          220,
+          240,
+          260,
+          280,
+          300,
+          320,
+          340
+        ],
+        "horizonStepDeg": 0.3,
+        "delta": "row",
+        "compression": "gzip"
+      },
+      "launch": {
+        "elevationM": 1000,
+        "slopeDeg": 12.6,
+        "aspectDeg": 244,
+        "skyViewFactor": 0.988,
+        "horizonDeg": [
+          5.7,
+          9.2,
+          11.6,
+          12.6,
+          12.1,
+          10.2,
+          7,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1.5
+        ]
+      },
+      "relief": {
+        "version": 1,
+        "path": "7cb2649eca8c/relief-v1.bin.gz",
+        "zoom": 11,
+        "x0": 326624,
+        "y0": 198464,
+        "width": 65,
+        "height": 33,
+        "offsetM": 500,
+        "scale": 10,
+        "minM": 558,
+        "maxM": 1495,
+        "encoding": "uint16 little-endian, (elevation m + offsetM) * scale, 0 = no data; row-delta (mod 65536); gzip",
+        "bytes": 170
+      }
+    },
+    "tiles": [
+      {
+        "z": 11,
+        "x": 1275,
+        "y": 775,
+        "bytes": 527,
+        "sha256": "a5ab2964ba512ea265f63a461a3d1c32353ad368dfe1dfebd8b5137080b0d6a0"
+      },
+      {
+        "z": 11,
+        "x": 1276,
+        "y": 775,
+        "bytes": 548,
+        "sha256": "9966ab014f45fad80e6fcc74f30ba396458f23cbacf9e804be77e979ea123d9c"
+      },
+      {
+        "z": 12,
+        "x": 2551,
+        "y": 1550,
+        "bytes": 639,
+        "sha256": "fe5401f2b75bfcb60613ff5a3e485394738275eee0d9afcf4c69779560d5993d"
+      },
+      {
+        "z": 12,
+        "x": 2552,
+        "y": 1550,
+        "bytes": 663,
+        "sha256": "05f0b1bd578ed4d5154099b8e34346a5e801d1b1a4956b0aab0c87d755cc540d"
+      },
+      {
+        "z": 13,
+        "x": 5103,
+        "y": 3101,
+        "bytes": 866,
+        "sha256": "6851d4f2615e7fe5376e3aa6c0d5572ef4d52e22627c1043c1fd43f9eec59b80"
+      },
+      {
+        "z": 13,
+        "x": 5104,
+        "y": 3101,
+        "bytes": 889,
+        "sha256": "5e83ada5006e8cca3d2f9b4729e3a324fcf809dde40dc8c543a926440ca8f329"
+      },
+      {
+        "z": 14,
+        "x": 10207,
+        "y": 6202,
+        "bytes": 410,
+        "sha256": "fe97b875968b77356c2668123956c1029e9961e19d60fc4032eac4a7a126810e"
+      },
+      {
+        "z": 14,
+        "x": 10208,
+        "y": 6202,
+        "bytes": 410,
+        "sha256": "fe97b875968b77356c2668123956c1029e9961e19d60fc4032eac4a7a126810e"
+      }
+    ],
+    "reliefSha256": "10501afe6369146e047d6666399766a1aa819a46d8dfcfe5c0b2404957fc54ca"
+  }
+}

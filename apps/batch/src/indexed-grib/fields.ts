@@ -1,3 +1,4 @@
+import { sourceIntervalHours } from '@av/contracts';
 import type { IndexedSource } from './source.js';
 import { sourceCycle, sourceUrl } from '../source.js';
 import { IndexedGribError } from './errors.ts';
@@ -7,7 +8,9 @@ import type { IndexedGribFieldSpec } from './types.ts';
 
 export function indexedGribFirstFixedSurface(level: string): readonly [number, number] {
   if (level === 'surface') return [1, 0];
-  if (level === '2 m above ground') return [103, 2];
+  const height = /^(\d+) m above ground$/.exec(level);
+  if (height) return [103, Number(height[1])];
+  if (level === 'mean sea level') return [101, 0];
   const pressure = /^(\d+) mb$/.exec(level);
   if (pressure) return [100, Number(pressure[1]) * 100];
   throw new Error(`Unsupported Indexed GRIB fixed surface: ${level}`);
@@ -103,12 +106,21 @@ export function indexedGribPressureSpecs(source: IndexedSource, hour: number): I
 }
 
 export function indexedGribCurrentSpecs(source: IndexedSource, hour: number): IndexedGribFieldSpec[] {
-  return [...indexedGribSurfaceSpecs(source, hour), ...indexedGribPressureSpecs(source, hour)];
+  return [...indexedGribSurfaceSpecs(source, hour), ...indexedGribPressureSpecs(source, hour),
+    ...Object.entries(source.upstream.auxSurface ?? {}).map(([id, spec]) => ({
+      ...instant(`auxSurface.${id}`, 'aux-surface', spec.variable, spec.level, spec.product ?? source.upstream.surfaceProduct, hour),
+      auxId: id, scale: spec.scale, outputUnit: spec.unit, ...(spec.surface ? { fixedSurface: spec.surface } : {})
+    })),
+    ...Object.entries(source.upstream.auxLevels ?? {}).flatMap(([id, spec]) => source.pressureLevels.map(level => ({
+      ...instant(`auxLevels.${id}.${level}`, 'aux-level', spec.variable, `${level} mb`, source.levelProducts.get(level)!, hour, level),
+      auxId: id, scale: spec.scale, outputUnit: spec.unit, ...(spec.conversion ? { conversion: spec.conversion } : {})
+    })))
+  ];
 }
 
 export function indexedGribCompanionSpecs(source: IndexedSource, hour: number): IndexedGribFieldSpec[] {
   const start = indexedGribWindowStart(source, hour);
-  const end = hour - source.model.forecast.intervalHours;
+  const end = hour - sourceIntervalHours(source.model.forecast, hour);
   if (start === end) return [];
   return [
     window('sensibleHeatFlux', 'sensible-flux', ...source.fields.sensibleHeatFlux, source.upstream.surfaceProduct, start, end, 'mean', 'companion'),
@@ -118,5 +130,5 @@ export function indexedGribCompanionSpecs(source: IndexedSource, hour: number): 
 }
 
 export function indexedGribWindowNeedsCompanion(source: IndexedSource, hour: number): boolean {
-  return indexedGribWindowStart(source, hour) !== hour - source.model.forecast.intervalHours;
+  return indexedGribWindowStart(source, hour) !== hour - sourceIntervalHours(source.model.forecast, hour);
 }

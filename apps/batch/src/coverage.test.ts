@@ -67,12 +67,12 @@ describe('coverage integrity', () => {
   });
 });
 
-it('omits forecast hours when the RRFS land mask is entirely dark', async () => {
+it('retains RRFS night hours throughout its native point horizon', async () => {
   const product = getProduct('rrfs');
   if (!product) throw new Error('RRFS product');
   const mask = await loadCoverage(product);
   expect(resolveProductFrameHours(product, mask, '2026-12-21T00:00:00Z', { outputIndices: coverageIndices(mask).output }))
-    .toEqual([1, 2, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+    .toEqual(product.frameHours);
 });
 
 it('writes and verifies sparse coverage artifacts without changing dense descriptors', async () => {

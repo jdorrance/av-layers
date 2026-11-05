@@ -18,6 +18,10 @@ Function names carry their units (`C`, `K`, `Hpa`, `MetersAgl`, `KgPerKg`,
 humidity) return `NaN`. [`@av/thermodynamics/constants`](src/constants.ts)
 exports the physical constants consumed by the solver and method descriptors.
 
+`boltonLclHeightMetersAgl` returns parcel condensation height using Bolton's
+temperature relation. Moisture conversions share the saturation constants;
+`geometricWFromOmegaMps` converts Pa/s to upward-positive m/s using dry density.
+
 See [science](../../docs/science.md).
 
 ```sh

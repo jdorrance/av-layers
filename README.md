@@ -1,8 +1,8 @@
 # Aviation Forecast Layers
 
-Maps and point forecasts for usable lift above sea level, usable lift above
-ground, and precipitation rate. A batch job builds the forecast files; an API
-serves them to a standalone map and a Windy plugin.
+Maps, native weather samples and full atmospheric profiles for GFS, ICON-EU and
+RRFS. A batch job builds immutable forecast files; an API serves them to map
+clients and Windgrams, alongside launch sunlight terrain.
 
 The forecast workflow runs the [configured models](packages/contracts/config/models.json)
 in parallel; their source profiles select NOAA or DWD inputs. Whole-domain

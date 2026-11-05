@@ -20,6 +20,21 @@ describe('normalized provider admission', () => {
     input.tempK[0][0] = NaN; input.missing.temp[0][0] = 1;
     expect(() => validate(input)).not.toThrow();
   });
+  it('validates optional surface and profile channels with the same missingness rules', () => {
+    const input = frame();
+    input.auxSurface = { cloudTotalPct: { values: Float32Array.of(75), missing: Uint8Array.of(0) } };
+    input.auxLevels = { rhPercent: [{ values: Float32Array.of(NaN), missing: Uint8Array.of(1) }] };
+    expect(() => validate(input)).not.toThrow();
+    input.auxLevels.rhPercent![0]!.missing[0] = 0;
+    expect(() => validate(input)).toThrow('unmasked nonfinite');
+    input.auxLevels.rhPercent = [];
+    expect(() => validate(input)).toThrow('level count');
+    input.auxLevels = undefined;
+    input.auxSurface.cloudTotalPct!.values = new Float32Array(2);
+    expect(() => validate(input)).toThrow('dimensions');
+    input.auxSurface = { imaginary: { values: Float32Array.of(0), missing: Uint8Array.of(0) } } as NormalizedFrame['auxSurface'];
+    expect(() => validate(input)).toThrow('Unsupported normalized auxiliary');
+  });
   it.each(['float64', 'boxed field', 'boxed indices', 'nonbyte mask', 'invalid mask', 'unmasked NaN', 'unmasked Infinity', 'wrong dimensions', 'wrong indices', 'nondecreasing levels'] as const)('rejects %s before scientific computation', defect => {
     const input = frame();
     if (defect === 'float64') input.terrainM = Float64Array.of(1) as unknown as Float32Array;

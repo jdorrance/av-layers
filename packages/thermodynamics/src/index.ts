@@ -98,6 +98,50 @@ export const lclHeightMetersAgl = (surfaceTempC: number, surfaceDewpointC: numbe
   return 125 * spread;
 };
 
+/** Bolton parcel LCL above its origin, in metres AGL. */
+export function boltonLclHeightMetersAgl(temperatureC: number, dewPointC: number): number {
+  const temperatureK = temperatureC + ZERO_CELSIUS_K, dewPointK = dewPointC + ZERO_CELSIUS_K;
+  if (!Number.isFinite(temperatureK) || !Number.isFinite(dewPointK) || temperatureK <= 0 || dewPointK <= 0) return NaN;
+  if (dewPointC >= temperatureC) return 0;
+  const lclK = 1 / (1 / (dewPointK - 56) + Math.log(temperatureK / dewPointK) / 800) + 56;
+  return Math.max(0, (temperatureK - lclK) / DRY_LAPSE_RATE_K_PER_M);
+}
+
+/** Water-vapor mixing ratio in kg/kg from dewpoint and ambient pressure. */
+export function mixingRatioFromDewPointKgKg(dewPointC: number, pressureHpa: number): number {
+  const e = saturationVaporPressureHpa(dewPointC);
+  return Number.isFinite(e) && e >= 0 && Number.isFinite(pressureHpa) && pressureHpa > e
+    ? WATER_DRY_AIR_MOLAR_MASS_RATIO * e / (pressureHpa - e) : NaN;
+}
+
+export function dewPointFromMixingRatioC(mixingRatioKgKg: number, pressureHpa: number): number {
+  if (!Number.isFinite(mixingRatioKgKg) || mixingRatioKgKg <= 0 || !Number.isFinite(pressureHpa) || pressureHpa <= 0) return NaN;
+  const e = mixingRatioKgKg * pressureHpa / (WATER_DRY_AIR_MOLAR_MASS_RATIO + mixingRatioKgKg);
+  const log = Math.log(e / SATURATION_SCALE_HPA);
+  return SATURATION_OFFSET_C * log / (SATURATION_EXPONENT - log);
+}
+
+export function dewPointFromSpecificHumidityC(specificHumidityKgKg: number, pressureHpa: number): number {
+  return Number.isFinite(specificHumidityKgKg) && specificHumidityKgKg > 0 && specificHumidityKgKg < 1
+    ? dewPointFromMixingRatioC(specificHumidityKgKg / (1 - specificHumidityKgKg), pressureHpa) : NaN;
+}
+
+/** Upward geometric velocity in m/s from pressure velocity omega in Pa/s. */
+export function geometricWFromOmegaMps(omegaPaS: number, pressureHpa: number, temperatureC: number): number {
+  const temperatureK = temperatureC + ZERO_CELSIUS_K;
+  return Number.isFinite(omegaPaS) && Number.isFinite(pressureHpa) && Number.isFinite(temperatureK) && pressureHpa > 0 && temperatureK > 0
+    ? omegaPaS === 0 ? 0 : -omegaPaS * THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * temperatureK /
+      (pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2) : NaN;
+}
+
+/** Pressure velocity in Pa/s from upward geometric velocity in m/s and dry density. */
+export function omegaFromGeometricWPaS(wMps: number, pressureHpa: number, temperatureC: number): number {
+  const temperatureK = temperatureC + ZERO_CELSIUS_K;
+  return Number.isFinite(wMps) && Number.isFinite(pressureHpa) && Number.isFinite(temperatureK) && pressureHpa > 0 && temperatureK > 0
+    ? wMps === 0 ? 0 : -wMps * pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2 /
+      (THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * temperatureK) : NaN;
+}
+
 /**
  * Dry-adiabatic parcel temperature at target altitude `zM` given initial
  * parcel temperature `t0` at altitude `z0M` and dry lapse rate `dryLapseRateKperM`.

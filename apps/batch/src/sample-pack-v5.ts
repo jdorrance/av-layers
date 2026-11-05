@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, rm, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { CELL_BYTES, MAX_SAMPLE_VALUES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, sparseCoverageLookup, type SparseCoverage } from '@av/contracts';
-import { SAMPLE_SHARD_TARGET_BYTES, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
+import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_VALUES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, sparseCoverageLookup, type SparseCoverage } from '@av/contracts';
+import { MAX_PACK_RECORD_BYTES, SAMPLE_SHARD_TARGET_BYTES, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
 import { localPath } from './validate.js';
 
-const WRITE_CHUNK_BYTES = Math.floor(1024 * 1024 / CELL_BYTES) * CELL_BYTES;
+const MAX_WRITE_CHUNK_BYTES = 1024 * 1024;
 const MAX_OPEN_SHARDS = 32;
 const MAX_BLOCK_CELLS = (SAMPLE_BLOCK_SIZE + 1) * (SAMPLE_BLOCK_SIZE + 1);
+type RawRecords = Uint8Array | ((gridIndex: number) => Uint8Array);
 
 export interface ShardedSamplePackShard {
   readonly firstBlock: number;
@@ -24,10 +25,12 @@ export interface ShardedSamplePackTarget {
   readonly buildId: string;
   readonly surfaceId: string;
   readonly group?: number;
+  readonly kind?: 'samples' | 'profiles';
 }
 
 export interface ShardedSamplePackInput {
   readonly root: string;
+  readonly recordBytes?: number;
   readonly channelCount: number;
   readonly shards: readonly ShardedSamplePackShard[];
 }
@@ -37,27 +40,49 @@ function component(value: unknown, name: string): string {
   return value;
 }
 
-export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number): string {
+export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number, kind: 'samples' | 'profiles' = 'samples'): string {
+  if (kind !== 'samples' && kind !== 'profiles') throw new RangeError('Invalid sample shard kind');
   component(model, 'model');
   component(buildId, 'build ID');
   component(surfaceId, 'surface ID');
   if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('Invalid sample shard index');
   if (group !== undefined && (!Number.isSafeInteger(group) || group < 0)) throw new RangeError('Invalid sample frame group');
-  return `builds/${model}/${buildId}/surfaces/${surfaceId}/samples/${group === undefined ? index : `g${group}-b${index}`}.bin`;
+  return `builds/${model}/${buildId}/surfaces/${surfaceId}/${kind}/${group === undefined ? index : `g${group}-b${index}`}.bin`;
 }
 
 function assertChannels(channelCount: number): void {
-  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_SAMPLE_VALUES) throw new RangeError('Invalid sample channel count');
+  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_PACK_CHANNELS) throw new RangeError('Invalid sample channel count');
 }
 
 function assertLayout(layout: ShardedSamplePackLayout): void {
   if (!layout || !Number.isSafeInteger(layout.blockCount) || layout.blockCount < 1 || !Number.isSafeInteger(layout.storedCells) || layout.storedCells < 1 || !Array.isArray(layout.shards) || !layout.shards.length) throw new RangeError('Invalid sharded sample layout');
   assertChannels(layout.channelCount);
+  if (!Number.isSafeInteger(layout.recordBytes) || layout.recordBytes < 1 || layout.recordBytes > MAX_PACK_RECORD_BYTES) throw new RangeError('Invalid sample record width');
+  const bytes = layout.storedCells * layout.channelCount * layout.recordBytes;
+  if (!Number.isSafeInteger(bytes) || bytes !== layout.byteLength) throw new RangeError('Invalid sample layout bytes');
+  let nextBlock = 0, shardBytes = 0;
+  for (const shard of layout.shards) {
+    if (shard.firstBlock !== nextBlock || !Number.isSafeInteger(shard.blockCount) || shard.blockCount < 1
+      || !Number.isSafeInteger(shard.byteLength) || shard.byteLength < 1 || shard.byteLength > SAMPLE_SHARD_TARGET_BYTES) throw new RangeError('Invalid sample shard layout');
+    nextBlock += shard.blockCount; shardBytes += shard.byteLength;
+  }
+  if (nextBlock !== layout.blockCount || shardBytes !== bytes) throw new RangeError('Incomplete sample shard layout');
 }
 
 function blockCells(layout: ShardedSamplePackLayout, ordinal: number): number {
   const block = layout.block(ordinal);
   return block.width * block.height;
+}
+
+function maximumBlockCells(layout: ShardedSamplePackLayout): number {
+  let maximum = 0;
+  for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+    const cells = blockCells(layout, ordinal);
+    if (!Number.isSafeInteger(cells) || cells < 1 || cells > MAX_BLOCK_CELLS) throw new RangeError('Invalid sample block size');
+    maximum = Math.max(maximum, cells);
+  }
+  if (maximum * layout.channelCount * layout.recordBytes > SAMPLE_SHARD_TARGET_BYTES) throw new RangeError('Sample block exceeds shard target');
+  return maximum;
 }
 
 function assertCoverage(layout: ShardedSamplePackLayout, coverage: SparseCoverage): void {
@@ -111,15 +136,16 @@ export function createShardedSamplePackWriter(
 ) {
   assertLayout(layout);
   assertCoverage(layout, coverage);
+  const recordBytes = layout.recordBytes, chunkBytes = Math.floor(MAX_WRITE_CHUNK_BYTES / recordBytes) * recordBytes;
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group));
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind));
   const finalPaths = finalKeys.map(key => localPath(target.root, key));
   const tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.channels`));
   const finalTempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
   const starts = layout.shards.map(() => new Array<number>(layout.channelCount).fill(-1));
   const ends = layout.shards.map(() => 0);
   const written = new Uint8Array(layout.channelCount), compatibleCoverages = new WeakSet<SparseCoverage>([coverage]);
-  const handles = new Map<number, FileHandle>(), finalHandles = new Set<FileHandle>(), created = new Set<string>(), linked = new Set<string>(), blockBuffer = Buffer.allocUnsafe(MAX_BLOCK_CELLS * CELL_BYTES);
+  const handles = new Map<number, FileHandle>(), finalHandles = new Set<FileHandle>(), created = new Set<string>(), linked = new Set<string>(), blockBuffer = Buffer.allocUnsafe(maximumBlockCells(layout) * recordBytes);
   let finished = false, closed = false, failed = false, completed = 0;
   let inFlight: Promise<unknown> | undefined;
   let cleanupPromise: Promise<void> | undefined;
@@ -188,10 +214,13 @@ export function createShardedSamplePackWriter(
     return packed;
   }
 
-  async function writeShardChannel(shard: number, channel: number, field: GridField, packed: SparseCoverage | undefined): Promise<void> {
+  async function writeShardChannel(shard: number, channel: number, source: GridField | RawRecords, packed: SparseCoverage | undefined, outsideRecord?: Uint8Array): Promise<void> {
     const descriptor = layout.shards[shard], sectionBytes = descriptor.byteLength / layout.channelCount;
-    const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, WRITE_CHUNK_BYTES));
-    const width = layout.grid.width, wrap = layout.grid.wrapLongitude, { flags } = field;
+    const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, chunkBytes));
+    const width = layout.grid.width, wrap = layout.grid.wrapLongitude;
+    const raw = source instanceof Uint8Array ? Buffer.from(source.buffer, source.byteOffset, source.byteLength) : undefined;
+    const readRecord = typeof source === 'function' ? source : undefined;
+    const field = raw || readRecord ? undefined : source as GridField;
     let chunkFill = 0, position = ends[shard];
     starts[shard][channel] = position;
     ends[shard] += sectionBytes;
@@ -206,21 +235,28 @@ export function createShardedSamplePackWriter(
       for (let i = 0; i < cells; i++) {
         const x = i % block.width, y = (i - x) / block.width;
         const column = wrap ? (block.column + x) % width : block.column + x;
-        const row = block.row + y, destination = i * CELL_BYTES;
+        const row = block.row + y, destination = i * recordBytes;
         const lookup = sparseCoverageLookup(coverage, column, row);
         if (!lookup) {
-          blockBuffer[destination] = 0; blockBuffer[destination + 1] = 0; blockBuffer[destination + 2] = 0; blockBuffer[destination + 3] = 0;
-          blockBuffer[destination + 4] = STATUS_OUTSIDE;
+          if (outsideRecord) blockBuffer.set(outsideRecord, destination);
+          else { blockBuffer.fill(0, destination, destination + recordBytes); blockBuffer[destination + 4] = STATUS_OUTSIDE; }
           continue;
         }
         const index = packed ? (packed === coverage ? lookup.offset : sparseCoverageLookup(packed, column, row)!.offset) : row * width + column;
-        blockBuffer.writeFloatLE(field.values[index], destination);
-        blockBuffer[destination + 4] = flags[index];
+        if (readRecord) {
+          const record = readRecord(row * width + column);
+          if (!(record instanceof Uint8Array) || record.byteLength !== recordBytes) throw new RangeError('Invalid callback record width');
+          blockBuffer.set(record, destination);
+        } else if (raw) raw.copy(blockBuffer, destination, index * recordBytes, (index + 1) * recordBytes);
+        else { blockBuffer.writeFloatLE(field!.values[index], destination); blockBuffer[destination + 4] = field!.flags[index]; }
       }
-      const blockBytes = cells * CELL_BYTES;
-      if (chunkFill + blockBytes > chunk.length) await flush();
-      blockBuffer.copy(chunk, chunkFill, 0, blockBytes);
-      chunkFill += blockBytes;
+      const blockBytes = cells * recordBytes;
+      for (let offset = 0; offset < blockBytes;) {
+        const length = Math.min(chunk.length - chunkFill, blockBytes - offset);
+        blockBuffer.copy(chunk, chunkFill, offset, offset + length);
+        chunkFill += length; offset += length;
+        if (chunkFill === chunk.length) await flush();
+      }
     }
     await flush();
     if (position !== starts[shard][channel] + sectionBytes) throw new Error('Sample shard channel length mismatch');
@@ -234,27 +270,46 @@ export function createShardedSamplePackWriter(
     return result;
   }
 
-  return {
-    writeChannel(channel: number, field: GridField): Promise<void> {
-      return run(async () => {
-        if (closed || finished || failed) check();
-        try { check(); } catch (error) { return fail(error); }
-        if (!Number.isSafeInteger(channel) || channel < 0 || channel >= layout.channelCount) throw new RangeError('Invalid sample channel index');
-        if (written[channel]) throw new Error(`Sample channel ${channel} was already written`);
-        if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array) || field.flags.length !== field.values.length) throw new RangeError('Invalid sample field shape');
-        const packed = packedCoverage(field);
+  function writeSource(channel: number, source: GridField | RawRecords, rawOptions?: { outsideRecord: Uint8Array; coverage?: SparseCoverage }): Promise<void> {
+    return run(async () => {
+      if (closed || finished || failed) check();
+      try { check(); } catch (error) { return fail(error); }
+      if (!Number.isSafeInteger(channel) || channel < 0 || channel >= layout.channelCount) throw new RangeError('Invalid sample channel index');
+      if (written[channel]) throw new Error(`Sample channel ${channel} was already written`);
+      const raw = source instanceof Uint8Array || typeof source === 'function';
+      let packed: SparseCoverage | undefined;
+      if (raw) {
+        packed = rawOptions?.coverage ?? coverage;
+        if (!compatibleCoverages.has(packed)) {
+          if (!sameCoverage(coverage, packed)) throw new RangeError('Packed record coverage differs from layout');
+          compatibleCoverages.add(packed);
+        }
+        if (!(rawOptions?.outsideRecord instanceof Uint8Array) || rawOptions.outsideRecord.byteLength !== recordBytes
+          || (source instanceof Uint8Array && source.byteLength !== packed.offsets[packed.offsets.length - 1]! * recordBytes)) throw new RangeError('Invalid raw record shape');
+      } else {
+        if (recordBytes !== CELL_BYTES) throw new RangeError('Scalar writing requires five-byte records');
+        if (!(source.values instanceof Float32Array) || !(source.flags instanceof Uint8Array) || source.flags.length !== source.values.length) throw new RangeError('Invalid sample field shape');
+        packed = packedCoverage(source);
         const expected = packed ? packed.offsets[packed.offsets.length - 1] : layout.grid.width * layout.grid.height;
-        if (field.values.length !== expected) throw new RangeError('Invalid sample field shape');
-        try {
-          for (let shard = 0; shard < layout.shards.length; shard++) {
-            check();
-            await writeShardChannel(shard, channel, field, packed);
-          }
+        if (source.values.length !== expected) throw new RangeError('Invalid sample field shape');
+      }
+      try {
+        for (let shard = 0; shard < layout.shards.length; shard++) {
           check();
-        } catch (error) { return fail(error); }
-        written[channel] = 1;
-        completed++;
-      });
+          await writeShardChannel(shard, channel, source, packed, rawOptions?.outsideRecord);
+        }
+        check();
+      } catch (error) { return fail(error); }
+      written[channel] = 1;
+      completed++;
+    });
+  }
+
+  return {
+    writeChannel(channel: number, field: GridField): Promise<void> { return writeSource(channel, field); },
+    /** Arrays follow sparse offsets; callbacks borrow one record per global grid index until copied. */
+    writeRawChannel(channel: number, records: RawRecords, rawOptions: { outsideRecord: Uint8Array; coverage?: SparseCoverage }): Promise<void> {
+      return writeSource(channel, records, rawOptions);
     },
 
     finish(): Promise<readonly ShardedSamplePackShard[]> {
@@ -275,8 +330,8 @@ export function createShardedSamplePackWriter(
               cells += block.width * block.height;
             }
             const sectionBytes = shardBytes / layout.channelCount;
-            if (!Number.isSafeInteger(sectionBytes) || sectionBytes % CELL_BYTES !== 0) throw new Error('Invalid sample shard channel alignment');
-            const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, WRITE_CHUNK_BYTES));
+            if (!Number.isSafeInteger(sectionBytes) || sectionBytes % recordBytes !== 0) throw new Error('Invalid sample shard channel alignment');
+            const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, chunkBytes));
             for (let channel = 0; channel < layout.channelCount; channel++) {
               check();
               const handle = await handleFor(shard);
@@ -284,13 +339,13 @@ export function createShardedSamplePackWriter(
               while (remaining > 0) {
                 check();
                 const length = Math.min(chunk.length, remaining);
-                if (length % CELL_BYTES !== 0) throw new Error('Invalid sample shard chunk alignment');
+                if (length % recordBytes !== 0) throw new Error('Invalid sample shard chunk alignment');
                 await readAll(handle, chunk, 0, length, position, check);
-                for (let offset = 0; offset < length; offset += CELL_BYTES) {
+                for (let offset = 0; offset < length; offset += recordBytes) {
                   while (blockIndex + 1 < blocks.length && within === blocks[blockIndex].cells) { blockIndex++; within = 0; }
                   if (within >= blocks[blockIndex].cells) throw new Error('Sample shard channel data exceeds its blocks');
-                  const destination = blocks[blockIndex].byteOffset + (within * layout.channelCount + channel) * CELL_BYTES;
-                  chunk.copy(buffer, destination, offset, offset + CELL_BYTES);
+                  const destination = blocks[blockIndex].byteOffset + (within * layout.channelCount + channel) * recordBytes;
+                  chunk.copy(buffer, destination, offset, offset + recordBytes);
                   within++; seen++;
                 }
                 position += length; remaining -= length;
@@ -312,7 +367,7 @@ export function createShardedSamplePackWriter(
             created.delete(tempPaths[shard]);
             descriptors.push({
               firstBlock: descriptor.firstBlock, blockCount: descriptor.blockCount,
-              storedCells: shardBytes / (layout.channelCount * CELL_BYTES), bytes: shardBytes,
+              storedCells: shardBytes / (layout.channelCount * recordBytes), bytes: shardBytes,
               key: finalKeys[shard], sha256: sha256(buffer)
             });
           }
@@ -339,12 +394,14 @@ export async function mergeShardedSamplePacks(
   options: { signal?: AbortSignal } = {}
 ): Promise<readonly ShardedSamplePackShard[]> {
   assertLayout(layout);
+  const recordBytes = layout.recordBytes;
   if (!inputs.length || inputs.length > MAX_SAMPLE_VALUES) throw new RangeError('Invalid sample pack input count');
   let channels = 0;
   for (const input of inputs) {
     assertChannels(input.channelCount);
+    if ((input.recordBytes ?? CELL_BYTES) !== recordBytes) throw new RangeError('Sample record width mismatch');
     channels += input.channelCount;
-    if (channels > MAX_SAMPLE_VALUES || typeof input.root !== 'string' || !input.root || !Array.isArray(input.shards) || !input.shards.length) throw new RangeError('Invalid sample pack input');
+    if (channels > MAX_PACK_CHANNELS || typeof input.root !== 'string' || !input.root || !Array.isArray(input.shards) || !input.shards.length) throw new RangeError('Invalid sample pack input');
     let next = 0, stored = 0, previousKey = '';
     for (const shard of input.shards) {
       if (!Number.isSafeInteger(shard.firstBlock) || shard.firstBlock !== next || !Number.isSafeInteger(shard.blockCount) || shard.blockCount < 1
@@ -355,7 +412,7 @@ export async function mergeShardedSamplePacks(
       if (!Number.isSafeInteger(end) || end > layout.blockCount) throw new Error('Incomplete sample shard ranges');
       let cells = 0;
       for (let ordinal = shard.firstBlock; ordinal < end; ordinal++) cells += blockCells(layout, ordinal);
-      const bytes = cells * input.channelCount * CELL_BYTES;
+      const bytes = cells * input.channelCount * recordBytes;
       if (!Number.isSafeInteger(bytes) || shard.storedCells !== cells || shard.bytes !== bytes || bytes > SAMPLE_SHARD_TARGET_BYTES) throw new Error('Sample shard size mismatch');
       next = end; stored += cells; previousKey = shard.key;
     }
@@ -365,13 +422,14 @@ export async function mergeShardedSamplePacks(
   options.signal?.throwIfAborted();
 
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group));
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind));
   const finalPaths = finalKeys.map(key => localPath(target.root, key)), tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
-  const linked = new Set<string>(), created = new Set<string>(), finalStride = layout.channelCount * CELL_BYTES;
+  const linked = new Set<string>(), created = new Set<string>(), finalStride = layout.channelCount * recordBytes;
   const shardStates = layout.shards.map(() => ({ handle: undefined as FileHandle | undefined, hash: undefined as ReturnType<typeof createHash> | undefined, bytes: 0 }));
+  const maxCells = maximumBlockCells(layout);
   const cursors = inputs.map(input => ({
     input, shard: 0, handle: undefined as FileHandle | undefined, hash: undefined as ReturnType<typeof createHash> | undefined,
-    remaining: 0, position: 0, buffer: Buffer.allocUnsafe(MAX_BLOCK_CELLS * input.channelCount * CELL_BYTES)
+    remaining: 0, position: 0, buffer: Buffer.allocUnsafe(maxCells * input.channelCount * recordBytes)
   }));
 
   async function openShard(cursor: (typeof cursors)[number]): Promise<void> {
@@ -429,7 +487,7 @@ export async function mergeShardedSamplePacks(
       const output = Buffer.allocUnsafe(outputBytes);
       let channelOffset = 0;
       for (const cursor of cursors) {
-        const inputStride = cursor.input.channelCount * CELL_BYTES;
+        const inputStride = cursor.input.channelCount * recordBytes;
         await readBlock(cursor, ordinal, cells * inputStride);
         if (cursors.length === 1 && inputStride === finalStride) cursor.buffer.copy(output, 0, 0, outputBytes);
         else for (let cell = 0; cell < cells; cell++) cursor.buffer.copy(output, cell * finalStride + channelOffset, cell * inputStride, (cell + 1) * inputStride);

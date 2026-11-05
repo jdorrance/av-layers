@@ -1,6 +1,6 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
+import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, PRECIPITATION_ALL_HOURS_METHOD, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
@@ -81,7 +81,7 @@ describe('contracts', () => {
       model: 'gfs',
       descriptors: createProductDescriptors({ ...INDEXED_PRODUCT, layers: ['precip-rate'] }),
       recipe: createRecipeIdentity(INDEXED_PRODUCT, hash),
-      method: { id: 'trailing-precipitation-rate-v1', hash },
+      method: { id: PRECIPITATION_ALL_HOURS_METHOD.id, hash },
       buildId: 'b1',
       frames: [
         { id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z' },
@@ -100,7 +100,7 @@ describe('contracts', () => {
     twoFrameManifest.method.id = 'unrelated-method-v1';
     expect(() => validateArtifactRecords(twoFrameManifest)).toThrow('published descriptor snapshots');
     twoFrameManifest.method.id = 'retained-precipitation-rate-v0';
-    const stored = twoFrameManifest.descriptors.methods['trailing-precipitation-rate-v1'];
+    const stored = twoFrameManifest.descriptors.methods[twoFrameManifest.descriptors.layers['precip-rate']!.methodId]!;
     delete twoFrameManifest.descriptors.methods[stored.id];
     stored.id = twoFrameManifest.method.id;
     twoFrameManifest.descriptors.methods[stored.id] = stored;

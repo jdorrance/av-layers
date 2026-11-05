@@ -8,8 +8,10 @@ import {
   STATUS_NO_LIFT,
   STATUS_OUTSIDE,
   STATUS_UNAVAILABLE,
+  renderedLayers,
   type CoverageMask,
-  type LayerId
+  type LayerId,
+  type SparseCoverage
 } from '@av/contracts';
 import {
   buildIntervalDaylightTimestampsMs,
@@ -24,6 +26,7 @@ import type { GridField } from './sampler.js';
 import { validateNormalizedFrame, type NormalizedFrame } from './inputs.js';
 import type { DepthBranch } from '@av/soaring';
 import { createNativeColumnScratch, readNativeColumn } from './column-input.js';
+import { prepareNativeFields } from './native-fields.js';
 
 
 export interface FrameDiagnostics {
@@ -58,8 +61,7 @@ export interface DeriveFrameOptions extends ColumnDerivationOptions {
    */
   readonly layers?: readonly LayerId[];
   /**
-   * When true (default), cells that are in darkness across the trailing flux/precipitation
-   * window and valid time skip column physics and precipitation evaluation.
+   * When true (default), dark cells skip convective column physics.
    */
   readonly daylightOnly?: boolean;
   /**
@@ -71,6 +73,7 @@ export interface DeriveFrameOptions extends ColumnDerivationOptions {
    */
   readonly minimumRateMmPerHour?: number;
   readonly diagnostics?: FrameDiagnostics;
+  readonly nativeCoverage?: SparseCoverage;
 }
 
 function field(mask: CoverageMask): GridField {
@@ -99,7 +102,9 @@ const frameViews = (frame: NormalizedFrame): ArrayBufferView[] => [
   ...(frame.missing.precipitation ? [frame.missing.precipitation] : []),
   ...frame.missing.hgt,
   ...frame.missing.temp,
-  ...(frame.missing.pressure ?? [])
+  ...(frame.missing.pressure ?? []),
+  ...Object.values(frame.auxSurface ?? {}).flatMap(field => [field.values, field.missing]),
+  ...Object.values(frame.auxLevels ?? {}).flatMap(levels => levels.flatMap(field => [field.values, field.missing]))
 ];
 
 function validateDiagnostics(
@@ -207,7 +212,7 @@ export function deriveFrame(
   const activeLayers: readonly LayerId[] =
     options?.layers ??
     (frame.precipitationMmPerHour instanceof Float32Array
-      ? LAYER_IDS
+      ? renderedLayers(LAYER_IDS)
       : (['usable-lift-msl', 'usable-lift-agl'] as const));
 
   const requiresLift = activeLayers.some(
@@ -237,6 +242,9 @@ export function deriveFrame(
   if (liftMsl) result['usable-lift-msl'] = liftMsl;
   if (liftAgl) result['usable-lift-agl'] = liftAgl;
   if (precipitation) result['precip-rate'] = precipitation;
+  const nativeLayers = activeLayers.filter(layer => !renderedLayers([layer]).length);
+  const native = nativeLayers.length ? prepareNativeFields(frame, mask, nativeLayers, options?.nativeCoverage) : undefined;
+  if (native) Object.assign(result, native.fields);
 
   const read = (values: Float32Array, missing: Uint8Array, i: number): number =>
     missing[i] ? NaN : values[i];
@@ -263,8 +271,16 @@ export function deriveFrame(
       throw new Error('Acquisition returned inactive index');
     }
     const terrain = read(frame.terrainM, frame.missing.terrain, i);
+    const daylight = isDaylight(index);
+    const cloudSupport = native?.write(i, daylight) ?? 0;
+    if (precipitation) {
+      const rain = read(frame.precipitationMmPerHour!, frame.missing.precipitation!, i);
+      const rainStatus = precipitationRateStatus(rain, minimumRateMmPerHour);
+      precipitation.values[index] = rainStatus === STATUS_UNAVAILABLE ? NaN : rain;
+      precipitation.flags[index] = rainStatus;
+    }
 
-    if (!isDaylight(index)) {
+    if (!daylight) {
       if (requiresLift) {
         const finiteTerrain = Number.isFinite(terrain);
         if (liftMsl) {
@@ -276,10 +292,6 @@ export function deriveFrame(
           liftAgl.flags[index] = finiteTerrain ? STATUS_NO_LIFT : STATUS_UNAVAILABLE;
         }
         if (diagnostics) diagnostics.branch[index] = FRAME_BRANCH.skippedDark;
-      }
-      if (precipitation) {
-        precipitation.values[index] = NaN;
-        precipitation.flags[index] = STATUS_UNAVAILABLE;
       }
       continue;
     }
@@ -296,20 +308,14 @@ export function deriveFrame(
       }
       if (liftMsl) {
         liftMsl.values[index] = lift.msl.value ?? NaN;
-        liftMsl.flags[index] = lift.msl.flags;
+        liftMsl.flags[index] = lift.msl.flags | cloudSupport;
       }
       if (liftAgl) {
         liftAgl.values[index] = lift.agl.value ?? NaN;
-        liftAgl.flags[index] = lift.agl.flags;
+        liftAgl.flags[index] = lift.agl.flags | cloudSupport;
       }
     }
 
-    if (precipitation) {
-      const rain = read(frame.precipitationMmPerHour!, frame.missing.precipitation!, i);
-      const rainStatus = precipitationRateStatus(rain, minimumRateMmPerHour);
-      precipitation.values[index] = rainStatus === STATUS_UNAVAILABLE ? NaN : rain;
-      precipitation.flags[index] = rainStatus;
-    }
   }
   return result;
 }

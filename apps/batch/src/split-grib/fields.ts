@@ -1,3 +1,4 @@
+import { sourceIntervalHours } from '@av/contracts';
 import type { SplitSource } from './source.js';
 import { sourceCycle, sourceUrl, sourceWindowStart } from '../source.js';
 import type { DecodedSplitGribField } from './grib.js';
@@ -110,13 +111,14 @@ export function verifySplitGribFieldMetadata(source: SplitSource,
       );
     }
   } else {
+    const startHour = spec.statisticalProcessCode === 2 ? expectedHour - sourceIntervalHours(source.model.forecast, expectedHour) : sourceWindowStart(source.model.forecast, expectedHour);
     if (
       p.statisticalProcessCode !== spec.statisticalProcessCode ||
-      Math.abs(p.startHour - sourceWindowStart(source.model.forecast, expectedHour)) > 1e-6 ||
+      Math.abs(p.startHour - startHour) > 1e-6 ||
       Math.abs(p.endHour - expectedHour) > 1e-6
     ) {
       throw new Error(
-        `Split GRIB ${field} statistical interval mismatch: expected ${sourceWindowStart(source.model.forecast, expectedHour)}..${expectedHour}h (process ${spec.statisticalProcessCode}), got ${p.startHour}..${p.endHour}h (process ${p.statisticalProcessCode})`
+        `Split GRIB ${field} statistical interval mismatch: expected ${startHour}..${expectedHour}h (process ${spec.statisticalProcessCode}), got ${p.startHour}..${p.endHour}h (process ${p.statisticalProcessCode})`
       );
     }
   }
@@ -125,6 +127,9 @@ export function verifySplitGribFieldMetadata(source: SplitSource,
     throw new Error(
       `Split GRIB ${field} fixed surface value mismatch: expected ${spec.firstFixedSurfaceValue}, got ${String(p.firstFixedSurfaceValue)}`
     );
+  }
+  if (spec.secondFixedSurfaceValue !== undefined && p.secondFixedSurfaceValue !== spec.secondFixedSurfaceValue) {
+    throw new Error(`Split GRIB ${field} second fixed surface value mismatch`);
   }
 
   if (options.level !== undefined && options.level !== null) {

@@ -17,3 +17,19 @@ export const DEFAULT_SOARING_PARAMETERS = Object.freeze({
   crossingEpsilonMultiplier: 8,
   maximumBisectionIterations: 60
 } as const);
+
+/** Native Windgrams V2 closures; source moments belong to one normalized frame. */
+export const NATIVE_DIAGNOSTIC_PARAMETERS = Object.freeze({
+  minimumLevelAglM: 20,
+  minimumThermalLevels: 3,
+  shallowLatentHeatCoefficient: 245268e-9,
+  shallowTemperaturePerFlux: 0.012,
+  maximumShallowTemperatureC: 1.5,
+  mixedLayerPoissonExponent: 0.2854,
+  nearSaturationSpreadC: 0.5,
+  overdevelopmentRelativeHumidityPercent: 85,
+  minimumShearMps: 0.2,
+  cloudCapSinkRateMps: 1,
+  sourceWindHeightAglM: 10,
+  boundaryLayerWindAnchorAglM: 0
+} as const);

@@ -18,7 +18,7 @@ vi.mock('../apps/batch/src/providers.js', async () => {
   } }) };
 });
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer, verifyV5Dependencies: fake.verifyDependencies }));
-vi.mock('../apps/batch/src/local-file.js', () => ({ readLocalFile: fake.readLocal }));
+vi.mock('../apps/batch/src/local-file.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/local-file.js')>(), readLocalFile: fake.readLocal }));
 vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
 vi.mock('../apps/batch/src/storage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/storage.js')>(), r2Storage: fake.storage }));
 vi.mock('../apps/batch/src/whole-domain/coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/whole-domain/coverage.js')>(), loadBundledFineCoverage: fake.fineCoverage }));
@@ -362,7 +362,7 @@ it('resumes matching artifacts through the same admission/journal without rebuil
 
 function refinedResumePlan(): BuildPlan {
   const patch = fixturePatch(manifest), product = getProduct(manifest.model)!;
-  patch.descriptors = createRefinementDescriptors(product, patch.descriptors.bounds);
+  patch.descriptors = createRefinementDescriptors({ ...product, layers: manifest.layers }, patch.descriptors.bounds);
   patch.method.id = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate].id;
   manifest.version = 4; manifest.patches = [patch];
   validateArtifactRecords(manifest);

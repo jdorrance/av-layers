@@ -74,7 +74,9 @@ export type IndexedGribFieldKind =
   | 'latent-flux'
   | 'precipitation'
   | 'height'
-  | 'temperature';
+  | 'temperature'
+  | 'aux-surface'
+  | 'aux-level';
 
 export interface IndexedGribFieldSpec {
   key: string;
@@ -86,6 +88,11 @@ export interface IndexedGribFieldSpec {
   statistic: 'instant' | 'mean' | 'accumulation';
   levelHpa?: number;
   role?: 'current' | 'companion';
+  fixedSurface?: readonly [number, number | null];
+  auxId?: string;
+  scale?: number;
+  conversion?: 'geometric-w-to-omega';
+  outputUnit?: string;
 }
 
 export interface SelectedIdxRecord {
@@ -142,6 +149,7 @@ export interface DecodedFieldReceipt {
   key: string;
   kind: IndexedGribFieldKind;
   role: 'current' | 'companion';
+  normalization?: { units: string; scale: number; conversion?: 'geometric-w-to-omega' };
   variable: string;
   level: string;
   levelHpa: number | null;
@@ -177,6 +185,7 @@ export interface DecodedFieldReceipt {
     gridDefinitionTemplateNumber: number;
     scanningMode: number;
     earthRadiusM: number;
+    uvRelativeToGrid?: boolean;
   };
   productMetadata: DecodedProductReceipt;
   interval: IndexedGribIntervalReceipt;

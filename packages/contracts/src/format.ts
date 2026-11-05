@@ -1,7 +1,14 @@
 /** Shared storage and wire-format limits consumed by producers and readers. */
 export const CELL_BYTES = 5;
+export const PROFILE_PACK_FORMAT = 'native-column-profile-v1';
+export const PROFILE_HEADER_BYTES = 8;
+export const PROFILE_LEVEL_BYTES = 14;
+export const MAX_PROFILE_LEVELS = 256;
+export const PROFILE_OMEGA_UNITS_PER_PA_S = 10;
+export const MAX_PACK_CHANNELS = 8192;
 export const SAMPLE_BLOCK_SIZE = 16;
 export const MAX_SAMPLE_VALUES = 256;
+export const MAX_FORECAST_SHARDS = 256;
 export const MAX_SAMPLE_RANGE_BYTES = 256 * 1024;
 export const RETENTION_DAYS = 7;
 export const MAX_RETAINED_BUILDS = 256;

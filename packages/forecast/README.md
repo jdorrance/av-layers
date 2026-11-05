@@ -23,6 +23,9 @@ daylight cells via [`@av/solar`](../solar/README.md).
 `validateNormalizedFrame` checks array dimensions, vertical pressure axes
 (`pressureLevelsHpa` or per-column `pressurePa`), and missingness masks before
 derivation.
+Optional `auxSurface` and `auxLevels` maps carry native diagnostic inputs in
+[`NORMALIZED_INPUTS`](../contracts/src/methods.ts) units. Profile arrays follow
+the core vertical axis; every auxiliary field has its own missingness mask.
 
 Pass caller-owned `diagnostics: { ceilingMslM, buoyancyM2S3, branch }` arrays
 (one element per native grid cell) to inspect lift derivation. Each call resets

@@ -64,6 +64,7 @@ files per model and fetches up to four files concurrently. Each completed
 failed workflow resumes those windows. Completed arrays and their manifest
 retain the existing terrain identity.
 
+
 [Operations](../../../../docs/operations.md#terrain-data) configures the hosted
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
 covers local builds with `--terrain-catalog-ref PATH`.
@@ -82,6 +83,23 @@ flowchart LR
   artifact --> plan[Forecast plan: validate and stage cached arrays]
   plan --> shards[Local load once per shard]
 ```
+
+## Publish launch sunlight
+
+The **Launch sunlight terrain** workflow reads launch coordinates from
+Windgrams' `forecasts/sites.json` and uses the selected terrain catalog:
+
+```sh
+pnpm terrain solar --catalog-ref output/terrain-catalog-ref.json \
+  --sites ../windgrams/forecasts/sites.json --site am-hatis-500 \
+  --out output/solar-terrain.json
+```
+
+It verifies every compressed tile and relief asset before publishing an
+immutable generation index and updating `terrain/solar/{slug}/index.json`
+with a conditional write. Repeating a generation preserves its exact index
+bytes and `generatedAt`. The workflow takes the catalog reference through its
+input or the environment's `TERRAIN_CATALOG_REF` variable.
 
 ## Source layout
 

@@ -1,3 +1,4 @@
+import { sourceIntervalHours } from '@av/contracts';
 import type { IndexedSource } from './source.js';
 import { sourceWindowStart } from '../source.js';
 import { recoverTrailingWindow as recoverInterval, type CompactTrailingWindowInput, type CompactTrailingWindowResult } from '@av/forecast/intervals';
@@ -152,6 +153,9 @@ export function admitIndexedGribWindowPair(source: IndexedSource,
 ): AdmittedWindowPair {
   const a = current.interval;
   const b = companion.interval;
+  const id = current.identification;
+  const hour = (Date.parse(a.end) - Date.UTC(id.year, id.month - 1, id.day, id.hour, id.minute, id.second)) / HOUR_MS;
+  const intervalHours = sourceIntervalHours(source.model.forecast, hour);
   if (
     a.kind !== 'window' ||
     b.kind !== 'window' ||
@@ -188,8 +192,8 @@ export function admitIndexedGribWindowPair(source: IndexedSource,
   if (idKeys.some((key) => current.identification[key] !== companion.identification[key])) {
     refuse('NOAA window pair initialization conflict');
   }
-  if (a.start !== b.start || Date.parse(a.end) - Date.parse(b.end) !== source.model.forecast.intervalHours * HOUR_MS) {
-    refuse(`NOAA window pair does not bound one trailing ${source.model.forecast.intervalHours}-hour interval`, {
+  if (a.start !== b.start || Date.parse(a.end) - Date.parse(b.end) !== intervalHours * HOUR_MS) {
+    refuse(`NOAA window pair does not bound one trailing ${intervalHours}-hour interval`, {
       current: a,
       companion: b,
     });
@@ -207,8 +211,8 @@ export function admitIndexedGribWindowPair(source: IndexedSource,
   }
   const currentHours = (Date.parse(a.end) - Date.parse(a.start)) / HOUR_MS;
   const previousHours = (Date.parse(b.end) - Date.parse(b.start)) / HOUR_MS;
-  if (previousHours <= 0 || currentHours <= previousHours || currentHours - previousHours !== source.model.forecast.intervalHours) {
-    refuse(`NOAA window pair does not yield ${source.model.forecast.intervalHours} hour(s)`, {
+  if (previousHours <= 0 || currentHours <= previousHours || currentHours - previousHours !== intervalHours) {
+    refuse(`NOAA window pair does not yield ${intervalHours} hour(s)`, {
       currentHours,
       previousHours,
     });

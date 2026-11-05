@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { coverageAtZoom, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
-import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions, type NormalizedFrame } from '@av/forecast';
+import { coverageAtZoom, matchesFrameIntervals, sourceIntervalHours, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type LayerId, type Manifest, type ProductDefinition } from '@av/contracts';
+import { deriveFrame, resolveProductFrameHours, validateNormalizedFrame, type DeriveFrameOptions } from '@av/forecast';
 import type { ForecastProvider, ForecastSession } from './provider.js';
 import { createRenderer } from './render.js';
 import { summarizeFields } from './summary.js';
@@ -42,13 +42,7 @@ export function forecastFrame(cycle: string, hour: number, intervalHours: number
 const sameInstant = (actual: unknown, expected: string): boolean => typeof actual === 'string' && Date.parse(actual) === Date.parse(expected);
 
 /** Source intervals retain their observed times; every execution path checks the same support. */
-export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frames'][number], requiresPrecipitation: boolean): boolean {
-  if (!intervals || typeof intervals !== 'object') return false;
-  const value = intervals as Partial<NormalizedFrame['intervals']>;
-  return sameInstant(value.profileTime, frame.validTime)
-    && sameInstant(value.fluxWindow?.start, frame.intervalStart) && sameInstant(value.fluxWindow?.end, frame.intervalEnd)
-    && (!requiresPrecipitation || (sameInstant(value.precipitationWindow?.start, frame.intervalStart) && sameInstant(value.precipitationWindow?.end, frame.intervalEnd)));
-}
+export { matchesFrameIntervals } from '@av/contracts';
 
 /** One bounded provider/renderer session; both local and distributed builds use this frame pipeline. */
 export async function buildFrames(options: FrameBuildOptions & ForecastInputs & BuildStamp & { prepared: PreparedBuild; hours?: readonly number[]; samplesKey: string; journalPrefix: string; refinementPrefix?: string }): Promise<FrameBuildResult> {
@@ -99,7 +93,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
       const frame = await acquisition.acquire(hour);
       validateNormalizedFrame(frame, active, mask.grid, provider.maxLevels, product.layers, product.capabilities.verticalCoordinate);
       acquireMs += Date.now() - tAcquire;
-      const descriptor = forecastFrame(cycle, hour, product.intervalHours), { id } = descriptor;
+      const descriptor = forecastFrame(cycle, hour, sourceIntervalHours(product, hour)), { id } = descriptor;
       if (!sameInstant(frame.cycle, cycle) || frame.hour !== hour || !sameInstant(frame.validAt, descriptor.validTime) || !matchesFrameIntervals(frame.intervals, descriptor, product.layers.includes('precip-rate'))) {
         throw new Error(`Acquisition interval mismatch f${hour}`);
       }

@@ -32,6 +32,15 @@ function codeOf(fn: () => unknown): string | undefined {
 }
 
 describe('GFS interval reset and companion differencing', () => {
+  it('uses hourly support through f120 and three-hour support from f123 across sparse output gaps', () => {
+    const source = indexedSource({ ...INDEXED_PRODUCT, forecast: { ...INDEXED_PRODUCT.forecast,
+      hours: [27, 120, 123, 384], intervalChange: { fromHour: 123, hours: 3 } } });
+    expect(indexedGribSurfaceSpecs(source, 27).find(spec => spec.key === 'precipitation')!.forecast).toBe('24-27 hour acc fcst');
+    expect(indexedGribSurfaceSpecs(source, 120).find(spec => spec.key === 'precipitation')!.forecast).toBe('114-120 hour acc fcst');
+    expect(indexedGribSurfaceSpecs(source, 123).find(spec => spec.key === 'precipitation')!.forecast).toBe('120-123 hour acc fcst');
+    expect(indexedGribSurfaceSpecs(source, 384).find(spec => spec.key === 'precipitation')!.forecast).toBe('378-384 hour acc fcst');
+  });
+
   it('resets six-hour GFS blocks', () => {
     expect(indexedGribWindowStart(profile, 1)).toBe(0);
     expect(indexedGribWindowStart(profile, 2)).toBe(0);

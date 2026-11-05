@@ -1,6 +1,6 @@
 import {
   createSparseCoverage, getBit, gridSchema, MAX_GRID_CELLS, planWholeDomainGrid, prepareGridGeometry, sameGrid, snapGridCoordinate, sparseCoverageLookup,
-  STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS,
+  STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, CLOUD_SUPPORT_MASK, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS,
   type CoverageMask, type Grid, type SparseCoverage, type WholeDomainGrid
 } from '@av/contracts';
 import { ReconstructedProfileWorkspace } from '@av/soaring';
@@ -600,8 +600,10 @@ function columnDeriver(source: Grid, target: Grid, activeIndices: Uint32Array, m
         if (result.msl.value === null || result.agl.value === null || !Number.isFinite(result.msl.value) || !Number.isFinite(result.agl.value)) {
           fail('solverRejected'); continue;
         }
-        agl.values[outputIndex] = result.agl.value; agl.flags[outputIndex] = result.agl.flags;
-        msl.values[outputIndex] = nativeGround ? result.msl.value : h + agl.values[outputIndex]!; msl.flags[outputIndex] = result.msl.flags;
+        let cloudSupport = 0;
+        if (nativeClearance) for (let i = 0; i < count; i++) cloudSupport |= nativeClearance.flags[donorIndices[slots[offset + i]!]!]! & CLOUD_SUPPORT_MASK;
+        agl.values[outputIndex] = result.agl.value; agl.flags[outputIndex] = result.agl.flags | cloudSupport;
+        msl.values[outputIndex] = nativeGround ? result.msl.value : h + agl.values[outputIndex]!; msl.flags[outputIndex] = result.msl.flags | cloudSupport;
         metrics.column!++;
         if ((agl.flags[outputIndex]! & STATUS_MASK) === STATUS_VALID) metrics.valid++; else metrics.noLift++;
         if (result.branch === 'profile-top') metrics.profileTop++;

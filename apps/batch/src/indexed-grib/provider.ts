@@ -6,6 +6,8 @@ export function createIndexedGribProvider(model: ModelDefinition): ResolvableFor
   const source = indexedSource(model);
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,
+    auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
+    auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
     async resolveCycle(options) {
       options.signal?.throwIfAborted();
       const { validateCycle } = await import('./fields.js');

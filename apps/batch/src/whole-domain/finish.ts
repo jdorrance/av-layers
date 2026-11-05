@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { createWholeDomainDescriptors, encodeBoundedJson, manifestV5Schema, MAX_MANIFEST_BYTES,
-  MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE,
+import { createWholeDomainDescriptors, encodeBoundedJson, manifestV5Schema, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS,
+  MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PROFILE_PACK_FORMAT, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct,
   type ManifestV5 } from '@av/contracts';
 import type { BuildStamp, ForecastInputs } from '../frame-build.js';
 import { failureReason } from '../failure.js';
@@ -22,6 +22,7 @@ export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   preparation?: { elapsedMs: number; peakRssBytes: number };
   assemblyStartedAt?: number;
   sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
+  profileGroups?: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'];
   remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
   onValidated?: (result: ValidatedBuild<ManifestV5>, path: string) => Promise<void>;
 }
@@ -46,16 +47,17 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
   let phase = 'provenance';
   try {
     const provenanceKey = `${prefix}/provenance.json`, provenancePath = localPath(root, provenanceKey);
-    const provenanceBytes = encodeBoundedJson({ version: 1, model: product.modelId, buildId, cycle: result.cycle, provider: provider.provider,
+    const provenanceBytes = encodeBoundedJson({ version: 2, model: product.modelId, buildId, cycle: result.cycle, provider: provider.provider,
       temporalApproximation: 'interval flux with endpoint profile', frames: result.receipts }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS);
     if (!('shards' in result.metrics.renderer)) await writeFile(localPath(root, `${prefix}/diagnostics.json`),
       encodeBoundedJson({ ...result.metrics, capacity: result.capacity }, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
     await mkdir(dirname(provenancePath), { recursive: true });
     await writeFile(provenancePath, provenanceBytes, { flag: 'wx' });
     const descriptors = createWholeDomainDescriptors(product);
-    const refinementMethod = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
+    const mapFrames = result.frames.filter(frame => product.mapEndHour === undefined || Date.parse(frame.validTime) - Date.parse(result.cycle) <= product.mapEndHour * 3_600_000).length;
+    const refinementMethod = terrainColumnMethodForProduct(product);
     const surfaces = result.surfaces.map(surface => {
-      const layout = surface.layout, channelCount = result.frames.length * surface.layers.length;
+      const layout = surface.layout, channelCount = (surface.kind === 'fine' ? mapFrames : result.frames.length) * surface.layers.length;
       const baseSamples = { blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer' as const,
         channelCount, coverageHash: surface.coverage.hash, blockCount: layout.blockCount, storedCells: layout.storedCells };
       const groups = options.sampleGroups?.[surface.id];
@@ -65,6 +67,10 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
             bytes: shard.bytes, key: shard.key, sha256: shard.sha256 })) };
       return { id: surface.id, kind: surface.kind, grid: surface.grid, gridHash: surface.gridHash,
         coverage: { ...surface.coverage }, layers: [...surface.layers], samples,
+        ...(surface.profiles ? { profiles: { format: PROFILE_PACK_FORMAT, blockSize: SAMPLE_BLOCK_SIZE,
+          levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, coverageHash: surface.coverage.hash,
+          blockCount: surface.profiles.layout.blockCount, storedCells: surface.profiles.layout.storedCells,
+          groups: options.profileGroups ?? [{ firstFrame: 0, frameCount: result.frames.length, shards: surface.profiles.shards }] } } : {}),
         ...(surface.terrain ? { terrain: { dataId: surface.terrain.dataId, key: surface.terrain.ref.key, sha256: surface.terrain.ref.sha256,
           verticalDatum: surface.terrain.verticalDatum, surface: surface.terrain.surface, gridHash: surface.gridHash,
           coverageHash: surface.coverage.hash, layoutVersion: 1 as const } } : {}) };
@@ -73,7 +79,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
       version: 5 as const, descriptors, recipe: options.identity.recipe, model: product.modelId, buildId, cycle: result.cycle, createdAt,
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),
       method: { id: [...new Set(product.layers.map(layer => descriptors.layers[layer].methodId))].join('+'), hash: options.identity.scienceHash },
-      frames: result.frames, layers: [...product.layers], artifacts: result.artifacts, surfaces,
+      frames: result.frames, ...(product.mapEndHour === undefined ? {} : { mapFrameCount: mapFrames }), layers: [...product.layers], artifacts: result.artifacts, surfaces,
       source: { provider: provider.provider, model: product.modelId, temporalApproximation: 'interval flux with endpoint profile',
         frameCount: result.frames.length, provenanceKey, provenanceSha256: sha256(provenanceBytes),
         terrain: { dataId: surfaces.find(surface => surface.terrain)?.terrain?.dataId ?? '', key: prepared.terrain.key, sha256: prepared.terrain.sha256, arrayBytes: prepared.terrain.arrayBytes } },
@@ -97,7 +103,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     if (!performance.passed) throw new Error(`Whole-domain build exceeds performance budget: ${performance.failures.join('; ')}`);
     const path = localPath(root, `${prefix}/manifest.json`);
     phase = 'write-manifest';
-    await writeFile(path, encodeBoundedJson(completed.manifest, MAX_MANIFEST_BYTES), { flag: 'wx' });
+    await writeFile(path, encodeBoundedJson(completed.manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS), { flag: 'wx' });
     await writeFile(localPath(root, `${prefix}/progress.json`), JSON.stringify({ state: 'validated', buildId, elapsedMs: Date.now() - started, version: 5 }));
     options.signal?.throwIfAborted();
     phase = 'on-validated';

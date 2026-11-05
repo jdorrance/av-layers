@@ -18,7 +18,14 @@ Version 5 assigns each layer to a native or fine surface with sparse coverage,
 terrain identity and bounded sample shards. [publication.ts](src/publication.ts)
 owns their schemas, artifact enumeration and layout binding. `manifestSchema`
 retains the version-3/version-4 reader; `publishedManifestSchema` admits every
-supported version.
+supported version. Native scalar channels declare sample-only delivery;
+`renderedLayers` selects map layers. `mapFrameCount` selects the map prefix;
+native samples and profiles retain the complete frame axis.
+
+[point-products.ts](src/point-products.ts) owns bounded point batches and native
+profile responses. [solar-terrain.ts](src/solar-terrain.ts) owns sunlight terrain
+indexes and their per-file inventories. Version-2 provenance indexes reference
+bounded frame receipts; retained version-1 receipts stay inline.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
 positive-weight native donor support. [sparse-coverage.ts](src/sparse-coverage.ts)

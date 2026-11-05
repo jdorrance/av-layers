@@ -13,6 +13,11 @@ parameter identities, field roles, flux signs, selected levels and cycles.
 [source.ts](source.ts) validates each instance and derives half-level interfaces.
 [acquire.ts](acquire.ts) owns static geometry, companion reuse and cancellation;
 [fields.ts](fields.ts) checks source metadata against configured grid geometry.
+Optional `auxSurface` and `auxLevels` descriptors select instantaneous diagnostics;
+their [normalized fields](../../../../packages/forecast/src/inputs.ts) retain
+per-cell missingness. Layer descriptors bind both fixed surfaces.
+Configured precipitation accumulations use same-run companions to recover
+trailing rates with the shared interval kernel and GRIB packing tolerances.
 
 [grib.ts](grib.ts) decodes GRIB packing and scan direction;
 [codec/bzip2.ts](codec/bzip2.ts) and [codec/ccsds.ts](codec/ccsds.ts) retain bounded

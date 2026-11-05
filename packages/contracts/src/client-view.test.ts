@@ -4,8 +4,8 @@ import { CELL_BYTES } from './format';
 import { manifestV5Schema } from './publication';
 import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
-import { buildDiagnosticRows, formatSeriesSummary, layerMaxZoom, paletteLegend, planViewportPrefetch, seriesTable, viewportTiles } from './client-view';
-import { PALETTES, paletteSchema } from './layers';
+import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSeriesSummary, formatSupportFlags, layerMaxZoom, paletteLegend, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
+import { PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema } from './layers';
 import { TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
 
 function v5Build(): PinnedBuild {
@@ -55,6 +55,22 @@ it('keeps retained palette snapshots discrete when interpolation is absent', () 
   expect(model.gradient).toBeUndefined();
   expect(model.rows.slice(0, palette.colors.length).map(row => row.color)).toEqual(palette.colors);
   expect(model.rows[0].label).toBe('0–300');
+});
+
+it('formats independent physical support and cloud regime flags', () => {
+  expect(formatSupportFlags(SUPPORT_PARCEL_CROSSING | SUPPORT_CUMULUS | SUPPORT_OVERDEVELOPED | SUPPORT_CLOUD_CAPPED)).toBe('parcel+Cu+OD+capped');
+  expect(formatSupportFlags(0)).toBe('—');
+});
+
+it('honors pinned sample-only delivery for legends and every prefetch path', () => {
+  const build = v5Build();
+  build.manifest.descriptors.layers['usable-lift-msl'].delivery = 'samples-only';
+  expect(activePalettes(build.manifest.descriptors.palettes, 'usable-lift-msl', build.manifest.descriptors.layers)).toEqual([]);
+  const options = { build, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] };
+  expect(planViewportPrefetch({ ...options, activeLayer: 'usable-lift-msl' })).toEqual([]);
+  const urls = planViewportPrefetch({ ...options, activeLayer: 'usable-lift-agl' });
+  expect(urls.length).toBeGreaterThan(0);
+  expect(urls.some(url => url.includes('/usable-lift-msl/'))).toBe(false);
 });
 
 it('shows an encoded channel gradient with separate no-lift and endpoint units', () => {
@@ -199,4 +215,60 @@ it('enumerates bounded viewport tiles across the antimeridian and at the poles',
   expect(viewportTiles({ west: -180, south: -90, east: 180, north: 90 }, 10)).toHaveLength(64);
   expect(viewportTiles({ west: NaN, south: 0, east: 1, north: 1 }, 2)).toEqual([]);
   expect(viewportTiles({ west: 0, south: 0, east: 1, north: 1 }, -1)).toEqual([]);
+});
+
+it('bounds the shared diurnal request to published fields and scalar values', () => {
+  const build = v5Build();
+  const native: import('./product').LayerId[] = ['thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
+  build.manifest.layers.push(...native);
+  const selected = pointSeriesSelection(build);
+  expect(selected.layers).toHaveLength(10);
+  expect(selected.frames.length * selected.layers.length).toBeLessThanOrEqual(build.manifest.descriptors.maxSampleValues);
+  expect(selected.layers.some(layer => layer.includes('80m'))).toBe(false);
+  build.manifest.descriptors.maxSampleValues = 20;
+  expect(pointSeriesSelection(build).frames).toHaveLength(2);
+});
+
+it('recovers terrain only when fine lift values share one uninterpolated basis', () => {
+  const build = v5Build();
+  const layers = {
+    'usable-lift-msl': { value: 2000, status: 'valid' as const, support: 4, interpolated: false, surfaceId: 'gfs-fine' },
+    'usable-lift-agl': { value: 500, status: 'valid' as const, support: 4, interpolated: false, surfaceId: 'gfs-fine' }
+  };
+  const frame = { ...build.manifest.frames[0], layers };
+  expect(deriveTerrainM(frame, build)).toBe(1500);
+  layers['usable-lift-msl'].interpolated = true; layers['usable-lift-agl'].interpolated = true;
+  expect(deriveTerrainM(frame, build)).toBeNull();
+  layers['usable-lift-msl'].interpolated = false; layers['usable-lift-agl'].interpolated = false;
+  layers['usable-lift-agl'].surfaceId = 'gfs-native';
+  expect(deriveTerrainM(frame, build)).toBeNull();
+  expect(deriveTerrainM(frame, fixtureBuild())).toBeNull();
+});
+
+it('formats point altitude, wind vectors and regime without inventing missing terrain', () => {
+  const build = v5Build();
+  const frame = { ...build.manifest.frames[0], layers: {
+    'usable-lift-msl': { value: null, status: 'no-usable-lift' as const, support: 0, interpolated: false, surfaceId: 'gfs-fine' },
+    'usable-lift-agl': { value: 0, status: 'no-usable-lift' as const, support: SUPPORT_CUMULUS, interpolated: false, surfaceId: 'gfs-fine' },
+    'wind-10m-u': { value: 0, status: 'valid' as const, support: 0, interpolated: false, surfaceId: 'gfs-native' },
+    'wind-10m-v': { value: -5, status: 'valid' as const, support: 0, interpolated: false, surfaceId: 'gfs-native' },
+    'thermal-velocity': { value: 1, status: 'valid' as const, support: SUPPORT_CUMULUS, interpolated: false, surfaceId: 'gfs-native' }
+  } };
+  const view = pointFrameView(frame, build, 'imperial');
+  expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Terrain —');
+  expect(view.summary).toContain('10 m 9.7 kt 0°'); expect(view.summary).toContain('Cu');
+  expect(view.summary).not.toContain('Blue');
+  expect(formatAltitude(1000, 'imperial')).toBe('3281 ft');
+  expect(formatAltitude(null, 'metric')).toBe('—');
+});
+
+it('keeps raster prefetch inside the map prefix while the native point axis continues', () => {
+  const build = v5Build();
+  if (build.manifest.version !== 5) throw new Error('Expected v5');
+  build.manifest.mapFrameCount = 2;
+  const options = { build, activeLayer: 'usable-lift-agl' as const, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] };
+  expect(planViewportPrefetch(options).some(url => /\/f009\//.test(url))).toBe(false);
+  expect(planViewportPrefetch({ ...options, activeFrame: 'f009' })).toEqual([]);
+  expect(pointSeriesSelection(build).frames).not.toContain('f009');
+  expect(build.manifest.frames.some(frame => frame.id === 'f009')).toBe(true);
 });

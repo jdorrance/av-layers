@@ -21,6 +21,7 @@ class Element extends EventTarget {
   get value(): string { return this.selected || this.children[0]?.value || ''; }
   set value(value: string) { this.selected = value; }
   append(...children: Element[]): void { this.children.push(...children); }
+  focus(): void { doc.activeElement = this; }
   add(child: Element): void { this.append(child); }
   replaceChildren(...children: Element[]): void { this.children = children; this.selected = ''; }
 }
@@ -29,6 +30,7 @@ class OptionElement extends Element {
 }
 class Document extends EventTarget {
   elements = new Map<string, Element>();
+  activeElement: Element | null = null;
   constructor() {
     super();
     const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -403,8 +405,9 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
 it('loads ICON hourly frames and keeps the AGL lift layer', async () => {
   await start();
   ui('ref-agl').dispatchEvent(new Event('click'));
-  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...SPLIT_PRODUCT.layers],
-    grid: SPLIT_PRODUCT.grid, descriptors: createProductDescriptors(SPLIT_PRODUCT),
+  const retained = { ...SPLIT_PRODUCT, layers: ['usable-lift-msl', 'usable-lift-agl'] as const };
+  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...retained.layers],
+    grid: retained.grid, descriptors: createProductDescriptors(retained),
     frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
       validTime: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z`,
       intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
@@ -472,7 +475,9 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   expect(ui('point-status').textContent).toContain('coverage gfs-native, gfs-fine');
-  expect(ui('point-body').children[0].children.some(row => row.children.some(cell => cell.textContent.includes('gfs-fine')))).toBe(true);
+  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
+  expect(chart.children).toHaveLength(published.frames.length);
+  expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('MSL 500 m');
 });
 
 it('uses Google terrain, remembers the view in the query string, and restores it from the back button', async () => {
@@ -495,4 +500,33 @@ it('uses Google terrain, remembers the view in the query string, and restores it
   modelButton('rrfs').dispatchEvent(new Event('click'));
   expect(map().getCenter().lat).toBeCloseTo((21.12 + 52.63) / 2);
   expect(map().getCenter().lng).toBeCloseTo((-134.12 + -60.89) / 2);
+});
+
+it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {
+  await start();
+  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+    model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
+    method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
+    frames: manifest.frames.map((frame, i) => ({ ...frame, layers: Object.fromEntries(manifest.layers.map(layer => [layer, {
+      value: layer === 'usable-lift-msl' ? 1000 + 100 * i : layer === 'usable-lift-agl' ? 300 : 0,
+      status: 'valid', support: 0, interpolated: false
+    }])) }))
+  })));
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
+  const readout = series.children.find(child => child.className === 'av-point-values')!;
+  chart.children[0].dispatchEvent(new Event('click'));
+  await vi.advanceTimersByTimeAsync(16);
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[0].id}/`);
+  expect(readout.textContent).toContain('MSL 1000 m');
+  expect(readout.textContent).toContain('Terrain —');
+  ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
+  expect(readout.textContent).toContain('3281 ft');
+  chart.children[0].dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));
+  await vi.advanceTimersByTimeAsync(16);
+  expect(doc.activeElement).toBe(chart.children[1]);
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
+  expect(ui('point-body').children[0]).toBe(series);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
 });

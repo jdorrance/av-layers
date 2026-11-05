@@ -12,7 +12,10 @@ and point queries evaluate the same grids and interpolation rules.
 - `precip-rate`: mean precipitation rate over the frame's trailing interval in
   millimetres per hour.
 
-Each build's manifest descriptors list its available layers.
+Each build's manifest descriptors list its available layers and delivery.
+[Native fields](../packages/contracts/src/native-layers.ts) add lift, flux,
+surface, cloud, stability and wind samples. Map layers carry palettes; native
+scalar channels use point queries.
 
 Every sample carries a status:
 
@@ -21,9 +24,8 @@ Every sample carries a status:
   darkness across the frame's interval and valid time
   (`solarElevation <= minimumSolarElevationDeg`, support `0`). Public MSL value
   is `null`; AGL value is `0`.
-- `unavailable`: required inputs are missing or invalid, or—for `precip-rate`—the
-  cell is in darkness (`solarElevation <= minimumSolarElevationDeg`). Value is
-  `null`.
+- `unavailable`: required inputs are missing or invalid, or the selected surface
+  lacks the frame. Value is `null`.
 - `outside-domain`: coordinate falls outside the product's coverage mask. Value
   is `null`.
 
@@ -40,7 +42,7 @@ Source receipts are emitted by the [native coverage generator](../scripts/masks/
 and [fine coverage generator](../scripts/masks/build_fine_masks.py).
 
 Version-5 manifests assign each layer to one surface. Lift uses the fine
-terrain-column surface; precipitation uses its native surface. Each surface
+terrain-column surface; weather scalars use the native surface. Each surface
 pins its grid, coverage and sample shards. A sample value's `surfaceId` identifies
 its grid and ground reference. Output masks select coverage; halo cells supply
 boundary contributors. No-lift and unavailable values retain their selected
@@ -59,10 +61,19 @@ owns their evaluation tooling.
 - `createdAt` / `ageSeconds`: build creation timestamp and elapsed seconds since
   the build started.
 
-[Model settings](../packages/contracts/config/models.json) select candidate
-hours and source intervals. `regional-daylight` products omit frames where no
-covered output cell is sunlit at the interval start, midpoint, or end. Acquisition
-also fetches preceding-hour companions needed to recover the first sunlit flux.
+[Model settings](../packages/contracts/config/models.json) select hours and source
+intervals. Current products emit native weather and profiles through the complete
+selected horizon, including night. Precipitation retains its trailing interval
+at night. `mapFrameCount` limits tiles and fine lift to the first 24 hours.
+Retained `regional-daylight` builds omit fully dark frames according to their
+declared method.
+
+Point profiles select the nearest covered native cell and retain every selected
+vertical level. Temperature and height remain usable when optional humidity or
+wind fields are absent. Responses report the selected cell, model terrain,
+statuses and nullable diagnostics; [point-products.ts](../packages/contracts/src/point-products.ts)
+owns the wire contract. Page explicit frame and field selections within its
+request budgets.
 
 `expiresAt` sets the 7-day retention deadline. Clients display a notice once
 `now` passes the last frame's `validTime` while keeping historical frames

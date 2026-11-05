@@ -1,10 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 import configuration from '../config/models.json' with { type: 'json' };
-import { DEFAULT_MODEL, DEFAULT_PRODUCT, MAX_MODEL_WORKERS, defineProduct, getProduct } from './products.js';
+import { DEFAULT_MODEL, DEFAULT_PRODUCT, MAX_MODEL_WORKERS, defineProduct, getProduct, mapFrameCount, sourceIntervalHours } from './products.js';
 
 const raw = configuration.models[0];
 
 describe('model configuration', () => {
+  it('keeps the map prefix and source intervals independent of sparse output hours', () => {
+    const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 120 }, (_, i) => 27 + i * 3)];
+    const product = defineProduct({ ...raw, forecast: { ...raw.forecast, hours, mapEndHour: 24, intervalHours: 1, intervalChange: { fromHour: 123, hours: 3 } } });
+    expect(product.frameHours).toHaveLength(144);
+    expect(product.frameHours.at(-1)).toBe(384);
+    expect(mapFrameCount(product)).toBe(24);
+    expect([24, 27, 120, 123, 384].map(hour => sourceIntervalHours(product, hour))).toEqual([1, 1, 1, 3, 3]);
+    expect(sourceIntervalHours(product.forecast, 27)).toBe(1);
+    expect(mapFrameCount({ frameHours: [3, 6, 9], mapEndHour: 6 })).toBe(2);
+    expect(mapFrameCount({ frameHours: [3, 6, 9] })).toBe(3);
+    expect(() => defineProduct({ ...raw, forecast: { ...raw.forecast, hours: [24, 27], mapEndHour: 23 } })).toThrow('Map window');
+    expect(() => defineProduct({ ...raw, forecast: { ...raw.forecast, intervalChange: { fromHour: 3, hours: 4 } } })).toThrow('Source interval');
+  });
   it('resolves the configured default and rejects prototype names', () => {
     expect(DEFAULT_MODEL).toBe(configuration.defaultModel);
     expect(getProduct(DEFAULT_MODEL)).toBe(DEFAULT_PRODUCT);

@@ -217,7 +217,7 @@ describe('frame derivation', () => {
     expect(deriveFrame(input, mask)['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
   });
 
-  it('skips both lift and precipitation derivation outside of daytime', () => {
+  it('skips dark convective columns while retaining precipitation', () => {
     // At 03:00 UTC, (lat=0, lon=0) is in nighttime darkness
     const { input, mask, index } = fixture(3);
     const nightFields = deriveFrame(input, mask);
@@ -225,10 +225,9 @@ describe('frame derivation', () => {
     expect(nightFields['usable-lift-msl']!.values[index]).toBe(100);
     expect(nightFields['usable-lift-agl']!.flags[index]).toBe(STATUS_NO_LIFT);
     expect(nightFields['usable-lift-agl']!.values[index]).toBe(0);
-    expect(nightFields['precip-rate']!.flags[index]).toBe(STATUS_UNAVAILABLE);
-    expect(Number.isNaN(nightFields['precip-rate']!.values[index])).toBe(true);
+    expect(nightFields['precip-rate']!.flags[index]).toBe(STATUS_VALID);
+    expect(nightFields['precip-rate']!.values[index]).toBe(2);
 
-    // Explicitly disabling daylightOnly evaluates column physics and precipitation at night
     const unGatedFields = deriveFrame(input, mask, { daylightOnly: false });
     expect(unGatedFields['usable-lift-agl']!.flags[index] & STATUS_MASK).toBe(STATUS_VALID);
     expect(unGatedFields['precip-rate']!.flags[index]).toBe(STATUS_VALID);
@@ -259,8 +258,8 @@ describe('bounded end-to-end build pipeline integration', () => {
 
     vi.mocked(coverageModule.loadCoverage).mockResolvedValueOnce(boundedMask);
     vi.mocked(coverageModule.writeCoverage).mockResolvedValueOnce(coverageHash);
-    vi.mocked(validateModule.validateBuild).mockImplementationOnce(async (root, raw, mask) =>
-      actualValidate.validateBuild(root, raw, mask, coverageHash)
+    vi.mocked(validateModule.validateBuild).mockImplementationOnce(async (root, raw, mask, _expectedHash, trustedProduct) =>
+      actualValidate.validateBuild(root, raw, mask, coverageHash, trustedProduct)
     );
     vi.mocked(validateModule.finalizeValidatedMetrics).mockImplementationOnce(actualValidate.finalizeValidatedMetrics);
     vi.mocked(renderModule.createRenderer).mockImplementationOnce((mask, options) =>

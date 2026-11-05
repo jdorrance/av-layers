@@ -4,12 +4,12 @@ import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { TERRAIN_CLEARANCE_METHOD, canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type Manifest, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { TERRAIN_CLEARANCE_METHOD, canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type Manifest, type ProvenanceFrameReference, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { describeSparseCoverage } from './coverage.js';
 import { buildShard, createBuildPlan, finalizeBuild, type BuildPlan } from './parallel.js';
-import { assertValidatedBuild, localPath } from './validate.js';
+import { assertValidatedBuild, localPath, sha256 } from './validate.js';
 import * as refinementConfig from './refinement/config.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
@@ -269,7 +269,7 @@ describe('whole-domain parallel receipt integrity', () => {
   type WholeReceipt = {
     planHash: string; shard: number;
     artifacts: { layer: string; frame: string; tilesKey: string; tilesSha256: string }[];
-    provenance: { hour: number; intervals: { fluxWindow: { end: string } }; receipt: unknown }[];
+    provenance: ProvenanceFrameReference[];
     surfaces: { id: 'native' | 'fine'; channelCount: number; shards: { firstBlock: number; blockCount: number; storedCells: number; bytes: number; key: string; sha256: string }[] }[];
     metrics: { frames: Record<string, unknown> };
   };
@@ -385,11 +385,23 @@ describe('whole-domain parallel receipt integrity', () => {
     } finally { clock.mockRestore(); }
   }, 60_000);
 
+  it('rejects altered source intervals even when the chunk digest is updated', async () => {
+    const out = await copyCompleted(), path = receiptPath(out, 0), receipt = JSON.parse(await readFile(path, 'utf8')) as WholeReceipt;
+    const reference = receipt.provenance[0]!, chunkPath = join(out, reference.key), chunk = JSON.parse(await readFile(chunkPath, 'utf8'));
+    chunk.intervals.fluxWindow.end = CYCLE;
+    const bytes = Buffer.from(JSON.stringify(chunk));
+    reference.bytes = bytes.length; reference.sha256 = sha256(bytes);
+    await writeFile(chunkPath, bytes); await writeFile(path, JSON.stringify(receipt));
+    const onValidated = vi.fn();
+    await expect(finalize(out, onValidated)).rejects.toThrow(/Provenance frame/);
+    expect(onValidated).not.toHaveBeenCalled();
+  });
+
   const tampering: [string, (receipt: WholeReceipt) => void, RegExp][] = [
     ['provenance-missing', receipt => { receipt.provenance.pop(); }, /provenance/],
     ['provenance-duplicate', receipt => { receipt.provenance.push(structuredClone(receipt.provenance[0]!)); }, /provenance/],
     ['provenance-hour', receipt => { receipt.provenance[0]!.hour += 1; }, /provenance/],
-    ['provenance-intervals', receipt => { receipt.provenance[0]!.intervals.fluxWindow.end = CYCLE; }, /provenance/],
+    ['provenance-key', receipt => { receipt.provenance[0]!.key = 'builds/other/provenance/f002.json'; }, /provenance/],
     ['artifact-missing', receipt => { receipt.artifacts.pop(); }, /artifact count/],
     ['artifact-duplicate', receipt => { receipt.artifacts.push(structuredClone(receipt.artifacts[0]!)); }, /artifact count/],
     ['artifact-order', receipt => { receipt.artifacts.reverse(); }, /artifact record/],

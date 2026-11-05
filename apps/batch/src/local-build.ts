@@ -1,5 +1,5 @@
 import { dirname, resolve } from 'node:path';
-import { getProduct, publishedManifestSchema, MAX_MANIFEST_BYTES, parseBoundedJson, type ProductDefinition } from '@av/contracts';
+import { getProduct, publishedManifestSchema, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, parseBoundedJson, type ProductDefinition } from '@av/contracts';
 import { loadCoverage, readCoverage } from './coverage.js';
 import { readLocalFile } from './local-file.js';
 import { localPath, validateBuild } from './validate.js';
@@ -8,7 +8,7 @@ import type { ObjectStorage } from './storage.js';
 /** Read the bounded immutable manifest from its declared build tree. */
 export async function readLocalManifest(manifestPath: string) {
   const path = resolve(manifestPath), root = resolve(dirname(path), '../../..');
-  const manifest = publishedManifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
+  const manifest = publishedManifestSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES), MAX_MANIFEST_JSON_TOKENS));
   if (localPath(root, `builds/${manifest.model}/${manifest.buildId}/manifest.json`) !== path) throw new Error('Manifest path differs from its declared build identity');
   return { root, manifest };
 }

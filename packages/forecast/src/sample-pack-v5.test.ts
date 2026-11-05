@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
-import { CELL_BYTES, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, type RegularLatLonGrid } from '@av/contracts';
+import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, type RegularLatLonGrid } from '@av/contracts';
 import { planSample, type SamplePlan } from './sampler.js';
-import { packedCellsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout, SAMPLE_SHARD_TARGET_BYTES } from './sample-pack.js';
+import { packedCellsFromRange, packedRecordsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout, SAMPLE_SHARD_TARGET_BYTES } from './sample-pack.js';
 
 const grid = (width: number, height: number, wrapLongitude: boolean): RegularLatLonGrid => ({
   kind: 'regular-latlon', width, height, wrapLongitude, earthRadiusM: 6371229, lon0: 0, lat0: height - 1, dx: 1, dy: -1
@@ -103,7 +103,7 @@ it('rejects invalid dimensions, directory, target, channels and contributors', (
     expect(() => prepareShardedSamplePackLayout({ ...dims, wrapLongitude: false }, ids, 1)).toThrow('grid');
   }
   for (const blocks of [Uint32Array.of(0, 0), Uint32Array.of(1, 0), Uint32Array.of(6)]) expect(() => prepare(blocks)).toThrow('order');
-  for (const channels of [0, -1, 1.5, MAX_SAMPLE_VALUES + 1]) expect(() => prepare(ids, channels)).toThrow('channel count');
+  for (const channels of [0, -1, 1.5, MAX_PACK_CHANNELS + 1]) expect(() => prepare(ids, channels)).toThrow('channel count');
   for (const target of [0, 1.5, SAMPLE_SHARD_TARGET_BYTES + 1]) expect(() => prepare(ids, 1, target)).toThrow('target');
   expect(() => prepare(ids, 1, 1444)).toThrow('Block exceeds');
   const layout = prepare();
@@ -120,4 +120,48 @@ it('rejects invalid dimensions, directory, target, channels and contributors', (
   expect(() => planShardedPackedSample(layout, distant, [0])).toThrow('neighborhood');
   const absent = prepare(Uint32Array.of(1));
   expect(() => planShardedPackedSample(absent, sample, [0])).toThrow('owner block');
+});
+
+it('plans wide records with layout-owned strides and rejects scalar decoding', () => {
+  const g = grid(33, 19, true), recordBytes = 358, channels = 3;
+  const layout = prepareShardedSamplePackLayout(g, Uint32Array.of(0, 1, 2, 3, 4, 5), channels, 400_000, recordBytes);
+  expect(layout.recordBytes).toBe(recordBytes);
+  const files = layout.shards.map(shard => new Uint8Array(shard.byteLength));
+  for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+    const block = layout.block(ordinal);
+    for (let row = 0; row < block.height; row++) for (let column = 0; column < block.width; column++) for (let channel = 0; channel < channels; channel++) {
+      const index = (block.row + row) * g.width + (block.column + column) % g.width;
+      const offset = block.byteOffset + ((row * block.width + column) * channels + channel) * recordBytes;
+      new DataView(files[block.shard].buffer).setUint32(offset, index * 10 + channel, true);
+      files[block.shard].fill(channel + 1, offset + 4, offset + recordBytes);
+    }
+  }
+  for (const [lat, lon] of [[17.5, 15.5], [0, 32.5], [2.5, 31.5]]) {
+    const sample = planSample(g, lat, lon)!, plan = planShardedPackedSample(layout, sample, [2, 0]);
+    expect(plan.recordBytes).toBe(recordBytes);
+    const bytes = files[plan.shard].subarray(plan.byteRange.offset, plan.byteRange.offset + plan.byteRange.length);
+    for (const channel of plan.channels) {
+      const records = packedRecordsFromRange(plan, bytes, channel);
+      expect(records).toHaveLength(sample.contributors.length);
+      for (const [i, record] of records.entries()) {
+        expect(record.buffer).toBe(bytes.buffer);
+        expect(record.byteLength).toBe(recordBytes);
+        expect(new DataView(record.buffer, record.byteOffset).getUint32(0, true)).toBe(sample.contributors[i].index * 10 + channel);
+        expect(record.subarray(4).every(value => value === channel + 1)).toBe(true);
+      }
+    }
+    expect(() => packedCellsFromRange(plan, bytes, 0)).toThrow('five-byte');
+    expect(() => packedRecordsFromRange(plan, bytes.subarray(1), 0)).toThrow('byte count');
+    expect(() => packedRecordsFromRange(plan, bytes, 1)).toThrow('not requested');
+  }
+  for (const width of [0, -1, 1.5, 4097, Number.MAX_SAFE_INTEGER]) {
+    expect(() => prepareShardedSamplePackLayout(g, Uint32Array.of(0), 1, SAMPLE_SHARD_TARGET_BYTES, width)).toThrow('record width');
+  }
+  expect(() => prepareShardedSamplePackLayout(g, Uint32Array.of(0), 256, SAMPLE_SHARD_TARGET_BYTES, 4096)).toThrow('Block exceeds');
+});
+
+it('admits full scalar horizons separately from bounded point requests', () => {
+  const g = grid(17, 17, false), layout = prepareShardedSamplePackLayout(g, Uint32Array.of(0), 720);
+  expect(layout.shards[0].byteLength).toBe(17 * 17 * 720 * CELL_BYTES);
+  expect(prepareShardedSamplePackLayout(g, Uint32Array.of(0), MAX_PACK_CHANNELS).shards[0].byteLength).toBeLessThan(SAMPLE_SHARD_TARGET_BYTES);
 });

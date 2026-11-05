@@ -1,5 +1,5 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId } from './index.ts';
-import type { PinnedBuild, SamplePayload } from './client-types.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, renderedLayers, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId, type ProfileResponse, type MultiPointSampleResponse, profileResponseSchema, multiPointSampleResponseSchema, MAX_SAMPLE_POINTS, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, gridToGeographic } from './index.ts';
+import type { GeoPoint, PinnedBuild, SamplePayload } from './client-types.ts';
 import { refinementCandidate } from './refinement.ts';
 
 export interface RequestOptions {
@@ -12,6 +12,10 @@ export interface SampleRequest extends RequestOptions {
   frames?: 'all' | readonly string[];
   layers?: readonly LayerId[];
   now?: number;
+}
+
+export interface MultiPointSampleRequest extends Omit<SampleRequest, 'lat' | 'lon'> {
+  points: readonly GeoPoint[];
 }
 
 export class ApiError extends Error {
@@ -87,7 +91,7 @@ function requireString(value: unknown, name: string): string {
   return value;
 }
 
-async function readJsonBounded(response: Response, limit = 1024 * 1024, signal?: AbortSignal): Promise<unknown> {
+async function readJsonBounded(response: Response, limit = MAX_POINT_RESPONSE_BYTES, signal?: AbortSignal): Promise<unknown> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > limit) {
     await response.body?.cancel();
@@ -111,6 +115,27 @@ async function readJsonBounded(response: Response, limit = 1024 * 1024, signal?:
   } finally { signal?.removeEventListener('abort', abort); reader.releaseLock(); }
   try { return JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))); }
   catch { throw new InvalidApiResponseError('Response is not valid JSON'); }
+}
+
+function validatePoint(point: GeoPoint): void {
+  if (!Number.isFinite(point.lat) || point.lat < -90 || point.lat > 90) throw new RangeError('lat out of range');
+  if (!Number.isFinite(point.lon) || point.lon < -180 || point.lon > 180) throw new RangeError('lon out of range');
+}
+
+function sampleSelection(build: PinnedBuild, request: Pick<SampleRequest, 'frames' | 'layers'>, defaults = build.manifest.layers, points = 1, scalarLimit = true) {
+  const frames = request.frames ?? 'all';
+  const expectedFrames = frames === 'all' ? build.manifest.frames.map(frame => frame.id) : [...frames];
+  const layers = request.layers ?? defaults;
+  if (!expectedFrames.length || new Set(expectedFrames).size !== expectedFrames.length) throw new RangeError('frames must be non-empty and unique');
+  if (!layers.length || new Set(layers).size !== layers.length) throw new RangeError('layers must be non-empty and unique');
+  if (expectedFrames.some(id => !build.manifest.frames.some(frame => frame.id === id))) throw new RangeError('unknown frame');
+  if (layers.some(layer => !build.manifest.layers.includes(layer))) throw new RangeError('unknown layer');
+  if (scalarLimit && points * expectedFrames.length * layers.length > build.manifest.descriptors.maxSampleValues) throw new RangeError(`select at most ${build.manifest.descriptors.maxSampleValues} point/frame/layer values`);
+  return { expectedFrames, layers, frameQuery: frames === 'all' ? 'all' : frames.join(',') };
+}
+
+function pointPath(build: PinnedBuild, route: 'sample' | 'samples' | 'profile'): string {
+  return `/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/${route}`;
 }
 
 export class ApiClient {
@@ -142,7 +167,7 @@ export class ApiClient {
         try {
           const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal });
           if (!response.ok) throw await readError(response, controller.signal);
-          return await readJsonBounded(response, 1024 * 1024, controller.signal);
+          return await readJsonBounded(response, MAX_POINT_RESPONSE_BYTES, controller.signal);
         } catch (error) {
           controller.signal.throwIfAborted();
           const retryable = error instanceof TypeError || (error instanceof ApiError && [502, 503, 504].includes(error.status));
@@ -170,8 +195,8 @@ export class ApiClient {
     if (!retained || retained.cycle !== manifestRaw.cycle || retained.expiresAt !== manifestRaw.expiresAt || retained.manifestKey !== `builds/${model}/${manifestRaw.buildId}/manifest.json`) throw new InvalidApiResponseError('manifest does not match retained entry');
     if (options.requireLive !== false) assertNotExpired(manifestRaw.expiresAt, this.now());
     const templateRaw = requireObject(raw.templates, 'templates');
-    const templates = {} as Record<LayerId, string>;
-    for (const layer of manifestRaw.layers) {
+    const templates: PinnedBuild['templates'] = {};
+    for (const layer of renderedLayers(manifestRaw.layers, manifestRaw.descriptors.layers)) {
       templates[layer] = requireString(templateRaw[layer], `templates.${layer}`);
     }
     return {
@@ -183,28 +208,79 @@ export class ApiClient {
 
   async sample(build: PinnedBuild, request: SampleRequest): Promise<SamplePayload> {
     if (build.expiresAtMs <= (request.now ?? this.now())) throw new ExpiredBuildError(build.manifest.expiresAt);
-    if (!Number.isFinite(request.lat) || request.lat < -90 || request.lat > 90) throw new RangeError('lat out of range');
-    if (!Number.isFinite(request.lon) || request.lon < -180 || request.lon > 180) throw new RangeError('lon out of range');
-    const frames = request.frames ?? 'all';
-    const expectedFrames = frames === 'all' ? build.manifest.frames.map(frame => frame.id) : [...frames];
-    const layers = request.layers ?? build.manifest.layers;
-    if (!expectedFrames.length || new Set(expectedFrames).size !== expectedFrames.length) throw new RangeError('frames must be non-empty and unique');
-    if (!layers.length || new Set(layers).size !== layers.length) throw new RangeError('layers must be non-empty and unique');
-    if (expectedFrames.some(id => !build.manifest.frames.some(frame => frame.id === id))) throw new RangeError('unknown frame');
-    if (layers.some(layer => !build.manifest.layers.includes(layer))) throw new RangeError('unknown layer');
-    if (expectedFrames.length * layers.length > build.manifest.descriptors.maxSampleValues) throw new RangeError(`select at most ${build.manifest.descriptors.maxSampleValues} frame/layer values`);
+    validatePoint(request);
+    const { expectedFrames, layers, frameQuery } = sampleSelection(build, request);
     const params = new URLSearchParams({
       lat: String(request.lat),
       lon: String(request.lon),
-      frame: frames === 'all' ? 'all' : frames.join(','),
+      frame: frameQuery,
       layers: layers.join(',')
     });
-    const path = `/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/sample?${params.toString()}`;
+    const path = `${pointPath(build, 'sample')}?${params}`;
     const raw = await this.getJson(path, request.signal);
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
     const parsed = publishedSampleResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
+    this.validateSample(build, request, expectedFrames, layers, payload);
+    return payload;
+  }
+
+  async samples(build: PinnedBuild, request: MultiPointSampleRequest): Promise<MultiPointSampleResponse> {
+    assertNotExpired(build.manifest.expiresAt, request.now ?? this.now());
+    if (build.manifest.version !== 5) throw new ApiError(409, 'unsupported-publication', 'Batch samples require a version-5 build');
+    if (!request.points.length || request.points.length > MAX_SAMPLE_POINTS) throw new RangeError(`Select 1–${MAX_SAMPLE_POINTS} points`);
+    for (const point of request.points) validatePoint(point);
+    const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, build.manifest.layers, request.points.length);
+    const params = new URLSearchParams({ points: request.points.map(point => `${point.lat},${point.lon}`).join(';'), frame: frameQuery, layers: layers.join(',') });
+    const raw = await this.getJson(`${pointPath(build, 'samples')}?${params}`, request.signal);
+    assertNotExpired(build.manifest.expiresAt, this.now());
+    const parsed = multiPointSampleResponseSchema.safeParse(raw);
+    if (!parsed.success) throw new InvalidApiResponseError('multi-point sample response does not match contract schema');
+    const payload = parsed.data;
+    if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId || payload.expiresAt !== build.manifest.expiresAt || payload.points.length !== request.points.length) {
+      throw new InvalidApiResponseError('multi-point sample does not match pinned build or requested points');
+    }
+    for (const { index, sample } of payload.points) this.validateSample(build, request.points[index], expectedFrames, layers, sample);
+    return payload;
+  }
+
+  async profile(build: PinnedBuild, request: SampleRequest): Promise<ProfileResponse> {
+    assertNotExpired(build.manifest.expiresAt, request.now ?? this.now());
+    validatePoint(request);
+    const native = build.manifest.version === 5 ? build.manifest.surfaces.find(surface => surface.kind === 'native') : undefined;
+    if (!native?.profiles) throw new RangeError('Build has no native profiles');
+    const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, native.layers, 1, false);
+    if (layers.some(layer => !native.layers.includes(layer))) throw new RangeError('Profile layers must belong to the native surface');
+    if (estimateProfileResponseBytes(expectedFrames.length, native.profiles.levelCount, layers.length) > MAX_POINT_RESPONSE_BYTES) throw new RangeError('Selected profile response exceeds byte budget');
+    const params = new URLSearchParams({ lat: String(request.lat), lon: String(request.lon), frame: frameQuery, layers: layers.join(',') });
+    const raw = await this.getJson(`${pointPath(build, 'profile')}?${params}`, request.signal);
+    assertNotExpired(build.manifest.expiresAt, this.now());
+    const parsed = profileResponseSchema.safeParse(raw);
+    if (!parsed.success) throw new InvalidApiResponseError('profile response does not match contract schema');
+    const payload = parsed.data;
+    if (payload.cycle !== build.manifest.cycle || payload.createdAt !== build.manifest.createdAt) throw new InvalidApiResponseError('profile run timestamps differ from pinned build');
+    const cell = payload.cell;
+    if (cell) {
+      const position = gridToGeographic(native.grid, cell.index % native.grid.width, Math.floor(cell.index / native.grid.width));
+      if (cell.surfaceId !== native.id || cell.index >= native.grid.width * native.grid.height || !position || Math.abs(position.lat - cell.lat) > 1e-6 || Math.abs(position.lon - cell.lon) > 1e-6) {
+        throw new InvalidApiResponseError('profile cell differs from the pinned native grid');
+      }
+    }
+    this.validateSample(build, request, expectedFrames, layers, {
+      ...payload, version: 5,
+      surfaces: build.manifest.version === 5 ? build.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })) : []
+    });
+    for (const frame of payload.frames) {
+      if (frame.profile.levels.length > native.profiles.levelCount || (cell === null ? frame.profile.status !== 'outside-domain' || frame.profile.modelTerrainM !== null : frame.profile.status === 'outside-domain') ||
+        layers.some(layer => frame.layers[layer].interpolated || (cell === null ? frame.layers[layer].status !== 'outside-domain' : frame.layers[layer].status === 'outside-domain'))) {
+        throw new InvalidApiResponseError('profile coverage or levels differ from selected native cell');
+      }
+    }
+    return payload;
+  }
+
+  private validateSample(build: PinnedBuild, request: GeoPoint, expectedFrames: readonly string[], layers: readonly LayerId[], payload: SamplePayload): void {
     if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId) {
       throw new InvalidApiResponseError('sample does not match pinned build');
     }
@@ -258,6 +334,5 @@ export class ApiClient {
       }
     }
     assertNotExpired(payload.expiresAt, this.now());
-    return payload;
   }
 }

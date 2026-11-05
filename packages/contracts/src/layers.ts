@@ -1,12 +1,16 @@
 import z from 'zod';
-import { LIFT_METHOD, PRECIPITATION_METHOD, methodIdSchema } from './methods.js';
+import { LIFT_METHOD, PRECIPITATION_ALL_HOURS_METHOD, methodIdSchema } from './methods.js';
 import { LAYER_IDS, type LayerId } from './product.js';
 import { CELL_BYTES } from './format.js';
 import { getBit, type CoverageMask } from './coverage.js';
+import { NATIVE_LAYERS, NATIVE_LAYER_IDS, nativeMethodId, nativeLayerTimeSupport } from './native-layers.js';
 
 export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
 export const STATUS_VALID = 0, STATUS_NO_LIFT = 1, STATUS_UNAVAILABLE = 2, STATUS_OUTSIDE = 3, STATUS_MASK = 3;
-export const SUPPORT_PARCEL_CROSSING = 4, SUPPORT_PROFILE_TOP = 8, SUPPORT_PBL_CLOSURE = 16, SUPPORT_MASK = 28;
+export const SUPPORT_PARCEL_CROSSING = 4, SUPPORT_PROFILE_TOP = 8, SUPPORT_PBL_CLOSURE = 16;
+export const SUPPORT_CUMULUS = 32, SUPPORT_OVERDEVELOPED = 64, SUPPORT_CLOUD_CAPPED = 128;
+export const CLOUD_SUPPORT_MASK = SUPPORT_CUMULUS | SUPPORT_OVERDEVELOPED | SUPPORT_CLOUD_CAPPED;
+export const SUPPORT_MASK = SUPPORT_PARCEL_CROSSING | SUPPORT_PROFILE_TOP | SUPPORT_PBL_CLOSURE | CLOUD_SUPPORT_MASK;
 export const layerIdSchema = z.enum(LAYER_IDS);
 export const sampleStatusSchema = z.enum(SAMPLE_STATUSES);
 export type SampleStatus = z.infer<typeof sampleStatusSchema>;
@@ -35,14 +39,15 @@ export type PaletteId = z.infer<typeof paletteIdSchema>;
 export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional(), interpolation: z.enum(PALETTE_INTERPOLATIONS).optional() });
 export const layerDescriptorSchema = z.object({
   id: layerIdSchema, kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
-  verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface']), timeSupport: z.enum(['interval-mean', 'interval-flux-endpoint-profile']),
-  methodId: methodIdSchema, palette: paletteIdSchema, supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
+  verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface', 'pressure-level']), timeSupport: z.enum(['valid-time', 'interval-mean', 'interval-maximum', 'interval-flux-endpoint-profile']),
+  methodId: methodIdSchema, palette: paletteIdSchema.optional(), delivery: z.enum(['tiles-and-samples', 'samples-only']).optional(),
+  supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
   noLiftSampleValue: z.number().finite().nullable(), zeroOnNoLiftInterpolation: z.boolean(), hideNonPositiveValues: z.boolean()
-});
+}).refine(layer => layer.delivery === 'samples-only' || layer.palette !== undefined, 'Rendered layers require a palette');
 
 export type LayerSpec = z.infer<typeof layerDescriptorSchema>;
 
-export const LAYERS = {
+export const LAYERS: Readonly<Record<LayerId, LayerSpec>> = {
   'usable-lift-msl': {
     id: 'usable-lift-msl',
     label: 'Usable lift top (MSL)', quantity: 'usable-lift-top', verticalReference: 'MSL',
@@ -72,7 +77,7 @@ export const LAYERS = {
   'precip-rate': {
     id: 'precip-rate',
     label: 'Precipitation rate', quantity: 'precipitation-rate', verticalReference: 'surface',
-    timeSupport: 'interval-mean', methodId: PRECIPITATION_METHOD.id,
+    timeSupport: 'interval-mean', methodId: PRECIPITATION_ALL_HOURS_METHOD.id,
     kind: 'scalar',
     units: 'mm/h',
     palette: 'rain',
@@ -81,8 +86,16 @@ export const LAYERS = {
     noLiftSampleValue: null,
     zeroOnNoLiftInterpolation: false,
     hideNonPositiveValues: false
-  }
-} as const satisfies Record<LayerId, LayerSpec>;
+  },
+  ...Object.fromEntries(NATIVE_LAYER_IDS.map(id => {
+    const [label, quantity, units, verticalReference, group] = NATIVE_LAYERS[id];
+    return [id, { id, label, quantity, units, verticalReference, kind: 'scalar',
+      timeSupport: nativeLayerTimeSupport(id),
+      methodId: nativeMethodId(group), delivery: 'samples-only', supportsNoLift: false,
+      supportsLiftFlags: id.startsWith('thermal-'), noLiftSampleValue: null,
+      zeroOnNoLiftInterpolation: false, hideNonPositiveValues: false }];
+  })) as Record<(typeof NATIVE_LAYER_IDS)[number], LayerSpec>
+};
 
 export function isPaletteId(value: string): value is PaletteId {
   return Object.hasOwn(PALETTES, value);
@@ -91,7 +104,15 @@ export function isLayerId(value: string): value is LayerId {
   return Object.hasOwn(LAYERS, value);
 }
 export function layerSurface(layer: LayerId): 'native' | 'fine' {
-  return LAYERS[layer].quantity === 'precipitation-rate' ? 'native' : 'fine';
+  return layer === 'usable-lift-msl' || layer === 'usable-lift-agl' ? 'fine' : 'native';
+}
+export function renderedLayers(layers: readonly LayerId[], descriptors: Readonly<Record<string, Pick<LayerSpec, 'delivery'>>> = LAYERS): LayerId[] {
+  return layers.filter(id => descriptors[id]?.delivery !== 'samples-only');
+}
+export function layerPalette(layer: LayerId): PaletteId {
+  const palette = LAYERS[layer].palette;
+  if (!palette || LAYERS[layer].delivery === 'samples-only') throw new RangeError(`Layer ${layer} has no raster palette`);
+  return palette;
 }
 export function paletteBinLabel(edges: readonly number[], colorCount: number, index: number): string {
   const from = edges[index], to = edges[index + 1];
@@ -103,14 +124,14 @@ export function paletteBinIndex(layer: LayerId, value: number | null, status: nu
   if (code >= STATUS_UNAVAILABLE) return -1;
   const spec = LAYERS[layer];
   if ((spec.supportsNoLift && code === STATUS_NO_LIFT) || value === null || !Number.isFinite(value) || (spec.hideNonPositiveValues && value <= 0)) return -1;
-  const palette = PALETTES[spec.palette];
+  const palette = PALETTES[layerPalette(layer)];
   if ('transparentBelow' in palette && value < palette.transparentBelow) return -1;
   const maxBin = Math.min(colorCount ?? palette.colors.length, palette.edges.length) - 1;
   for (let i = maxBin; i > 0; i--) if (value >= palette.edges[i]) return i;
   return 0;
 }
 export function paletteColor(layer: LayerId, value: number | null, status: number): string | null {
-  const palette = PALETTES[LAYERS[layer].palette];
+  const palette = PALETTES[layerPalette(layer)];
   const bin = paletteBinIndex(layer, value, status, palette.colors.length);
   return bin < 0 ? null : palette.colors[bin];
 }

@@ -1,5 +1,5 @@
 /** Validate a resolved dry column and calculate its convective and usable depths. */
-import { dryParcelTemperatureC, saturationVaporPressureHpa } from '@av/thermodynamics';
+import { dryParcelTemperatureC, mixingRatioFromDewPointKgKg, saturationVaporPressureHpa } from '@av/thermodynamics';
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
 import { DEFAULT_SOARING_PARAMETERS } from './parameters.js';
 import { usableLiftDepthM, type UsableLiftOptions } from './velocity.js';
@@ -89,8 +89,8 @@ export function dewPointMixingRatioKgKg(dewPointC: number, pressureHpa: number):
   ) {
     return null;
   }
-  const e = saturationVaporPressureHpa(dewPointC);
-  return e < pressureHpa ? (EPSILON * e) / (pressureHpa - e) : null;
+  const ratio = mixingRatioFromDewPointKgKg(dewPointC, pressureHpa);
+  return Number.isFinite(ratio) ? ratio : null;
 }
 
 export function deriveLift(

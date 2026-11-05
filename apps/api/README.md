@@ -30,6 +30,18 @@ pnpm --filter @av/api build
 3. Pin `buildId` for subsequent `GET /tiles/:model/:buildId/:layer/:frame/:z/:x/:y.webp`
    and `GET /v1/models/:model/runs/:buildId/sample` requests.
 
+`/samples?points=lat,lon;lat,lon` batches coordinates in request order.
+`/profile?lat=...&lon=...` returns the nearest covered native cell's full levels,
+measured surface pressure and point-derived cloud/wind diagnostics. `frame` and
+`layers` select scalar inputs; omitted dependencies produce null derived values.
+Profiles default to all frames; extended runs need bounded frame pages. See the [OpenAPI spec](../../docs/reference/openapi.json)
+for request limits and response schemas.
+
+`/provenance` serves the run receipt or frame index; `?frame=f001` selects a
+verified source receipt from an indexed run. `/v1/terrain/solar/:slug/index.json`
+revalidates the current sunlight generation. Generation URLs serve verified
+gzip file bytes for explicit client decompression.
+
 Catalog, latest and retained-run lists use short edge caching within the
 [pointer freshness budget](../../docs/serving-budgets.md); browsers revalidate.
 Build-specific responses cache through their expiry bound. Health and error

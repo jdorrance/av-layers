@@ -3,7 +3,8 @@ import { loadCoverage } from './coverage.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as contracts from '@av/contracts';
 import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { packCells, prepareSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
@@ -21,6 +22,9 @@ async function writeTestSamplePack(output: string, inputs: string[], layout: Ret
 }
 
 describe('build provenance validation', () => {
+  const currentProduct = contracts.getProduct;
+  beforeEach(() => { vi.spyOn(contracts, 'getProduct').mockImplementation(model => [INDEXED_PRODUCT, SPLIT_PRODUCT].find(product => product.modelId === model) ?? currentProduct(model)); });
+  afterEach(() => { vi.restoreAllMocks(); });
   async function fixture(product: ProductDefinition = INDEXED_PRODUCT) {
     const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
     manifest.model = product.modelId;
@@ -92,12 +96,12 @@ describe('build provenance validation', () => {
   it.each(['cycle', 'model', 'buildId', 'version'] as const)('rejects a hash-valid wrong %s before reading artifacts or uploading objects', async field => {
     const { root, manifest, mask, key, receipt } = await fixture();
     try {
-      const values = { cycle: '2026-10-29T00:00:00.000Z', model: 'hrrr', buildId: 'another', version: 2 };
+      const values = { cycle: '2026-10-29T00:00:00.000Z', model: 'hrrr', buildId: 'another', version: 99 };
       const bytes = Buffer.from(JSON.stringify({ ...receipt, [field]: values[field] }));
       manifest.source.provenanceSha256 = sha256(bytes);
       await writeFile(join(root, key), bytes);
       const expected = field === 'version'
-        ? { name: 'ZodError', issues: expect.arrayContaining([expect.objectContaining({ code: 'invalid_value', path: ['version'] })]) }
+        ? { name: 'ZodError', issues: expect.arrayContaining([expect.objectContaining({ path: ['version'] })]) }
         : { message: 'Provenance does not match manifest' };
       await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject(expected);
       const store = { get: vi.fn(async () => null), head: vi.fn(async () => null), put: vi.fn(async () => {}), list: vi.fn(async () => []), delete: vi.fn(async () => {}) };
@@ -244,7 +248,7 @@ describe('packed sample and concurrent archive validation', () => {
       const manifest = { descriptors: createProductDescriptors(INDEXED_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
       await expect(validateSamplePack(output, manifest, mask)).resolves.toBeUndefined();
       const original = await readFile(output);
-      for (const [offset, flag, message] of [[4, 1, 'lift flags'], [9, 0, 'coverage'], [4, 128, 'support bits']] as const) {
+      for (const [offset, flag, message] of [[4, 1, 'lift flags'], [9, 0, 'coverage'], [4, 128, 'lift flags']] as const) {
         const corrupt = Buffer.from(original); corrupt[offset] = flag; await writeFile(output, corrupt);
         await expect(validateSamplePack(output, { ...manifest, samples: { ...manifest.samples, sha256: sha256(corrupt) } }, mask)).rejects.toThrow(message);
       }

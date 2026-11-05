@@ -1,4 +1,4 @@
-import { CELL_BYTES, MAX_SAMPLE_VALUES, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
+import { CELL_BYTES, MAX_PACK_CHANNELS, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
 import type { Cell, SamplePlan } from './sampler.js';
 
 export interface SamplePackBlock {
@@ -69,13 +69,15 @@ export function prepareSamplePackLayout(grid: Pick<Grid, 'width' | 'height' | 'w
 export interface PackedSamplePlan {
   readonly byteRange: { offset: number; length: number };
   readonly channelCount: number;
+  readonly recordBytes: number;
   readonly channels: readonly number[];
   readonly contributorRanks: readonly number[];
 }
 
 /** The caller checks output coverage; the FIRST contributor owns the block, including at longitude wrap. */
-export function planPackedSample(layout: SamplePackLayout, sample: SamplePlan, channelCount: number, channels: readonly number[]): PackedSamplePlan {
-  const stride = channelCount * CELL_BYTES;
+export function planPackedSample(layout: SamplePackLayout, sample: SamplePlan, channelCount: number, channels: readonly number[], recordBytes = CELL_BYTES): PackedSamplePlan {
+  assertRecordBytes(recordBytes);
+  const stride = channelCount * recordBytes;
   if (!Number.isSafeInteger(channelCount) || channelCount <= 0 || !Number.isSafeInteger(stride) || !Number.isSafeInteger(stride * layout.storedCells)) throw new RangeError('Invalid pack channel count');
   if (!channels.length || new Set(channels).size !== channels.length || channels.some(channel => !Number.isSafeInteger(channel) || channel < 0 || channel >= channelCount)) throw new RangeError('Invalid selected pack channels');
   if (!sample.contributors.length) throw new RangeError('Sample has no contributors');
@@ -90,13 +92,14 @@ export function planPackedSample(layout: SamplePackLayout, sample: SamplePlan, c
   const first = Math.min(...contributorRanks), last = Math.max(...contributorRanks);
   const firstChannel = Math.min(...channels), lastChannel = Math.max(...channels);
   return {
-    byteRange: { offset: first * stride + firstChannel * CELL_BYTES, length: (last - first) * stride + (lastChannel - firstChannel + 1) * CELL_BYTES },
-    channelCount, channels: [...channels], contributorRanks
+    byteRange: { offset: first * stride + firstChannel * recordBytes, length: (last - first) * stride + (lastChannel - firstChannel + 1) * recordBytes },
+    channelCount, recordBytes, channels: [...channels], contributorRanks
   };
 }
 
 /** Decode one channel in the original contributor order; repeated wrap contributors remain repeated. */
 export function packedCellsFromRange(plan: PackedSamplePlan, bytes: Uint8Array, channel: number): Cell[] {
+  if (plan.recordBytes !== CELL_BYTES) throw new RangeError('Scalar decoding requires five-byte records');
   if (!plan.channels.includes(channel)) throw new RangeError('Channel was not requested by pack plan');
   if (bytes.byteLength !== plan.byteRange.length) throw new RangeError('Unexpected packed range byte count');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -107,7 +110,24 @@ export function packedCellsFromRange(plan: PackedSamplePlan, bytes: Uint8Array, 
   });
 }
 
+/** Borrow one record per contributor in the original sample order. */
+export function packedRecordsFromRange(plan: PackedSamplePlan, bytes: Uint8Array, channel: number): Uint8Array[] {
+  assertRecordBytes(plan.recordBytes);
+  if (!plan.channels.includes(channel)) throw new RangeError('Channel was not requested by pack plan');
+  if (bytes.byteLength !== plan.byteRange.length) throw new RangeError('Unexpected packed range byte count');
+  return plan.contributorRanks.map(rank => {
+    const offset = (rank * plan.channelCount + channel) * plan.recordBytes - plan.byteRange.offset;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset + plan.recordBytes > bytes.byteLength) throw new RangeError('Cell outside packed range');
+    return bytes.subarray(offset, offset + plan.recordBytes);
+  });
+}
+
 export const SAMPLE_SHARD_TARGET_BYTES = 64 * 1024 * 1024;
+export const MAX_PACK_RECORD_BYTES = 4096;
+
+function assertRecordBytes(recordBytes: number): void {
+  if (!Number.isSafeInteger(recordBytes) || recordBytes < 1 || recordBytes > MAX_PACK_RECORD_BYTES) throw new RangeError('Invalid pack record width');
+}
 
 export interface ShardedSampleBlock {
   readonly slot: number;
@@ -129,6 +149,7 @@ export interface SampleShard {
 export interface ShardedSamplePackLayout {
   readonly grid: Pick<Grid, 'width' | 'height' | 'wrapLongitude'>;
   readonly channelCount: number;
+  readonly recordBytes: number;
   readonly blockCount: number;
   readonly storedCells: number;
   readonly byteLength: number;
@@ -142,17 +163,19 @@ export function prepareShardedSamplePackLayout(
   grid: Pick<Grid, 'width' | 'height' | 'wrapLongitude'>,
   activeBlocks: Uint32Array,
   channelCount: number,
-  shardTargetBytes = SAMPLE_SHARD_TARGET_BYTES
+  shardTargetBytes = SAMPLE_SHARD_TARGET_BYTES,
+  recordBytes = CELL_BYTES
 ): ShardedSamplePackLayout {
   const { width, height, wrapLongitude } = grid, cellCount = width * height;
   if (![width, height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 0x7fffffff)
       || !Number.isSafeInteger(cellCount) || cellCount >= 0xffffffff || typeof wrapLongitude !== 'boolean') throw new RangeError('Invalid pack grid');
-  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_SAMPLE_VALUES) throw new RangeError('Invalid pack channel count');
+  if (!Number.isSafeInteger(channelCount) || channelCount < 1 || channelCount > MAX_PACK_CHANNELS) throw new RangeError('Invalid pack channel count');
+  assertRecordBytes(recordBytes);
   if (!Number.isSafeInteger(shardTargetBytes) || shardTargetBytes < 1 || shardTargetBytes > SAMPLE_SHARD_TARGET_BYTES) throw new RangeError('Invalid shard target');
   if (!(activeBlocks instanceof Uint32Array)) throw new RangeError('Invalid active blocks');
   const columns = Math.ceil(width / SAMPLE_BLOCK_SIZE), blockSlots = columns * Math.ceil(height / SAMPLE_BLOCK_SIZE);
   const slots = activeBlocks.slice(), offsets = new Uint32Array(slots.length);
-  const stride = channelCount * CELL_BYTES;
+  const stride = channelCount * recordBytes;
   const dimensions = (slot: number) => {
     const row = Math.floor(slot / columns) * SAMPLE_BLOCK_SIZE, column = (slot % columns) * SAMPLE_BLOCK_SIZE;
     const coreWidth = Math.min(SAMPLE_BLOCK_SIZE, width - column);
@@ -182,7 +205,7 @@ export function prepareShardedSamplePackLayout(
     return { slot, ...dims, shard: lo - 1, byteOffset: offsets[ordinal], byteLength: dims.width * dims.height * stride };
   };
   return {
-    grid: { width, height, wrapLongitude }, channelCount, blockCount: slots.length, storedCells, byteLength,
+    grid: { width, height, wrapLongitude }, channelCount, recordBytes, blockCount: slots.length, storedCells, byteLength,
     indexBytes: slots.byteLength + offsets.byteLength, shards, block,
     blockFor(index) {
       if (!Number.isSafeInteger(index) || index < 0 || index >= cellCount) throw new RangeError('Pack cell index out of range');
@@ -214,7 +237,9 @@ export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample:
   }
   const owner = layout.blockFor(sample.contributors[0].index);
   if (!owner) throw new RangeError('Sample owner block is outside pack coverage');
-  const stride = channelCount * CELL_BYTES;
+  const recordBytes = layout.recordBytes;
+  assertRecordBytes(recordBytes);
+  const stride = channelCount * recordBytes;
   const contributorRanks = sample.contributors.map(c => {
     const row = c.row - owner.row, column = wrapLongitude ? (c.column - owner.column + width) % width : c.column - owner.column;
     if (row < 0 || row >= owner.height || column < 0 || column >= owner.width) throw new RangeError('Sample contributor is outside its owner block');
@@ -224,7 +249,7 @@ export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample:
   const firstChannel = Math.min(...channels), lastChannel = Math.max(...channels);
   return {
     shard: owner.shard,
-    byteRange: { offset: first * stride + firstChannel * CELL_BYTES, length: (last - first) * stride + (lastChannel - firstChannel + 1) * CELL_BYTES },
-    channelCount, channels: [...channels], contributorRanks
+    byteRange: { offset: first * stride + firstChannel * recordBytes, length: (last - first) * stride + (lastChannel - firstChannel + 1) * recordBytes },
+    channelCount, recordBytes, channels: [...channels], contributorRanks
   };
 }

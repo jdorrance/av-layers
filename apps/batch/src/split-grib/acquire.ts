@@ -4,7 +4,7 @@ import { recoverTrailingWindow } from '@av/forecast/intervals';
 import { createHash } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, sourceIntervalHours } from '@av/contracts';
 import type { ModelLevelFrame } from '@av/forecast';
 import { readLocalFile } from '../local-file.js';
 import { discoverSplitGribRun } from './discover.js';
@@ -15,7 +15,8 @@ import {
   verifySplitGribFieldMetadata
 } from './fields.js';
 import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
-import type { NormalizedFrameTarget } from '../provider.js';
+import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
+import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
 
 const DEFAULT_CONCURRENCY = 8;
 
@@ -28,6 +29,7 @@ export interface SplitGribObjectReceipt {
   readonly expandedBytes: number;
   readonly sha256: string;
   readonly cacheHit: boolean;
+  readonly normalization?: { units: string; scale: number };
 }
 
 export interface SplitGribTransportStats {
@@ -177,12 +179,19 @@ export function recoverSplitGribFlux(source: SplitSource, role: 'sensibleHeatFlu
   previous: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> | null,
   hour: number
 ): { readonly values: Float32Array; readonly missing: Uint8Array } {
+  return recoverWindow(source, current, previous, hour, 'mean', source.upstream.fields[role].scale);
+}
+
+type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'representation'>>;
+function recoverWindow(source: SplitSource, current: WindowField, previous: WindowField | null, hour: number,
+  statistic: 'mean' | 'accumulation', outputSign: 1 | -1 = 1
+): { readonly values: Float32Array; readonly missing: Uint8Array } {
   if (!Number.isInteger(hour) || hour < 1) {
-    throw new Error(`Split GRIB flux de-averaging requires forecast hour >= 1, got ${hour}`);
+    throw new Error(`Split GRIB window recovery requires forecast hour >= 1, got ${hour}`);
   }
-  const start = sourceWindowStart(source.model.forecast, hour), previousHour = hour - source.model.forecast.intervalHours;
+  const start = sourceWindowStart(source.model.forecast, hour), previousHour = hour - sourceIntervalHours(source.model.forecast, hour);
   if (previousHour > start && !previous) {
-    throw new Error(`Split GRIB flux de-averaging for f${hour} requires companion f${hour - source.model.forecast.intervalHours}`);
+    throw new Error(`Split GRIB window recovery for f${hour} requires companion f${hour - sourceIntervalHours(source.model.forecast, hour)}`);
   }
   return recoverTrailingWindow({
     currentValues: current.values,
@@ -191,10 +200,10 @@ export function recoverSplitGribFlux(source: SplitSource, role: 'sensibleHeatFlu
     companionMissing: previousHour > start ? previous!.missing : null,
     currentHours: hour - start,
     previousHours: previousHour - start,
-    statistic: 'mean',
-    packingErrorCurrent: 0,
-    packingErrorPrevious: 0,
-    outputSign: source.upstream.fields[role].scale
+    statistic,
+    packingErrorCurrent: current.representation?.packingError ?? 0,
+    packingErrorPrevious: previous?.representation?.packingError ?? 0,
+    outputSign
   });
 }
 
@@ -305,6 +314,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     target?: { values: Float32Array; missing: Uint8Array }
   ): Promise<{ readonly decoded: DecodedSplitGribField; readonly receipt: SplitGribObjectReceipt }> => {
     const url = splitGribRegularFieldUrl(source, field, cycle, { hour, level, baseUrl });
+    const normalization = source.specs[field]!.normalization;
     const { decoded, compressedBytes, sha256, cacheHit } = await loadSplitGribField(
       url,
       options.cacheDir,
@@ -326,7 +336,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         compressedBytes,
         expandedBytes: decoded.expandedBytes,
         sha256,
-        cacheHit
+        cacheHit,
+        ...(normalization ? { normalization } : {})
       }
     };
   };
@@ -382,34 +393,73 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   };
 
   const acquireFrame = async (hour: number, target?: NormalizedFrameTarget): Promise<ModelLevelFrame> => {
-    for (const key of fluxCache.keys()) if (!key.endsWith(`:${hour - source.model.forecast.intervalHours}`)) fluxCache.delete(key);
+    for (const key of fluxCache.keys()) if (!key.endsWith(`:${hour - sourceIntervalHours(source.model.forecast, hour)}`)) fluxCache.delete(key);
     const staticGeom = await getStaticGeometry();
-    const needsCompanion = hour - source.model.forecast.intervalHours > sourceWindowStart(source.model.forecast, hour);
+    const needsCompanion = hour - sourceIntervalHours(source.model.forecast, hour) > sourceWindowStart(source.model.forecast, hour);
+    const { auxSurface, auxLevels } = createAuxiliaryTargets(activeIndices.length, source.modelLevels.length,
+      Object.keys(source.upstream.auxSurface ?? {}) as AuxSurfaceId[], Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[], target);
+    const auxiliaryTargets = new Map<string, AuxField>();
+    const auxiliaryRequests = [
+      ...Object.entries(source.upstream.auxSurface ?? {}).map(([id, spec]) => {
+        auxiliaryTargets.set(`${spec.field}:null`, auxSurface[id as AuxSurfaceId]!);
+        return { field: spec.field, hour, level: null };
+      }),
+      ...Object.entries(source.upstream.auxLevels ?? {}).flatMap(([id, spec]) => source.modelLevels.map((level, index) => {
+        auxiliaryTargets.set(`${spec.field}:${level}`, auxLevels[id as AuxLevelId]![index]!);
+        return { field: spec.field, hour, level };
+      }))
+    ];
 
     const surfaceFields = [source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux];
+    const precipitationField = source.model.layers.includes('precip-rate') ? source.fields.precipitation : undefined;
+    const precipitationRequests = precipitationField ? [
+      { field: precipitationField, hour, level: null },
+      ...(needsCompanion ? [{ field: precipitationField, hour: hour - sourceIntervalHours(source.model.forecast, hour), level: null }] : [])
+    ] : [];
     const requests = [
       ...surfaceFields.map(field => ({ field, hour, level: null })),
-      ...(needsCompanion ? [source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => ({ field, hour: hour - source.model.forecast.intervalHours, level: null })) : []),
-      ...[source.fields.temperature, source.fields.pressure].flatMap(field => source.modelLevels.map(level => ({ field, hour, level })))
+      ...(needsCompanion ? [source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => ({ field, hour: hour - sourceIntervalHours(source.model.forecast, hour), level: null })) : []),
+      ...[source.fields.temperature, source.fields.pressure].flatMap(field => source.modelLevels.map(level => ({ field, hour, level }))),
+      ...precipitationRequests,
+      ...auxiliaryRequests
     ];
     const fields = await mapConcurrent(requests, concurrency, request =>
-      request.field === source.fields.sensibleHeatFlux || request.field === source.fields.latentHeatFlux
+      request.field === source.fields.sensibleHeatFlux || request.field === source.fields.latentHeatFlux || request.field === precipitationField
         ? getFluxField(request.field, request.hour)
-        : loadDecodedField(request.field, request.hour, request.level, target ? (() => {
+        : loadDecodedField(request.field, request.hour, request.level, auxiliaryTargets.get(`${request.field}:${request.level}`) ?? (target ? (() => {
           if (request.field === source.fields.surfacePressure) return { values: target.surfacePressurePa, missing: target.missing.surfacePressure };
           if (request.field === source.fields.temperature2m) return { values: target.temp2mK, missing: target.missing.temp2m };
           if (request.field === source.fields.specificHumidity2m) return { values: target.specificHumidity2mKgKg, missing: target.missing.humidity2m };
           const index = source.modelLevels.indexOf(request.level!);
           return request.field === source.fields.temperature ? { values: target.tempK[index]!, missing: target.missing.temp[index]! }
             : { values: target.pressurePa![index]!, missing: target.missing.pressure![index]! };
-        })() : undefined)
+        })() : undefined))
     );
     const [psRes, t2mRes, qv2mRes, ashflCurr, alhflCurr] = fields;
     const ashflPrev = needsCompanion ? fields[surfaceFields.length] : null;
     const alhflPrev = needsCompanion ? fields[surfaceFields.length + 1] : null;
     const modelOffset = surfaceFields.length + (needsCompanion ? 2 : 0);
     const modelTResults = fields.slice(modelOffset, modelOffset + source.modelLevels.length);
-    const modelPResults = fields.slice(modelOffset + source.modelLevels.length);
+    const modelPResults = fields.slice(modelOffset + source.modelLevels.length, modelOffset + 2 * source.modelLevels.length);
+    const precipitationIndex = modelOffset + 2 * source.modelLevels.length;
+    const precipitation = precipitationField ? recoverWindow(source, fields[precipitationIndex]!.decoded,
+      needsCompanion ? fields[precipitationIndex + 1]!.decoded : null, hour, 'accumulation') : undefined;
+    for (const [configured, output] of [[source.upstream.auxSurface, auxSurface], [source.upstream.auxLevels, auxLevels]] as const) {
+      for (const [name, spec] of Object.entries(configured ?? {})) {
+        const selected = output[name as keyof typeof output] as AuxField | readonly AuxField[];
+        for (const field of Array.isArray(selected) ? selected : [selected as AuxField]) {
+          if (spec.scale !== 1) for (let i = 0; i < field.values.length; i++) if (!field.missing[i]) field.values[i] *= spec.scale;
+        }
+      }
+    }
+    const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined) => {
+      if (!u || !v) return;
+      for (let i = 0; i < activeIndices.length; i++) if (u.missing[i] || v.missing[i]) {
+        u.missing[i] = v.missing[i] = 1; u.values[i] = v.values[i] = NaN;
+      }
+    };
+    normalizeWind(auxSurface.u10mMps, auxSurface.v10mMps);
+    for (let i = 0; i < source.modelLevels.length; i++) normalizeWind(auxLevels.uWindMps?.[i], auxLevels.vWindMps?.[i]);
 
     const sensible = recoverSplitGribFlux(source, 'sensibleHeatFlux',
       ashflCurr.decoded,
@@ -426,26 +476,21 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       for (let i = 0; i < staticGeom.hgtM.length; i++) { target.hgtM[i]!.set(staticGeom.hgtM[i]!); target.missing.hgt[i]!.set(staticGeom.missingHgt[i]!); }
       target.sensibleHeatFluxWm2.set(sensible.values); target.missing.sensibleHeatFlux.set(sensible.missing);
       target.latentHeatFluxWm2.set(latent.values); target.missing.latentHeatFlux.set(latent.missing);
+      if (precipitation && target.precipitationMmPerHour && target.missing.precipitation) {
+        target.precipitationMmPerHour.set(precipitation.values); target.missing.precipitation.set(precipitation.missing);
+      }
     }
 
     const cycleMs = Date.parse(cycle);
-    const startIso = new Date(cycleMs + (hour - source.model.forecast.intervalHours) * 3_600_000).toISOString();
+    const startIso = new Date(cycleMs + (hour - sourceIntervalHours(source.model.forecast, hour)) * 3_600_000).toISOString();
     const endIso = new Date(cycleMs + hour * 3_600_000).toISOString();
     const sourceStartIso = new Date(cycleMs + sourceWindowStart(source.model.forecast, hour) * 3_600_000).toISOString();
     const capturedAt = new Date().toISOString();
     const { runStamp } = formatSplitGribRunStamp(source, cycle);
+    const precipitationOutput = precipitation && target?.precipitationMmPerHour && target.missing.precipitation
+      ? { values: target.precipitationMmPerHour, missing: target.missing.precipitation } : precipitation;
 
-    const hourlyReceipts: SplitGribObjectReceipt[] = [
-      psRes.receipt,
-      t2mRes.receipt,
-      qv2mRes.receipt,
-      ashflCurr.receipt,
-      alhflCurr.receipt,
-      ...(ashflPrev ? [ashflPrev.receipt] : []),
-      ...(alhflPrev ? [alhflPrev.receipt] : []),
-      ...modelTResults.map(r => r.receipt),
-      ...modelPResults.map(r => r.receipt)
-    ];
+    const hourlyReceipts: SplitGribObjectReceipt[] = fields.map(result => result.receipt);
 
     return {
       cycle,
@@ -460,9 +505,12 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       specificHumidity2mKgKg: qv2mRes.decoded.values,
       sensibleHeatFluxWm2: target?.sensibleHeatFluxWm2 ?? sensible.values,
       latentHeatFluxWm2: target?.latentHeatFluxWm2 ?? latent.values,
+      ...(precipitationOutput ? { precipitationMmPerHour: precipitationOutput.values } : {}),
       pressurePa: modelPResults.map(r => r.decoded.values),
       hgtM: target?.hgtM ?? staticGeom.hgtM.map(arr => new Float32Array(arr)),
       tempK: modelTResults.map(r => r.decoded.values),
+      ...(Object.keys(auxSurface).length ? { auxSurface } : {}),
+      ...(Object.keys(auxLevels).length ? { auxLevels } : {}),
       missing: {
         terrain: target?.missing.terrain ?? new Uint8Array(staticGeom.missingTerrain),
         surfacePressure: psRes.decoded.missing,
@@ -470,6 +518,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         humidity2m: qv2mRes.decoded.missing,
         sensibleHeatFlux: target?.missing.sensibleHeatFlux ?? sensible.missing,
         latentHeatFlux: target?.missing.latentHeatFlux ?? latent.missing,
+        ...(precipitationOutput ? { precipitation: precipitationOutput.missing } : {}),
         pressure: modelPResults.map(r => r.decoded.missing),
         hgt: target?.missing.hgt ?? staticGeom.missingHgt.map(arr => new Uint8Array(arr)),
         temp: modelTResults.map(r => r.decoded.missing)
@@ -478,6 +527,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         profileTime: endIso,
         fluxWindow: { start: startIso, end: endIso },
         fluxSourceWindow: { start: sourceStartIso, end: endIso },
+        ...(precipitation ? { precipitationWindow: { start: startIso, end: endIso }, precipitationSourceWindow: { start: sourceStartIso, end: endIso } } : {}),
         usedCompanion: needsCompanion
       },
       receipt: {

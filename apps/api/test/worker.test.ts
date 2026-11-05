@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT, INDEXED_GRID } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCTS, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, gridToGeographic, isCovered, manifestV5Schema, LAYER_IDS, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type LayerId, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { PRODUCTS, layerSurface, renderedLayers, mapFrameCount, sourceIntervalHours, createProductDescriptors, createProductMethodId, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, gridToGeographic, isCovered, manifestV5Schema, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type ManifestV5, type ProductDefinition } from '@av/contracts';
 
 const coverageFixture = vi.hoisted(async () => {
   const { createHash } = await import('node:crypto');
@@ -28,7 +28,7 @@ const cycle = '2026-10-29T18:00:00Z';
 const hash = 'a'.repeat(64);
 const coverageHash = (await coverageFixture).hash;
 const sampleLayout = prepareSamplePackLayout(INDEXED_GRID, new Uint8Array((await coverageFixture).output), new Uint8Array((await coverageFixture).halo));
-const layers = [...LAYER_IDS];
+const layers = [...INDEXED_PRODUCT.layers];
 const ctx = { waitUntil(p: Promise<unknown>) { pending.push(p); }, passThroughOnException() {}, props: {} };
 let pending: Promise<unknown>[] = [];
 
@@ -137,13 +137,14 @@ async function realSurface(product: ProductDefinition, kind: 'fine' | 'native', 
   const fine = kind === 'fine' ? await loadBundledFineCoverage(product, wholeDomainPlan(product)!) : undefined;
   const mask = fine?.mask ?? nativeSparseMask(await loadCoverage(product));
   const description = fine ?? describeSparseCoverage(mask, product);
-  const layers: LayerId[] = kind === 'native' ? ['precip-rate'] : ['usable-lift-msl', 'usable-lift-agl'];
-  const channels = product.frameHours.length * layers.length;
+  const layers = product.layers.filter(layer => layerSurface(layer) === kind);
+  const frames = kind === 'fine' ? mapFrameCount(product) : product.frameHours.length;
+  const channels = frames * layers.length;
   const id = kind;
   const shards: Extract<ForecastSurfaceV5['samples'], { format: 'frame-group-block-shards-v1' }>['shards'] = [];
   let firstFrame = 0;
   for (let group = 0; group < 4; group++) {
-    const frameCount = Math.floor(product.frameHours.length * (group + 1) / 4) - firstFrame;
+    const frameCount = Math.floor(frames * (group + 1) / 4) - firstFrame;
     const layout = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, frameCount * layers.length);
     shards.push(...layout.shards.map((shard, blockShard) => ({
       group, firstFrame, frameCount, blockShard,
@@ -190,7 +191,7 @@ async function realPublication(product: ProductDefinition, buildId: string) {
   const fine = await realSurface(product, 'fine', prefix);
   const surfaces: ManifestV5['surfaces'] = [fine.surface];
   const objects = new Map(fine.objects), shards = new Map(fine.shardInfo);
-  if (product.layers.includes('precip-rate')) {
+  if (product.layers.some(layer => layerSurface(layer) === 'native')) {
     const native = await realSurface(product, 'native', prefix);
     surfaces.push(native.surface);
     for (const [key, value] of native.objects) objects.set(key, value);
@@ -198,14 +199,14 @@ async function realPublication(product: ProductDefinition, buildId: string) {
   }
   const frames: ManifestV5['frames'] = product.frameHours.map(hour => ({
     id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(now + hour * 3_600_000).toISOString(),
-    intervalStart: new Date(now + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(now + hour * 3_600_000).toISOString()
+    intervalStart: new Date(now + (hour - sourceIntervalHours(product, hour)) * 3_600_000).toISOString(), intervalEnd: new Date(now + hour * 3_600_000).toISOString()
   }));
-  const artifacts: ManifestV5['artifacts'] = frames.flatMap(frame => product.layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'f'.repeat(64) })));
+  const artifacts: ManifestV5['artifacts'] = frames.slice(0, mapFrameCount(product)).flatMap(frame => renderedLayers(product.layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'f'.repeat(64) })));
   const provenanceKey = `${prefix}/provenance.json`, provenance = new TextEncoder().encode(JSON.stringify({ version: 1, model: product.modelId, buildId, cycle, frames: [] }));
   const manifest = manifestV5Schema.parse({
     version: 5, model: product.modelId, buildId, cycle, createdAt: cycle, expiresAt,
     descriptors: createWholeDomainDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
-    method: { id: Object.keys(createWholeDomainDescriptors(product).methods).join('+'), hash: 'a'.repeat(64) }, frames, layers: product.layers, artifacts, surfaces,
+    method: { id: Object.keys(createWholeDomainDescriptors(product).methods).join('+'), hash: 'a'.repeat(64) }, frames, mapFrameCount: mapFrameCount(product), layers: product.layers, artifacts, surfaces,
     source: { provider: product.source.modelFamily.toUpperCase(), provenanceKey, provenanceSha256: createHash('sha256').update(provenance).digest('hex') },
     tool: {}, palettes: ['lift', 'rain'], metrics: {}
   });

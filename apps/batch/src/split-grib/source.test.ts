@@ -38,6 +38,52 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
+it('acquires configured model-level humidity and vectors into reusable shared targets', async () => {
+  const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-aux-'));
+  tempDirs.push(cacheDir);
+  const configured = splitSource({ ...SPLIT_PRODUCT, capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
+    upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74],
+      auxSurface: { cloudTotalPct: { field: 'CLCT', kind: 'single-level', parameter: [6, 1], surface: [1, 0], unit: '%' },
+        pblHeightM: { field: 'MH', kind: 'single-level', parameter: [19, 3], surface: [1, 0], unit: 'm' },
+        gust10mMps: { field: 'VMAX_10M', kind: 'single-level', parameter: [2, 22], surface: [103, 10], statistic: 2, unit: 'm/s' } },
+      auxLevels: {
+        spfhKgKg: { field: 'QV', kind: 'model-level', parameter: [1, 0], surface: [150, null, 150], unit: 'kg/kg' },
+        uWindMps: { field: 'U', kind: 'model-level', parameter: [2, 2], surface: [150, null, 150], unit: 'm/s' },
+        vWindMps: { field: 'V', kind: 'model-level', parameter: [2, 3], surface: [150, null, 150], unit: 'm/s' }
+      }
+    } });
+  const cycle = '2026-10-08T00:00:00Z', requested: string[] = [], baseFetch = syntheticFetch(cycle, requested);
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input), match = /_(\d{3})(?:_(\d+))?_(QV|U|V|CLCT|MH|VMAX_10M)\.grib2\.bz2$/.exec(url);
+    if (!match) return baseFetch(input, init);
+    requested.push(url);
+    const [, hour, level, field] = match, surface = level === undefined, gust = field === 'VMAX_10M';
+    const spec = configured.specs[field]!;
+    return new Response(Buffer.from(buildSyntheticSplitGrib2({ referenceTimeIso: cycle, templateNumber: gust ? 8 : 0, statisticalProcess: gust ? 2 : undefined, startHour: Number(hour) - 1,
+      parameterCategory: spec.parameterCategory, parameterNumber: spec.parameterNumber, hour: Number(hour),
+      firstFixedSurfaceType: spec.firstFixedSurfaceType, firstFixedSurfaceValue: surface ? spec.firstFixedSurfaceValue : Number(level),
+      ...(surface ? {} : { secondFixedSurfaceType: 150, secondFixedSurfaceValue: Number(level) + 1 }),
+      constantValue: field === 'QV' ? 0.005 : field === 'U' ? 5 : field === 'V' ? -2 : field === 'MH' ? 400 : gust ? 9.5 : 75
+    })));
+  };
+  const slot = createNormalizedFrameTarget(1, 2, true, false);
+  const session = await createSplitGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+  try {
+    const first = await session.acquire(4, slot);
+    expect(first.auxSurface!.cloudTotalPct!.values[0]).toBe(75);
+    expect(first.auxSurface!.pblHeightM!.values[0]).toBe(400);
+    expect(first.auxSurface!.gust10mMps!.values[0]).toBe(9.5);
+    expect(first.auxLevels!.spfhKgKg![0]!.values[0]).toBeCloseTo(0.005);
+    expect(first.auxLevels!.uWindMps!.map(field => field.values[0])).toEqual([5, 5]);
+    expect(first.auxLevels!.vWindMps!.map(field => field.values[0])).toEqual([-2, -2]);
+    expect(first.auxLevels!.spfhKgKg![0]!.values.buffer).toBeInstanceOf(SharedArrayBuffer);
+    validateNormalizedFrame(first, first.activeIndices, configured.grid, 2, ['usable-lift-msl', 'usable-lift-agl'], 'model-levels');
+    const second = await session.acquire(5, slot);
+    expect(second.auxLevels!.spfhKgKg![0]!.values).toBe(first.auxLevels!.spfhKgKg![0]!.values);
+    expect(second.auxSurface!.cloudTotalPct!.values).toBe(first.auxSurface!.cloudTotalPct!.values);
+  } finally { await session.close(); }
+});
+
 /**
  * Build a minimal valid single-field GRIB2 message encoded with DRT 5.0 (simple packing)
  * on the 1377x657 ICON-EU regular-lat-lon grid for fast unit tests.
@@ -49,6 +95,7 @@ function buildSyntheticSplitGrib2(options: {
   scanningMode?: number;
   coordinateValueCount?: number;
   templateNumber: 0 | 8;
+  statisticalProcess?: 0 | 1 | 2;
   parameterCategory: number;
   parameterNumber: number;
   firstFixedSurfaceType: number;
@@ -151,7 +198,7 @@ function buildSyntheticSplitGrib2(options: {
     v4.setUint8(40, end.getUTCSeconds());
     v4.setUint8(41, 1);
     v4.setUint32(42, 0, false);
-    v4.setUint8(46, 0); // average
+    v4.setUint8(46, options.statisticalProcess ?? 0);
     v4.setUint8(47, 2);
     v4.setUint8(48, 0); // minutes
     v4.setUint32(49, (options.hour - (options.startHour ?? 0)) * 60, false);
@@ -304,6 +351,47 @@ function syntheticFetch(cycle: string, requestedUrls: string[], resetHours?: num
     return new Response('not found', { status: 404 });
   };
 }
+
+it('recovers ICON precipitation intervals, retains raw companions and masks decreasing accumulations', async () => {
+  const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-precip-'));
+  tempDirs.push(cacheDir);
+  const cycle = '2026-10-08T00:00:00Z', requested: string[] = [];
+  const configured = splitSource({ ...SPLIT_PRODUCT, layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'],
+    capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 }, upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74],
+      fields: { ...(SPLIT_PRODUCT.upstream.fields as object), precipitation: { field: 'TOT_PREC', kind: 'single-level', parameter: [1, 52], surface: [1, 0], statistic: 1 } }
+    } });
+  const baseFetch = syntheticFetch(cycle, requested);
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input), match = /_(\d{3})_TOT_PREC\.grib2\.bz2$/.exec(url);
+    if (!match) return baseFetch(input, init);
+    requested.push(url);
+    const hour = Number(match[1]);
+    return new Response(Buffer.from(buildSyntheticSplitGrib2({ referenceTimeIso: cycle, templateNumber: 8,
+      statisticalProcess: 1, parameterCategory: 1, parameterNumber: 52, firstFixedSurfaceType: 1, firstFixedSurfaceValue: 0,
+      hour, constantValue: hour === 1 ? 2 : hour === 2 ? 5 : 4
+    })));
+  };
+  expect(splitGribRunSentinelUrls(configured, cycle).some(url => url.endsWith('_TOT_PREC.grib2.bz2'))).toBe(true);
+  const session = await createSplitGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+  const slot = createNormalizedFrameTarget(1, 2, true, true);
+  try {
+    const first = await session.acquire(1, slot);
+    expect(first.precipitationMmPerHour![0]).toBe(2);
+    expect(first.precipitationMmPerHour).toBe(slot.precipitationMmPerHour);
+    first.precipitationMmPerHour![0] = 999;
+    const second = await session.acquire(2, slot);
+    expect(second.precipitationMmPerHour![0]).toBe(3);
+    expect(second.intervals.precipitationWindow).toEqual({ start: '2026-10-08T01:00:00.000Z', end: '2026-10-08T02:00:00.000Z' });
+    expect(second.intervals.precipitationSourceWindow!.start).toBe(cycle.replace('Z', '.000Z'));
+    expect(requested.filter(url => url.endsWith('_TOT_PREC.grib2.bz2'))).toHaveLength(2);
+    validateNormalizedFrame(second, second.activeIndices, configured.grid, 2, configured.model.layers, 'model-levels');
+    const third = await session.acquire(3, slot);
+    expect(third.missing.precipitation![0]).toBe(1);
+    expect(Number.isNaN(third.precipitationMmPerHour![0])).toBe(true);
+  } finally { await session.close(); }
+  expect(() => splitSource({ ...SPLIT_PRODUCT, layers: ['precip-rate'], upstream: { ...SPLIT_PRODUCT.upstream,
+    fields: { ...(SPLIT_PRODUCT.upstream.fields as object), precipitation: undefined } } })).toThrow('accumulation descriptor');
+});
 
 describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
   it('constructs canonical DWD Open Data URLs and sentinel probes', () => {
@@ -722,8 +810,9 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     expect(indices.active.length).toBe(409684);
     expect(layout.storedCells).toBe(528650);
 
+    const regionalProduct = { ...profile.model, capabilities: { ...profile.model.capabilities, daylightFrames: 'regional-daylight' as const } };
     const daylightHours = resolveProductFrameHours(
-      profile.model,
+      regionalProduct,
       mask,
       '2026-10-08T00:00:00Z',
       { outputIndices: indices.output }
@@ -731,7 +820,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     // Night hours over Europe (00..01 UTC and 19..24 UTC in October) are omitted before acquisition
     expect(daylightHours).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
 
-    const { capacity } = prepareBuild(mask, profile.model, {
+    const { capacity } = prepareBuild(mask, regionalProduct, {
       ...createSplitGribProvider(profile.model),
       frameCount: daylightHours.length
     });

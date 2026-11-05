@@ -3,6 +3,7 @@ export const MAX_POINTER_BYTES = 128 * 1024;
 export const MAX_MANIFEST_BYTES = 512 * 1024;
 export const MAX_PROVENANCE_BYTES = 4 * 1024 * 1024;
 export const MAX_METADATA_JSON_TOKENS = 8192;
+export const MAX_MANIFEST_JSON_TOKENS = 16_384;
 export const MAX_PROVENANCE_JSON_TOKENS = 262_144;
 export class ResourceLimitError extends Error {}
 

@@ -9,7 +9,28 @@
       "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global"},
       "label": "GFS",
       "attribution": "NOAA GFS · Aviation Forecast Layers",
-      "layers": ["usable-lift-msl", "usable-lift-agl", "precip-rate"],
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
       "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 21, "daylightFrames": "all-hours"},
       "grid": {
         "kind": "regular-latlon",
@@ -23,7 +44,9 @@
         "wrapLongitude": true
       },
       "forecast": {
-        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120, 123, 126, 129, 132, 135, 138, 141, 144, 147, 150, 153, 156, 159, 162, 165, 168, 171, 174, 177, 180, 183, 186, 189, 192, 195, 198, 201, 204, 207, 210, 213, 216, 219, 222, 225, 228, 231, 234, 237, 240, 243, 246, 249, 252, 255, 258, 261, 264, 267, 270, 273, 276, 279, 282, 285, 288, 291, 294, 297, 300, 303, 306, 309, 312, 315, 318, 321, 324, 327, 330, 333, 336, 339, 342, 345, 348, 351, 354, 357, 360, 363, 366, 369, 372, 375, 378, 381, 384],
+        "mapEndHour": 24,
+        "intervalChange": {"fromHour": 123, "hours": 3},
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": 6
@@ -65,7 +88,10 @@
       "upstream": {
         "nativeLongitudeOrigin": 0,
         "products": {"primary": "pgrb2.0p25", "secondary": "pgrb2b.0p25"},
-        "pressureLevelsHpa": {"primary": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400], "secondary": [875, 825, 775, 725, 675, 625]},
+        "pressureLevelsHpa": {
+          "primary": [1000, 975, 950, 925, 900, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400],
+          "secondary": [875, 825, 775, 725, 675, 625]
+        },
         "surfaceProduct": "primary",
         "discoveryLagHours": 4,
         "discoveryCandidates": 6,
@@ -80,7 +106,16 @@
           "SPFH": [1, 0, "kg/kg"],
           "SHTFL": [0, 11, "W/m2"],
           "LHTFL": [0, 10, "W/m2"],
-          "APCP": [1, 8, "kg/m2"]
+          "APCP": [1, 8, "kg/m2"],
+          "RH": [1, 1, "%"],
+          "PRMSL": [3, 1, "Pa"],
+          "UGRD": [2, 2, "m/s"],
+          "VGRD": [2, 3, "m/s"],
+          "GUST": [2, 22, "m/s"],
+          "HPBL": [3, 196, "m"],
+          "CAPE": [7, 6, "J/kg"],
+          "TCDC": [6, 1, "%"],
+          "LCDC": [6, 3, "%"]
         },
         "fields": {
           "terrain": ["HGT", "surface"],
@@ -92,6 +127,21 @@
           "precipitation": ["APCP", "surface"],
           "height": ["HGT"],
           "temperature": ["TMP"]
+        },
+        "auxSurface": {
+          "mslpPa": {"variable": "PRMSL", "level": "mean sea level", "unit": "Pa"},
+          "u10mMps": {"variable": "UGRD", "level": "10 m above ground", "unit": "m/s"},
+          "v10mMps": {"variable": "VGRD", "level": "10 m above ground", "unit": "m/s"},
+          "gust10mMps": {"variable": "GUST", "level": "surface", "unit": "m/s"},
+          "pblHeightM": {"variable": "HPBL", "level": "surface", "unit": "m"},
+          "capeJkg": {"variable": "CAPE", "level": "surface", "unit": "J/kg"},
+          "cloudTotalPct": {"variable": "TCDC", "level": "entire atmosphere", "unit": "%", "surface": [10, 0]},
+          "cloudLowPct": {"variable": "LCDC", "level": "low cloud layer", "unit": "%", "surface": [214, 0]}
+        },
+        "auxLevels": {
+          "uWindMps": {"variable": "UGRD", "unit": "m/s"},
+          "vWindMps": {"variable": "VGRD", "unit": "m/s"},
+          "rhPercent": {"variable": "RH", "unit": "%"}
         }
       },
       "terrainSubdivisionFactor": 10,
@@ -104,8 +154,29 @@
       "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe"},
       "label": "ICON-EU",
       "attribution": "DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers",
-      "layers": ["usable-lift-msl", "usable-lift-agl"],
-      "capabilities": {"verticalCoordinate": "model-levels", "maxVerticalLevels": 30, "daylightFrames": "regional-daylight"},
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {"verticalCoordinate": "model-levels", "maxVerticalLevels": 30, "daylightFrames": "all-hours"},
       "grid": {
         "kind": "regular-latlon",
         "width": 1377,
@@ -118,7 +189,8 @@
         "wrapLongitude": false
       },
       "forecast": {
-        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48],
+        "mapEndHour": 24,
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": null
@@ -154,17 +226,47 @@
           "surfacePressure": {"field": "PS", "kind": "single-level", "parameter": [3, 0], "surface": [1]},
           "temperature2m": {"field": "T_2M", "kind": "single-level", "parameter": [0, 0], "surface": [103, 2]},
           "specificHumidity2m": {"field": "QV_2M", "kind": "single-level", "parameter": [1, 0], "surface": [103, 2]},
-          "sensibleHeatFlux": {"field": "ASHFL_S", "kind": "single-level", "parameter": [0, 11], "surface": [1], "statistic": 0, "scale": -1},
-          "latentHeatFlux": {"field": "ALHFL_S", "kind": "single-level", "parameter": [0, 10], "surface": [1], "statistic": 0, "scale": -1},
+          "sensibleHeatFlux": {
+            "field": "ASHFL_S",
+            "kind": "single-level",
+            "parameter": [0, 11],
+            "surface": [1],
+            "statistic": 0,
+            "scale": -1
+          },
+          "latentHeatFlux": {
+            "field": "ALHFL_S",
+            "kind": "single-level",
+            "parameter": [0, 10],
+            "surface": [1],
+            "statistic": 0,
+            "scale": -1
+          },
           "temperature": {"field": "T", "kind": "model-level", "parameter": [0, 0], "surface": [150, null, 150]},
-          "pressure": {"field": "P", "kind": "model-level", "parameter": [3, 0], "surface": [150, null, 150]}
+          "pressure": {"field": "P", "kind": "model-level", "parameter": [3, 0], "surface": [150, null, 150]},
+          "precipitation": {"field": "TOT_PREC", "kind": "single-level", "parameter": [1, 52], "surface": [1, 0], "statistic": 1}
         },
         "discoveryLagHours": 3,
         "discoveryCandidates": 4,
         "protocol": "split-grib2",
         "provider": "DWD",
         "centre": 78,
-        "urlTemplate": "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{cycleHour}/{fieldLower}/icon-eu_europe_regular-lat-lon_{kind}_{runStamp}{suffix}_{field}.grib2.bz2"
+        "urlTemplate": "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{cycleHour}/{fieldLower}/icon-eu_europe_regular-lat-lon_{kind}_{runStamp}{suffix}_{field}.grib2.bz2",
+        "auxSurface": {
+          "pblHeightM": {"field": "MH", "kind": "single-level", "parameter": [19, 3], "surface": [1, 0], "unit": "m"},
+          "gust10mMps": {"field": "VMAX_10M", "kind": "single-level", "parameter": [2, 22], "surface": [103, 10], "statistic": 2, "unit": "m/s"},
+          "mslpPa": {"field": "PMSL", "kind": "single-level", "parameter": [3, 1], "surface": [101, 0], "unit": "Pa"},
+          "u10mMps": {"field": "U_10M", "kind": "single-level", "parameter": [2, 2], "surface": [103, 10], "unit": "m/s"},
+          "v10mMps": {"field": "V_10M", "kind": "single-level", "parameter": [2, 3], "surface": [103, 10], "unit": "m/s"},
+          "cloudTotalPct": {"field": "CLCT", "kind": "single-level", "parameter": [6, 1], "surface": [1, 0], "unit": "%"},
+          "cloudLowPct": {"field": "CLCL", "kind": "single-level", "parameter": [6, 22], "surface": [100, 80000, 1, 0], "unit": "%"},
+          "capeJkg": {"field": "CAPE_ML", "kind": "single-level", "parameter": [7, 6], "surface": [192, 0], "unit": "J/kg"}
+        },
+        "auxLevels": {
+          "spfhKgKg": {"field": "QV", "kind": "model-level", "parameter": [1, 0], "surface": [150, null, 150], "unit": "kg/kg"},
+          "uWindMps": {"field": "U", "kind": "model-level", "parameter": [2, 2], "surface": [150, null, 150], "unit": "m/s"},
+          "vWindMps": {"field": "V", "kind": "model-level", "parameter": [2, 3], "surface": [150, null, 150], "unit": "m/s"}
+        }
       },
       "terrainSubdivisionFactor": 5,
       "execution": {"zoom": 10, "shards": 8, "parallelism": 8, "schedule": ["17 5,17 * * *"]}
@@ -176,8 +278,29 @@
       "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus"},
       "label": "RRFS (CONUS)",
       "attribution": "NOAA RRFS · Aviation Forecast Layers",
-      "layers": ["usable-lift-msl", "usable-lift-agl", "precip-rate"],
-      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 25, "daylightFrames": "regional-daylight"},
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 25, "daylightFrames": "all-hours"},
       "grid": {
         "kind": "lambert-conformal",
         "width": 1799,
@@ -194,7 +317,8 @@
         "wrapLongitude": false
       },
       "forecast": {
-        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "hours": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48],
+        "mapEndHour": 24,
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": 1
@@ -227,7 +351,9 @@
       },
       "upstream": {
         "products": {"surface": "2dfld", "profile": "prslev"},
-        "pressureLevelsHpa": {"profile": [1000, 975, 950, 925, 900, 875, 850, 825, 800, 775, 750, 725, 700, 675, 650, 625, 600, 575, 550, 525, 500, 475, 450, 425, 400]},
+        "pressureLevelsHpa": {
+          "profile": [1000, 975, 950, 925, 900, 875, 850, 825, 800, 775, 750, 725, 700, 675, 650, 625, 600, 575, 550, 525, 500, 475, 450, 425, 400]
+        },
         "surfaceProduct": "surface",
         "discoveryLagHours": 3,
         "discoveryCandidates": 6,
@@ -242,7 +368,16 @@
           "SPFH": [1, 0, "kg/kg"],
           "SHTFL": [0, 11, "W/m2"],
           "LHTFL": [0, 10, "W/m2"],
-          "APCP": [1, 8, "kg/m2"]
+          "APCP": [1, 8, "kg/m2"],
+          "MSLET": [3, 192, "Pa"],
+          "UGRD": [2, 2, "m/s"],
+          "VGRD": [2, 3, "m/s"],
+          "GUST": [2, 22, "m/s"],
+          "HPBL": [3, 18, "m"],
+          "CAPE": [7, 6, "J/kg"],
+          "TCDC": [6, 1, "%"],
+          "LCDC": [6, 3, "%"],
+          "DZDT": [2, 9, "m/s"]
         },
         "fields": {
           "terrain": ["HGT", "surface"],
@@ -254,6 +389,27 @@
           "precipitation": ["APCP", "surface"],
           "height": ["HGT"],
           "temperature": ["TMP"]
+        },
+        "auxSurface": {
+          "mslpPa": {"variable": "MSLET", "level": "mean sea level", "unit": "Pa"},
+          "u10mMps": {"variable": "UGRD", "level": "10 m above ground", "unit": "m/s"},
+          "v10mMps": {"variable": "VGRD", "level": "10 m above ground", "unit": "m/s"},
+          "gust10mMps": {"variable": "GUST", "level": "surface", "unit": "m/s"},
+          "pblHeightM": {"variable": "HPBL", "level": "surface", "unit": "m"},
+          "capeJkg": {"variable": "CAPE", "level": "surface", "unit": "J/kg"},
+          "cloudTotalPct": {
+            "variable": "TCDC",
+            "level": "entire atmosphere (considered as a single layer)",
+            "unit": "%",
+            "surface": [200, 0]
+          },
+          "cloudLowPct": {"variable": "LCDC", "level": "low cloud layer", "unit": "%", "surface": [214, 0]}
+        },
+        "auxLevels": {
+          "uWindMps": {"variable": "UGRD", "unit": "m/s"},
+          "vWindMps": {"variable": "VGRD", "unit": "m/s"},
+          "spfhKgKg": {"variable": "SPFH", "unit": "kg/kg"},
+          "omegaPaS": {"variable": "DZDT", "unit": "Pa/s", "conversion": "geometric-w-to-omega"}
         }
       },
       "terrainSubdivisionFactor": 2,

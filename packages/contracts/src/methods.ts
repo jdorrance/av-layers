@@ -1,11 +1,28 @@
 import z from 'zod';
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
-import { DEFAULT_SOARING_PARAMETERS } from '@av/soaring/parameters';
+import { DEFAULT_SOARING_PARAMETERS, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring/parameters';
 import { DEFAULT_HORIZON_DEG } from '@av/solar/parameters';
+import { NATIVE_LAYERS, NATIVE_LAYER_IDS, nativeMethodId, type NativeLayerId, type NativeMethodGroup } from './native-layers.js';
+import type { ProductDefinition } from './product.js';
+export { nativeLayerTimeSupport } from './native-layers.js';
+
+const auxiliaryInputs = {
+  mslpPa: ['mean-sea-level-pressure', 'Pa', 'cell', 'MSL'], u10mMps: ['eastward-wind', 'm/s', 'cell', '10 m model AGL'],
+  v10mMps: ['northward-wind', 'm/s', 'cell', '10 m model AGL'], gust10mMps: ['wind-gust', 'm/s', 'cell', '10 m model AGL'],
+  pblHeightM: ['boundary-layer-height', 'm', 'cell', 'model AGL'], capeJkg: ['convective-available-potential-energy', 'J/kg', 'cell', 'source parcel declared in provenance'],
+  cloudTotalPct: ['cloud-cover-total', '%', 'cell', 'atmospheric column'],
+  cloudLowPct: ['cloud-cover-low', '%', 'cell', 'source low-cloud layer'], spfhKgKg: ['specific-humidity', 'kg/kg', 'level-cell', 'native model levels'],
+  rhPercent: ['relative-humidity', '%', 'level-cell', 'native model levels'], uWindMps: ['eastward-wind', 'm/s', 'level-cell', 'native model levels'],
+  vWindMps: ['northward-wind', 'm/s', 'level-cell', 'native model levels'], omegaPaS: ['pressure-vertical-velocity', 'Pa/s', 'level-cell', 'native model levels']
+} as const;
+type AuxiliaryInput = keyof typeof auxiliaryInputs;
+const auxiliaryDescriptors = Object.fromEntries(Object.entries(auxiliaryInputs).map(([id, [quantity, units, dimensions, verticalReference]]) =>
+  [id, { id, quantity, units, dimensions, verticalReference, timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }]
+)) as { [Id in AuxiliaryInput]: { id: Id; quantity: (typeof auxiliaryInputs)[Id][0]; units: (typeof auxiliaryInputs)[Id][1]; dimensions: (typeof auxiliaryInputs)[Id][2]; verticalReference: (typeof auxiliaryInputs)[Id][3]; timeSupport: 'valid-time'; missingness: 'explicit-cell-mask' } };
 
 /** Current adapter outputs only. Isobaric pressure levels are a shared coordinate;
  * terrain-following model levels supply per-column pressures with an explicit mask.
- * Missing cell values have an explicit mask. No vector field/basis is admitted yet.
+ * Missing cell values have an explicit mask; horizontal vectors are Earth-relative.
  */
 export const NORMALIZED_INPUTS = {
   terrainM: { id: 'terrainM', quantity: 'geopotential-height', units: 'm', dimensions: 'cell', verticalReference: 'MSL', timeSupport: 'static', missingness: 'explicit-cell-mask' },
@@ -18,7 +35,8 @@ export const NORMALIZED_INPUTS = {
   pressureLevelsHpa: { id: 'pressureLevelsHpa', quantity: 'air-pressure-coordinate', units: 'hPa', dimensions: 'level', verticalReference: 'strictly decreasing isobaric levels', timeSupport: 'static', missingness: 'all-levels-required' },
   pressurePa: { id: 'pressurePa', quantity: 'air-pressure', units: 'Pa', dimensions: 'level-cell', verticalReference: 'terrain-following model levels', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
   hgtM: { id: 'hgtM', quantity: 'geopotential-height', units: 'm', dimensions: 'level-cell', verticalReference: 'MSL at profile levels (isobaric or model levels)', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
-  tempK: { id: 'tempK', quantity: 'air-temperature', units: 'K', dimensions: 'level-cell', verticalReference: 'profile levels (isobaric or model levels)', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' }
+  tempK: { id: 'tempK', quantity: 'air-temperature', units: 'K', dimensions: 'level-cell', verticalReference: 'profile levels (isobaric or model levels)', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' },
+  ...auxiliaryDescriptors
 } as const;
 export type NormalizedInputId = keyof typeof NORMALIZED_INPUTS;
 for (const input of Object.values(NORMALIZED_INPUTS)) Object.freeze(input);
@@ -75,6 +93,15 @@ export const PRECIPITATION_METHOD = Object.freeze({
     'Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.'
   ])
 } as const);
+export const PRECIPITATION_ALL_HOURS_METHOD = Object.freeze({
+  ...PRECIPITATION_METHOD,
+  id: 'trailing-precipitation-rate-v2',
+  parameters: Object.freeze({ minimumRateMmPerHour: PRECIPITATION_METHOD_PARAMETERS.minimumRateMmPerHour }),
+  caveats: Object.freeze([
+    'The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including accumulation differencing.',
+    'Evaluated at every retained forecast time. Negative, non-finite or explicitly missing rates are unavailable.'
+  ])
+} as const);
 export const TERRAIN_CLEARANCE_METHOD = Object.freeze({
   id: 'native-lift-terrain-clearance-v2',
   requiredInputs: Object.freeze(['convectiveDepthTopMslM', 'buoyancyM2S3', 'branch', 'terrainElevationM'] as const),
@@ -123,13 +150,79 @@ export const TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: TERRAIN_COLUMN_METHOD,
   'model-levels': MODEL_LEVEL_TERRAIN_COLUMN_METHOD
 } as const);
+function defineCloudTerrainColumnMethod<const Id extends string>(id: Id, base: typeof TERRAIN_COLUMN_METHOD | typeof MODEL_LEVEL_TERRAIN_COLUMN_METHOD) {
+  const nativeCloudSupport = Object.freeze({ id: 'nativeCloudSupport', quantity: 'native-cloud-support-flags', units: 'code',
+    dimensions: 'cell', verticalReference: 'native model column', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' } as const);
+  return Object.freeze({ ...base, id,
+    requiredInputs: Object.freeze([...base.requiredInputs, nativeCloudSupport.id]),
+    inputs: Object.freeze({ ...base.inputs, nativeCloudSupport }),
+    caveats: Object.freeze([...base.caveats, 'Cloud support flags combine available positive-weight native-column diagnostics.'])
+  });
+}
+export const TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
+  isobaric: defineCloudTerrainColumnMethod('supported-terrain-column-1p2-v2', TERRAIN_COLUMN_METHOD),
+  'model-levels': defineCloudTerrainColumnMethod('supported-terrain-column-1p2-model-levels-v2', MODEL_LEVEL_TERRAIN_COLUMN_METHOD)
+});
+export function terrainColumnMethodForProduct(product: Pick<ProductDefinition, 'layers' | 'capabilities'>) {
+  const methods = product.layers.includes('thermal-velocity') ? TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE : TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE;
+  return methods[product.capabilities.verticalCoordinate];
+}
+const nativeInputs = {
+  soaring: ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'hgtM', 'tempK', 'pblHeightM', 'spfhKgKg', 'rhPercent'],
+  cloud: ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg'],
+  surface: ['temp2mK', 'specificHumidity2mKgKg', 'surfacePressurePa', 'mslpPa', 'capeJkg', 'cloudTotalPct', 'cloudLowPct'],
+  wind: ['terrainM', 'surfacePressurePa', 'temp2mK', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pblHeightM', 'hgtM', 'tempK', 'uWindMps', 'vWindMps', 'u10mMps', 'v10mMps', 'gust10mMps']
+} as const satisfies Record<NativeMethodGroup, readonly NormalizedInputId[]>;
+export const NATIVE_METHOD_PARAMETERS = Object.freeze({ ...THERMODYNAMIC_CONSTANTS, ...NATIVE_DIAGNOSTIC_PARAMETERS,
+  lenschowScale: DEFAULT_SOARING_PARAMETERS.lenschowScale,
+  lenschowShape: DEFAULT_SOARING_PARAMETERS.lenschowShape,
+  lenschowPeakZeta: DEFAULT_SOARING_PARAMETERS.lenschowPeakZeta,
+  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG });
+function nativeMethodsForCoordinate(coordinate: 'isobaric' | 'model-levels') {
+  const pressure = coordinate === 'isobaric' ? 'pressureLevelsHpa' : 'pressurePa';
+  return Object.freeze(Object.fromEntries((Object.keys(nativeInputs) as NativeMethodGroup[]).map(group => {
+    const id = nativeMethodId(group, coordinate);
+    const inputs: readonly NormalizedInputId[] = group === 'surface' || group === 'cloud' ? nativeInputs[group] : [...nativeInputs[group], pressure];
+    return [group, Object.freeze({ id, requiredInputs: Object.freeze(inputs),
+      inputs: Object.freeze(Object.fromEntries(inputs.map(input => [input, NORMALIZED_INPUTS[input]]))),
+      outputs: Object.freeze(NATIVE_LAYER_IDS.filter(layer => NATIVE_LAYERS[layer][4] === group)),
+      spatialSupport: 'column' as const,
+      parameters: NATIVE_METHOD_PARAMETERS,
+      caveats: Object.freeze([
+        'All inputs belong to one normalized frame; fluxes retain their declared trailing window and profiles use its endpoint.',
+        'Input dependencies describe the output group. Missing optional source fields leave only their dependent outputs unavailable.',
+        group === 'wind' ? 'Earth-relative vectors integrate from model ground to resolved thermal top or model PBL top, with the 10 m vector anchored at ground; missing segments remain unavailable.'
+          : group === 'cloud' ? 'Surface LCL uses the native surface parcel and Bolton condensation temperature.'
+          : group === 'surface' ? 'Source CAPE parcel and cloud-layer definitions are recorded in provenance. Instantaneous gust inputs retain their source diagnostic meaning.'
+          : 'Native shallow-column model-PBL and heat-flux closures retain positive convection below the map sink threshold. Nighttime convection is zero.'
+      ]) })];
+  }))) as Readonly<Record<NativeMethodGroup, {
+    id: string; requiredInputs: readonly NormalizedInputId[]; inputs: Readonly<Record<string, (typeof NORMALIZED_INPUTS)[NormalizedInputId]>>;
+    outputs: readonly NativeLayerId[]; spatialSupport: 'column'; parameters: typeof NATIVE_METHOD_PARAMETERS; caveats: readonly string[];
+  }>>;
+}
+export const NATIVE_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
+  isobaric: nativeMethodsForCoordinate('isobaric'),
+  'model-levels': nativeMethodsForCoordinate('model-levels')
+});
+export function nativeMethodForLayer(layer: string, coordinate: 'isobaric' | 'model-levels') {
+  if (!Object.hasOwn(NATIVE_LAYERS, layer)) return undefined;
+  return NATIVE_METHODS_BY_VERTICAL_COORDINATE[coordinate][NATIVE_LAYERS[layer as NativeLayerId][4]];
+}
+const nativeMethods = Object.fromEntries(Object.values(NATIVE_METHODS_BY_VERTICAL_COORDINATE).flatMap(groups =>
+  Object.values(groups).map(method => [method.id, method])
+));
 export const METHODS = Object.freeze({
   [LIFT_METHOD.id]: LIFT_METHOD,
   [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD,
   [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD,
+  [PRECIPITATION_ALL_HOURS_METHOD.id]: PRECIPITATION_ALL_HOURS_METHOD,
   [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD,
   [TERRAIN_COLUMN_METHOD.id]: TERRAIN_COLUMN_METHOD,
-  [MODEL_LEVEL_TERRAIN_COLUMN_METHOD.id]: MODEL_LEVEL_TERRAIN_COLUMN_METHOD
+  [MODEL_LEVEL_TERRAIN_COLUMN_METHOD.id]: MODEL_LEVEL_TERRAIN_COLUMN_METHOD,
+  [TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE.isobaric.id]: TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE.isobaric,
+  [TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE['model-levels'].id]: TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE['model-levels'],
+  ...nativeMethods
 });
 export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: LIFT_METHOD,
@@ -145,7 +238,7 @@ const parameterKeySchema = z.string().regex(/^[a-z][A-Za-z0-9_]{0,63}$/);
 export const normalizedInputSchema = z.object({
   id: inputIdSchema, quantity: z.string().min(1).max(80), units: z.string().min(1).max(24),
   dimensions: z.enum(['cell', 'level', 'level-cell']), verticalReference: z.string().min(1).max(80),
-  timeSupport: z.enum(['static', 'valid-time', 'interval-mean']), missingness: z.enum(['explicit-cell-mask', 'all-levels-required'])
+  timeSupport: z.enum(['static', 'valid-time', 'interval-mean', 'interval-maximum']), missingness: z.enum(['explicit-cell-mask', 'all-levels-required'])
 }).strict();
 
 export const methodDescriptorSchema = z.object({

@@ -1,15 +1,29 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema } from './index.js';
+import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema } from './index.js';
+import { deriveSoaringViews, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring';
 
 describe('implemented method snapshots', () => {
+  it('projects source-declared interval gust maxima without changing instantaneous source snapshots', () => {
+    const product = { ...INDEXED_PRODUCT, layers: [...INDEXED_PRODUCT.layers, 'wind-gust-10m' as const],
+      upstream: { ...INDEXED_PRODUCT.upstream, auxSurface: { gust10mMps: { statistic: 2 } } } };
+    const maximum = createProductDescriptors(product), gust = maximum.layers['wind-gust-10m']!;
+    expect(gust.timeSupport).toBe('interval-maximum');
+    expect(maximum.methods[gust.methodId]!.inputs.gust10mMps!.timeSupport).toBe('interval-maximum');
+    const instantProduct = { ...product, upstream: { ...product.upstream, auxSurface: {} } };
+    const instant = createProductDescriptors(instantProduct);
+    expect(instant.layers['wind-gust-10m']!.timeSupport).toBe('valid-time');
+    expect(instant.methods[gust.methodId]!.inputs.gust10mMps!.timeSupport).toBe('valid-time');
+    expect(NORMALIZED_INPUTS.gust10mMps.timeSupport).toBe('valid-time');
+  });
+
   it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('publishes $modelId whole-domain layers with their actual methods and ground references', product => {
     const descriptors = createWholeDomainDescriptors(product), legacy = createProductDescriptors(product);
     const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     expect(descriptors.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
     expect(descriptors.layers['usable-lift-agl']).toMatchObject({ methodId: method.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' });
     expect(descriptors.methods[method.id]).toEqual(method);
-    expect(Object.keys(descriptors.methods)).toEqual(product.layers.includes('precip-rate') ? [method.id, PRECIPITATION_METHOD.id] : [method.id]);
+    expect(Object.keys(descriptors.methods)).toEqual(product.layers.includes('precip-rate') ? [method.id, PRECIPITATION_ALL_HOURS_METHOD.id] : [method.id]);
     if (product.layers.includes('precip-rate')) expect(descriptors.layers['precip-rate']).toEqual(legacy.layers['precip-rate']);
     expect(legacy.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
     expect(createProductMethodId(product)).toBe([...new Set(product.layers.map(layer => legacy.layers[layer].methodId))].join('+'));
@@ -45,7 +59,7 @@ describe('implemented method snapshots', () => {
   });
   it('shares one lift dependency/parameter snapshot across MSL and AGL', () => {
     const descriptors = createProductDescriptors(INDEXED_PRODUCT);
-    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-v2', 'trailing-precipitation-rate-v1']);
+    expect(Object.keys(descriptors.methods)).toEqual(['dry-lenschow-1p2-v2', 'trailing-precipitation-rate-v2']);
     expect(descriptors.layers['usable-lift-msl'].methodId).toBe(descriptors.layers['usable-lift-agl'].methodId);
     const lift = descriptors.methods['dry-lenschow-1p2-v2']!;
     expect(lift.requiredInputs).toEqual(['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pressureLevelsHpa', 'hgtM', 'tempK']);
@@ -99,9 +113,9 @@ describe('implemented method snapshots', () => {
 
   it('admits only the needed precipitation definition for a precipitation-only product', () => {
     const descriptors = createProductDescriptors({ ...INDEXED_PRODUCT, layers: ['precip-rate'] });
-    expect(Object.keys(descriptors.methods)).toEqual(['trailing-precipitation-rate-v1']);
-    expect(descriptors.methods[PRECIPITATION_METHOD.id]?.requiredInputs).toEqual(['precipitationMmPerHour']);
-    expect(Object.values(descriptors.methods[PRECIPITATION_METHOD.id]!.inputs)).toEqual([
+    expect(Object.keys(descriptors.methods)).toEqual(['trailing-precipitation-rate-v2']);
+    expect(descriptors.methods[PRECIPITATION_ALL_HOURS_METHOD.id]?.requiredInputs).toEqual(['precipitationMmPerHour']);
+    expect(Object.values(descriptors.methods[PRECIPITATION_ALL_HOURS_METHOD.id]!.inputs)).toEqual([
       { id: 'precipitationMmPerHour', quantity: 'liquid-water-equivalent-precipitation-rate', units: 'mm/h', dimensions: 'cell', verticalReference: 'surface', timeSupport: 'interval-mean', missingness: 'explicit-cell-mask' }
     ]);
   });
@@ -140,4 +154,71 @@ describe('implemented method snapshots', () => {
     invalid(value => { delete value.methods[LIFT_METHOD.id].parameters; });
     invalid(value => { value.methods[LIFT_METHOD.id].parameters['unsafe parameter key'] = 1; });
   });
+});
+
+describe('native method metadata', () => {
+  it.each(['isobaric', 'model-levels'] as const)('binds %s pressures and every actual dependency within descriptor bounds', coordinate => {
+    const methods = NATIVE_METHODS_BY_VERTICAL_COORDINATE[coordinate];
+    const pressure = coordinate === 'isobaric' ? 'pressureLevelsHpa' : 'pressurePa';
+    const otherPressure = coordinate === 'isobaric' ? 'pressurePa' : 'pressureLevelsHpa';
+    for (const method of Object.values(methods)) {
+      expect(methodDescriptorSchema.safeParse(method).success).toBe(true);
+      expect(method.requiredInputs).not.toContain(otherPressure);
+      expect(Object.isFrozen(method)).toBe(true);
+    }
+    expect(methods.soaring.requiredInputs).toContain(pressure);
+    expect(methods.wind.requiredInputs).toContain(pressure);
+    expect(methods.cloud.requiredInputs).not.toContain(pressure);
+    for (const group of ['soaring', 'wind'] as const) {
+      expect(methods[group].requiredInputs).toEqual(expect.arrayContaining(['terrainM', 'temp2mK', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'pblHeightM', 'hgtM', 'tempK']));
+    }
+    expect(methods.cloud.outputs).toEqual(['surface-lcl-msl']);
+    expect(methods.surface.outputs).toContain('cape-jkg');
+    expect(nativeMethodForLayer('precip-rate', coordinate)).toBeUndefined();
+  });
+
+  it('publishes the exact thresholds used by native physical decisions', () => {
+    expect(NATIVE_METHOD_PARAMETERS).toMatchObject({
+      nearSaturationSpreadC: 0.5, overdevelopmentRelativeHumidityPercent: 85,
+      minimumLevelAglM: 20, mixedLayerPoissonExponent: 0.2854,
+      sourceWindHeightAglM: 10, boundaryLayerWindAnchorAglM: 0,
+      cloudCapSinkRateMps: 1, lenschowScale: 4, lenschowShape: 0.8, lenschowPeakZeta: 0.3125
+    });
+    for (const [key, parameter] of Object.entries(NATIVE_DIAGNOSTIC_PARAMETERS)) expect(NATIVE_METHOD_PARAMETERS).toHaveProperty(key, parameter);
+    const basis = { thermalTopM: 2000, mixedLayerLclM: 1500, thermalVelocityMps: 1 };
+    expect(deriveSoaringViews({ ...basis, thermalTopRhPercent: NATIVE_METHOD_PARAMETERS.overdevelopmentRelativeHumidityPercent - 0.01 }).overdeveloped).toBe(false);
+    expect(deriveSoaringViews({ ...basis, thermalTopRhPercent: NATIVE_METHOD_PARAMETERS.overdevelopmentRelativeHumidityPercent }).overdeveloped).toBe(true);
+  });
+
+  it('retains exact wind height, pressure and source parcel meanings', () => {
+    expect(NORMALIZED_INPUTS.u10mMps).toMatchObject({ quantity: 'eastward-wind', verticalReference: '10 m model AGL', timeSupport: 'valid-time' });
+    expect(NORMALIZED_INPUTS.gust10mMps.timeSupport).toBe('valid-time');
+    expect(NORMALIZED_INPUTS.capeJkg.verticalReference).toBe('source parcel declared in provenance');
+  });
+
+  it('retains the old precipitation snapshot and declares the all-hour method separately', () => {
+    expect(METHODS[PRECIPITATION_METHOD.id]).toBe(PRECIPITATION_METHOD);
+    expect(PRECIPITATION_METHOD.id).toBe('trailing-precipitation-rate-v1');
+    expect(PRECIPITATION_METHOD.parameters).toHaveProperty('minimumSolarElevationDeg');
+    expect(PRECIPITATION_METHOD.caveats[1]).toContain('daylight');
+    expect(PRECIPITATION_ALL_HOURS_METHOD.id).toBe('trailing-precipitation-rate-v2');
+    expect(PRECIPITATION_ALL_HOURS_METHOD.parameters).not.toHaveProperty('minimumSolarElevationDeg');
+    expect(PRECIPITATION_ALL_HOURS_METHOD.caveats[1]).toContain('every retained forecast time');
+    expect(methodDescriptorSchema.safeParse(PRECIPITATION_ALL_HOURS_METHOD).success).toBe(true);
+  });
+});
+
+
+it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('versions native cloud support for $modelId while retaining the legacy terrain method', product => {
+  const coordinate = product.capabilities.verticalCoordinate, legacy = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[coordinate];
+  const method = TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE[coordinate];
+  expect(terrainColumnMethodForProduct(product)).toBe(legacy);
+  expect(terrainColumnMethodForProduct({ ...product, layers: [...product.layers, 'thermal-velocity'] })).toBe(method);
+  expect(legacy.requiredInputs).not.toContain('nativeCloudSupport');
+  expect(method.requiredInputs).toEqual([...legacy.requiredInputs, 'nativeCloudSupport']);
+  expect(method.inputs.nativeCloudSupport).toMatchObject({ quantity: 'native-cloud-support-flags', units: 'code', verticalReference: 'native model column' });
+  expect(method.caveats).toContain('Cloud support flags combine available positive-weight native-column diagnostics.');
+  expect(methodDescriptorSchema.safeParse(method).success).toBe(true);
+  expect(method.parameters).toBe(legacy.parameters);
+  expect(METHODS[method.id]).toBe(method);
 });

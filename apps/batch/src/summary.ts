@@ -1,5 +1,5 @@
 import { coverageIndices, LAYER_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PBL_CLOSURE, SUPPORT_PROFILE_TOP, type CoverageMask, type LayerId } from '@av/contracts';
-import type { GridField } from '@av/forecast';
+import { fieldOffset, type GridField } from '@av/forecast';
 
 export function summarizeFields(
   fields: Partial<Record<LayerId, GridField>>,
@@ -13,9 +13,9 @@ export function summarizeFields(
     const counts = { valid: 0, noLift: 0, unavailable: 0, outside: 0, parcelCrossing: 0, profileTop: 0, pblClosure: 0 };
     let min = Infinity, max = -Infinity, total = 0;
     for (const i of outputIndices) {
-      const flags = field.flags[i], status = flags & STATUS_MASK;
+      const offset = fieldOffset(field, i, mask.grid.width), flags = field.flags[offset], status = flags & STATUS_MASK;
       if (status === STATUS_VALID) {
-        const value = field.values[i];
+        const value = field.values[offset];
         if (!Number.isFinite(value)) throw new Error(`Non-finite valid sample in ${layer}`);
         counts.valid++; min = Math.min(min, value); max = Math.max(max, value); total += value;
       } else if (status === STATUS_NO_LIFT) counts.noLift++;

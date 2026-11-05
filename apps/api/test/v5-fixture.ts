@@ -10,6 +10,9 @@ import {
   gridSchema,
   manifestV5Schema,
   planWholeDomainGrid,
+  renderedLayers,
+  layerSurface,
+  sparseCoverageLookup,
   sparseCoverageFromDense,
   type ForecastSurfaceV5,
   type Grid,
@@ -18,7 +21,7 @@ import {
   type ProductDefinition,
   type SparseCoverageMask
 } from '@av/contracts';
-import { prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
+import { prepareShardedSamplePackLayout, profileRecordBytes, writeProfileRecord, type NativeProfileInput, type ShardedSamplePackLayout } from '@av/forecast';
 import { describeSparseCoverage } from '../../batch/src/coverage';
 import { createApp } from '../src/index';
 
@@ -59,7 +62,7 @@ function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) =
   };
 }
 
-interface SurfaceFixture { surface: ForecastSurfaceV5; layout: ShardedSamplePackLayout; bytes: Uint8Array; objects: Map<string, Uint8Array>; shardSha: Map<string, string> }
+interface SurfaceFixture { surface: ForecastSurfaceV5; mask: SparseCoverageMask; layout: ShardedSamplePackLayout; bytes: Uint8Array; objects: Map<string, Uint8Array>; shardSha: Map<string, string> }
 
 function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 'native' | 'fine', layers: LayerId[], frameCount: number, active: (x: number, y: number) => boolean, value: (channel: number, x: number, y: number) => { value: number; flags: number }, prefix: string, masterZoom: number): SurfaceFixture {
   const mask = denseMask(grid, masterZoom, active, product.bounds);
@@ -100,31 +103,42 @@ function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 
     [`${coveragePrefix}/tiles.bin`, mask.tiles],
     [shardKey, bytes]
   ]);
-  return { surface, layout, bytes, objects, shardSha: new Map([[shardKey, shardSha]]) };
+  return { surface, mask, layout, bytes, objects, shardSha: new Map([[shardKey, shardSha]]) };
 }
 
-interface FixtureOptions { product?: ProductDefinition; grid?: Grid; bounds?: ProductDefinition['bounds']; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[] }
+interface FixtureOptions {
+  product?: ProductDefinition; grid?: Grid; bounds?: ProductDefinition['bounds']; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[];
+  mapFrameCount?: number;
+  framePrefix?: 'f' | 'h';
+  nativeLayers?: readonly LayerId[];
+  nativeValue?: (layer: LayerId, frame: number, x: number, y: number) => number | null;
+}
 
-export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE_GRID, bounds = BOUNDS, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2] }: FixtureOptions = {}) {
-  const product: ProductDefinition = { ...base, grid, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
+export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE_GRID, bounds = BOUNDS, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2], mapFrameCount, framePrefix = 'h', nativeLayers, nativeValue }: FixtureOptions = {}) {
+  const configuredNative = base.layers.filter(layer => layerSurface(layer) === 'native');
+  const nativeChannels = nativeLayers ?? (configuredNative.length ? configuredNative : NATIVE_LAYERS);
+  const product: ProductDefinition = { ...base, ...(nativeLayers ? { layers: [...FINE_LAYERS, ...nativeLayers] } : {}), grid, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
   const model = product.modelId, prefix = `builds/${model}/${buildId}`;
   const cycle = new Date(NOW).toISOString(), expiresAt = new Date(NOW + 86_400_000).toISOString();
-  const frames = frameHours.map(hour => ({ id: `h${String(hour).padStart(3, '0')}`, validTime: new Date(NOW + hour * 3_600_000).toISOString(), intervalStart: new Date(NOW + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(NOW + hour * 3_600_000).toISOString() }));
-  const fine = buildSurface(product, planWholeDomainGrid(grid, 2).fine, 'fine', 'fine', FINE_LAYERS, frames.length, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {
+  const frames = frameHours.map(hour => ({ id: `${framePrefix}${String(hour).padStart(3, '0')}`, validTime: new Date(NOW + hour * 3_600_000).toISOString(), intervalStart: new Date(NOW + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(NOW + hour * 3_600_000).toISOString() }));
+  const fine = buildSurface(product, planWholeDomainGrid(grid, 2).fine, 'fine', 'fine', FINE_LAYERS, mapFrameCount ?? frames.length, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {
     const layer = channel % 2, frame = Math.floor(channel / 2);
     if (layer === 0) return x === 4 && y === 17 ? { value: 0, flags: 1 } : { value: 310.25 + frame * 10 + (y === 17 ? 10 : 0), flags: 4 };
     return x === 5 && y === 17 ? { value: 0, flags: 2 } : { value: 610.25 + frame * 10, flags: 8 };
   }, prefix, maxZoom);
-  const native = buildSurface(product, grid, 'native', 'native', NATIVE_LAYERS, frames.length, (_x, y) => y >= 8 && y <= 10, channel => ({ value: 7 + channel, flags: 0 }), prefix, maxZoom);
-  const layers = [...product.layers], surfaces = product.layers.includes('precip-rate') ? [fine.surface, native.surface] : [fine.surface];
+  const native = buildSurface(product, grid, 'native', 'native', [...nativeChannels], frames.length, (_x, y) => y >= 8 && y <= 10, (channel, x, y) => {
+    const value = nativeValue ? nativeValue(nativeChannels[channel % nativeChannels.length]!, Math.floor(channel / nativeChannels.length), x, y) : 7 + channel;
+    return { value: value ?? NaN, flags: value === null ? 2 : 0 };
+  }, prefix, maxZoom);
+  const layers = [...product.layers], surfaces = nativeLayers || configuredNative.length ? [fine.surface, native.surface] : [fine.surface];
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
   const descriptors = createWholeDomainDescriptors(product);
   const manifest: ManifestV5 = manifestV5Schema.parse({
     version: 5, model, buildId, cycle, createdAt: cycle, expiresAt,
     descriptors, recipe: createRecipeIdentity(product, 'a'.repeat(64)),
     method: { id: [...new Set(product.layers.map(layer => descriptors.layers[layer].methodId))].join('+'), hash: 'a'.repeat(64) },
-    frames, layers,
-    artifacts: frames.flatMap(frame => layers.map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))),
+    frames, layers, ...(mapFrameCount === undefined ? {} : { mapFrameCount }),
+    artifacts: frames.slice(0, mapFrameCount ?? frames.length).flatMap(frame => renderedLayers(layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))),
     surfaces,
     source: { provider: 'Fixture', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) },
     tool: {}, palettes: ['lift', 'rain'], metrics: {}
@@ -150,6 +164,54 @@ export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE
   return { product, manifest, objects, shardSha, get, bucket, app, request, sample, fine, native, buildId };
 }
 
+/** Pack genuine profile records with the same block and frame-group layout as publication. */
+export function attachNativeProfiles(fixture: ReturnType<typeof createV5Fixture>, options: {
+  levels?: number; groupSize?: number;
+  profile?: (frame: number, x: number, y: number) => NativeProfileInput;
+} = {}) {
+  const surface = fixture.manifest.surfaces.find(surface => surface.kind === 'native');
+  if (!surface) throw new Error('Profile fixture requires a native surface');
+  const levels = options.levels ?? 2, recordBytes = profileRecordBytes(levels), groupSize = options.groupSize ?? fixture.manifest.frames.length;
+  const blockIds = fixture.native.mask.coverage.blockIds;
+  const groups: NonNullable<ForecastSurfaceV5['profiles']>['groups'] = [];
+  const prefix = `builds/${fixture.manifest.model}/${fixture.buildId}/surfaces/${surface.id}/profiles`;
+  for (let firstFrame = 0, group = 0; firstFrame < fixture.manifest.frames.length; firstFrame += groupSize, group++) {
+    const frameCount = Math.min(groupSize, fixture.manifest.frames.length - firstFrame);
+    const layout = prepareShardedSamplePackLayout(surface.grid, blockIds, frameCount, undefined, recordBytes);
+    const data = layout.shards.map(shard => new Uint8Array(shard.byteLength));
+    for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+      const block = layout.block(ordinal), bytes = data[block.shard]!;
+      for (let row = 0; row < block.height; row++) for (let column = 0; column < block.width; column++) {
+        const x = (block.column + column) % surface.grid.width, y = block.row + row;
+        const covered = sparseCoverageLookup(fixture.native.mask.coverage, x, y);
+        for (let frame = 0; frame < frameCount; frame++) {
+          const offset = block.byteOffset + ((row * block.width + column) * frameCount + frame) * recordBytes;
+          const profile = covered?.output || covered?.halo ? options.profile?.(firstFrame + frame, x, y) ?? {
+            modelTerrainM: 100 + x, surfacePressureHpa: 987.6, status: 'valid' as const,
+            levels: Array.from({ length: levels }, (_, index) => ({ pressureHpa: 900 - index * 25, heightM: 600 + index * 500,
+              temperatureC: 15 - index * 3 + firstFrame + frame, dewPointC: 10 - index * 3,
+              uWindMps: 2 + x, vWindMps: -3, omegaPaS: 0.1 }))
+          } : { modelTerrainM: null, status: 'outside-domain' as const, levels: [] };
+          writeProfileRecord(bytes.subarray(offset, offset + recordBytes), profile);
+        }
+      }
+    }
+    const shards: NonNullable<ForecastSurfaceV5['profiles']>['groups'][number]['shards'] = [];
+    for (const [blockShard, part] of layout.shards.entries()) {
+      const bytes = data[blockShard]!, key = `${prefix}/g${group}-b${blockShard}.bin`, sha256 = hash(bytes);
+      fixture.objects.set(key, bytes); fixture.shardSha.set(key, sha256);
+      shards.push({ firstBlock: part.firstBlock, blockCount: part.blockCount,
+        storedCells: part.byteLength / (frameCount * recordBytes), bytes: bytes.length, key, sha256 });
+    }
+    groups.push({ firstFrame, frameCount, shards });
+  }
+  surface.profiles = { format: 'native-column-profile-v1', blockSize: SAMPLE_BLOCK_SIZE, levelCount: levels, recordBytes,
+    coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells, groups };
+  manifestV5Schema.parse(fixture.manifest);
+  fixture.objects.set(`builds/${fixture.manifest.model}/${fixture.buildId}/manifest.json`, json(fixture.manifest));
+  return fixture;
+}
+
 export function createGroupedV5Fixture({ groups, ...options }: Omit<FixtureOptions, 'frameHours'> & { groups: readonly (readonly number[])[] }) {
   const fixture = createV5Fixture({ ...options, frameHours: groups.flat() });
   const { manifest, objects, shardSha } = fixture, prefix = `builds/${manifest.model}/${manifest.buildId}`;
@@ -158,8 +220,10 @@ export function createGroupedV5Fixture({ groups, ...options }: Omit<FixtureOptio
     const blockIds = Uint32Array.from({ length: source.layout.blockCount }, (_, i) => source.layout.block(i).slot);
     const shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
     let firstFrame = 0;
+    const count = surface.kind === 'fine' ? manifest.mapFrameCount ?? manifest.frames.length : manifest.frames.length;
     for (const [group, hours] of groups.entries()) {
-      const channels = hours.length * surface.layers.length;
+      if (firstFrame >= count) break;
+      const frameCount = Math.min(hours.length, count - firstFrame), channels = frameCount * surface.layers.length;
       const layout = prepareShardedSamplePackLayout(surface.grid, blockIds, channels), data = new Uint8Array(layout.byteLength);
       for (let block = 0; block < layout.blockCount; block++) {
         const target = layout.block(block), original = source.layout.block(block);
@@ -170,8 +234,8 @@ export function createGroupedV5Fixture({ groups, ...options }: Omit<FixtureOptio
       }
       const key = `${prefix}/surfaces/${surface.id}/samples/g${group}-b0.bin`, sha256 = hash(data);
       objects.set(key, data); shardSha.set(key, sha256);
-      shards.push({ group, firstFrame, frameCount: hours.length, blockShard: 0, firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: data.length, key, sha256 });
-      firstFrame += hours.length;
+      shards.push({ group, firstFrame, frameCount, blockShard: 0, firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: data.length, key, sha256 });
+      firstFrame += frameCount;
     }
     surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards };
   }

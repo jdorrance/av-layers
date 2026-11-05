@@ -99,14 +99,16 @@ export async function createWholeDomainDerivePool(input: DerivePoolInput) {
       if (failed) throw failed;
       if (closing) throw new Error('Derive pool closed');
       if (active || job.generation !== nextGeneration) throw new Error('Invalid derive generation');
-      if (copyBytes(job.frame) > input.maxFrameCopyBytes) throw new RangeError('Derive frame copy budget exceeded');
+      const frame = { ...job.frame };
+      delete frame.auxSurface; delete frame.auxLevels;
+      if (copyBytes(frame) > input.maxFrameCopyBytes) throw new RangeError('Derive frame copy budget exceeded');
       if (job.deadlineAt !== undefined && (!Number.isFinite(job.deadlineAt) || Date.now() >= job.deadlineAt)) throw new Error('Terrain column deadline exceeded');
       signal?.throwIfAborted();
       active = true; jobId++;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         for (const field of Object.values(output)) { field.values.fill(NaN); field.flags.fill(STATUS_OUTSIDE); }
-        const shared = share({ ...job, phase: 'derive' as const, jobId });
+        const shared = share({ ...job, frame, phase: 'derive' as const, jobId });
         if (job.deadlineAt !== undefined) timer = setTimeout(() => fail(new Error('Terrain column deadline exceeded')), Math.max(0, job.deadlineAt - Date.now()));
         const results = await Promise.all(workers.map((worker, index) => new Promise<Omit<TerrainColumnDerivation, 'fields'>>((resolve, reject) => {
           pending.set(index, { resolve, reject });
