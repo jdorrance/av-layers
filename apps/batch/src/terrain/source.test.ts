@@ -65,12 +65,17 @@ describe('terrain source inventory', () => {
   });
 
   it('retries transient source responses and preserves caller cancellation', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     let calls = 0;
     const fetch = vi.fn(async () => ++calls === 1 ? new Response(null, { status: 503 }) : new Response(encode(`${north}\n`)));
-    await expect(fetchSourceInventory({ fetch })).resolves.toHaveProperty('inventory.tiles.0.id', north);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    const controller = new AbortController(); controller.abort(new Error('stop terrain'));
-    await expect(fetchSourceInventory({ fetch, signal: controller.signal })).rejects.toThrow('stop terrain');
-    expect(fetch).toHaveBeenCalledTimes(2);
+    try {
+      const pending = fetchSourceInventory({ fetch });
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(pending).resolves.toHaveProperty('inventory.tiles.0.id', north);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      const controller = new AbortController(); controller.abort(new Error('stop terrain'));
+      await expect(fetchSourceInventory({ fetch, signal: controller.signal })).rejects.toThrow('stop terrain');
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
   });
 });

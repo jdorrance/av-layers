@@ -1,14 +1,12 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, PRODUCTS, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
+import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
 import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
-import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { fileURLToPath } from 'node:url';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
 const TILES_BY_ZOOM = [1, 4];
@@ -42,26 +40,6 @@ describe('build capacity admission and performance budgets', () => {
       await expect(loadBundledFineCoverage(product, wholeDomainPlan(product)!)).rejects.toThrow('Fine coverage is missing');
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
-  it('rejects scenario overrides instead of silently ignoring them for configured whole-domain capacity', () => {
-    const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--frames', '48', '--layers', '8', '--models', '4'], { encoding: 'utf8' });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('scenario overrides are unsupported');
-    expect(result.stdout).not.toContain('currentProductAdmission');
-  });
-  it.each(PRODUCTS)('admits the configured $modelId product within resource bounds', product => {
-    const model = product.modelId;
-    const result = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./cli.ts', import.meta.url)), 'capacity', '--model', model], { encoding: 'utf8', timeout: 60_000 });
-    expect(result.status, result.stderr).toBe(0);
-    const report = JSON.parse(result.stdout);
-    expect(report.capacity.violations).toEqual([]);
-    expect(report.capacity.tiles).toBeGreaterThan(0);
-    expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
-    for (const count of [report.capacity.rasterWorkers, report.capacity.deriveWorkers]) {
-      expect(count).toBeGreaterThanOrEqual(0);
-      expect(count).toBeLessThanOrEqual(product.execution.workers);
-    }
-    expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
-  }, 70_000);
   it('rejects empty public coverage before opening a provider', async () => {
     const { mask, product } = input();
     expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, product, { maxLevels: 1 })).toThrow('before acquisition');

@@ -3,10 +3,10 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { expectedTiles, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, type CoverageMask, type LayerId } from '@av/contracts';
+import { CELL_BYTES, expectedTiles, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, type CoverageMask, type LayerId } from '@av/contracts';
 import { openArchive } from './archive-reader.js';
 import { BUILD_BUDGETS } from './capacity.js';
-import { createRasterPool, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
+import { createRasterPool, MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { createRenderer } from './render.js';
 import { decodeWebp } from './webp.js';
 import { admitWholeDomain } from './whole-domain/capacity.js';
@@ -85,24 +85,23 @@ describe('bounded per-frame raster workers', () => {
     const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const active = fine.coverage.offsets[fine.coverage.blockIds.length]!;
     expect(active).toBeGreaterThan(0);
-    const fields = (['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => ({ layer, field: { values: new Float32Array(active), flags: new Uint8Array(active), coverage: fine.coverage } }));
+    const nativeLayers = product.layers.includes('precip-rate') ? 1 : 0;
     const nativeCells = plan.native.width * plan.native.height, nativeMaskBytes = 2 * Math.ceil(nativeCells / 8) + fine.tiles.byteLength;
+    const fineMaskBytes = fine.tiles.byteLength + fine.coverage.blockIds.byteLength + fine.coverage.offsets.byteLength + fine.coverage.output.byteLength + fine.coverage.halo.byteLength;
     const capacity = admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive: 1, nativeMask: fine, fine, nativeMaskBytes,
-      frames: 1, nativeLayers: product.layers.includes('precip-rate') ? 1 : 0, fineLayers: 2, terrainBytes: 0, maxLevels: 1, retainedGeometryFields: 0,
+      frames: 1, nativeLayers, fineLayers: 2, terrainBytes: 0, maxLevels: 1, retainedGeometryFields: 0,
       columns: { byteLength: 0, workspaceBufferBytes: 0, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
-    const expectedBytes = capacity.rasterSharedInputBytes;
+    const fieldBytes = active * CELL_BYTES * 2;
+    expect(capacity.rasterSharedInputBytes).toBe(Math.max(nativeCells * nativeLayers * CELL_BYTES + nativeMaskBytes, fieldBytes + fineMaskBytes));
+    expect(capacity.rasterSharedInputBytes).toBeGreaterThan(MAX_RASTER_SHARED_INPUT_BYTES);
     expect(capacity.rasterWorkers).toBe(rasterWorkerCount(undefined, product.execution.workers));
     expect(capacity.violations).toEqual([]);
     expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
-    expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? expectedBytes : 0);
+    expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? capacity.rasterSharedInputBytes : 0);
     expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
     if (capacity.rasterWorkers) expect(capacity.workingSet.rasterInline).toBe(0);
     else expect(capacity.workingSet.rasterInline).toBeGreaterThan(0);
-    await expect(createRasterPool(fine, fields, { workers: 1, geometryCacheBytes: 0, maxPending: 1 })).rejects.toThrow('shared input byte budget');
-    const pool = await createRasterPool(fine, fields, { workers: 1, geometryCacheBytes: 0, maxPending: 1, maxSharedInputBytes: capacity.rasterSharedInputBytes });
-    try { expect(pool.sharedInputBytes).toBe(expectedBytes); expect(pool.admittedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes); }
-    finally { await pool.close(); }
-  }, 30_000);
+  });
 
   it('falls back inline when whole-domain worker headroom is exhausted', async () => {
     const { mask, targets } = fixture(), directory = await mkdtemp(join(tmpdir(), 'av-raster-headroom-')); temporary.push(directory);

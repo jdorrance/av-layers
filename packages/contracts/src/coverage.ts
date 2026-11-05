@@ -64,32 +64,40 @@ export interface SparseCoverageMask { grid: Grid; bounds?: GeographicBounds; cov
 export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
   createSparseCoverage(coverage);
   const { width, height, wrapLongitude, blockIds, output, halo } = coverage;
-  const size = SAMPLE_BLOCK_SIZE, columns = Math.ceil(width / size);
-  const findBlock = (id: number): number => {
-    let lo = 0, hi = blockIds.length;
-    while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (blockIds[mid] < id) lo = mid + 1; else hi = mid; }
-    return lo < blockIds.length && blockIds[lo] === id ? lo : -1;
+  const size = SAMPLE_BLOCK_SIZE, columns = Math.ceil(width / size), blockRows = Math.ceil(height / size);
+  const blockIndex = new Int32Array(columns * blockRows);
+  blockIndex.fill(-1);
+  for (let block = 0; block < blockIds.length; block++) blockIndex[blockIds[block]!] = block;
+  const cell = (x: number, y: number): { output: boolean } | null => {
+    if (y < 0 || y >= height) return null;
+    if (wrapLongitude) x = ((x % width) + width) % width;
+    else if (x < 0 || x >= width) return null;
+    const block = blockIndex[Math.floor(y / size) * columns + Math.floor(x / size)]!;
+    if (block < 0) return null;
+    const local = (y % size) * size + (x % size), byte = block * 32 + (local >> 3), bit = 1 << (local & 7);
+    const present = ((output[byte]! | halo[byte]!) & bit) !== 0;
+    return present ? { output: (output[byte]! & bit) !== 0 } : null;
   };
   const rowBits = (column: number, row: number): number => {
     if (row < 0 || row >= height) return 0;
-    const block = findBlock(Math.floor(row / size) * columns + column);
+    const block = blockIndex[Math.floor(row / size) * columns + column]!;
     if (block < 0) return 0;
     const index = block * 32 + (row % size) * 2;
-    return output[index] | (output[index + 1] << 8);
+    return output[index]! | (output[index + 1]! << 8);
   };
   for (let block = 0; block < blockIds.length; block++) {
-    const column = blockIds[block] % columns, x0 = column * size, y0 = Math.floor(blockIds[block] / columns) * size;
+    const column = blockIds[block]! % columns, x0 = column * size, y0 = Math.floor(blockIds[block]! / columns) * size;
     const blockWidth = Math.min(size, width - x0), blockHeight = Math.min(size, height - y0), valid = (1 << blockWidth) - 1;
     for (let row = 0; row < blockHeight; row++) {
-      const y = y0 + row, index = block * 32 + row * 2, own = output[index] | (output[index + 1] << 8);
+      const y = y0 + row, index = block * 32 + row * 2, own = output[index]! | (output[index + 1]! << 8);
       let expanded = 0;
       for (let dy = -1; dy <= 1; dy++) {
         const bits = rowBits(column, y + dy);
         expanded |= bits | (bits << 1) | (bits >>> 1);
-        if (sparseCoverageLookup(coverage, x0 - 1, y + dy)?.output) expanded |= 1;
-        if (sparseCoverageLookup(coverage, x0 + blockWidth, y + dy)?.output) expanded |= 1 << (blockWidth - 1);
+        if (cell(x0 - 1, y + dy)?.output) expanded |= 1;
+        if (cell(x0 + blockWidth, y + dy)?.output) expanded |= 1 << (blockWidth - 1);
       }
-      const actual = halo[index] | (halo[index + 1] << 8);
+      const actual = halo[index]! | (halo[index + 1]! << 8);
       if (((expanded & valid) & ~own) !== actual) throw new Error('Sparse coverage halo mismatch');
       if (row === 0 || row === blockHeight - 1 || (own & 1) || (own & (1 << (blockWidth - 1)))) {
         for (let x = 0; x < blockWidth; x++) {
@@ -98,7 +106,7 @@ export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
             const nx = x0 + x + dx, ny = y + dy;
             if (ny < 0 || ny >= height || (!wrapLongitude && (nx < 0 || nx >= width))) continue;
             const wrapped = ((nx % width) + width) % width;
-            if ((Math.floor(wrapped / size) !== column || Math.floor(ny / size) !== Math.floor(y0 / size)) && !sparseCoverageLookup(coverage, nx, ny)) throw new Error('Sparse coverage halo mismatch');
+            if ((Math.floor(wrapped / size) !== column || Math.floor(ny / size) !== Math.floor(y0 / size)) && !cell(nx, ny)) throw new Error('Sparse coverage halo mismatch');
           }
         }
       }

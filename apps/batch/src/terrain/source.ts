@@ -1,5 +1,5 @@
-import { setTimeout as delay } from 'node:timers/promises';
 import { ASSET_MAX_BYTES, TERRAIN_SOURCE, sha256, terrainInventorySchema, type TerrainCatalog, type TerrainInventory, type TerrainStorage, type TerrainTileSource } from './contract.js';
+import { pause } from '../pause.js';
 
 const SOURCE_ORIGIN = 'https://copernicus-dem-90m.s3.amazonaws.com';
 export const INVENTORY_MAX_BYTES = 4 * 1024 * 1024;
@@ -85,7 +85,7 @@ async function fetchBytes(url: string, limit: number, { fetch: request = globalT
     } catch (error) {
       signal?.throwIfAborted();
       if (attempt >= 2 || (error instanceof SourceResponseError && !error.retryable)) throw error;
-      await delay(500 * (attempt + 1), undefined, { signal });
+      await pause(500 * (attempt + 1), signal);
     }
   }
 }

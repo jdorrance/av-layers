@@ -1,8 +1,8 @@
 import type { SplitSource } from './source.js';
 import { recentSourceCycles } from '../source.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
-import { setTimeout as delay } from 'node:timers/promises';
 import { splitGribRegularFieldUrl, validateSplitGribCycle } from './fields.js';
+import { pause } from '../pause.js';
 
 const PROBE_CONCURRENCY = 4;
 const PROBE_ATTEMPTS = 3;
@@ -67,7 +67,7 @@ async function probeSentinel(url: string, fetchFn: typeof fetch, signal: AbortSi
       signal.throwIfAborted();
       failure = probeFailure(error);
     }
-    if (attempt + 1 < PROBE_ATTEMPTS) await delay(250 * (attempt + 1), undefined, { signal });
+    if (attempt + 1 < PROBE_ATTEMPTS) await pause(250 * (attempt + 1), signal);
   }
   return `${failure} after ${PROBE_ATTEMPTS} attempts`;
 }

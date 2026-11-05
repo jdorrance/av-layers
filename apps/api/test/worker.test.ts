@@ -398,8 +398,11 @@ describe('read-only worker', () => {
     expect((await call(path)).status).toBe(200);
     const cacheReads = cache.matches;
     bucket.install(publication('build-2'));
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(now + 15_000);
-    expect((await call(path)).status).toBe(404);
+    const refreshed = call(path);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await refreshed).status).toBe(404);
     expect(cache.matches).toBe(cacheReads);
   });
   it('keeps missing or corrupt provenance failures uncached', async () => {
@@ -529,12 +532,17 @@ describe('read-only worker', () => {
     expect((await call(first)).status).toBe(200);
     const newer = publication('build-2');
     bucket.install(publication('build-1'), newer);
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     vi.setSystemTime(now + 1001);
     const before = bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json').length;
-    expect((await call('/tiles/gfs/build-2/usable-lift-agl/f003/1/0/0.webp')).status).toBe(200);
+    const promoted = call('/tiles/gfs/build-2/usable-lift-agl/f003/1/0/0.webp');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await promoted).status).toBe(200);
     expect(bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json').length - before).toBe(1);
     const cacheReads = cache.matches;
-    const missing = await call('/tiles/gfs/unknown/usable-lift-agl/f003/1/0/0.webp');
+    const missingPending = call('/tiles/gfs/unknown/usable-lift-agl/f003/1/0/0.webp');
+    await vi.advanceTimersByTimeAsync(1_000);
+    const missing = await missingPending;
     expect(missing.status).toBe(404);
     expect(((await missing.json()) as { title: string }).title).toBe('not-retained');
     expect(cache.matches).toBe(cacheReads);
@@ -896,19 +904,25 @@ describe('read-only worker', () => {
   });
 
   it('bounds unknown-build refreshes and briefly caches unavailable publications', async () => {
-    const unknown = await Promise.all(Array.from({ length: 40 }, (_, i) => call(`/v1/models/gfs/runs/unknown-${i}`)));
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(now);
+    const pending = Promise.all(Array.from({ length: 40 }, (_, i) => call(`/v1/models/gfs/runs/unknown-${i}`)));
+    await vi.advanceTimersByTimeAsync(1_000);
+    const unknown = await pending;
     expect(unknown.filter(result => result.status === 404)).toHaveLength(32);
     expect(unknown.filter(result => result.status === 503)).toHaveLength(8);
     await Promise.all(unknown.map(async result => { if (result.status === 503) expect(await result.json()).toMatchObject({ title: 'resource-limit' }); else await result.body?.cancel(); }));
     expect(bucket.reads.filter(read => read.key === 'catalog/gfs/latest.json')).toHaveLength(2);
     vi.setSystemTime(now + 1001);
-    expect((await call('/v1/models/gfs/runs/unknown-41')).status).toBe(404);
+    const later = call('/v1/models/gfs/runs/unknown-41');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await later).status).toBe(404);
     expect(bucket.reads.filter(read => read.key === 'catalog/gfs/latest.json')).toHaveLength(3);
     bucket = new MemoryBucket();
     for (let i = 0; i < 10; i++) expect((await call('/v1/models/gfs/latest')).status).toBe(503);
     expect(bucket.reads).toHaveLength(1);
     bucket.install(publication('recovered'));
-    vi.setSystemTime(now + 6002);
+    vi.setSystemTime(Date.now() + 5_001);
     expect((await call('/v1/models/gfs/latest')).status).toBe(200);
   });
 

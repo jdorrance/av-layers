@@ -218,8 +218,13 @@ export function prepareTerrainColumns(sourceMask: CoverageMask, targetMask: Cove
   };
 }
 
+export function packedTerrainColumnBudget(plan: WholeDomainGrid, coverage: SparseCoverage, sourceActiveIndices: Uint32Array,
+  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string; partition?: { index: number; count: number } }): Pick<PreparedPackedTerrainColumns, 'byteLength' | 'workspaceBufferBytes' | 'workspaceObjectBudgetBytes' | 'outputBufferBytes'> {
+  return preparePackedTerrainColumns(plan, coverage, sourceActiveIndices, maxLevels, { ...options, budgetOnly: true });
+}
+
 export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: SparseCoverage, sourceActiveIndices: Uint32Array,
-  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string; partition?: { index: number; count: number } }): PreparedPackedTerrainColumns {
+  maxLevels: number, options: TerrainColumnEvaluationOptions & { maxBytes: number; expectedGridHash: string; partition?: { index: number; count: number }; budgetOnly?: boolean }): PreparedPackedTerrainColumns {
   const expected = planWholeDomainGrid(plan.native, plan.k);
   if (!sameGrid(expected.fine, plan.fine)) throw new RangeError('Invalid whole-domain terrain column grid');
   const source = expected.native, target = expected.fine;
@@ -252,6 +257,10 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
   const outputBufferBytes = targetCount * 10;
   const admittedBytes = byteLength + workspaceBufferBytes + workspaceObjectBudgetBytes + outputBufferBytes;
   if (!Number.isSafeInteger(admittedBytes) || admittedBytes > options.maxBytes) throw new RangeError('Packed terrain column byte budget exceeded');
+  if (options.budgetOnly) {
+    const unavailable = () => { throw new Error('Packed terrain column budget does not derive'); };
+    return { byteLength, workspaceBufferBytes, workspaceObjectBudgetBytes, outputBufferBytes, derive: unavailable, deriveAsync: async () => unavailable() };
+  }
   const activeIndices = sourceActiveIndices.slice(), xCoordinates = new Float64Array(target.width), yCoordinates = new Float64Array(target.height);
   if (source.kind === 'regular-latlon' && target.kind === 'regular-latlon') {
     for (let x = 0; x < target.width; x++) {

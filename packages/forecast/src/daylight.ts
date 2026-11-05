@@ -6,7 +6,7 @@ import {
   type Grid,
   type ProductDefinition
 } from '@av/contracts';
-import { createGridDaylightTester } from '@av/solar/grid';
+import { anyProjectedSampleInDaylight, createGridDaylightTester, prepareProjectedDaylightSamples } from '@av/solar/grid';
 
 interface ResolveProductFrameHoursOptions {
   /** When false, returns all candidate product.frameHours without solar filtering. */
@@ -85,27 +85,26 @@ export function resolveProductFrameHours(
 
   const minimumSolarElevationDeg =
     options?.minimumSolarElevationDeg ?? LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg;
+  const geometry = mask.grid.kind === 'regular-latlon' ? undefined : prepareGridGeometry(mask.grid);
+  const projected = geometry ? prepareProjectedDaylightSamples({
+    kind: 'projected', width: mask.grid.width, height: mask.grid.height,
+    gridToGeographic: (column, row) => geometry.gridToGeographic(column, row)
+  }, outputIndices) : undefined;
 
   const selected: number[] = [];
   for (const hour of candidates) {
     const endMs = cycleMs + hour * 3_600_000;
     const startMs = cycleMs + (hour - product.intervalHours) * 3_600_000;
     const timestampsMs = buildIntervalDaylightTimestampsMs(startMs, endMs);
-    const isDaylight = createMaskDaylightTester(
-      mask.grid,
-      timestampsMs,
-      minimumSolarElevationDeg
-    );
     let anyDaylight = false;
-    for (let i = 0; i < outputIndices.length; i += 1) {
-      if (isDaylight(outputIndices[i]!)) {
-        anyDaylight = true;
-        break;
+    if (projected) anyDaylight = anyProjectedSampleInDaylight(projected, timestampsMs, minimumSolarElevationDeg);
+    else {
+      const isDaylight = createMaskDaylightTester(mask.grid, timestampsMs, minimumSolarElevationDeg);
+      for (let i = 0; i < outputIndices.length; i += 1) {
+        if (isDaylight(outputIndices[i]!)) { anyDaylight = true; break; }
       }
     }
-    if (anyDaylight) {
-      selected.push(hour);
-    }
+    if (anyDaylight) selected.push(hour);
   }
 
   return selected.length > 0 ? selected : candidates;

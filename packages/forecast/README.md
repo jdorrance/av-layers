@@ -80,8 +80,9 @@ estimates JavaScript overhead. Returned field buffers and preparation temporarie
 have separate lifetimes. [Build admission](../../apps/batch/src/capacity.ts) retains
 the prepared mapping for frame execution and accounts for these buffers.
 
-`preparePackedTerrainColumns` derives whole-domain fields in sparse active-cell
-offset order. `PackedGridField` shares immutable coverage with the sampler and
+`packedTerrainColumnBudget` returns those byte counters after the same admission
+checks. `preparePackedTerrainColumns` derives whole-domain fields in sparse
+active-cell offset order. `PackedGridField` shares immutable coverage with the sampler and
 raster consumers. Native-grid donor support comes from
 [`planWholeDomainGrid`](../contracts/src/whole-domain-grid.ts).
 `prepareTerrainColumns` retains the regional mapping path for evaluation.

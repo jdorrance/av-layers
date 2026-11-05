@@ -42,7 +42,6 @@ it('retains configured fine and native masks within the cache budget', async () 
     const bytes = objects.get(key);
     return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null;
   } } as unknown as R2Bucket;
-  const receipts = [];
   for (const item of fixtures) {
     const grid = item.surface.grid;
     const block = item.layout.block(0);
@@ -51,20 +50,17 @@ it('retains configured fine and native masks within the cache budget', async () 
     const plan = planShardedPackedSample(item.layout, sample, Array.from({ length: item.surface.samples.channelCount }, (_, i) => i));
     expect(plan.byteRange.length).toBe((block.width + 2) * item.surface.samples.channelCount * 5);
     expect(plan.byteRange.length).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
-    const start = performance.now(), lease = await resolveSparseCoverage(bucket, item.surface, undefined, item.descriptor.bounds);
-    receipts.push({ blocks: lease.coverage.layout.blockCount, sparseBytes: item.sparse.byteLength, maxRangeBytes: plan.byteRange.length, coldMs: Math.round(performance.now() - start), ...coverageMemory(bucket) });
+    const lease = await resolveSparseCoverage(bucket, item.surface, undefined, item.descriptor.bounds);
     lease.release();
   }
   const coldReads = reads;
   for (const item of fixtures) {
-    const start = performance.now(), lease = await resolveSparseCoverage(bucket, item.surface, undefined, item.descriptor.bounds);
-    receipts.push({ blocks: lease.coverage.layout.blockCount, warmMs: Math.round(performance.now() - start), ...coverageMemory(bucket) });
+    const lease = await resolveSparseCoverage(bucket, item.surface, undefined, item.descriptor.bounds);
     lease.release();
   }
   expect(reads).toBe(coldReads);
   expect(coverageMemory(bucket).cachedBytes).toBeLessThanOrEqual(24 * 1024 * 1024);
   expect(coverageMemory(bucket).leasedBytes).toBe(0);
-  console.log('full coverage receipts', JSON.stringify(receipts));
   let peakCold = 0;
   const concurrent = { get: async (key: string) => {
     peakCold = Math.max(peakCold, inFlightAllocationBytes());
@@ -75,8 +71,7 @@ it('retains configured fine and native masks within the cache budget', async () 
   for (const lease of concurrentLeases) lease.release();
   expect(peakCold).toBeLessThanOrEqual(32 * 1024 * 1024);
   expect(coverageMemory(concurrent).leasedBytes).toBe(0);
-  console.log('concurrent cold coverage receipt', JSON.stringify({ peakReservedBytes: peakCold, ...coverageMemory(concurrent) }));
-}, 120_000);
+});
 
 it('bounds rotating retained masks and coalesces leases until delayed reads settle', async () => {
   const item = await fixture(INDEXED_PRODUCT), objects = new Map<string, Uint8Array>();
@@ -125,5 +120,4 @@ it('bounds rotating retained masks and coalesces leases until delayed reads sett
   } finally { for (const gate of gates) gate(); await Promise.all(requests); }
   expect(coverageMemory(bucket).leasedBytes).toBe(0);
   expect(peakReserved).toBeLessThanOrEqual(32 * 1024 * 1024);
-  console.log('rotating coverage receipt', JSON.stringify({ held: leases.length, peakLeasedBytes: peak, peakReservedBytes: peakReserved, ...coverageMemory(bucket) }));
-}, 120_000);
+});
