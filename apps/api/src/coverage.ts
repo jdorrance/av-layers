@@ -89,7 +89,8 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, 
   return resolved;
 }
 
-export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurfaceV5, bounds?: readonly number[], ctx?: WaitContext): Promise<SparseTiles> {
+export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurfaceV5, bounds?: readonly number[], ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<SparseTiles> {
+  waiterSignal?.throwIfAborted();
   const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = `${hash}/tiles`;
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
   let cache = caches.get(bucket);
@@ -117,7 +118,7 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
       const value = { descriptor, tiles };
       cache!.set(cacheKey, value, tiles.byteLength + bytes.length * 4, Date.now() + 3_600_000);
       return value;
-    }, ctx) as SparseTiles;
+    }, ctx, waiterSignal) as SparseTiles;
   }
   const descriptor = result.descriptor;
   if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash
@@ -174,7 +175,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
     resolved = await reads.run(cacheKey, async signal => {
       state.loading = true;
       try {
-      const { descriptor, tiles } = await resolveSparseTiles(bucket, surface, bounds, ctx);
+      const { descriptor, tiles } = await resolveSparseTiles(bucket, surface, bounds, ctx, signal);
       signal.throwIfAborted();
       if (descriptor.files.sparse.bytes > MAX_API_SPARSE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
       const groups = frameGroups(surface);

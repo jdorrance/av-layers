@@ -99,7 +99,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
 - Execution: 24 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["27 3,9,15,21 * * *"]`.
-- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `regional-daylight`.
 - Vertical coordinate: `isobaric`; maximum levels: 25.
 - Calculation methods: `supported-terrain-column-1p2-v1`, `trailing-precipitation-rate-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `precipitationMmPerHour`.

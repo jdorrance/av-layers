@@ -166,6 +166,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
     await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle, phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) });
     throw error;
   } finally {
+    await renderer.close?.();
     pack?.close();
     for (const patch of refinements) patch.pack?.close();
     delete options.prepared.terrain;

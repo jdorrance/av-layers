@@ -119,7 +119,7 @@ in the frozen plan. Workers stage verified terrain from R2 and derive fine lift
 surfaces from the same native weather frames. Assembly requires every grid's
 complete shard set before validating and publishing the build.
 
-Admission requires a source cycle at most **18 hours old**, at least **6 hours
+Admission requires a source cycle within its configured age bound (**18 hours** for GFS and ICON-EU; **12 hours** for RRFS), at least **6 hours
 of remaining forecast coverage**, and a build created within the last **6 hours**.
 Published builds are retained for 7 days.
 Cleanup waits until every object in an unreferenced build has aged seven days,
@@ -190,9 +190,9 @@ to import and verify the Copernicus GLO-90 catalog in R2. See the
 preparations.
 
 Production forecasts use the catalog pinned in the
-[model workflow](../.github/workflows/forecast-model.yml). Both weather models
-use this catalog and the shared
-[polygon configuration](../packages/contracts/config/refinement.json).
+[model workflow](../.github/workflows/forecast-model.yml). All configured weather models
+use this catalog for whole-domain terrain preparation (and the shared
+[polygon configuration](../packages/contracts/config/refinement.json) for regional patch evaluation).
 
 The Forecast workflow's `terrain-catalog-ref` input overrides the environment's
 `TERRAIN_CATALOG_REF`, which overrides the production pin. For staging, set the

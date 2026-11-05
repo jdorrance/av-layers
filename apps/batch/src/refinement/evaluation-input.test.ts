@@ -201,6 +201,10 @@ describe('evaluation input admission', () => {
     const decoded = decodeSamplePack(values.patchPack, control.targetMask, ['f001', 'f002'], ['usable-lift-msl', 'usable-lift-agl'], 4);
     expect(decoded.fields.f002!['usable-lift-agl']!.values[8]).toBe(8 * 100 + 3);
     expect(decoded.fields.f002!['usable-lift-agl']!.flags[8]).toBe(STATUS_VALID | SUPPORT_PARCEL_CROSSING);
+
+    const v5Path = join(values.out, 'v5-manifest.json');
+    await writeFile(v5Path, JSON.stringify({ ...values.manifest, version: 5 }));
+    await expect(loadEvaluationInput({ manifestPath: v5Path })).rejects.toThrow('Control manifest must be a v4 regional-patch build');
   });
 
   it('rejects path traversal and absent or mismatched stored sources', async () => {

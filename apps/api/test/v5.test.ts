@@ -250,6 +250,9 @@ describe('API v5 sampling', () => {
     const before = fixture.get.mock.calls.filter(([, options]) => options?.range).length;
     const empty = await api.sample(build, { ...outside, frames: 'all' });
     expect(empty.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'outside-domain'))).toBe(true);
+    const rim = gridToGeographic(grid, -0.25, 2)!;
+    const rimResult = await api.sample(build, { ...rim, frames: 'all' });
+    expect(rimResult.frames.every(frame => Object.values(frame.layers).every(cell => cell.status === 'outside-domain'))).toBe(true);
     expect(fixture.get.mock.calls.filter(([, options]) => options?.range)).toHaveLength(before);
     const tilejson = await fixture.request(`/v1/models/${fixture.product.modelId}/runs/${fixture.buildId}/layers/usable-lift-msl/h001/tilejson.json`);
     expect(tilejson.status).toBe(200);

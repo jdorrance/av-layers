@@ -229,9 +229,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     let surfaceIndex = 0;
     for await (const loaded of prefetch(instantSpecs, sourceGrid.gridKey)) {
       const spec = instantSpecs[surfaceIndex++]!;
-      const sampled = await instant(loaded,
-        spec.kind === 'surface-pressure' ? target?.surfacePressurePa : spec.kind === 'temp-2m' ? target?.temp2mK : target?.specificHumidity2mKgKg,
-        spec.kind === 'surface-pressure' ? target?.missing.surfacePressure : spec.kind === 'temp-2m' ? target?.missing.temp2m : target?.missing.humidity2m);
+      const sampled = loaded.sampled as SampledColumn<Float32Array>;
       receipts.push(loaded.receipt);
       if (spec.kind === 'surface-pressure') outputs.surfacePressure = sampled;
       else if (spec.kind === 'temp-2m') outputs.temp2m = sampled;
@@ -247,13 +245,15 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     const intervalOutputs = new Map<string, { values: Float32Array; missing: Uint8Array; missingCount: number }>();
     const windowReceipts = new Map<string, { current: DecodedFieldReceipt; companion: DecodedFieldReceipt | null }>();
     const needsCompanion = indexedGribWindowNeedsCompanion(source, hour);
+    const nextHour = hour + source.model.forecast.intervalHours;
+    const nextNeedsCompanion = source.model.forecast.hours.includes(nextHour) && indexedGribWindowNeedsCompanion(source, nextHour);
     const companionSpecs = indexedGribCompanionSpecs(source, hour);
     const companionByKind = new Map(companionSpecs.map((spec) => [spec.kind, spec]));
 
     for (const spec of intervalSpecs) {
       const current = await load(spec, currentStartHour, hour, sourceGrid.gridKey);
       const currentSampled = await decode(current, nativeIndices);
-      if (!needsCompanion) nextRaw.set(`${current.receipt.url}\n${spec.key}`, {
+      if (nextNeedsCompanion) nextRaw.set(`${current.receipt.url}\n${spec.key}`, {
         grid: current.grid, packingError: current.packingError, receipt: structuredClone(current.receipt),
         indexSha256: current.indexSha256, sampled: currentSampled,
       });
@@ -268,7 +268,8 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
         receipts.push(companion.receipt);
         admitIndexedGribWindowPair(source, current.receipt, companion.receipt);
       } else if (hoursInWindow(current.receipt) !== source.model.forecast.intervalHours) {
-        throw new IndexedGribError('source-conflict', `Direct Indexed GRIB window is not three hours for ${spec.key}`);
+        const expectedHours = source.model.forecast.intervalHours;
+        throw new IndexedGribError('source-conflict', `Direct Indexed GRIB window is not ${expectedHours === 3 ? 'three hours' : `${expectedHours} hour${expectedHours === 1 ? '' : 's'}`} for ${spec.key}`);
       }
       const recovered = recoverTrailingWindow({
         currentValues: currentSampled.values,
@@ -315,9 +316,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     let pressureIndex = 0;
     for await (const loaded of prefetch(pressureSpecs, sourceGrid.gridKey)) {
       const spec = pressureSpecs[pressureIndex++]!;
-      const levelIndex = spec.kind === 'height' ? hgtM.length : tempK.length;
-      const sampled = await instant(loaded, spec.kind === 'height' ? target?.hgtM[levelIndex] : target?.tempK[levelIndex],
-        spec.kind === 'height' ? target?.missing.hgt[levelIndex] : target?.missing.temp[levelIndex]);
+      const sampled = loaded.sampled as SampledColumn<Float32Array>;
       receipts.push(loaded.receipt);
       if (spec.kind === 'height') { hgtM.push(sampled.values); hgtMissing.push(sampled.missing); }
       else { tempK.push(sampled.values); tempMissing.push(sampled.missing); }

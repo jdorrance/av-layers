@@ -177,7 +177,7 @@
       "label": "RRFS (CONUS)",
       "attribution": "NOAA RRFS · Aviation Forecast Layers",
       "layers": ["usable-lift-msl", "usable-lift-agl", "precip-rate"],
-      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 25, "daylightFrames": "all-hours"},
+      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 25, "daylightFrames": "regional-daylight"},
       "grid": {
         "kind": "lambert-conformal",
         "width": 1799,

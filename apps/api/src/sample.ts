@@ -1,6 +1,6 @@
 import { MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, STATUS_OUTSIDE, isCovered, isLayerId, type ForecastGrid, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
 import { refinementCandidate } from '@av/contracts/refinement';
-import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, type Sample } from '@av/forecast';
+import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Sample } from '@av/forecast';
 import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from './coverage';
 import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObjectBytes, waitFor, type WaitContext } from './resources';
 import { artifact, servedSource, type PublishedManifest } from './publication';
@@ -139,7 +139,7 @@ async function serveSampleV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       releases.push(lease.release);
       request.signal.throwIfAborted();
       const coverage = lease.coverage;
-      const covered = isCovered(coverage.mask, lat, lon);
+      const covered = samplingCovered(coverage.mask, lat, lon);
       const plan = covered ? planSample(surface.grid, lat, lon) : null;
       if (covered && !plan) fail(503, 'publication-invalid', 'Surface coverage lacks sample support');
       const groups = coverage.groups ?? [{ firstFrame: 0, frameCount: m.frames.length, channelCount: surface.samples.channelCount, shards: surface.samples.shards }];

@@ -5,7 +5,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
+import { canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, createRecipeIdentity, getProduct, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
+import { resolveProductFrameHours } from '@av/forecast';
 import { validateBuild } from './validate.js';
 
 function manifest(hash: string) {
@@ -64,6 +65,14 @@ describe('coverage integrity', () => {
     expect(actual).not.toBe(stale);
     await expect(validateBuild('.', manifest(stale), mask)).rejects.toThrow('Coverage identity mismatch');
   });
+});
+
+it('omits forecast hours when the RRFS land mask is entirely dark', async () => {
+  const product = getProduct('rrfs');
+  if (!product) throw new Error('RRFS product');
+  const mask = await loadCoverage(product);
+  expect(resolveProductFrameHours(product, mask, '2026-12-21T00:00:00Z', { outputIndices: coverageIndices(mask).output }))
+    .toEqual([1, 2, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
 });
 
 it('writes and verifies sparse coverage artifacts without changing dense descriptors', async () => {

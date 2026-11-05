@@ -167,7 +167,7 @@ describe('point sampling', () => {
       expect(contributors.size).toBeGreaterThan(0);
       expect([...prepared.contributors]).toEqual([...contributors]);
       expect(paired.contributors).toEqual(prepared.contributors);
-      expect(prepared.byteLength).toBe(pairedLatitudes.length * 32 + Math.ceil(pairedLatitudes.length / 8) + contributors.size * 4);
+      expect(prepared.byteLength).toBe(pairedLatitudes.length * 24 + Math.ceil(pairedLatitudes.length / 8) + contributors.size * 4);
       expect(paired.byteLength).toBe(prepared.byteLength);
       const field = { values: Float32Array.from({ length: 36 }, (_, i) => i + 500),
         flags: Uint8Array.from({ length: 36 }, (_, i) => i % 7 === 0 ? STATUS_UNAVAILABLE : i % 11 === 0 ? STATUS_NO_LIFT : 0),

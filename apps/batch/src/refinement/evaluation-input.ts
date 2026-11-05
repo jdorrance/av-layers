@@ -114,7 +114,11 @@ export async function loadEvaluationInput(options: { manifestPath: string; patch
   options.signal?.throwIfAborted();
   const manifestPath = resolve(options.manifestPath);
   const manifestBytes = await readLocalFile(manifestPath, MAX_MANIFEST_BYTES);
-  const manifest = manifestSchema.parse(parseBoundedJson(manifestBytes));
+  const rawManifest = parseBoundedJson(manifestBytes);
+  if (typeof rawManifest === 'object' && rawManifest !== null && 'version' in rawManifest && rawManifest.version === 5) {
+    throw new Error('Control manifest must be a v4 regional-patch build; whole-domain v5 manifests do not carry a legacy terrain-clearance patch');
+  }
+  const manifest = manifestSchema.parse(rawManifest);
   validateArtifactRecords(manifest);
   for (const frame of manifest.frames) {
     if (frame.id === '.' || frame.id === '..' || frame.id.includes('/') || frame.id.includes('\\')) throw new Error(`Invalid frame ID ${frame.id}`);
