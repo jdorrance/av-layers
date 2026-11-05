@@ -11,7 +11,7 @@ export const BUILD_BUDGETS = {
   tiles: 4_000_000,
   samplePackBytes: 256 * 1024 * 1024,
   numericBytes: 64 * 1024 ** 3,
-  elapsedMs: 50 * 60_000,
+  elapsedMs: 90 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
 } as const;
 

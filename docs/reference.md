@@ -1002,7 +1002,7 @@ Configured limits from [capacity.ts](../apps/batch/src/capacity.ts) and [serving
 
 Complete-build limits:
 
-- `elapsedMs`: `3000000`.
+- `elapsedMs`: `5400000`.
 - `gridCells`: `4000000`.
 - `numericBytes`: `68719476736`.
 - `peakRssBytes`: `2147483648`.

@@ -6,6 +6,7 @@ import { canonicalGridJson, createRefinementDescriptors, createSparseCoverage, e
 import * as refinementConfiguration from '../apps/batch/src/refinement/config.js';
 import { fixturePatch } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
+import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { refinementInputSchema } from '../apps/batch/src/refinement/prepare.js';
 import { localPath } from '../apps/batch/src/validate.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn() }));
@@ -561,7 +562,7 @@ it('resumes frame-group local payloads without remote shard receipts', async () 
 });
 
 it.each([
-  { defect: 'elapsed', metrics: { elapsedMs: 51 * 60_000, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'elapsedMs' },
+  { defect: 'elapsed', metrics: { elapsedMs: BUILD_BUDGETS.elapsedMs + 1, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'elapsedMs' },
   { defect: 'rss', metrics: { elapsedMs: 1000, peakRssBytes: 3 * 1024 ** 3, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'peakRssBytes' },
   { defect: 'invalid', metrics: { elapsedMs: -1, peakRssBytes: 0 }, message: 'missing or invalid' }
 ] as const)('rejects v5 publication with $defect budget metrics', async ({ metrics, message }) => {
