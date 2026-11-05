@@ -20,8 +20,8 @@ import { stagePreparedTerrain, stageSparsePreparedTerrain } from './terrain/stag
 import { loadRefinements, prepareRefinements, refinementInputSchema } from './refinement/prepare.js';
 import type { ObjectStorage } from './storage.js';
 import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
-import { buildWholeDomainFrames, type WholeDomainFrameResult, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
-import { finishWholeDomain } from './whole-domain/finish.js';
+import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
+import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
@@ -380,11 +380,10 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     const phasesMs = { acquireMs: 0, deriveMs: 0, packMs: 0, renderMs: 0 };
     for (const receipt of receipts) for (const key of Object.keys(phasesMs) as (keyof typeof phasesMs)[]) phasesMs[key] += receipt.metrics.phasesMs[key];
     const frames = plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, options.product.intervalHours));
-    const result: WholeDomainFrameResult = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
+    const result: FinishWholeDomainOptions['result'] = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
       receipts: receipts.flatMap(receipt => receipt.provenance), surfaces, capacity,
-      metrics: { frames: Object.assign({}, ...receipts.map(receipt => receipt.metrics.frames)), phasesMs,
-        renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) }, acquisition: { shards: receipts.map(receipt => receipt.metrics.acquisition) },
-        elapsedMs: Date.now() - Date.parse(plan.createdAt), peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
+      metrics: { phasesMs, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
+        peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
     const objects = options.store ? receipts.flatMap(receipt => {
       if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
       return receipt.objects;

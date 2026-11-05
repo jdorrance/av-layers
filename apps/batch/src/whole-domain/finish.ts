@@ -15,7 +15,9 @@ import type { ObjectReceipt } from '../immutable-upload.js';
 export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   out: string; signal?: AbortSignal;
   prepared: WholeDomainPrepared;
-  result: WholeDomainFrameResult;
+  result: Omit<WholeDomainFrameResult, 'metrics'> & {
+    metrics: Pick<WholeDomainFrameResult['metrics'], 'phasesMs' | 'renderer' | 'peakRssBytes'>;
+  };
   identity: { recipe: ManifestV5['recipe']; scienceHash: string; components: Record<string, string> };
   preparation?: { elapsedMs: number; peakRssBytes: number };
   assemblyStartedAt?: number;
