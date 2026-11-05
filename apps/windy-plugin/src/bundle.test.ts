@@ -116,9 +116,15 @@ it.each([
   };
   const layer = {
     url: '', options: {} as { zIndex?: number }, setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
-    source: () => source
+    source: () => source, layer: () => ({ id: 'windy-forecast' }), isLoading: () => false, alwaysLoadTiles: false
   };
-  const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
+  const renderListeners = new Map<string, Set<() => void>>();
+  const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn(), maplibreMap: {
+    setPaintProperty: vi.fn(),
+    on: (name: string, listener: () => void) => { const listeners = renderListeners.get(name) ?? new Set(); listeners.add(listener); renderListeners.set(name, listeners); },
+    off: (name: string, listener: () => void) => renderListeners.get(name)?.delete(listener),
+    isMoving: () => false
+  } };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   let destroyApp: (() => void) | undefined;
   // Host unmount can happen after the request; Back must release resources immediately.
@@ -173,9 +179,11 @@ it.each([
   expect(typeof app.$destroy).toBe('function');
   app.onopen();
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
+  tileListeners.get('data')?.({ tile: {} });
+  for (const listener of renderListeners.get('render') ?? []) listener();
   expect(metadata.listenToSingleclick).toBe(false);
   expect(singleclick.on).not.toHaveBeenCalled();
-  expect(addWindowListener).toHaveBeenCalledTimes(2);
+  expect(addWindowListener).toHaveBeenCalledTimes(3);
   expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/${model}/latest?expand=manifest`);
@@ -245,7 +253,7 @@ it.each([
   const mobileHeader = target.children.find(element => element.className.split(' ').includes('plugin__mobile-header'))!;
   expect(target.children).toEqual([mobileHeader, root]);
   expect(document.body.children).not.toContain(root);
-  expect(addWindowListener).toHaveBeenCalledTimes(2);
+  expect(addWindowListener).toHaveBeenCalledTimes(3);
   elements.find(element => element.className === 'av-back')!.dispatch('click');
   expect(broadcast.emit.mock.calls).toEqual([
     ['rqstClose', loaded.__pluginConfig.name],
@@ -256,15 +264,30 @@ it.each([
   expect(map.removeLayer).not.toHaveBeenCalled();
   expect(protocols.size).toBe(1);
 
+  const pendingSignals: AbortSignal[] = [];
+  fetchImpl.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    const signal = init!.signal!; pendingSignals.push(signal);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }));
+  const otherModels = PRODUCTS.filter(product => product.modelId !== model);
+  selects[0].value = otherModels[0].modelId; selects[0].dispatch('change');
+  selects[0].value = otherModels[1].modelId; selects[0].dispatch('change');
+  expect(pendingSignals[0].aborted).toBe(true);
+  expect(pendingSignals[1].aborted).toBe(false);
+  expect(map.removeLayer).not.toHaveBeenCalled(); // Superseding pending models preserves the committed forecast.
+
   clock.mockReturnValue(expiresAtMs);
   win.dispatchEvent(new Event('pageshow'));
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
   expect(horizonNotice.hidden).toBe(true);
   expect(tileListeners.size).toBe(0);
-  expect(protocols.size).toBe(0);
+  expect(protocols.size).toBe(1); // The map session owns protocol registration; build bytes were evicted.
   expect(store.off).toHaveBeenCalledTimes(1);
   expect(removeWindowListener).not.toHaveBeenCalled();
   expect(removeVisibilityListener).not.toHaveBeenCalled();
   reopened.$destroy();
   expect(target.children).toHaveLength(0);
+  win.dispatchEvent(new Event('pagehide'));
+  expect(pendingSignals[1].aborted).toBe(true);
+  expect(protocols.size).toBe(0);
 });

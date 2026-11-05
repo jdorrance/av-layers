@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
-import { OVERLAY_LAYER_ID, type RasterTileProtocol } from '@av/contracts/client';
+import { type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -40,6 +40,8 @@ class Document extends EventTarget {
 class Window extends EventTarget {
   setInterval = globalThis.setInterval;
   clearInterval = globalThis.clearInterval;
+  requestAnimationFrame = (callback: FrameRequestCallback): number => globalThis.setTimeout(() => callback(Date.now()), 16) as unknown as number;
+  cancelAnimationFrame = (handle: number): void => globalThis.clearTimeout(handle);
   href = 'http://localhost:5173/';
   get location(): { pathname: string; search: string; href: string } {
     const url = new URL(this.href);
@@ -78,6 +80,9 @@ class MapMock {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(listener); this.handlers.set(name, handlers);
   }
+  off(name: string, listener: (event: Record<string, unknown>) => void): void { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(value => value !== listener)); }
+  isSourceLoaded(): boolean { return true; }
+  getBounds() { return { getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 }; }
   emit(name: string, event: Record<string, unknown> = {}): void { for (const handler of this.handlers.get(name) ?? []) handler(event); }
   addControl(): void {}
   getCenter(): { lng: number; lat: number } { return this.center; }
@@ -91,11 +96,11 @@ class MapMock {
     this.center = { lng: camera.center[0], lat: camera.center[1] };
     this.zoom = camera.zoom;
   }
-  setPaintProperty(): void {}
+  setPaintProperty(id: string, property: string, value: number): void { const layer = this.layers.get(id); if (layer) { layer.paint ??= {}; layer.paint[property] = value; } }
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
   getSource(id: string): unknown { return this.sources.get(id); }
   removeSource(id: string): void { this.sources.delete(id); }
-  addLayer(layer: { id: string; source?: string }): void { this.layers.set(layer.id, layer); }
+  addLayer(layer: { id: string; source?: string }): void { this.layers.set(layer.id, layer); this.emit('sourcedata', { sourceId: layer.source, tile: {} }); this.emit('render'); }
   getLayer(id: string): unknown { return this.layers.get(id); }
   removeLayer(id: string): void { this.layers.delete(id); }
   remove(): void { this.removed = true; }
@@ -110,7 +115,7 @@ let manifest: Manifest;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
-const sourceId = () => map().layers.get(OVERLAY_LAYER_ID)!.source!;
+const sourceId = () => [...map().layers.values()].find(layer => layer.source?.startsWith('av-overlay-'))!.source!;
 function modelButton(id: string): Element {
   const button = ui('models').children.find(child => child.value === id);
   if (!button) throw new Error(`Missing model button ${id}`);
@@ -119,6 +124,7 @@ function modelButton(id: string): Element {
 function selectFrame(index: number): void {
   ui('time').value = String(index);
   ui('time').dispatchEvent(new Event('input'));
+  vi.advanceTimersByTime(16);
 }
 function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
 
@@ -231,7 +237,7 @@ it('shows the horizon warning as time advances without hiding tile errors or dis
   expect(ui('horizon-notice').textContent).toContain('Forecast ended at 2026-10-31T00:00:00.000Z');
   expect(ui('tile-error').hidden).toBe(false);
   expect(ui('time').disabled).toBe(false);
-  expect(map().layers.has(OVERLAY_LAYER_ID)).toBe(true);
+  expect(map().layers.has(sourceId())).toBe(true);
 });
 
 it('shows exhausted forecasts immediately and refreshes the warning after timer throttling', async () => {
@@ -290,7 +296,7 @@ it('stops the previous freshness interval when a replacement load fails', async 
   modelButton(manifest.model).dispatchEvent(new Event('click'));
   expect(cancel).toHaveBeenCalledWith(interval);
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
-  expect(vi.getTimerCount()).toBe(0);
+  expect(vi.getTimerCount()).toBeGreaterThan(0); // The committed overlay keeps its expiry deadline.
   expect(modelButton(manifest.model).disabled).toBe(false);
   expect(ui('days').children).toHaveLength(0);
   expect(ui('time').disabled).toBe(true);
@@ -337,38 +343,24 @@ it('makes point values keyboard-scrollable only while the card is open', async (
 });
 
 
-it('cancels the old raster generation and removes protocols on replacement and BFCache suspension', async () => {
+it('keeps one session protocol during selection and recreates it after BFCache suspension', async () => {
   await start();
-  const url = (map().getSource(sourceId()) as { tiles: string[] }).tiles[0].replace('{z}', '0').replace('{x}', '0').replace('{y}', '0');
-  const scheme = url.split('://')[0], loader = protocols.get(scheme)!;
-  expect(protocols.size).toBe(1);
-  fetchMock.mockImplementationOnce(async (_url, init) => new Promise((_resolve, reject) => { init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }); }));
-  const pending = loader({ url }, new AbortController());
-  const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  const scheme = [...protocols.keys()][0];
   selectFrame(1);
-  await cancelled;
-  expect(protocols.has(scheme)).toBe(false); expect(protocols.size).toBe(1);
+  expect(protocols.size).toBe(1); expect(protocols.has(scheme)).toBe(true);
   page('pagehide', true); expect(protocols.size).toBe(0);
-  page('pageshow', true); expect(protocols.size).toBe(1);
+  page('pageshow', true); expect(protocols.size).toBe(1); expect(protocols.has(scheme)).toBe(false);
 });
 
-it('cleans a partially mounted overlay and displays frame-change errors, then permits recovery', async () => {
+it('retains the committed overlay after staging mount failure and permits retry', async () => {
   await start();
-  const addLayer = map().addLayer.bind(map());
-  let failedProtocol: { load: RasterTileProtocol['load']; url: string };
-  vi.spyOn(map(), 'addLayer').mockImplementationOnce(layer => {
-    addLayer(layer);
-    const source = map().sources.get(layer.source!) as { tiles: string[] };
-    failedProtocol = { load: [...protocols.values()][0], url: source.tiles[0].replace(/\{[zxy]\}/g, '0') };
-    throw new Error('GPU context unavailable');
-  });
+  const active = sourceId();
+  vi.spyOn(map(), 'addLayer').mockImplementationOnce(layer => { map().layers.set(layer.id, layer); throw new Error('GPU context unavailable'); });
   selectFrame(1);
-  expect(protocols.size).toBe(0); expect(map().sources.size).toBe(0); expect(map().layers.size).toBe(0);
-  expect(ui('error').hidden).toBe(false); expect(ui('error').textContent).toContain('GPU context unavailable');
-  expect(ui('timestamp').textContent).toBe('Overlay unavailable');
-  await expect(failedProtocol!.load({ url: failedProtocol!.url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
+  expect(protocols.size).toBe(1); expect(map().sources.has(active)).toBe(true);
+  expect(ui('error').textContent).toContain('GPU context unavailable');
   selectFrame(0);
-  expect(protocols.size).toBe(1); expect(map().sources.size).toBe(1); expect(ui('error').hidden).toBe(true);
+  expect(protocols.size).toBe(1); expect(ui('error').hidden).toBe(true);
 });
 
 it('configures the bundled worker and reports unsupported graphics without starting requests', async () => {
@@ -453,7 +445,7 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   const source = () => map().getSource(sourceId()) as { maxzoom: number; tiles: string[] };
   expect(source().maxzoom).toBe(9);
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
-  expect(map().layers.get(OVERLAY_LAYER_ID)?.paint?.['raster-opacity']).toBe(0.7);
+  expect(map().layers.get(sourceId())?.paint?.['raster-opacity']).toBe(0.7);
   ui('ref-msl').dispatchEvent(new Event('click'));
   expect(source().maxzoom).toBe(9);
   expect(source().tiles[0]).toContain('/usable-lift-msl/');

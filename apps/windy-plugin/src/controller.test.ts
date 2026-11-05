@@ -53,14 +53,19 @@ class StubLayer implements HostTileLayer {
   url: string;
   options: WindyTileOptions;
   opacity: number;
+  frozen = false;
+  freeze(): void { this.frozen = true; }
+  statusListener: ((status: 'loading' | 'ready' | 'error', displayedUrl: string) => void) | null = null;
+  onStatus(listener: (status: 'loading' | 'ready' | 'error', displayedUrl: string) => void): void { this.statusListener = listener; }
   listeners = new Map<string, Set<(event: HostTileEvent) => void>>();
   constructor(url: string, options: WindyTileOptions) {
     this.url = url;
     this.options = options;
     this.opacity = options.opacity;
   }
-  setUrl(url: string): void {
+  setUrl(url: string, maxNativeZoom = this.options.maxNativeZoom): void {
     this.url = url;
+    this.options = { ...this.options, maxNativeZoom };
   }
   setOpacity(opacity: number): void {
     this.opacity = opacity;
@@ -444,39 +449,60 @@ describe('PluginController', () => {
   });
 });
 
-  it('remounts the v5 tile layer for each surface max zoom while preserving frame, opacity, listeners and state', async () => {
-    const stub = stubHost();
-    const controller = new PluginController({ model: 'gfs', loadBuild: async () => v5Pinned(), host: stub.host, now: () => Date.parse(created) });
-    await controller.start();
-    expect(stub.added).toHaveLength(1);
-    expect(stub.added[0].url).toContain('/usable-lift-msl/f003/');
-    expect(stub.added[0].options.maxNativeZoom).toBe(9);
-    controller.setOpacity(0.7);
-    expect(controller.selectFrame('f006').frameId).toBe('f006');
-    expect(stub.added[0].url).toContain('/f006/');
+it('passes surface zoom changes through the mounted session without tearing down the adapter', async () => {
+  const stub = stubHost();
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => v5Pinned(), host: stub.host, now: () => Date.parse(created) });
+  await controller.start();
+  controller.setOpacity(0.7); controller.selectFrame('f006');
+  controller.selectLayer('precip-rate');
+  expect(stub.added).toHaveLength(1); expect(stub.removed).toHaveLength(0);
+  expect(stub.added[0].options.maxNativeZoom).toBe(7);
+  expect(stub.added[0].url).toContain('/precip-rate/f006/');
+  controller.selectLayer('usable-lift-agl');
+  expect(stub.added[0].options.maxNativeZoom).toBe(9);
+  expect(stub.added[0].url).toContain('/usable-lift-agl/f006/');
+  expect(stub.added[0].opacity).toBe(0.7);
+  controller.dispose();
+  expect(stub.removed).toEqual([stub.added[0]]);
+  expect(stub.listeners.size).toBe(0);
+});
 
-    expect(controller.selectLayer('precip-rate').layerId).toBe('precip-rate');
-    expect(stub.added).toHaveLength(2);
-    expect(stub.removed).toEqual([stub.added[0]]);
-    expect(stub.added[1].options.maxNativeZoom).toBe(7);
-    expect(stub.added[1].url).toContain('/precip-rate/f006/');
-    expect(stub.added[1].opacity).toBe(0.7);
-    expect([...stub.added[0].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
-    expect([...stub.added[1].listeners.values()].every(listeners => listeners.size === 1)).toBe(true);
-    expect(stub.listeners.size).toBe(1);
-    const failed = { tile: {} };
-    stub.added[1].emit('tileloadstart', failed);
-    stub.added[1].emit('tileerror', failed);
-    expect(controller.state().message).toContain('Overlay tile failed to load');
+it('clears errors belonging to a retired frame when the replacement commits', async () => {
+  const stub = stubHost();
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
+  await controller.start();
+  controller.selectFrame('f006');
+  const oldTile = { tile: {} }, layer = stub.added[0];
+  layer.emit('tileloadstart', oldTile); layer.emit('tileerror', oldTile);
+  expect(controller.state().message).toContain('Overlay tile failed');
+  layer.statusListener?.('ready', layer.url);
+  expect(controller.state().message).toBeNull();
+  controller.dispose();
+});
 
-    expect(controller.selectLayer('usable-lift-agl').layerId).toBe('usable-lift-agl');
-    expect(stub.added).toHaveLength(3);
-    expect(stub.added[2].options.maxNativeZoom).toBe(9);
-    expect(stub.added[2].url).toContain('/usable-lift-agl/f006/');
-    expect(stub.added[2].opacity).toBe(0.7);
-    expect(controller.state()).toMatchObject({ phase: 'ready', frameId: 'f006', layerId: 'usable-lift-agl', opacity: 0.7, message: null });
-    controller.dispose();
-    expect(stub.removed.at(-1)).toBe(stub.added[2]);
-    expect(stub.listeners.size).toBe(0);
-    expect([...stub.added[2].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
-  });
+it('freezes host timeline changes during model handover while preserving expiry', async () => {
+  const stub = stubHost(Date.parse('2026-10-30T03:00:00Z'));
+  let now = Date.parse(created);
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => now });
+  await controller.start();
+  const layer = stub.added[0], displayed = layer.url;
+  controller.freeze();
+  expect(layer.frozen).toBe(true); expect(stub.listeners.size).toBe(0);
+  stub.host.store.set('timestamp', Date.parse('2026-10-30T09:00:00Z'));
+  controller.refreshTime();
+  expect(layer.url).toBe(displayed);
+  now = Date.parse(expiresAt); controller.refreshTime();
+  expect(stub.removed).toEqual([layer]);
+  expect(controller.state().phase).toBe('expired');
+});
+
+it('ignores a build load that resolves after the controller was frozen', async () => {
+  const stub = stubHost();
+  let finish!: (build: PinnedBuild) => void;
+  const controller = new PluginController({ model: 'gfs', loadBuild: () => new Promise(resolve => { finish = resolve; }), host: stub.host, now: () => Date.parse(created) });
+  const starting = controller.start();
+  controller.freeze(); finish(pinned());
+  expect(await starting).toBeNull();
+  expect(stub.added).toHaveLength(0);
+  controller.dispose();
+});

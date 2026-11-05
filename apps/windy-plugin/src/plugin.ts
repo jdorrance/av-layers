@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL, type ModelId } from '@av/contracts';
-import { ApiClient, formatBuildFreshness } from '@av/contracts/client';
+import { ApiClient, createRasterTileProtocol, formatBuildFreshness, type RasterTileProtocol } from '@av/contracts/client';
 import { PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -14,6 +14,15 @@ let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
 let mountedIn: HTMLElement | null = null;
 let selectedModel: ModelId = DEFAULT_MODEL;
+let rasterProtocol: RasterTileProtocol | null = null;
+let previousController: PluginController | null = null;
+function protocol(): RasterTileProtocol {
+  if (!rasterProtocol) {
+    rasterProtocol = createRasterTileProtocol(API_BASE);
+    L.addProtocol(rasterProtocol.scheme, rasterProtocol.load);
+  }
+  return rasterProtocol;
+}
 
 const host: WindyHost = {
   map: {
@@ -21,18 +30,24 @@ const host: WindyHost = {
     removeLayer: layer => layer.remove?.()
   },
   store,
-  createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, { ...options, zIndex: forecastStackZIndex(W.map.layerOrder) })
+  createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, { ...options, zIndex: forecastStackZIndex(W.map.layerOrder) }, protocol())
 };
 
 function refreshTime(): void {
   controller?.refreshTime();
+  previousController?.refreshTime();
 }
 
 function bindHostListeners(): void {
   if (listenersBound) return;
   window.addEventListener('focus', refreshTime);
-  window.addEventListener('pageshow', refreshTime);
   document.addEventListener('visibilitychange', refreshTime);
+  window.addEventListener('pagehide', () => {
+    controller?.dispose(); controller = null;
+    previousController?.dispose(); previousController = null;
+    if (rasterProtocol) { rasterProtocol.dispose(); L.removeProtocol(rasterProtocol.scheme); rasterProtocol = null; }
+  });
+  window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) void startController(selectedModel); });
   listenersBound = true;
 }
 
@@ -46,6 +61,7 @@ function ensurePanel(): PluginPanel {
       },
       onOpacity: opacity => {
         controller?.setOpacity(opacity);
+        previousController?.setOpacity(opacity);
       },
       onBack: () => {
         panel?.setVisible(false);
@@ -65,22 +81,33 @@ function ensurePanel(): PluginPanel {
   return panel;
 }
 
+function renderController(ui: PluginPanel, active: PluginController): void {
+  const state = active.state();
+  if (state.phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild);
+  ui.renderState(state);
+  if (previousController?.displayedForecast) ui.setError(`${state.message ?? `Loading ${state.model}.`} Showing ${previousController.displayedForecast}.`);
+  if (state.phase === 'ready' && state.buildId && active.currentBuild) {
+    ui.setStatus(formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
+  }
+}
+
 function showCurrent(ui: PluginPanel): boolean {
   const active = controller;
   if (!active || active.state().model !== selectedModel) return false;
   const phase = active.state().phase;
   if (phase !== 'ready' && phase !== 'loading') return false;
   ui.setVisible(true);
-  if (phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild);
-  ui.renderState(active.state());
+  renderController(ui, active);
   return true;
 }
 
 async function startController(model: ModelId): Promise<void> {
   const opacity = controller?.state().opacity;
-  const previous = controller;
+  const previous = previousController ?? controller;
+  if (previousController) controller?.dispose();
+  previous?.freeze();
+  previousController = previous;
   controller = null;
-  previous?.dispose();
   const ui = ensurePanel();
   ui.setVisible(true);
   ui.setError(null);
@@ -91,12 +118,16 @@ async function startController(model: ModelId): Promise<void> {
     host,
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
     onState: state => {
-      if (controller !== activeController) return;
-      if (state.phase === 'ready' && activeController.currentBuild) ui.renderBuild(activeController.currentBuild);
-      ui.renderState(state);
-      if (state.phase === 'ready' && state.buildId && activeController.currentBuild) {
-        ui.setStatus(formatBuildFreshness(activeController.currentBuild.manifest, activeController.currentBuild.expiresAtMs));
+      if (controller !== activeController) {
+        if (previousController === activeController && controller) renderController(ui, controller);
+        return;
       }
+      if (state.phase === 'ready' && state.message === null && previousController === previous) {
+        previousController = null; previous?.dispose();
+        const oldBuildId = previous?.currentBuild?.manifest.buildId;
+        if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);
+      }
+      renderController(ui, activeController);
     }
   });
   controller = activeController;

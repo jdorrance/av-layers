@@ -5,20 +5,13 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { PRODUCTS, type LayerId, type ModelId } from '@av/contracts';
 import {
   ApiClient,
-  createRasterTileProtocol,
-  type RasterTileProtocol,
-  OVERLAY_LAYER_ID,
-  OVERLAY_SOURCE_ID,
   activePalettes,
   assertNotExpired,
   formatSampleStatus,
   formatSeriesSummary,
   forecastHorizonNotice,
   formatBuildFreshness,
-  layerMaxZoom,
   normalizePoint,
-  previewRasterLayer,
-  previewRasterSource,
   samePoint,
   watchBuildExpiry,
   type FrameSampleLayer,
@@ -27,6 +20,7 @@ import {
   type SamplePayload
 } from '@av/contracts/client';
 import './style.css';
+import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -209,11 +203,12 @@ function startPreview(): void {
   let opacity = initialOpacity;
   let expired = false;
   let mapFailed = false;
-  let overlaySourceId = OVERLAY_SOURCE_ID;
-  let overlayGeneration = 0;
-  let overlayProtocol: RasterTileProtocol | null = null;
-  const failedTiles = new Set<object>();
-  let sourceFailed = false;
+  let overlayState: OverlayState = { displayed: null, requested: null, error: false };
+  const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
+    overlayState = state;
+    updateOverlayStatus();
+  });
+  let timelineRaf: number | null = null;
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
   let loadAbort: AbortController | null = null;
@@ -227,7 +222,6 @@ function startPreview(): void {
   let urlReady = false;
   let applyingHistory = false;
   let opacityCommitted = false;
-  let timeCommitted = false;
   let legendOpen = true;
 
   function mapLon(): number {
@@ -312,6 +306,7 @@ function startPreview(): void {
   }
 
   function updateFreshness(): void {
+    overlay.refresh();
     if (!build || expired) return;
     const now = Date.now();
     if (build.expiresAtMs <= now) {
@@ -324,9 +319,9 @@ function startPreview(): void {
     freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);
   }
 
-  function renderRibbon(layer: LayerId): void {
-    const palette = build ? activePalettes(build.manifest.descriptors.palettes, layer, build.manifest.descriptors.layers)[0] : undefined;
-    if (!build || !palette) {
+  function renderRibbon(layer: LayerId, displayedBuild = build): void {
+    const palette = displayedBuild ? activePalettes(displayedBuild.manifest.descriptors.palettes, layer, displayedBuild.manifest.descriptors.layers)[0] : undefined;
+    if (!displayedBuild || !palette) {
       legend.hidden = true;
       legendBody.replaceChildren();
       return;
@@ -391,28 +386,26 @@ function startPreview(): void {
     timestamp.textContent = selected ? clockLabel(Date.parse(selected.validTime), offset) : 'No frame selected';
   }
 
-  function removeOverlay(): void {
-    const protocol = overlayProtocol;
-    overlayProtocol = null;
-    protocol?.dispose();
-    try {
-      if (map.getLayer(OVERLAY_LAYER_ID)) map.removeLayer(OVERLAY_LAYER_ID);
-      if (map.getSource(overlaySourceId)) map.removeSource(overlaySourceId);
-    } finally {
-      if (protocol) maplibregl.removeProtocol(protocol.scheme);
-    }
+  function removeOverlay(dispose = false): void {
+    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
+    timelineRaf = null;
+    overlay.clear(dispose);
   }
 
   function resetTileErrors(): void {
-    failedTiles.clear();
-    sourceFailed = false;
     tileErrorBox.hidden = true;
     tileErrorBox.textContent = '';
   }
 
-  function updateTileError(): void {
-    tileErrorBox.hidden = !sourceFailed && failedTiles.size === 0;
-    tileErrorBox.textContent = tileErrorBox.hidden ? '' : 'Overlay tile failed to load — forecast display may be incomplete.';
+  function updateOverlayStatus(): void {
+    const { displayed, requested, error } = overlayState;
+    const showing = displayed ? `Showing ${displayed.build.manifest.model} ${displayed.frame} ${displayed.layer}.` : 'No forecast displayed.';
+    const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
+    const olderBuild = displayed && displayed.build !== build;
+    tileErrorBox.hidden = !error && !pending && !pendingModel && !olderBuild;
+    tileErrorBox.textContent = error ? `Forecast replacement failed. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
+    if (displayed) renderRibbon(displayed.layer, displayed.build);
+    else { legend.hidden = true; legendBody.replaceChildren(); }
   }
 
   function expireView(): void {
@@ -450,27 +443,11 @@ function startPreview(): void {
   function updateOverlay(): void {
     const layer = activeLayer();
     if (!build || !selectedFrame || !layer || !ensureLive()) return;
-    renderRibbon(layer);
-    const template = build.templates[layer];
-    if (!template) {
-      showError(`No tile template for ${layer}`);
-      return;
-    }
-    removeOverlay();
-    resetTileErrors();
     clearError();
     try {
-      overlaySourceId = `${OVERLAY_SOURCE_ID}-${++overlayGeneration}`;
-      overlayProtocol = createRasterTileProtocol(apiBaseUrl);
-      maplibregl.addProtocol(overlayProtocol.scheme, overlayProtocol.load);
-      const source = previewRasterSource(template, selectedFrame, layerMaxZoom(build.manifest, layer), build.manifest.descriptors.attribution);
-      source.tiles = source.tiles.map(overlayProtocol.url);
-      map.addSource(overlaySourceId, source);
-      map.addLayer({ ...previewRasterLayer(opacity), source: overlaySourceId });
+      overlay.select(build, layer, selectedFrame);
       updateTimeUi();
     } catch (error) {
-      removeOverlay();
-      timestamp.textContent = 'Overlay unavailable';
       showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -480,7 +457,9 @@ function startPreview(): void {
     if (!frame) return;
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
-    updateOverlay();
+    updateTimeUi();
+    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
+    timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
     if (history !== 'none') writeUrl(history);
   }
 
@@ -518,10 +497,10 @@ function startPreview(): void {
     legendBody.replaceChildren();
     closePoint();
     setControlsEnabled(false);
-    removeOverlay();
     clearError();
     freshness.textContent = `Loading ${model} latest immutable build…`;
     timestamp.textContent = 'No frame selected';
+    updateOverlayStatus();
     try {
       const next = await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
@@ -547,6 +526,7 @@ function startPreview(): void {
         loadAbort = null;
         pendingModel = null;
         for (const button of modelButtons) button.disabled = mapFailed;
+        updateOverlayStatus();
       }
     }
   }
@@ -626,7 +606,7 @@ function startPreview(): void {
       opacity = Math.min(1, Math.max(0, nextOpacity));
       opacityInput.value = String(opacity);
       opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
-      if (map.getLayer(OVERLAY_LAYER_ID)) map.setPaintProperty(OVERLAY_LAYER_ID, 'raster-opacity', opacity);
+      overlay.setOpacity(opacity);
     }
     const lat = finiteParam(params.get('lat'));
     const lon = finiteParam(params.get('lon'));
@@ -668,17 +648,13 @@ function startPreview(): void {
   opacityInput.addEventListener('input', () => {
     opacity = Math.min(1, Math.max(0, Number(opacityInput.value)));
     opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
-    if (map.getLayer(OVERLAY_LAYER_ID)) map.setPaintProperty(OVERLAY_LAYER_ID, 'raster-opacity', opacity);
+    overlay.setOpacity(opacity);
     writeUrl(opacityCommitted ? 'replace' : 'push');
     opacityCommitted = true;
   });
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
-  timeInput.addEventListener('pointerdown', () => { timeCommitted = false; });
-  timeInput.addEventListener('input', () => {
-    selectIndex(Number(timeInput.value), timeCommitted ? 'replace' : 'push');
-    timeCommitted = true;
-  });
-  timeInput.addEventListener('change', () => { timeCommitted = false; });
+  timeInput.addEventListener('input', () => { selectIndex(Number(timeInput.value), 'none'); });
+  timeInput.addEventListener('change', () => { writeUrl('replace'); });
   legendToggle.addEventListener('click', () => {
     legendOpen = !legendOpen;
     legend.className = legendOpen ? 'ribbon' : 'ribbon is-collapsed';
@@ -705,33 +681,14 @@ function startPreview(): void {
     writeUrl('push');
   });
 
-  type OverlayEvent = { sourceId?: string; tile?: object };
-  map.on('error', (event: OverlayEvent & { error?: unknown }) => {
-    if (event.error instanceof maplibregl.GPUInitializationError) {
-      mapFailed = true;
-      loadAbort?.abort();
-      loadAbort = null;
-      pendingModel = null;
-      resumeModel = null;
-      closePoint();
-      disposeExpiry();
-      if (expiryTimer !== null) window.clearInterval(expiryTimer);
-      expiryTimer = null;
-      removeOverlay();
-      map.remove();
-      showMapFailure(event.error);
-      return;
-    }
-    if (!build || expired || event.sourceId !== overlaySourceId) return;
-    if (event.tile) failedTiles.add(event.tile);
-    else sourceFailed = true;
-    updateTileError();
-  });
-  map.on('sourcedata', (event: OverlayEvent) => {
-    if (event.sourceId === overlaySourceId && event.tile && failedTiles.delete(event.tile)) updateTileError();
-  });
-  map.on('sourcedataabort', (event: OverlayEvent) => {
-    if (event.sourceId === overlaySourceId && event.tile && failedTiles.delete(event.tile)) updateTileError();
+  map.on('error', (event: { error?: unknown }) => {
+    if (!(event.error instanceof maplibregl.GPUInitializationError)) return;
+    mapFailed = true;
+    loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
+    closePoint(); disposeExpiry();
+    if (expiryTimer !== null) window.clearInterval(expiryTimer);
+    expiryTimer = null;
+    overlay.destroy(); map.remove(); showMapFailure(event.error);
   });
 
   window.addEventListener('popstate', applyHistory);
@@ -750,10 +707,10 @@ function startPreview(): void {
       window.clearInterval(expiryTimer);
       expiryTimer = null;
     }
-    removeOverlay();
+    removeOverlay(true);
     if (event.persisted) return;
     disposeExpiry();
-    if (!mapFailed) map.remove();
+    if (!mapFailed) { overlay.destroy(); map.remove(); }
   });
   window.addEventListener('pageshow', (event: PageTransitionEvent) => {
     if (!event.persisted) return;
