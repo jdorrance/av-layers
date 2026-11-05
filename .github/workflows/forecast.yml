@@ -51,6 +51,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.models.outputs.matrix }}
+      model-parallelism: ${{ steps.models.outputs.model-parallelism }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +69,7 @@ jobs:
     needs: select
     strategy:
       fail-fast: false
+      max-parallel: ${{ fromJSON(needs.select.outputs.model-parallelism) }}
       matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     concurrency:
       group: forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}

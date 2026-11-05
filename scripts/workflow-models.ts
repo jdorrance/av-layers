@@ -21,8 +21,10 @@ export function selectWorkflowModels(selection = 'all', schedule?: string, produ
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const forecast = process.argv.includes('--forecast');
   const selection = process.env.MODEL_SELECTION ?? 'all';
-  const models = selectWorkflowModels(selection, forecast ? process.env.MODEL_SCHEDULE : undefined);
+  const schedule = forecast ? process.env.MODEL_SCHEDULE : undefined;
+  const models = selectWorkflowModels(selection, schedule);
   const value = forecast ? { include: models } : models.map(model => model.model);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${forecast ? 'matrix' : 'models'}=${JSON.stringify(value)}\n`);
+  const output = `${forecast ? 'matrix' : 'models'}=${JSON.stringify(value)}\n${forecast ? `model-parallelism=${schedule ? models.length : 1}\n` : ''}`;
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, output);
   console.log(`Selected forecast models: ${models.map(model => model.model).join(', ')}`);
 }

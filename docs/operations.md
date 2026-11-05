@@ -55,8 +55,9 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 owns per-model UTC schedules, rendered zoom, shard targets and parallelism.
 Run `pnpm docs:generate` after editing it, then `pnpm verify` and `pnpm capacity --model MODEL`.
 Generated workflow triggers select models by the cron expression that fired,
-including delayed starts. Without `cycle`, each model discovers its
-latest complete upstream run. Already-published
+including delayed starts. Manual runs finish each model before starting the next;
+scheduled runs start selected models concurrently. Without `cycle`, each model
+discovers its latest complete upstream run. Already-published
 cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
@@ -70,9 +71,9 @@ planning.
 
 The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
 the configured shard target. Set that target to the candidate frame count for
-one hour per shard. Each model uses its configured parallelism cap; their sum
-must fit the global job budget, including overlapping schedules. The global
-worker default may be overridden per model; CPU and memory admission bounds
+one hour per shard. Each model and each group sharing a cron expression fit the
+job budget. Use the same cron string for models intended to run together. The
+global worker default may be overridden per model; CPU and memory admission bounds
 actual workers. Plans freeze rendered zoom,
 worker ceilings and frame groups for their workers.
 

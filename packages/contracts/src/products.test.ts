@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import configuration from '../config/models.json' with { type: 'json' };
 import { DEFAULT_MODEL, DEFAULT_PRODUCT, MAX_MODEL_WORKERS, defineProduct, getProduct } from './products.js';
 
@@ -9,6 +9,24 @@ describe('model configuration', () => {
     expect(DEFAULT_MODEL).toBe(configuration.defaultModel);
     expect(getProduct(DEFAULT_MODEL)).toBe(DEFAULT_PRODUCT);
     for (const id of ['constructor', '__proto__', 'unknown']) expect(getProduct(id)).toBeUndefined();
+  });
+
+  it('bounds each manual model and each shared cron cohort by the job budget', async () => {
+    const first = { ...raw, modelId: 'first', id: 'first-product', execution: { ...raw.execution, parallelism: 2, schedule: ['17 5 * * *'] } };
+    const second = { ...raw, modelId: 'second', id: 'second-product', execution: { ...raw.execution, parallelism: 2, schedule: ['23 6 * * *'] } };
+    try {
+      for (const [models, admitted] of [
+        [[first, second], true],
+        [[first, { ...second, execution: { ...second.execution, parallelism: 1, schedule: first.execution.schedule } }], false],
+        [[{ ...first, execution: { ...first.execution, parallelism: 3, schedule: [] } }], false]
+      ] as const) {
+        vi.resetModules();
+        vi.doMock('../config/models.json', () => ({ default: { defaultModel: first.modelId, parallelism: { jobs: 2, workers: 1 }, models } }));
+        const loaded = import('./products.js');
+        if (admitted) expect((await loaded).MODEL_IDS).toEqual(models.map(model => model.modelId));
+        else await expect(loaded).rejects.toThrow('Forecast trigger parallelism exceeds the job budget');
+      }
+    } finally { vi.doUnmock('../config/models.json'); vi.resetModules(); }
   });
 
   it('admits a regional source with independent timing, shards, zoom and worker defaults', () => {
