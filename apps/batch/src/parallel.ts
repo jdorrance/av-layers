@@ -157,6 +157,13 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? MAX_FORECAST_SHARDS);
   if (product.terrainSubdivisionFactor !== undefined) {
     const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
+    const capacity = admitWholeDomain({ product, plan: prepared.plan, nativeBlocks: prepared.native.mask.coverage.blockIds,
+      nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask, fine: prepared.fine.mask,
+      maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+      nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
+      frames: groups.flat().length, nativeLayers: prepared.nativeSurfaceLayers.length, fineLayers: prepared.fineSurfaceLayers.length,
+      columns: prepared.columns, terrainBytes: prepared.terrain.arrayBytes });
+    if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
     const frozen = frozenWholeDomain(prepared);
     const identity = await buildIdentity(product, prepared.native.hash, undefined, [], undefined,
       { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain });
@@ -332,7 +339,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       receipts.push(receipt);
     }
     const capacity = admitWholeDomain({ product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
-      nativeActive: whole.acquisitionActive.length, fine: whole.fine.mask, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
+      nativeActive: whole.acquisitionActive.length, nativeMask: whole.native.mask, fine: whole.fine.mask, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
       nativeMaskBytes: whole.nativeMask.output.byteLength + whole.nativeMask.halo.byteLength + whole.nativeMask.tiles.byteLength,
       frames: totalFrames, nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length,
       columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });

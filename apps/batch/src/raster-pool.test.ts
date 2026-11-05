@@ -82,7 +82,7 @@ describe('bounded per-frame raster workers', () => {
     expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(active);
     const fields = (['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => ({ layer, field: { values: new Float32Array(active), flags: new Uint8Array(active), coverage: fine.coverage } }));
     const nativeCells = plan.native.width * plan.native.height, nativeMaskBytes = 2 * Math.ceil(nativeCells / 8) + fine.tiles.byteLength;
-    const capacity = admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive: 1, fine, nativeMaskBytes,
+    const capacity = admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive: 1, nativeMask: fine, fine, nativeMaskBytes,
       frames: 1, nativeLayers: product.layers.includes('precip-rate') ? 1 : 0, fineLayers: 2, terrainBytes: 0, maxLevels: 1, retainedGeometryFields: 0,
       columns: { byteLength: 0, workspaceBufferBytes: 0, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
     expect(capacity.rasterSharedInputBytes).toBe(expectedBytes);
@@ -118,7 +118,7 @@ describe('bounded per-frame raster workers', () => {
   it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
     const product = ICON_EU_PRODUCT, plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
-    const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, fine,
+    const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,
       nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,
       nativeLayers: 0, fineLayers: 2, terrainBytes: 0,
       columns: { byteLength: 0, workspaceBufferBytes: nativeActive * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });

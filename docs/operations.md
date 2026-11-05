@@ -29,10 +29,12 @@ per environment:
 pnpm exec wrangler r2 bucket create windy-av-layer-staging
 pnpm exec wrangler r2 bucket dev-url disable windy-av-layer-staging
 pnpm exec wrangler r2 bucket lock add windy-av-layer-staging forecast-builds builds/ --retention-days 7
+pnpm exec wrangler r2 bucket lifecycle add windy-av-layer-staging forecast-build-expiry builds/ --expire-days 8
+pnpm exec wrangler r2 bucket lifecycle add windy-av-layer-staging terrain-checkpoint-expiry terrain/checkpoints/ --expire-days 7
 pnpm exec wrangler pages project create windy-av-preview-staging --production-branch main
 ```
 
-Provision the same `builds/` lock for production. Prepare checks the existing
+Provision the same lock and lifecycle rules for production. Prepare checks the existing
 bucket lock through the Cloudflare API before issuing credentials; it never
 changes the rule. Keep the rule enabled throughout each build and its retention.
 
@@ -105,6 +107,13 @@ of remaining forecast coverage**, and a build created within the last **6 hours*
 Published builds are retained for 7 days.
 Cleanup waits until every object in an unreferenced build has aged seven days,
 matching the `builds/` bucket lock.
+
+R2 independently expires `builds/` objects eight days after upload and
+`terrain/checkpoints/` after seven days, including when workflows stop.
+Keep the default seven-day multipart-abort rule. Cloudflare typically deletes
+expired objects within 24 hours; see [object lifecycles](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
+Terrain catalogs, source COGs, prepared arrays, coverage and model pointers have
+no age-based expiry; later forecasts reuse them.
 
 ## Resume a build
 

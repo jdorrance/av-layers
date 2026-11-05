@@ -8,7 +8,7 @@ import type { LoadedRefinement } from './refinement/prepare.js';
 /** Admission budgets, not predictions about an unknown runner or upstream service. */
 export const BUILD_BUDGETS = {
   gridCells: MAX_GRID_CELLS,
-  tiles: 800_000,
+  tiles: 4_000_000,
   samplePackBytes: 256 * 1024 * 1024,
   elapsedMs: 50 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
@@ -123,6 +123,22 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   return { indices, layout, refinements, capacity: { ...capacity, rasterWorkers, workingSet, estimatedPeakBytes } };
 }
 
+function rendererTileCount(renderer: unknown): number {
+  if (!renderer || typeof renderer !== 'object' || Array.isArray(renderer)) return NaN;
+  const shards = 'shards' in renderer ? renderer.shards : [renderer];
+  if (!Array.isArray(shards) || !shards.length) return NaN;
+  let total = 0;
+  for (const shard of shards) {
+    if (!shard || typeof shard !== 'object' || Array.isArray(shard)) return NaN;
+    for (const kind of ['native', 'fine'] as const) {
+      const surface = shard[kind];
+      if (!surface || typeof surface !== 'object' || Array.isArray(surface) || !Number.isSafeInteger(surface.tiles) || surface.tiles < 0) return NaN;
+      total += surface.tiles;
+    }
+  }
+  return Number.isSafeInteger(total) ? total : NaN;
+}
+
 /** Gate recorded build metrics against the same budgets used by build admission. */
 export function checkPerformance(manifest: Manifest | ManifestV5) {
   const failures: string[] = [];
@@ -135,8 +151,19 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
   const counts = manifest.metrics.tiles;
   const maxZoom = manifest.version === 5 ? Math.max(...manifest.surfaces.map(surface => surface.coverage.maxZoom)) : manifest.coverage.maxZoom;
   const validCounts = Array.isArray(counts) && counts.length === maxZoom + 1 && counts.every(n => Number.isSafeInteger(n) && n >= 0);
-  if (!validCounts) failures.push('missing or invalid tile counts');
-  const tiles = validCounts ? counts.reduce((sum: number, count: number) => sum + count, 0) * manifest.artifacts.length : NaN;
+  let tiles: number;
+  if (manifest.version === 5 && manifest.metrics.renderer !== undefined) {
+    tiles = rendererTileCount(manifest.metrics.renderer);
+    if (!Number.isSafeInteger(tiles) || tiles < manifest.artifacts.length) failures.push('missing or invalid renderer tile counts');
+    const capacity = manifest.metrics.capacity;
+    if (capacity && typeof capacity === 'object' && 'tiles' in capacity &&
+        (!Number.isSafeInteger(capacity.tiles) || capacity.tiles !== tiles)) failures.push('rendered tile count differs from admitted coverage');
+  } else {
+    // Older single-surface v5 records share one coverage mask across every archive.
+    if (!validCounts || (manifest.version === 5 && manifest.surfaces.length !== 1)) failures.push('missing or invalid tile counts');
+    tiles = validCounts ? counts.reduce((sum: number, count: number) => sum + count, 0) * manifest.artifacts.length : NaN;
+    if (!Number.isSafeInteger(tiles)) failures.push('unsafe tile count');
+  }
   if (manifest.version === 5) {
     let samplePackBytes = 0, emittedSampleBytes = 0, gridCells = 0;
     for (const surface of manifest.surfaces) {

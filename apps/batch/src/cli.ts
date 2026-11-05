@@ -48,7 +48,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
       const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES } = await import('./whole-domain/capacity.js');
       const columns = preparePackedTerrainColumns(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
       const native = nativeSparseMask(mask);
-      const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, fine: fine.mask,
+      const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask: mask, fine: fine.mask,
         nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
         nativeLayers: product.layers.filter(layer => layer === 'precip-rate').length,
         fineLayers: product.layers.filter(layer => layer !== 'precip-rate').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });

@@ -75,7 +75,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   try {
     const nativeLayers = prepared.nativeSurfaceLayers.length, fineLayers = prepared.fineSurfaceLayers.length;
     const nativeBlocks = prepared.native.mask.coverage.blockIds;
-    const capacityInput = { product, plan: prepared.plan, nativeBlocks, nativeActive: prepared.acquisitionActive.length,
+    const capacityInput = { product, plan: prepared.plan, nativeBlocks, nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask,
       maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
       fine: prepared.fine.mask, nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
       frames: options.hours?.length ?? product.frameHours.length, nativeLayers, fineLayers, columns: prepared.columns,
