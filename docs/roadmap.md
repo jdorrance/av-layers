@@ -186,7 +186,7 @@ and [serving budgets](serving-budgets.md):
   sounding charts.
 - **Additional public NWP adapters:** add pluggable providers for
   `0.1°` ECMWF IFS Open Data and `2–3 km` regional convection-permitting feeds
-  (`ICON-D2`, `HRRR`/`RRFS`, `AROME`).
+  (`ICON-D2`, `HRRR`, `AROME`).
 - **Station, radiosonde, and IGC flight-log MOS + regional `1.5–2 km` runs:**
   fit terrain and diurnal bias corrections against historical stations,
   soundings (`UGEE`), and IGC flight logs, and composite the highest-skill

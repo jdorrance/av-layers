@@ -17,7 +17,7 @@ selects a local configuration file.
 pnpm refinement:evaluate --control-manifest PATH --cache-dir PATH --out PATH --frames f021,f024
 ```
 
-[evaluate.ts](evaluate.ts) verifies control hashes, source receipts, coverage,
+[evaluate.ts](evaluate.ts) verifies v4 regional-patch control hashes, source receipts, coverage,
 prepared terrain and numeric packs before replaying saved frames from cache.
 `--patch zone-001` selects a patch when several are published. Completed reports
 live at `OUT/CONTROL_BUILD_ID/report.json` and are immutable.

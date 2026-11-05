@@ -1,5 +1,7 @@
 # Whole-domain terrain-column implementation handoff
 
+> **Status:** Implemented and merged on `main` (`#36`–`#48`, including GFS `k=10` at `z=9`, ICON-EU `k=5` at `z=10`, and RRFS `k=2` at `z=10` in [models.json](../packages/contracts/config/models.json)). Retained as the implementation specification record.
+
 Implement whole-domain terrain refinement for GFS and ICON-EU and deliver a
 ready-to-ship branch with passing checks, complete integration and measured
 build/serving evidence.

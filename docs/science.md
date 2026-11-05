@@ -123,7 +123,8 @@ type. The calculation applies no vertical-datum transformation.
 
 ## Terrain columns
 
-Production uses [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts)
+Production uses [`preparePackedTerrainColumns`](../packages/forecast/src/terrain-column.ts)
+(and [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts) in regional patch evaluation)
 to reconstruct an environmental profile at each DEM cell from native donors.
 [Method descriptors](../packages/contracts/src/methods.ts) select the configured
 isobaric or per-column model-level pressure axis. Surface
@@ -162,7 +163,8 @@ local validation.
 
 The [evaluation command](../apps/batch/src/refinement/README.md#evaluation)
 records paired fields, status/support changes and station comparisons.
-[Build admission](../apps/batch/src/capacity.ts) accounts for the retained mappings,
+[Whole-domain admission](../apps/batch/src/whole-domain/capacity.ts) and
+[legacy patch admission](../apps/batch/src/capacity.ts) account for the retained mappings,
 solver workspace and fallback fields.
 
 ## Reconstruction and storage

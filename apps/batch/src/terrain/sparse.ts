@@ -229,8 +229,7 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
       for (let local = 0; local < SAMPLE_BLOCK_SIZE * SAMPLE_BLOCK_SIZE; local++) {
         const index = block * maskBytes + Math.floor(local / 8);
         if (!((target.coverage.output[index] | target.coverage.halo[index]) & (1 << (local % 8)))) continue;
-        const point = geometry.gridToGeographic(x0 + local % SAMPLE_BLOCK_SIZE, y0 + Math.floor(local / SAMPLE_BLOCK_SIZE));
-        yield point ? { latitude: point.lat, longitude: point.lon, offset } : null;
+        yield { x: x0 + local % SAMPLE_BLOCK_SIZE, y: y0 + Math.floor(local / SAMPLE_BLOCK_SIZE), offset };
         offset++;
       }
       checkDeadline();
@@ -252,13 +251,14 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     groups = new Map(); windowPoints = 0;
   }
   try {
-    for (const point of targets()) {
+    for (const cell of targets()) {
       if (restored && !windowPoints) {
         const window = { identity: checkpointIdentity, firstCell: plannedCells, count: Math.min(WINDOW_POINTS, target.cells - plannedCells) };
         restored[windows] = Number(await restoreTerrainCheckpoint(options.storage, window, heights, valid, signal));
       }
-      if (point && !restored?.[windows]) {
-        const blocks = planner.sourceBlocks(point.latitude, point.longitude);
+      const point = !restored?.[windows] ? geometry.gridToGeographic(cell.x, cell.y) : null;
+      if (point) {
+        const blocks = planner.sourceBlocks(point.lat, point.lon);
         groups.set(blocks, (groups.get(blocks) ?? 0) + 1);
         for (const block of blocks.split('|')) if (block) {
           const [id, x, y] = block.split('/'), asset = assets.get(id)!;
@@ -320,9 +320,10 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
       } finally { release?.(); points = []; }
     };
     let scanned = 0, firstCell = 0;
-    for (const point of targets()) {
+    for (const cell of targets()) {
       if (!restored?.[firstCell / WINDOW_POINTS]) {
-        if (point) points.push({ ...point, blocks: reader.sourceBlocks(point.latitude, point.longitude) });
+        const point = geometry.gridToGeographic(cell.x, cell.y);
+        if (point) points.push({ latitude: point.lat, longitude: point.lon, offset: cell.offset, blocks: reader.sourceBlocks(point.lat, point.lon) });
         else sampledCells++;
       }
       if (++scanned === WINDOW_POINTS) { await flush(firstCell, scanned); await checkpoint(); firstCell += scanned; scanned = 0; }

@@ -37,7 +37,7 @@ describe('offline projected-grid scalar fixture', () => {
       if (isCovered(restricted, latitudes[y], longitudes[x])) for (const c of planSample(grid, latitudes[y], longitudes[x])?.contributors ?? []) actualContributors.add(c.index);
     }
     expect([...prepared.contributors].sort((a, b) => a - b)).toEqual([...actualContributors].sort((a, b) => a - b));
-    expect(prepared.byteLength).toBe(latitudes.length * longitudes.length * 32 + Math.ceil(latitudes.length * longitudes.length / 8) + prepared.contributors.byteLength);
+    expect(prepared.byteLength).toBe(latitudes.length * longitudes.length * 24 + Math.ceil(latitudes.length * longitudes.length / 8) + prepared.contributors.byteLength);
   });
 
   it('reuses index-space scalar packing without changing the wire record or doing geographic regridding', () => {

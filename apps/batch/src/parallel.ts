@@ -355,7 +355,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       nativeActive: whole.acquisitionActive.length, fine: whole.fine.mask, nativeMaskBytes: 0, frames: totalFrames, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
       nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length, columns: whole.columns, terrainBytes: whole.terrain.arrayBytes });
     const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
-      coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal });
+      coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });
     const surfaces: WholeDomainSurfaceResult[] = [];
     const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
     for (const id of ['native', 'fine'] as const) {

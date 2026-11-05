@@ -89,7 +89,7 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   const inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   const maximumWorkers = rasterWorkerCount(undefined, input.product.execution.workers);
   let rasterWorkers = 0, deriveWorkers = 0, selectedTotal = -1, selectedImbalance = Number.POSITIVE_INFINITY;
-  const deriveSharedInputs = terrainBytes + nativeCells * 10 + fineMaskBytes + nativeActive * 4;
+  const deriveSharedInputs = terrainBytes + nativeCells + nativeActive * 4;
   const workerColumns = columns.byteLength + columns.workspaceBufferBytes + columns.workspaceObjectBudgetBytes;
   for (let raster = 0; raster <= maximumWorkers; raster++) for (let derive = 0; derive <= maximumWorkers; derive++) {
     const peak = inlinePeakBytes + (raster ? sharedInputBytes + raster * RASTER_WORKER_RESERVE_BYTES - workingSet.rasterInline : 0) +

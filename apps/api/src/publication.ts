@@ -191,7 +191,7 @@ export function readProvenance(bucket: R2Bucket, m: PublishedManifest, reference
     try { release = reserveAllocation(3 * MAX_PROVENANCE_BYTES); }
     catch (error) { void object.body?.cancel?.(error); throw error; }
     try {
-      const value = await readObjectBytes(object, MAX_PROVENANCE_BYTES, false, ctx, signal);
+      const value = await readObjectBytes(object, MAX_PROVENANCE_BYTES, false, ctx, signal, true);
       const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', value as Uint8Array<ArrayBuffer>)), byte => byte.toString(16).padStart(2, '0')).join('');
       signal.throwIfAborted();
       if (digest !== reference.sha256) fail(503, 'publication-invalid', 'Provenance hash mismatch');

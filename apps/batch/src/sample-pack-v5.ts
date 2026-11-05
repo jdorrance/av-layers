@@ -213,7 +213,7 @@ export function createShardedSamplePackWriter(
           blockBuffer[destination + 4] = STATUS_OUTSIDE;
           continue;
         }
-        const index = packed ? sparseCoverageLookup(packed, column, row)!.offset : row * width + column;
+        const index = packed ? (packed === coverage ? lookup.offset : sparseCoverageLookup(packed, column, row)!.offset) : row * width + column;
         blockBuffer.writeFloatLE(field.values[index], destination);
         blockBuffer[destination + 4] = flags[index];
       }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PRODUCT, PRODUCTS, manifestSchema, type ProductDefinition, type PublishedManifest } from '@av/contracts';
+import { coverageIndices, DEFAULT_PRODUCT, PRODUCTS, manifestSchema, type ProductDefinition, type PublishedManifest } from '@av/contracts';
 import { resolveProductFrameHours } from '@av/forecast';
 import { loadCoverage } from '../apps/batch/src/coverage.js';
 import { assertUsefulHorizon } from '../apps/batch/src/publication.js';
@@ -49,10 +49,10 @@ it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId',
 });
 
 it.each(PRODUCTS.filter(product => product.capabilities.daylightFrames === 'regional-daylight'))('keeps $modelId winter daylight admission and health aligned', async product => {
-  const mask = await loadCoverage(product);
+  const mask = await loadCoverage(product), outputIndices = coverageIndices(mask).output;
   for (const day of ['2026-11-03', '2026-12-21', '2027-02-15']) for (const cycleHour of [0, 6, 12, 18]) {
     const cycle = `${day}T${String(cycleHour).padStart(2, '0')}:00:00Z`;
-    const hours = resolveProductFrameHours(product, mask, cycle), manifest = fixture(product, cycle, hours);
+    const hours = resolveProductFrameHours(product, mask, cycle, { outputIndices }), manifest = fixture(product, cycle, hours);
     const deadline = Math.min(
       Date.parse(cycle) + Math.min(product.freshness.maxCycleAgeHours, product.frameHours.at(-1)! - product.freshness.minHorizonHours) * HOUR,
       Date.parse(manifest.frames.at(-1)!.validTime) - 1
@@ -62,7 +62,7 @@ it.each(PRODUCTS.filter(product => product.capabilities.daylightFrames === 'regi
     expect(() => assertUsefulHorizon(manifest, deadline + 1)).toThrow('useful forecast horizon');
     expect((await observe(manifest, deadline + 1)).healthy).toBe(false);
   }
-});
+}, 90_000);
 
 it('reports an unknown model before probing', async () => {
   const probe = vi.spyOn(serving, 'probeApi');

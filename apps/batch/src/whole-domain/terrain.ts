@@ -45,9 +45,9 @@ export async function prepareWholeDomainTerrain(options: WholeDomainTerrainOptio
   return ref;
 }
 
-export function loadWholeDomainTerrain(input: WholeDomainTerrainInput & { out: string; signal?: AbortSignal }) {
+export function loadWholeDomainTerrain(input: WholeDomainTerrainInput & { out: string; signal?: AbortSignal; collect?: boolean }) {
   return loadSparsePreparedTerrain({ ref: input.ref, out: input.out, grid: input.grid, coverage: input.coverage,
-    coverageDescriptor: input.coverageDescriptor, signal: input.signal });
+    coverageDescriptor: input.coverageDescriptor, signal: input.signal, collect: input.collect });
 }
 
 export { readSparsePreparedTerrain };

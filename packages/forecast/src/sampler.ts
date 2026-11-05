@@ -55,7 +55,7 @@ function quadOffsets(field: GridField, width: number) {
   return {
     offsets,
     locate(r0: number, c0: number, r1: number, c1: number): number {
-      const key = r0 + c0, slot = key & 511, start = slot * 4;
+      const key = r0 + c0, slot = (Math.imul(r0, 0x9e3779b1) ^ c0) & 511, start = slot * 4;
       if (keys[slot] !== key) {
         keys[slot] = -1;
         try {
@@ -398,25 +398,22 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
 
 function locatedSampleCache() { return { nearest: -1, output: false, quad: -1, contributed: 0 }; }
 
-/** Locate one admitted geographic pair and record its covered cell, fractions and contributors. */
-function prepareLocatedSample(
+function recordLocatedSample(
   grid: Grid,
-  geometry: GridGeometry | null,
   mask: SamplingMask,
-  lat: number,
-  lon: number,
+  column: number,
+  row: number,
+  fx: number,
+  fy: number,
   index: number,
-  lowerX: Float64Array,
-  lowerY: Float64Array,
+  lowerX: Uint32Array,
+  lowerY: Uint32Array,
   fractionX: Float64Array,
   fractionY: Float64Array,
   covered: Uint8Array,
   contributorSet: Set<number>,
   cache: ReturnType<typeof locatedSampleCache>
 ): void {
-  const located = locate(grid, geometry, lat, lon);
-  if (!located) return;
-  const { column, row, fractionX: fx, fractionY: fy } = located;
   const upperColumn = grid.wrapLongitude ? (column + 1) % grid.width : column + 1, upperRow = row + 1;
   const nearestColumn = fx < 0.5 ? column : fx > 0.5 ? upperColumn : Math.min(column, upperColumn);
   const nearestRow = fy <= 0.5 ? row : Math.min(grid.height - 1, upperRow);
@@ -435,19 +432,65 @@ function prepareLocatedSample(
   cache.contributed |= needed;
 }
 
-/** Projected coordinates are not separable. Retain only four numbers per requested coordinate. */
+/** Locate one admitted geographic pair and record its covered cell, fractions and contributors. */
+function prepareLocatedSample(
+  grid: Grid,
+  geometry: GridGeometry | null,
+  mask: SamplingMask,
+  lat: number,
+  lon: number,
+  index: number,
+  lowerX: Uint32Array,
+  lowerY: Uint32Array,
+  fractionX: Float64Array,
+  fractionY: Float64Array,
+  covered: Uint8Array,
+  contributorSet: Set<number>,
+  cache: ReturnType<typeof locatedSampleCache>
+): void {
+  const located = locate(grid, geometry, lat, lon);
+  if (!located) return;
+  recordLocatedSample(grid, mask, located.column, located.row, located.fractionX, located.fractionY, index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
+}
+
+const RAD = Math.PI / 180;
+const wrapRadians = (value: number) => ((value + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+
+/** Projected coordinates are not separable in grid space, but spherical Lambert rho(lat) and theta(lon) factor along the axes. */
 function prepareProjectedSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
-  const grid = mask.grid, geometry = prepareGridGeometry(grid);
+  const grid = mask.grid;
+  if (grid.kind !== 'lambert-conformal') throw new RangeError('Projected sampling requires a Lambert grid');
   const width = longitudes.length, height = latitudes.length, total = width * height;
-  const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
+  const lowerX = new Uint32Array(total), lowerY = new Uint32Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
   const cache = locatedSampleCache();
-  const allowedColumns = Uint8Array.from(longitudes, lon => Number(withinGeographicBounds(mask.bounds?.[1] ?? 0, lon, mask.bounds)));
+  const p1 = grid.standardParallel1Deg * RAD, p2 = grid.standardParallel2Deg * RAD;
+  const t1 = Math.tan(Math.PI / 4 + p1 / 2), t2 = Math.tan(Math.PI / 4 + p2 / 2);
+  const n = Math.abs(p1 - p2) < 1e-14 ? Math.sin(p1) : Math.log(Math.cos(p1) / Math.cos(p2)) / Math.log(t2 / t1);
+  const f = Math.cos(p1) * t1 ** n / n;
+  const rho0 = grid.earthRadiusM * f / Math.tan(Math.PI / 4 + grid.latitudeOfOriginDeg * RAD / 2) ** n;
+  const sinTheta = new Float64Array(width), cosTheta = new Float64Array(width), allowedColumns = new Uint8Array(width);
+  for (let x = 0; x < width; x++) {
+    const lon = longitudes[x];
+    if (!withinGeographicBounds(mask.bounds?.[1] ?? 0, lon, mask.bounds) || !Number.isFinite(lon)) continue;
+    const theta = n * wrapRadians((lon - grid.centralMeridianDeg) * RAD);
+    sinTheta[x] = Math.sin(theta);
+    cosTheta[x] = Math.cos(theta);
+    allowedColumns[x] = 1;
+  }
   for (let y = 0; y < height; y++) {
-    if (!withinGeographicBounds(latitudes[y], mask.bounds?.[0] ?? 0, mask.bounds)) continue;
+    const lat = latitudes[y];
+    if (!withinGeographicBounds(lat, mask.bounds?.[0] ?? 0, mask.bounds) || !Number.isFinite(lat) || Math.abs(lat) >= 90) continue;
+    const rho = grid.earthRadiusM * f / Math.tan(Math.PI / 4 + lat * RAD / 2) ** n;
+    if (!Number.isFinite(rho)) continue;
+    const rowOffset = y * width;
     for (let x = 0; x < width; x++) if (allowedColumns[x]) {
-      prepareLocatedSample(grid, geometry, mask, latitudes[y], longitudes[x], y * width + x, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
+      const gx = snap((rho * sinTheta[x] - grid.x0M) / grid.dxM);
+      const gy = snap((rho0 - rho * cosTheta[x] - grid.y0M) / grid.dyM);
+      if (!Number.isFinite(gx) || !Number.isFinite(gy) || gx < 0 || gx > grid.width - 1 || gy < 0 || gy > grid.height - 1) continue;
+      const column = Math.floor(gx), row = Math.floor(gy);
+      recordLocatedSample(grid, mask, column, row, gx - column, gy - row, rowOffset + x, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
     }
   }
   return preparedFromCells(mask, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
@@ -459,7 +502,7 @@ export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array
   if (latitudes.length !== longitudes.length || total < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
   validateSamplingMask(mask);
   const geometry = grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null;
-  const lowerX = new Float64Array(total), lowerY = new Float64Array(total);
+  const lowerX = new Uint32Array(total), lowerY = new Uint32Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
   const cache = locatedSampleCache();
@@ -470,11 +513,11 @@ export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array
   return preparedFromCells(mask, total, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
 }
 
-function preparedFromCells(mask: SamplingMask, width: number, lowerX: Float64Array, lowerY: Float64Array, fractionX: Float64Array, fractionY: Float64Array, covered: Uint8Array, contributorSet: Set<number>, wrap: boolean): PreparedGridSampling {
+function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Array, lowerY: Uint32Array, fractionX: Float64Array, fractionY: Float64Array, covered: Uint8Array, contributorSet: Set<number>, wrap: boolean): PreparedGridSampling {
   const grid = mask.grid, total = lowerX.length, contributors = Uint32Array.from(contributorSet);
   return {
     width, height: total / width, contributors,
-    byteLength: total * 4 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
+    byteLength: total * (2 * Uint32Array.BYTES_PER_ELEMENT + 2 * Float64Array.BYTES_PER_ELEMENT) + covered.byteLength + contributors.byteLength,
     bind(field, layer) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;

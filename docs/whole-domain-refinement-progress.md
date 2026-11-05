@@ -16,7 +16,7 @@ Implementation and independent code review are complete on `feature/higher-res-1
 - Full ICON-EU k=5 mask: 9,981,126 active cells, 40,668 blocks, 2,928,156 sparse bytes; generation took 19.40 s with 123,469,824 bytes peak RSS.
 - Full GFS k=10 mask: 14,583,173 active cells, 61,472 blocks, 4,426,044 sparse bytes; generation took 55.68 s with 157,728,768 bytes peak RSS.
 - `FINE_MASK_REAL_SOURCE=1 uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/test_fine_masks.py`: five tests passed, including TypeScript schema, halo and encoding checks. Each bundled `fine/source.json` records generator and pinned-source provenance.
-- Full-mask serving fixtures retain both fine masks and native GFS coverage in 8,317,966 bytes within the unchanged 8 MiB cache. Concurrent cold reservations peaked at 22,911,506 bytes within 32 MiB. Local cold/warm lookups were about 2.5 s/2 ms for GFS and 1.7 s/1 ms for ICON. These are local validator-backed tests, not deployed Worker load or heap measurements.
+- Full-mask serving fixtures retain configured fine masks and native coverage within the 24 MiB coverage cache (expanded from the earlier 8 MiB fixture cap). Concurrent cold reservations peaked at 22,911,506 bytes within 32 MiB. Local cold/warm lookups were about 2.5 s/2 ms for GFS and 1.7 s/1 ms for ICON. These are local validator-backed tests, not deployed Worker load or heap measurements.
 
 ## Numerical and raster measurements
 
