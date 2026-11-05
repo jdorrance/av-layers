@@ -46,7 +46,7 @@ export function response(body: BodyInit | null, type: string, expiresAt?: string
   if (expiresAt) ensureLive(expiresAt);
   const headers = new Headers({
     'content-type': type,
-    'cache-control': expiresAt ? `public, max-age=${ttl(expiresAt)}` : 'no-store'
+    'cache-control': expiresAt ? `public, max-age=${ttl(expiresAt)}, immutable` : 'no-store'
   });
   let size = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? body.byteLength : 1024 * 1024;
   if (typeof body === 'string') {
@@ -73,7 +73,7 @@ export function finish(request: Request, res: Response, expiresAt?: string): Res
     catch (error) { void res.body?.cancel().catch(() => {}); throw error; }
   }
   const headers = new Headers(res.headers);
-  if (expiresAt) headers.set('cache-control', `public, max-age=${ttl(expiresAt)}`);
+  if (expiresAt) headers.set('cache-control', `public, max-age=${ttl(expiresAt)}, immutable`);
   headers.set('access-control-allow-origin', '*');
   headers.set('access-control-expose-headers', 'ETag, Cache-Control, Server-Timing, X-Av-R2-Reads, X-Av-R2-Bytes, X-Av-Cache-Hits, X-Av-Coalesced, X-Av-Response-Cache');
   if (

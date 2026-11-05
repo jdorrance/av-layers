@@ -377,11 +377,11 @@ describe('read-only worker', () => {
     const path = '/v1/models/gfs/runs/build-1/provenance';
     const first = await call(path);
     expect(first.status).toBe(200);
-    expect(first.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(first.headers.get('cache-control')).toBe('public, max-age=60, immutable');
     vi.setSystemTime(now + 10_000);
     const hit = await call(path, { headers: { 'if-none-match': first.headers.get('etag')! } });
     expect(hit.status).toBe(304);
-    expect(hit.headers.get('cache-control')).toBe('public, max-age=50');
+    expect(hit.headers.get('cache-control')).toBe('public, max-age=50, immutable');
     expect(bucket.reads.filter(read => read.key === receipt.key)).toHaveLength(1);
     const cacheReads = cache.matches;
     vi.setSystemTime(now + 60_000);
@@ -577,7 +577,7 @@ describe('read-only worker', () => {
     const first = await call(url);
     expect(first.status).toBe(200);
     expect(first.headers.get('content-type')).toBe('image/webp');
-    expect(first.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(first.headers.get('cache-control')).toBe('public, max-age=60, immutable');
     const webp = await first.arrayBuffer();
     expect(webp.byteLength).toBeGreaterThan(25);
     const bytes = new Uint8Array(webp);
@@ -587,7 +587,7 @@ describe('read-only worker', () => {
     expect((dims & 0x3fff) + 1).toBe(256);
     expect(((dims >>> 14) & 0x3fff) + 1).toBe(256);
     vi.setSystemTime(now + 10_000);
-    expect((await call(url)).headers.get('cache-control')).toBe('public, max-age=50');
+    expect((await call(url)).headers.get('cache-control')).toBe('public, max-age=50, immutable');
     expect((await call('/tiles/gfs/build-1/usable-lift-agl/f999/1/0/0.webp')).status).toBe(404);
     const hits = cache.matches;
     vi.setSystemTime(now + 60_000);
@@ -595,6 +595,30 @@ describe('read-only worker', () => {
     expect(expired.status).toBe(404);
     expect(expired.headers.get('cache-control')).toBe('no-store');
     expect(cache.matches).toBe(hits);
+  });
+  it('preserves pinned tiles across rollback and rejects them after retention removal', async () => {
+    const target = publication('rollback-target'), previous = publication('build-1');
+    bucket.install(target, previous);
+    const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
+    const tile = await call(path);
+    expect(tile.status).toBe(200);
+    await tile.arrayBuffer();
+    const pointer = bucket.objects.get('catalog/gfs/latest.json') as { latestBuildId: string };
+    bucket.objects.set('catalog/gfs/latest.json', { ...pointer, latestBuildId: target.manifest.buildId });
+    vi.setSystemTime(now + 16_000);
+    expect(await (await call('/v1/models/gfs/latest')).json()).toMatchObject({ pointer: { latestBuildId: target.manifest.buildId } });
+    const pinned = await call(path);
+    expect(pinned.status).toBe(200);
+    expect(pinned.headers.get('x-av-response-cache')).toBe('hit');
+    await pinned.arrayBuffer();
+    const matches = cache.matches;
+    bucket.install(target);
+    vi.setSystemTime(now + 32_000);
+    const removed = await call(path);
+    expect(removed.status).toBe(404);
+    expect(removed.headers.get('cache-control')).toBe('no-store');
+    expect(cache.matches).toBe(matches);
+    await removed.arrayBuffer();
   });
   it('refuses retained builds with old coverage before cache, blank tiles or sample ranges', async () => {
     const old = publication('old-build');

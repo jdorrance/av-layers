@@ -11,14 +11,18 @@ apply to the combined work across all grids selected by a request.
 - **Pointer cache:** 32 entries, 1 MiB max; 15 s positive TTL, 5 s unavailable
   TTL. A build-ID miss coalesces a pointer refresh throttled to 1 req/s.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
-  concurrent cold loads.
+  concurrent cold loads. Successful static product validation follows manifest
+  and product identity; retained-entry binding and expiry run on every request.
 - **Coverage cache:** 16 entries, 24 MiB max; 2 concurrent cold loads. Verifies
   descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
   and compact sample layouts. Tile requests load only descriptors and tile masks.
   Request-held sparse objects reserve shared allocation bytes until their last
   lease ends, including after cache eviction.
 - **PMTiles directory cache:** 256 entries, 4 MiB max (96 B/entry, max 16,384
-  entries/directory); 4 concurrent tile reads.
+  entries/directory); 4 concurrent tile reads. Identical archive ranges share
+  materialized bytes, with 4 active ranges and the default queue, waiter and
+  deadline limits in `MaterializedReads`. Cancelling one waiter preserves the
+  read for remaining consumers.
 - **Binary sample & provenance reads:** 8 concurrent loads; identical range
   reads coalesce and share materialized `Uint8Array` bytes. Up to 64 distinct
   reads wait FIFO and 96 callers may wait in total; each sample request starts

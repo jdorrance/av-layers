@@ -40,3 +40,60 @@ it('bounds archive reads, decompression and retained directory bytes', async () 
   cache.cache.set('oversized', { lastUsed: 3, data: new ArrayBuffer(2000) });
   cache.prune(); expect(cache.cache.size).toBe(0);
 });
+
+it('shares archive ranges without binding their lifetime to the initiating waiter', async () => {
+  const { R2Source } = await import('../src/pmtiles');
+  const { inFlightAllocationBytes } = await import('../src/resources');
+  let started!: () => void, finish!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const get = vi.fn(async () => ({ size: 3, etag: 'archive-etag', httpMetadata: { cacheControl: 'max-age=60' }, body: new ReadableStream<Uint8Array>({ async pull(controller) {
+    started(); await gate; controller.enqueue(Uint8Array.of(1, 2, 3)); controller.close();
+  } }, { highWaterMark: 0 }) }));
+  const bucket = { get } as unknown as R2Bucket, abort = new AbortController();
+  const metrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
+  const owners: Promise<unknown>[] = [], ctx = { metrics, waitUntil(promise: Promise<unknown>) { owners.push(promise); } };
+  const first = new R2Source(bucket, 'archive', ctx, abort.signal).getBytes(0, 3);
+  const second = new R2Source(bucket, 'archive', ctx).getBytes(0, 3);
+  const third = new R2Source(bucket, 'archive', ctx).getBytes(0, 3);
+  const cancelled = expect(first).rejects.toThrow('initiating waiter cancelled');
+  await reading;
+  abort.abort(new Error('initiating waiter cancelled'));
+  await cancelled;
+  expect(get).toHaveBeenCalledTimes(1);
+  expect(inFlightAllocationBytes()).toBe(6);
+  finish();
+  const [a, b] = await Promise.all([second, third]);
+  await Promise.all(owners);
+  expect(a.data).toBe(b.data);
+  expect(a).toMatchObject({ etag: 'archive-etag', cacheControl: 'max-age=60' });
+  expect(new Uint8Array(a.data)).toEqual(Uint8Array.of(1, 2, 3));
+  expect(metrics).toMatchObject({ r2Reads: 1, r2Bytes: 3, coalesced: 2 });
+  expect(inFlightAllocationBytes()).toBe(0);
+});
+
+it('keeps archive identities, ranges and conditional etags separate and retries failures', async () => {
+  const { R2Source } = await import('../src/pmtiles');
+  const get = vi.fn(async (_key: string, options: { range: { offset: number; length: number }; onlyIf?: { etagMatches: string } }) => ({
+    size: 100, etag: options.onlyIf?.etagMatches,
+    body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(options.range.length)); controller.close(); } })
+  }));
+  const bucket = { get } as unknown as R2Bucket;
+  const source = new R2Source(bucket, 'archive');
+  await Promise.all([
+    source.getBytes(0, 3, undefined, 'one'), source.getBytes(0, 3, undefined, 'two'),
+    source.getBytes(1, 3), source.getBytes(0, 4), new R2Source(bucket, 'other').getBytes(0, 3)
+  ]);
+  expect(get).toHaveBeenCalledTimes(5);
+  expect(get).toHaveBeenCalledWith('archive', { range: { offset: 0, length: 3 }, onlyIf: { etagMatches: 'one' } });
+  get.mockRejectedValueOnce(new Error('range unavailable'));
+  await expect(source.getBytes(8, 3)).rejects.toThrow('range unavailable');
+  expect((await source.getBytes(8, 3)).data.byteLength).toBe(3);
+});
+
+it('rejects conditional archive reads when R2 reports an etag mismatch', async () => {
+  const { R2Source } = await import('../src/pmtiles');
+  const { EtagMismatch } = await import('pmtiles');
+  const source = new R2Source({ get: async () => ({ etag: 'new' }) } as unknown as R2Bucket, 'archive');
+  await expect(source.getBytes(0, 3, undefined, 'old')).rejects.toBeInstanceOf(EtagMismatch);
+});
