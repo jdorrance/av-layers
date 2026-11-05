@@ -14,6 +14,8 @@ class Element extends EventTarget {
   hidden = false;
   disabled = false;
   tabIndex = -1;
+  max = '';
+  min = '';
   private selected = '';
   constructor(readonly tag: string) { super(); }
   get value(): string { return this.selected || this.children[0]?.value || ''; }
@@ -38,6 +40,19 @@ class Document extends EventTarget {
 class Window extends EventTarget {
   setInterval = globalThis.setInterval;
   clearInterval = globalThis.clearInterval;
+  href = 'http://localhost:5173/';
+  get location(): { pathname: string; search: string; href: string } {
+    const url = new URL(this.href);
+    return { pathname: url.pathname, search: url.search, href: this.href };
+  }
+  history = {
+    pushState: (_state: unknown, _title: unknown, url?: string | URL | null) => {
+      if (url) this.href = new URL(String(url), this.href).href;
+    },
+    replaceState: (_state: unknown, _title: unknown, url?: string | URL | null) => {
+      if (url) this.href = new URL(String(url), this.href).href;
+    }
+  };
 }
 class GPUInitializationError extends Error {}
 let initializationError: Error | null = null;
@@ -47,16 +62,35 @@ const map = () => maps.at(-1)!;
 class MapMock {
   handlers = new Map<string, Array<(event: Record<string, unknown>) => void>>();
   sources = new Map<string, unknown>();
-  layers = new Map<string, { id: string; source?: string }>();
+  layers = new Map<string, { id: string; source?: string; paint?: Record<string, number> }>();
   removed = false;
-  constructor() { if (initializationError) throw initializationError; maps.push(this); }
+  options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number } = {};
+  center = { lng: 0, lat: 0 };
+  zoom = 0;
+  constructor(options?: MapMock['options']) {
+    if (initializationError) throw initializationError;
+    this.options = options ?? {};
+    if (options?.center) this.center = { lng: options.center[0], lat: options.center[1] };
+    if (typeof options?.zoom === 'number') this.zoom = options.zoom;
+    maps.push(this);
+  }
   on(name: string, listener: (event: Record<string, unknown>) => void): void {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(listener); this.handlers.set(name, handlers);
   }
   emit(name: string, event: Record<string, unknown> = {}): void { for (const handler of this.handlers.get(name) ?? []) handler(event); }
   addControl(): void {}
-  fitBounds(): void {}
+  getCenter(): { lng: number; lat: number } { return this.center; }
+  getZoom(): number { return this.zoom; }
+  getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
+  fitBounds(bounds: [[number, number], [number, number]]): void {
+    const [[west, south], [east, north]] = bounds;
+    this.center = { lng: (west + east) / 2, lat: (south + north) / 2 };
+  }
+  jumpTo(camera: { center: [number, number]; zoom: number }): void {
+    this.center = { lng: camera.center[0], lat: camera.center[1] };
+    this.zoom = camera.zoom;
+  }
   setPaintProperty(): void {}
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
   getSource(id: string): unknown { return this.sources.get(id); }
@@ -77,6 +111,15 @@ let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
 const sourceId = () => map().layers.get(OVERLAY_LAYER_ID)!.source!;
+function modelButton(id: string): Element {
+  const button = ui('models').children.find(child => child.value === id);
+  if (!button) throw new Error(`Missing model button ${id}`);
+  return button;
+}
+function selectFrame(index: number): void {
+  ui('time').value = String(index);
+  ui('time').dispatchEvent(new Event('input'));
+}
 function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
 
 function v5Manifest() {
@@ -129,7 +172,7 @@ function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
 async function start(): Promise<void> {
   await import('./main');
   map().emit('load');
-  await vi.waitFor(() => expect(ui('model').disabled).toBe(false));
+  await vi.waitFor(() => expect(modelButton(manifest.model).disabled).toBe(false));
 }
 beforeEach(() => {
   vi.resetModules();
@@ -170,8 +213,7 @@ it('keeps source-level errors through unrelated successes and ignores events fro
   map().emit('error', { sourceId: oldSource });
   map().emit('sourcedata', { sourceId: oldSource, tile: {}, isSourceLoaded: true });
   expect(ui('tile-error').hidden).toBe(false);
-  ui('frame').value = manifest.frames[1]!.id;
-  ui('frame').dispatchEvent(new Event('change'));
+  selectFrame(1);
   expect(sourceId()).not.toBe(oldSource);
   expect(ui('tile-error').hidden).toBe(true);
   map().emit('error', { sourceId: oldSource, tile: {} });
@@ -188,7 +230,7 @@ it('shows the horizon warning as time advances without hiding tile errors or dis
   expect(ui('horizon-notice').hidden).toBe(false);
   expect(ui('horizon-notice').textContent).toContain('Forecast ended at 2026-10-31T00:00:00.000Z');
   expect(ui('tile-error').hidden).toBe(false);
-  expect(ui('frame').disabled).toBe(false);
+  expect(ui('time').disabled).toBe(false);
   expect(map().layers.has(OVERLAY_LAYER_ID)).toBe(true);
 });
 
@@ -196,7 +238,7 @@ it('shows exhausted forecasts immediately and refreshes the warning after timer 
   vi.setSystemTime(horizon + 6 * 3600_000);
   await start();
   expect(ui('horizon-notice').hidden).toBe(false);
-  expect(ui('frame').disabled).toBe(false);
+  expect(ui('time').disabled).toBe(false);
   vi.setSystemTime(horizon - 1);
   win.dispatchEvent(new Event('focus'));
   expect(ui('horizon-notice').hidden).toBe(true);
@@ -213,12 +255,12 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
     return new Promise(resolve => { finishOld = resolve; });
   });
   await import('./main'); map().emit('load');
-  expect(ui('model').disabled).toBe(true);
+  expect(modelButton(manifest.model).disabled).toBe(true);
   page('pagehide', true);
   expect(oldSignal?.aborted).toBe(true);
   expect(map().removed).toBe(false);
   page('pageshow', true);
-  await vi.waitFor(() => expect(ui('model').disabled).toBe(false));
+  await vi.waitFor(() => expect(modelButton(manifest.model).disabled).toBe(false));
   expect(fetchMock).toHaveBeenCalledTimes(2);
   const currentSource = sourceId();
   finishOld(latest());
@@ -230,11 +272,12 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
 it('preserves a loaded build across BFCache restoration and renews its raster generation', async () => {
   manifest.source.provenanceUrl = 'https://api.test/v1/models/gfs/runs/build/provenance';
   await start();
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   const links = ui('meta').children.flatMap(child => child.children);
   expect(links.some(link => link.href === manifest.source.provenanceUrl)).toBe(true);
   const currentSource = sourceId();
   page('pagehide', true); page('pageshow', true);
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(sourceId()).not.toBe(currentSource);
   expect(map().removed).toBe(false);
 });
@@ -244,38 +287,36 @@ it('stops the previous freshness interval when a replacement load fails', async 
   await start();
   const interval = schedule.mock.results[0].value;
   fetchMock.mockResolvedValueOnce(new Response('', { status: 400 }));
-  ui('model').dispatchEvent(new Event('change'));
+  modelButton(manifest.model).dispatchEvent(new Event('click'));
   expect(cancel).toHaveBeenCalledWith(interval);
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
   expect(vi.getTimerCount()).toBe(0);
-  expect(ui('model').disabled).toBe(false);
-  expect(ui('frame').children).toHaveLength(0);
-  expect(ui('frame').disabled).toBe(true);
+  expect(modelButton(manifest.model).disabled).toBe(false);
+  expect(ui('days').children).toHaveLength(0);
+  expect(ui('time').disabled).toBe(true);
 });
 
 it('allows retrying a point request interrupted by BFCache navigation', async () => {
   await start();
-  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   let sampleSignal: AbortSignal | null | undefined;
   fetchMock.mockImplementationOnce((_url, init) => {
     sampleSignal = init?.signal;
     return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))));
   });
-  ui('series-button').dispatchEvent(new Event('click'));
-  expect(ui('series-button').disabled).toBe(true);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  expect(sampleSignal?.aborted).toBe(false);
   page('pagehide', true);
   expect(sampleSignal?.aborted).toBe(true);
   page('pageshow', true);
   await Promise.resolve(); await Promise.resolve();
-  expect(ui('series-button').disabled).toBe(false);
-  expect(ui('series-status').textContent).toContain('Point request interrupted');
+  expect(ui('point-status').textContent).toContain('Point request interrupted');
+  expect(ui('time').disabled).toBe(false);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
-it('makes point values keyboard-scrollable only while the series has results', async () => {
+it('makes point values keyboard-scrollable only while the card is open', async () => {
   await start();
-  expect(ui('series').tabIndex).toBe(-1);
-  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  expect(ui('point-body').tabIndex).toBe(-1);
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
     model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
     method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
@@ -284,13 +325,15 @@ it('makes point values keyboard-scrollable only while the series has results', a
       layers: Object.fromEntries(manifest.layers.map(layer => [layer, { value: 1, status: 'valid', support: 0, interpolated: false }]))
     }))
   })));
-  ui('series-button').dispatchEvent(new Event('click'));
-  await vi.waitFor(() => expect(ui('series').children).toHaveLength(1));
-  expect(ui('series').tabIndex).toBe(0);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  expect(ui('point-body').tabIndex).toBe(0);
+  expect(ui('point-card').hidden).toBe(false);
 
   map().emit('click', { lngLat: { lat: 33, lng: -117 } });
-  expect(ui('series').children).toHaveLength(0);
-  expect(ui('series').tabIndex).toBe(-1);
+  expect(ui('point-body').children).toHaveLength(0);
+  expect(ui('point-body').tabIndex).toBe(-1);
+  expect(ui('point-card').hidden).toBe(true);
 });
 
 
@@ -302,7 +345,7 @@ it('cancels the old raster generation and removes protocols on replacement and B
   fetchMock.mockImplementationOnce(async (_url, init) => new Promise((_resolve, reject) => { init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }); }));
   const pending = loader({ url }, new AbortController());
   const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-  ui('frame').value = manifest.frames[1].id; ui('frame').dispatchEvent(new Event('change'));
+  selectFrame(1);
   await cancelled;
   expect(protocols.has(scheme)).toBe(false); expect(protocols.size).toBe(1);
   page('pagehide', true); expect(protocols.size).toBe(0);
@@ -319,13 +362,12 @@ it('cleans a partially mounted overlay and displays frame-change errors, then pe
     failedProtocol = { load: [...protocols.values()][0], url: source.tiles[0].replace(/\{[zxy]\}/g, '0') };
     throw new Error('GPU context unavailable');
   });
-  ui('frame').value = manifest.frames[1].id;
-  ui('frame').dispatchEvent(new Event('change'));
+  selectFrame(1);
   expect(protocols.size).toBe(0); expect(map().sources.size).toBe(0); expect(map().layers.size).toBe(0);
   expect(ui('error').hidden).toBe(false); expect(ui('error').textContent).toContain('GPU context unavailable');
   expect(ui('timestamp').textContent).toBe('Overlay unavailable');
   await expect(failedProtocol!.load({ url: failedProtocol!.url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
-  ui('frame').value = manifest.frames[0].id; ui('frame').dispatchEvent(new Event('change'));
+  selectFrame(0);
   expect(protocols.size).toBe(1); expect(map().sources.size).toBe(1); expect(ui('error').hidden).toBe(true);
 });
 
@@ -335,41 +377,37 @@ it('configures the bundled worker and reports unsupported graphics without start
   expect(setWorkerUrl).toHaveBeenCalledWith('/assets/map-worker.js');
   expect(ui('error').hidden).toBe(false);
   expect(ui('error').textContent).toContain('WebGL2');
-  expect(ui('model').disabled).toBe(true);
+  expect(modelButton(manifest.model).disabled).toBe(true);
   expect(fetchMock).not.toHaveBeenCalled();
   expect(protocols.size).toBe(0);
 });
 
 it('stops a pending point request and keeps sampling disabled after graphics recovery fails', async () => {
   await start();
-  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   let sampleSignal: AbortSignal | null | undefined;
   fetchMock.mockImplementationOnce((_url, init) => {
     sampleSignal = init?.signal;
     return new Promise((_resolve, reject) => sampleSignal?.addEventListener('abort', () => reject(sampleSignal?.reason)));
   });
-  ui('series-button').dispatchEvent(new Event('click'));
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   expect(fetchMock).toHaveBeenCalledTimes(2);
   map().emit('error', { error: new GPUInitializationError('Context recreation failed') });
   await vi.advanceTimersByTimeAsync(0);
   expect(sampleSignal?.aborted).toBe(true);
   expect(ui('error').textContent).toContain('WebGL2');
-  expect(ui('frame').disabled).toBe(true);
-  expect(ui('series-button').disabled).toBe(true);
+  expect(ui('time').disabled).toBe(true);
+  expect(ui('point-card').hidden).toBe(true);
   expect(map().removed).toBe(true);
   expect(protocols.size).toBe(0);
   page('pageshow', true);
   map().emit('click', { lngLat: { lat: 33, lng: -117 } });
-  ui('series-button').dispatchEvent(new Event('click'));
-  expect(ui('series-button').disabled).toBe(true);
   expect(protocols.size).toBe(0);
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
-it('loads ICON layers and hourly frames directly from its published manifest and preserves a shared layer', async () => {
+it('loads ICON hourly frames and keeps the AGL lift layer', async () => {
   await start();
-  ui('layer').value = 'usable-lift-agl';
-  ui('layer').dispatchEvent(new Event('change'));
+  ui('ref-agl').dispatchEvent(new Event('click'));
   manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...SPLIT_PRODUCT.layers],
     grid: SPLIT_PRODUCT.grid, descriptors: createProductDescriptors(SPLIT_PRODUCT),
     frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
@@ -377,11 +415,12 @@ it('loads ICON layers and hourly frames directly from its published manifest and
       intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
       intervalEnd: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z` }))
   });
-  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
-  expect(ui('layer').children.map(option => option.value)).toEqual(SPLIT_PRODUCT.layers);
-  expect(ui('layer').value).toBe('usable-lift-agl');
-  expect(ui('frame').children.map(option => option.value)).toEqual(['f004', 'f005', 'f007']);
+  expect(ui('ref-agl').className).toContain('is-selected');
+  expect(ui('time').max).toBe('2');
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+  expect(map().getCenter().lng).toBeCloseTo((-23.5 + 62.5) / 2);
   expect(fetchMock.mock.calls.at(-1)![0]).toContain('/models/icon-eu/latest?');
 });
 
@@ -389,14 +428,14 @@ it('lets a user switch back to GFS when ICON has no publication yet', async () =
   await start();
   fetchMock.mockImplementation(async url => String(url).includes('/icon-eu/')
     ? new Response(JSON.stringify({ detail: 'No publication available for icon-eu' }), { status: 503 }) : latest());
-  ui('model').value = 'icon-eu'; ui('model').dispatchEvent(new Event('change'));
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('error').textContent).toContain('No publication available'));
-  expect(ui('model').disabled).toBe(false);
-  expect(ui('frame').children).toHaveLength(0);
-  ui('model').value = 'gfs'; ui('model').dispatchEvent(new Event('change'));
-  await vi.waitFor(() => expect(ui('frame').disabled).toBe(false));
+  expect(modelButton('gfs').disabled).toBe(false);
+  expect(ui('days').children).toHaveLength(0);
+  modelButton('gfs').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('time').disabled).toBe(false));
   expect(ui('error').hidden).toBe(true);
-  expect(ui('frame').children.map(option => option.value)).toEqual(manifest.frames.map(frame => frame.id));
+  expect(ui('time').max).toBe(String(manifest.frames.length - 1));
 });
 
 it('keeps the selected forecast without background requests on focus or elapsed time', async () => {
@@ -413,17 +452,14 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   await start();
   const source = () => map().getSource(sourceId()) as { maxzoom: number; tiles: string[] };
   expect(source().maxzoom).toBe(9);
-  expect(source().tiles[0]).toContain('/usable-lift-msl/');
-  ui('layer').value = 'precip-rate';
-  ui('layer').dispatchEvent(new Event('change'));
-  expect(source().maxzoom).toBe(7);
-  expect(source().tiles[0]).toContain('/precip-rate/');
-  ui('layer').value = 'usable-lift-agl';
-  ui('layer').dispatchEvent(new Event('change'));
+  expect(source().tiles[0]).toContain('/usable-lift-agl/');
+  expect(map().layers.get(OVERLAY_LAYER_ID)?.paint?.['raster-opacity']).toBe(0.7);
+  ui('ref-msl').dispatchEvent(new Event('click'));
   expect(source().maxzoom).toBe(9);
+  expect(source().tiles[0]).toContain('/usable-lift-msl/');
+  ui('ref-agl').dispatchEvent(new Event('click'));
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
 
-  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
     version: 5, model: published.model, buildId: published.buildId, lat: 32.9, lon: -117.25,
     method: published.method, source: published.source, expiresAt: published.expiresAt,
@@ -436,8 +472,30 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
       }))
     }))
   })));
-  ui('series-button').dispatchEvent(new Event('click'));
-  await vi.waitFor(() => expect(ui('series').children).toHaveLength(1));
-  expect(ui('series-status').textContent).toContain('coverage gfs-native, gfs-fine');
-  expect(ui('series').children[0].children.some(row => row.children.some(cell => cell.textContent.includes('gfs-fine')))).toBe(true);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  expect(ui('point-status').textContent).toContain('coverage gfs-native, gfs-fine');
+  expect(ui('point-body').children[0].children.some(row => row.children.some(cell => cell.textContent.includes('gfs-fine')))).toBe(true);
+});
+
+it('uses Google terrain, remembers the view in the query string, and restores it from the back button', async () => {
+  await start();
+  const tiles = map().options.style?.sources?.basemap?.tiles ?? [];
+  expect(tiles[0]).toContain('lyrs=p');
+  expect(win.location.search).toContain('model=gfs');
+  expect(win.location.search).toContain('ref=agl');
+  expect(win.location.search).toContain('opacity=0.7');
+  ui('opacity').value = '0.4';
+  ui('opacity').dispatchEvent(new Event('input'));
+  expect(win.location.search).toContain('opacity=0.4');
+  const saved = win.href;
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  expect(win.location.search).toContain('ref=msl');
+  win.href = saved;
+  win.dispatchEvent(new Event('popstate'));
+  expect(ui('ref-agl').className).toContain('is-selected');
+  expect(ui('opacity').value).toBe('0.4');
+  modelButton('rrfs').dispatchEvent(new Event('click'));
+  expect(map().getCenter().lat).toBeCloseTo((21.12 + 52.63) / 2);
+  expect(map().getCenter().lng).toBeCloseTo((-134.12 + -60.89) / 2);
 });

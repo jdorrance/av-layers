@@ -1,20 +1,19 @@
-import { DEFAULT_MODEL, type LayerId, type ModelId } from '@av/contracts';
-import { ApiClient, formatBuildFreshness, sampleRequestText, assertNotExpired, datasetRange, normalizePoint, samePoint } from '@av/contracts/client';
+import { DEFAULT_MODEL, type ModelId } from '@av/contracts';
+import { ApiClient, formatBuildFreshness } from '@av/contracts/client';
 import { PluginController, type WindyHost } from './controller';
+import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
-import { WindyRasterLayer } from './raster-layer';
 
 const { map } = W.map;
-const { singleclick } = W.singleclick;
 const { store, broadcast: bcast } = W;
 const API_BASE = import.meta.env.AV_API_BASE || 'http://localhost:8787';
 const api = new ApiClient({ baseUrl: API_BASE });
 let panel: PluginPanel | null = null;
 let controller: PluginController | null = null;
-let seriesAbort: AbortController | null = null;
 let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
 let mountedIn: HTMLElement | null = null;
+let selectedModel: ModelId = DEFAULT_MODEL;
 
 const host: WindyHost = {
   map: {
@@ -22,69 +21,19 @@ const host: WindyHost = {
     removeLayer: layer => layer.remove?.()
   },
   store,
-  createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, options)
+  createTileLayer: (url, options) => new WindyRasterLayer(L, API_BASE, url, { ...options, zIndex: forecastStackZIndex(W.map.layerOrder) })
 };
-
-function onClick({ lat, lon }: WindySingleclickPoint): void {
-  seriesAbort?.abort();
-  seriesAbort = null;
-  if (controller?.checkExpiry()) return;
-  const point = normalizePoint(lat, lon);
-  panel?.setClicked(point.lat, point.lon);
-  panel?.setSeriesEnabled(controller?.state().phase === 'ready');
-}
 
 function refreshTime(): void {
   controller?.refreshTime();
 }
 
-async function requestSeries(): Promise<void> {
-  const build = controller?.currentBuild;
-  const activeController = controller;
-  const point = panel?.clickedPoint;
-  if (!panel || !build || !point || !activeController || activeController.checkExpiry()) return;
-  seriesAbort?.abort();
-  const requestAbort = new AbortController();
-  seriesAbort = requestAbort;
-  const requestedPoint = { ...point };
-  panel.setSeriesEnabled(false);
-  panel.setSeriesStatus(sampleRequestText(build, requestedPoint));
-  try {
-    const layers = [...build.manifest.layers];
-    const payload = await api.sample(build, {
-      lat: requestedPoint.lat,
-      lon: requestedPoint.lon,
-      frames: 'all',
-      layers,
-      signal: requestAbort.signal
-    });
-    if (
-      requestAbort.signal.aborted ||
-      controller !== activeController ||
-      activeController.currentBuild !== build ||
-      !samePoint(panel.clickedPoint, requestedPoint) ||
-      activeController.checkExpiry()
-    ) {
-      return;
-    }
-    assertNotExpired(payload.expiresAt);
-    panel.renderSeries(payload, layers, requestedPoint);
-  } catch (error) {
-    if (
-      requestAbort.signal.aborted ||
-      controller !== activeController ||
-      !samePoint(panel.clickedPoint, requestedPoint) ||
-      activeController.checkExpiry()
-    ) {
-      return;
-    }
-    panel.setSeriesStatus(`Series failed: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    if (seriesAbort === requestAbort) {
-      seriesAbort = null;
-      panel?.setSeriesEnabled(controller?.state().phase === 'ready');
-    }
-  }
+function bindHostListeners(): void {
+  if (listenersBound) return;
+  window.addEventListener('focus', refreshTime);
+  window.addEventListener('pageshow', refreshTime);
+  document.addEventListener('visibilitychange', refreshTime);
+  listenersBound = true;
 }
 
 function ensurePanel(): PluginPanel {
@@ -92,22 +41,14 @@ function ensurePanel(): PluginPanel {
   if (!panel) {
     panel = new PluginPanel({
       onModel: model => {
-        void startController(model as ModelId);
-      },
-      onLayer: (layer: LayerId) => {
-        controller?.selectLayer(layer);
-      },
-      onFrame: frame => {
-        controller?.selectFrame(frame);
+        selectedModel = model as ModelId;
+        void startController(selectedModel);
       },
       onOpacity: opacity => {
         controller?.setOpacity(opacity);
       },
-      onSeries: () => {
-        void requestSeries();
-      },
       onBack: () => {
-        onclose();
+        panel?.setVisible(false);
         bcast.emit('rqstClose', __pluginConfig.name);
         bcast.emit('rqstOpen', 'menu');
       }
@@ -124,69 +65,53 @@ function ensurePanel(): PluginPanel {
   return panel;
 }
 
+function showCurrent(ui: PluginPanel): boolean {
+  const active = controller;
+  if (!active || active.state().model !== selectedModel) return false;
+  const phase = active.state().phase;
+  if (phase !== 'ready' && phase !== 'loading') return false;
+  ui.setVisible(true);
+  if (phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild);
+  ui.renderState(active.state());
+  return true;
+}
+
 async function startController(model: ModelId): Promise<void> {
-  const initialLayer = controller?.state().layerId ?? undefined;
-  controller?.dispose();
-  seriesAbort?.abort();
-  seriesAbort = null;
+  const opacity = controller?.state().opacity;
+  const previous = controller;
+  controller = null;
+  previous?.dispose();
   const ui = ensurePanel();
   ui.setVisible(true);
   ui.setError(null);
-  ui.clearSeries();
   ui.setStatus('Loading latest immutable build…');
-  const activeController: PluginController = new PluginController({
+  const activeController = new PluginController({
     model,
-    initialLayer,
+    opacity,
     host,
-    hostRange: () => (activeController.currentBuild ? datasetRange(activeController.currentBuild.manifest.frames) : null),
     loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
     onState: state => {
       if (controller !== activeController) return;
-      if (state.phase === 'ready' && state.buildId) {
-        const build = activeController.currentBuild;
-        if (build) ui.renderBuild(build);
-      }
-      if (state.phase === 'expired' || state.phase === 'disposed') {
-        seriesAbort?.abort();
-        seriesAbort = null;
-        ui.clearSeries();
-      }
+      if (state.phase === 'ready' && activeController.currentBuild) ui.renderBuild(activeController.currentBuild);
       ui.renderState(state);
-      if (seriesAbort) ui.setSeriesEnabled(false);
-      if (state.phase === 'ready' && state.buildId) {
-        const build = activeController.currentBuild;
-        if (build) ui.setStatus(formatBuildFreshness(build.manifest, build.expiresAtMs));
+      if (state.phase === 'ready' && state.buildId && activeController.currentBuild) {
+        ui.setStatus(formatBuildFreshness(activeController.currentBuild.manifest, activeController.currentBuild.expiresAtMs));
       }
     }
   });
   controller = activeController;
+  selectedModel = model;
   await activeController.start();
 }
 
-export const onopen = (_params: unknown): void => {
-  if (!listenersBound) {
-    singleclick.on(__pluginConfig.name, onClick);
-    window.addEventListener('focus', refreshTime);
-    window.addEventListener('pageshow', refreshTime);
-    document.addEventListener('visibilitychange', refreshTime);
-    listenersBound = true;
-  }
-  void startController(DEFAULT_MODEL);
+export const onopen = (): void => {
+  bindHostListeners();
+  const ui = ensurePanel();
+  if (showCurrent(ui)) return;
+  void startController(selectedModel);
 };
 
 export function onclose(): void {
-  seriesAbort?.abort();
-  seriesAbort = null;
-  controller?.dispose();
-  controller = null;
-  if (listenersBound) {
-    singleclick.off(__pluginConfig.name, onClick);
-    window.removeEventListener('focus', refreshTime);
-    window.removeEventListener('pageshow', refreshTime);
-    document.removeEventListener('visibilitychange', refreshTime);
-    listenersBound = false;
-  }
-  panel?.clearSeries();
   panel?.setVisible(false);
 }
 
@@ -199,13 +124,12 @@ export default class ExternalApp {
   constructor(args: { target: HTMLElement; anchor?: HTMLElement }) {
     ExternalApp.active = this;
     mountTarget = args.target;
-    // Windy wires native pane behavior after mounting the component.
     ensurePanel();
   }
 
-  onopen(params?: unknown): void {
+  onopen(): void {
     if (ExternalApp.active !== this) return;
-    onopen(params);
+    onopen();
   }
 
   $destroy(): void {
@@ -214,7 +138,6 @@ export default class ExternalApp {
     onclose();
     panel?.mobileHeader.remove();
     panel?.root.remove();
-    panel = null;
     mountTarget = null;
     mountedIn = null;
   }

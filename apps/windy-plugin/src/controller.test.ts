@@ -81,7 +81,7 @@ class StubLayer implements HostTileLayer {
 function stubHost(initialTimestamp: number | null = null) {
   const added: StubLayer[] = [];
   const removed: StubLayer[] = [];
-  const listeners = new Set<(value: number) => void>();
+  const listeners = new Set<(value: unknown) => void>();
   const values = new Map<string, unknown>();
   if (initialTimestamp !== null) values.set('timestamp', initialTimestamp);
   const store: HostStore = {
@@ -124,12 +124,11 @@ describe('PluginController', () => {
     };
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
     expect(await controller.start()).toMatchObject({ phase: 'error', message: 'Host subscription failed' });
-    expect(stub.added).toHaveLength(1);
-    expect(stub.removed).toEqual(stub.added);
+    expect(stub.added).toHaveLength(0);
+    expect(stub.removed).toHaveLength(0);
     expect(stub.listeners.size).toBe(0);
-    expect([...stub.added[0].listeners.values()].every(listeners => listeners.size === 0)).toBe(true);
     controller.dispose();
-    expect(stub.removed).toHaveLength(1);
+    expect(stub.removed).toHaveLength(0);
   });
   it('starts from an exact host frame, adds one 256px non-retina layer at 0.5 opacity', async () => {
     const stub = stubHost(Date.parse('2026-10-30T06:00:00.000Z'));
@@ -313,16 +312,19 @@ describe('PluginController', () => {
     expect(stub.values.has('timestamp')).toBe(false);
   });
 
-  it('keeps the selected frame and badges an off-frame host time without nearest substitution', async () => {
+  it('selects the latest frame at or before the host time, including timestamps in seconds', async () => {
     const stub = stubHost();
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
     await controller.start();
-    controller.selectFrame('f003', { syncHost: false });
+    controller.selectFrame('f009', { syncHost: false });
     const state = controller.syncHost(Date.parse('2026-10-30T04:59:00.000Z'));
     expect(state.frameId).toBe('f003');
-    expect(state.badge).toContain('off-frame');
-    expect(state.badge).toContain('f003');
+    expect(state.badge).toContain('Host frame f003');
     expect(stub.added[0].url).toContain('/f003/');
+    const later = controller.syncHost(Date.parse('2026-10-30T09:00:00.000Z') / 1000);
+    expect(later.frameId).toBe('f009');
+    expect(stub.added[0].url).toContain('/f009/');
+    expect(stub.added).toHaveLength(1);
   });
 
   it('switches layers and changes opacity on the existing layer', async () => {
@@ -340,11 +342,10 @@ describe('PluginController', () => {
     const stub = stubHost();
     const previous = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
     await previous.start();
-    const previousLayer = previous.selectLayer('precip-rate').layerId!;
     previous.dispose();
     const build = fixtureBuild({ model: 'icon-eu', buildId: 'build-1', createdAt: created, expiresAt,
       layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) });
-    const controller = new PluginController({ model: 'icon-eu', initialLayer: previousLayer, loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
+    const controller = new PluginController({ model: 'icon-eu', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
     try {
       expect(await controller.start()).toMatchObject({ phase: 'ready', model: 'icon-eu', layerId: build.manifest.layers[0] });
       expect(stub.removed).toEqual([stub.added[0]]);
@@ -370,8 +371,7 @@ describe('PluginController', () => {
       expect(await controller.start()).toMatchObject({ frameId: 'f007' });
       const gap = controller.syncHost(Date.parse('2026-10-30T07:00:00.000Z'));
       expect(gap.frameId).toBe('f007');
-      expect(gap.badge).toContain('Host time 2026-10-30T07:00:00.000Z is off-frame');
-      expect(gap.badge).toContain('keeping f007 · 2026-10-29T19:00:00.000Z');
+      expect(gap.badge).toContain('Host frame f007 · 2026-10-29T19:00:00.000Z');
       expect(stub.added[0].url).toContain('/f007/');
       const next = controller.syncHost(Date.parse('2026-10-30T08:00:00.000Z'));
       expect(next.frameId).toBe('f020');

@@ -5,6 +5,7 @@
   "main": "dist/plugin.min.js",
   "scripts": {
     "build": "vite build",
+    "serve": "node ./dev-server.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

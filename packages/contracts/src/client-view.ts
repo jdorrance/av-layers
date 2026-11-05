@@ -206,6 +206,7 @@ export interface WindyTileOptions {
   opacity: number;
   attribution: string;
   minNativeZoom: number;
+  zIndex?: number;
 }
 
 export function clampOpacity(value: number): number {

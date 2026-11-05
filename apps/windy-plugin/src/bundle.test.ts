@@ -51,7 +51,7 @@ afterEach(() => {
 it.each([
   ['configured', 'https://api.example.test:9443/prefix'],
   ['default', undefined]
-])('loads the built Windy module with %s API base, routes clicks without closing its pane, shows stale horizons and tile errors, cancels stale requests, and expires a pending series', async (_name, configuredBase) => {
+])('loads the built Windy module with %s API base, follows the host time, keeps the overlay when the pane closes, and removes it on expiry', async (_name, configuredBase) => {
   const pluginDir = resolve(import.meta.dirname, '..');
   const vite = resolve(pluginDir, 'node_modules/vite/bin/vite.js');
   const base = configuredBase ?? 'http://localhost:8787';
@@ -89,12 +89,9 @@ it.each([
   });
   const latest = fixtureLatest(manifest, base), [west, south, east, north] = manifest.descriptors.bounds;
   const point = { lat: (south + north) / 2, lon: (west + east) / 2 };
-  let resolveSample!: (response: Response) => void;
-  let sampleSignal: AbortSignal | null | undefined;
-  const fetchImpl = vi.fn<typeof fetch>((url, init) => {
+  const fetchImpl = vi.fn<typeof fetch>(url => {
     if (String(url).includes('/latest?')) return Promise.resolve(new Response(JSON.stringify(latest)));
-    sampleSignal = init?.signal;
-    return new Promise(resolve => { resolveSample = resolve; });
+    return Promise.reject(new Error(`unexpected ${String(url)}`));
   });
   const clickListeners = new Map<string, Set<(point: WindySingleclickPoint) => void>>();
   const singleclick = {
@@ -118,7 +115,7 @@ it.each([
     off: vi.fn((name: string) => tileListeners.delete(name))
   };
   const layer = {
-    url: '', setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
+    url: '', options: {} as { zIndex?: number }, setUrl(url: string) { this.url = url; }, setOpacity: vi.fn(),
     source: () => source
   };
   const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn() };
@@ -130,10 +127,10 @@ it.each([
   vi.stubGlobal('window', win);
   vi.stubGlobal('Option', FakeOption);
   vi.stubGlobal('fetch', fetchImpl);
-  vi.stubGlobal('W', { map: { map }, singleclick: { singleclick }, store, broadcast });
+  vi.stubGlobal('W', { map: { map, layerOrder: { MAIN: 200, PARTICLES: 400, PARTICLES_HIGH_ZOOM: 450 } }, singleclick: { singleclick }, store, broadcast });
   const protocols = new Map<string, unknown>();
   vi.stubGlobal('L', {
-    tileLayer: (url: string) => { layer.url = url; return layer; },
+    tileLayer: (url: string, options: { zIndex?: number }) => { layer.url = url; layer.options = options; return layer; },
     addProtocol: (scheme: string, handler: unknown) => { protocols.set(scheme, handler); },
     removeProtocol: (scheme: string) => { protocols.delete(scheme); }
   });
@@ -176,13 +173,14 @@ it.each([
   expect(typeof app.$destroy).toBe('function');
   app.onopen();
   await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(1));
-  expect(singleclick.on).toHaveBeenCalledWith(metadata.name, expect.any(Function));
-  expect(clickListeners.get(metadata.name)?.size).toBe(1);
+  expect(metadata.listenToSingleclick).toBe(false);
+  expect(singleclick.on).not.toHaveBeenCalled();
   expect(addWindowListener).toHaveBeenCalledTimes(2);
   expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/${model}/latest?expand=manifest`);
   expect(layer.url).toContain(`/tiles/${model}/b1/${layerId}/f006/`);
+  expect(layer.options.zIndex).toBe(201);
   expect(protocols.size).toBe(1);
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;
   expect(horizonNotice.hidden).toBe(false);
@@ -210,122 +208,61 @@ it.each([
   expect(tileError.hidden).toBe(true);
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
+  expect(selects).toHaveLength(1);
   expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual(PRODUCTS.map(product => [product.modelId, false, product.label]));
-  expect(selects[2].value).toBe('f006');
-  selects[2].value = 'f003';
-  selects[2].dispatch('change');
-  expect(store.set).toHaveBeenCalledWith('timestamp', Date.parse('2026-10-30T03:00:00.000Z'));
+  const opacity = elements.find(element => element.id === 'av-opacity')!;
+  opacity.value = '0.4';
+  opacity.dispatch('input');
+  expect(layer.setOpacity).toHaveBeenCalledWith(0.4);
+  expect(map.addLayer).toHaveBeenCalledTimes(1);
+  expect(store.set).not.toHaveBeenCalled();
 
-  click({ lat: point.lat, lon: point.lon + 360 });
-  expect(openWeatherPicker).not.toHaveBeenCalled();
-  expect(target.children).toHaveLength(2);
-  expect(map.removeLayer).not.toHaveBeenCalled();
-  const pointStatus = elements.find(element => element.textContent.startsWith('Clicked '))!;
-  const button = elements.find(element => element.textContent === 'Sample clicked point')!;
-  button.dispatch('click');
-  expect(sampleSignal?.aborted).toBe(false);
-  // A delayed callback from the replaced app must not touch the current app's
-  // panel, controller, or pending point request.
+  // A replaced app must not drop the live overlay or start another build.
   initialApp.$destroy();
   initialApp.onopen();
-  expect(sampleSignal?.aborted).toBe(false);
   expect(target.children).toEqual(mounted);
   expect(map.removeLayer).not.toHaveBeenCalled();
-  expect(fetchImpl).toHaveBeenCalledTimes(2);
-  win.dispatchEvent(new Event('focus'));
-  expect(button.disabled).toBe(true);
-  expect(sampleSignal?.aborted).toBe(false);
-  expect(fetchImpl.mock.calls[1][0]).toContain(`lat=${point.lat}`);
-  expect(fetchImpl.mock.calls[1][0]).toContain(`lon=${point.lon}`);
-  resolveSample(new Response(JSON.stringify({ model, buildId: 'b1', ...point, method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt, frames: frames.map(frame => ({ ...frame, layers: { [layerId]: { value: 1, status: 'valid', support: 0, interpolated: false } } })) })));
-  const series = elements.find(element => element.className === 'av-series')!;
-  await vi.waitFor(() => expect(series.children).toHaveLength(1));
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-  button.dispatch('click');
-  const firstSignal = sampleSignal;
-  click({ lat: 2, lon: 3 });
-  expect(firstSignal?.aborted).toBe(true);
-  expect(series.children).toHaveLength(0);
+  // Windy's own weather picker closes the pane. The forecast layer stays.
+  click({ lat: point.lat, lon: point.lon });
+  expect(openWeatherPicker).toHaveBeenCalledTimes(1);
+  expect(map.removeLayer).not.toHaveBeenCalled();
+  expect(store.off).not.toHaveBeenCalled();
+  expect(removeWindowListener).not.toHaveBeenCalled();
+  expect(target.children).toHaveLength(0);
+  expect(protocols.size).toBe(1);
 
-  button.dispatch('click');
-  expect(sampleSignal?.aborted).toBe(false);
+  clock.mockReturnValue(now);
+  const reopened = new loaded.default({ target, anchor: target });
+  destroyApp = () => reopened.$destroy();
+  reopened.onopen();
+  await Promise.resolve();
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  expect(map.addLayer).toHaveBeenCalledTimes(1);
+  const root = target.children.find(element => element.className.split(' ').includes('av-panel'))!;
+  const mobileHeader = target.children.find(element => element.className.split(' ').includes('plugin__mobile-header'))!;
+  expect(target.children).toEqual([mobileHeader, root]);
+  expect(document.body.children).not.toContain(root);
+  expect(addWindowListener).toHaveBeenCalledTimes(2);
+  elements.find(element => element.className === 'av-back')!.dispatch('click');
+  expect(broadcast.emit.mock.calls).toEqual([
+    ['rqstClose', loaded.__pluginConfig.name],
+    ['rqstOpen', 'menu']
+  ]);
+  expect(root.hidden).toBe(true);
+  expect(mobileHeader.hidden).toBe(true);
+  expect(map.removeLayer).not.toHaveBeenCalled();
+  expect(protocols.size).toBe(1);
+
   clock.mockReturnValue(expiresAtMs);
   win.dispatchEvent(new Event('pageshow'));
-  expect(sampleSignal?.aborted).toBe(true);
   expect(map.removeLayer).toHaveBeenCalledTimes(1);
   expect(horizonNotice.hidden).toBe(true);
   expect(tileListeners.size).toBe(0);
   expect(protocols.size).toBe(0);
-  click({ lat: 5, lon: 6 });
-  expect(pointStatus.textContent).toBe('');
-  expect(button.disabled).toBe(true);
-  resolveSample(new Response(JSON.stringify({ model, buildId: 'b1', lat: 2, lon: 3, expiresAt, frames: [] })));
-  await Promise.resolve();
-  await Promise.resolve();
-  expect(series.children).toHaveLength(0);
-  app.$destroy();
-  expect(singleclick.off).toHaveBeenCalledTimes(1);
-  expect(removeWindowListener).toHaveBeenCalledTimes(2);
-  expect(removeWindowListener).toHaveBeenCalledWith('focus', addWindowListener.mock.calls[0][1]);
-  expect(removeWindowListener).toHaveBeenCalledWith('pageshow', addWindowListener.mock.calls[1][1]);
-  expect(removeVisibilityListener).toHaveBeenCalledTimes(1);
-  expect(removeVisibilityListener).toHaveBeenCalledWith('visibilitychange', addVisibilityListener.mock.calls[0][1]);
-  expect(clickListeners.size).toBe(0);
-  expect(map.off).not.toHaveBeenCalled();
+  expect(store.off).toHaveBeenCalledTimes(1);
+  expect(removeWindowListener).not.toHaveBeenCalled();
+  reopened.$destroy();
   expect(target.children).toHaveLength(0);
-
-  // A live view must close before opening the menu, releasing its
-  // pending point request, time subscription, click listener and raster protocol.
-  clock.mockReturnValue(now);
-  const previousElementCount = elements.length;
-  const reopened = new loaded.default({ target, anchor: target });
-  destroyApp = () => reopened.$destroy();
-  reopened.onopen();
-  try {
-    await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(2));
-    const reopenedElements = elements.slice(previousElementCount);
-    const root = reopenedElements.find(element => element.className.split(' ').includes('av-panel'))!;
-    const mobileHeader = reopenedElements.find(element => element.className.split(' ').includes('plugin__mobile-header'))!;
-    expect(root.className.split(' ')).toContain('plugin__content');
-    expect(target.children).toEqual([mobileHeader, root]);
-    expect(target.children).toContain(root);
-    expect(document.body.children).not.toContain(root);
-    expect(clickListeners.get(metadata.name)?.size).toBe(1);
-    expect(addWindowListener).toHaveBeenCalledTimes(4);
-    expect(addVisibilityListener).toHaveBeenCalledTimes(2);
-    click({ lat: 3, lon: 4 });
-    reopenedElements.find(element => element.textContent === 'Sample clicked point')!.dispatch('click');
-    expect(sampleSignal?.aborted).toBe(false);
-    expect(protocols.size).toBe(1);
-    app.$destroy();
-    expect(sampleSignal?.aborted).toBe(false);
-    expect(target.children).toEqual([mobileHeader, root]);
-    expect(protocols.size).toBe(1);
-    reopenedElements.find(element => element.className === 'av-back')!.dispatch('click');
-    expect(broadcast.emit.mock.calls).toEqual([
-      ['rqstClose', loaded.__pluginConfig.name],
-      ['rqstOpen', 'menu']
-    ]);
-    expect(sampleSignal?.aborted).toBe(true);
-    expect(singleclick.off).toHaveBeenCalledTimes(2);
-    expect(removeWindowListener).toHaveBeenCalledTimes(4);
-    expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
-    expect(clickListeners.size).toBe(0);
-    expect(map.on).not.toHaveBeenCalled();
-    expect(map.off).not.toHaveBeenCalled();
-    expect(openWeatherPicker).not.toHaveBeenCalled();
-    expect(store.off).toHaveBeenCalledTimes(2);
-    expect(map.removeLayer).toHaveBeenCalledTimes(2);
-    expect(tileListeners.size).toBe(0);
-    expect(protocols.size).toBe(0);
-    expect(root.hidden).toBe(true);
-    expect(mobileHeader.hidden).toBe(true);
-    expect(target.children).toEqual([mobileHeader, root]);
-    destroyApp?.();
-    expect(target.children).toHaveLength(0);
-  } finally {
-    reopened.$destroy();
-  }
-  expect(removeWindowListener).toHaveBeenCalledTimes(4);
-  expect(removeVisibilityListener).toHaveBeenCalledTimes(2);
 });

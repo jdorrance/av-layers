@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, matchHostFrame, selectExplicitFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
+import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
 
 afterEach(() => vi.useRealTimers());
 
@@ -58,6 +58,27 @@ describe('frame selection', () => {
     const badge = frameBadge(selected, null, host);
     expect(badge.kind).toBe('off-frame');
     expect(badge.text).toContain('f003');
+  });
+
+  it('follows the latest frame at or before the host time', () => {
+    const at = (value: string) => Date.parse(value);
+    expect(selectHostFrame(frames, at('2026-10-30T04:59:00.000Z'))?.id).toBe('f003');
+    expect(selectHostFrame(frames, at('2026-10-30T06:00:00.000Z'))?.id).toBe('f006');
+    expect(selectHostFrame(frames, at('2026-10-30T02:00:00.000Z'))?.id).toBe('f003');
+    expect(selectHostFrame(frames, at('2026-10-30T18:00:00.000Z'))?.id).toBe('f009');
+    expect(selectHostFrame([], at('2026-10-30T06:00:00.000Z'))).toBeNull();
+    expect(selectHostFrame(frames, Number.NaN)).toBeNull();
+  });
+
+  it('reads host timestamps from milliseconds, seconds, numeric strings and Dates', () => {
+    const ms = Date.parse('2026-10-30T06:00:00.000Z');
+    expect(hostTimestampMs(ms)).toBe(ms);
+    expect(hostTimestampMs(ms / 1000)).toBe(ms);
+    expect(hostTimestampMs(String(ms / 1000))).toBe(ms);
+    expect(hostTimestampMs(new Date(ms))).toBe(ms);
+    expect(hostTimestampMs('  ')).toBeNull();
+    expect(hostTimestampMs('soon')).toBeNull();
+    expect(hostTimestampMs(null)).toBeNull();
   });
 
   it('reports an in-frame host badge and an explicit badge without host time', () => {
