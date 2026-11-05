@@ -25,13 +25,12 @@ Unchecked gates remain required work.
   measured caller requires a change.
 - [x] Define runtime-validated `/samples` and `/profile` responses in
   [`@av/contracts`](../packages/contracts/README.md), including units, vertical
-  reference, missing values, build identity and expiry. Windgrams adaptation
-  belongs to its client in Phase 2.
+  reference, missing values, build identity and expiry.
 - [x] Preserve retained version-3/4/5 reads. Test older descriptor snapshots
   against API product validation before changing registry descriptors or layers:
   [`checkProduct`](../apps/api/src/publication.ts) validates the manifest’s
   declared trusted layer subset and retained method snapshots.
-- [ ] Deploy compatible API and browser readers before enabling new writers.
+- [x] Deploy compatible API and browser readers before enabling new writers.
   Test mixed old/new builds, retained URLs and rollback. Publish a new format
   version if strict existing readers cannot safely admit the extension.
 
@@ -95,11 +94,13 @@ native `precip-rate`. Add these 17 sample-only native channels (18 native channe
 - [x] Retain all forecast hours needed by synoptic/profile callers. Update
   [`resolveProductFrameHours`](../packages/forecast/src/daylight.ts) and model
   policies; the registered point timelines retain nighttime frames.
-- [ ] Run live `pnpm input:proof --model MODEL --cache-dir .cache/MODEL` for
+- [x] Run live `pnpm input:proof --model MODEL --cache-dir .cache/MODEL` for
   GFS, ICON-EU and RRFS; retain representative encoded fixtures and receipts.
 
-Live source checks on 2026-11-05 admitted complete one-cell acquisitions for
-all three adapters. Horizon inventories contain every configured GFS field at
+Live `input:proof` checks on 2026-11-05 admitted the registered 20-channel
+products at one public cell each for the 12 UTC cycle, lead 6: 123 GFS fields,
+199 ICON-EU objects and 165 RRFS fields. Horizon inventories contain every
+configured GFS field at
 27/120/123/384 and every RRFS field at 48. Encoded ICON-EU 48/47 flux and
 precipitation records recover one-hour windows; MH is instantaneous and VMAX is
 a trailing-hour maximum. NOAA gusts remain instantaneous. RRFS DZDT uses aligned

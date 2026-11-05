@@ -93,6 +93,10 @@ peak RSS. GFS completed only two to four map frames in 31–40 minutes.
 Tile and numeric totals stay fixed. Verify the new grouping through publication
 before closing the gate.
 
+Use a 90-minute elapsed budget for the complete plan. An ICON daytime pair
+measured 33.6 minutes; later groups waited 13 minutes before starting. The
+deadline also covers assembly and publication.
+
 Numeric packs total 20.79/15.95/35.88 GB per build. The configured daily cadence
 and seven-day retention project 1.52 TB across the three models. Admission and
 assembly enforce the aggregate numeric-byte budget in

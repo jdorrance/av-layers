@@ -66,8 +66,8 @@ Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
 (15m timeout), parallel `forecast-shard` jobs (60m timeout), and
 `forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. Terrain preparation has its
-own 50-minute operation budget per attempt; forecast elapsed time starts with
-planning.
+own operation budget per attempt from [build budgets](../apps/batch/src/capacity.ts);
+forecast elapsed time starts with planning.
 
 The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
 the configured shard target. Set that target to the candidate frame count for
@@ -83,9 +83,11 @@ The [build budgets](../apps/batch/src/capacity.ts) gate the complete
 forecast's native and fine render work before weather acquisition.
 
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
-the plan remains within the 50-minute build elapsed-time budget and its environment
-secret has not been rotated by a later same-model build. After rotation, start a
-new build.
+the run revision remains current main, the plan meets the
+[build elapsed budget](../apps/batch/src/capacity.ts),
+its scoped credentials remain valid and its environment secret has not been
+rotated by a later same-model build. After a main change, expiry or rotation, start
+a new build.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
