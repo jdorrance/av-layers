@@ -3,7 +3,7 @@ import { link, mkdir, open, rm, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_VALUES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, sparseCoverageLookup, type SparseCoverage } from '@av/contracts';
 import { MAX_PACK_RECORD_BYTES, SAMPLE_SHARD_TARGET_BYTES, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
-import { localPath } from './validate.js';
+import { localPath } from './local-file.js';
 
 const MAX_WRITE_CHUNK_BYTES = 1024 * 1024;
 const MAX_OPEN_SHARDS = 32;
@@ -85,6 +85,18 @@ function maximumBlockCells(layout: ShardedSamplePackLayout): number {
   return maximum;
 }
 
+function writerBuffers(layout: ShardedSamplePackLayout) {
+  const sectionBytes = layout.shards.reduce((maximum, shard) => Math.max(maximum, shard.byteLength / layout.channelCount), 0);
+  return { block: maximumBlockCells(layout) * layout.recordBytes,
+    chunk: Math.min(sectionBytes, Math.floor(MAX_WRITE_CHUNK_BYTES / layout.recordBytes) * layout.recordBytes) };
+}
+
+/** Binary scratch retained by one serialized writer, including its final transpose. */
+export function samplePackWriterBufferBytes(layout: ShardedSamplePackLayout): number {
+  const buffers = writerBuffers(layout);
+  return buffers.block + buffers.chunk;
+}
+
 function assertCoverage(layout: ShardedSamplePackLayout, coverage: SparseCoverage): void {
   const { grid } = layout;
   if (coverage.width !== grid.width || coverage.height !== grid.height || coverage.wrapLongitude !== grid.wrapLongitude
@@ -136,7 +148,7 @@ export function createShardedSamplePackWriter(
 ) {
   assertLayout(layout);
   assertCoverage(layout, coverage);
-  const recordBytes = layout.recordBytes, chunkBytes = Math.floor(MAX_WRITE_CHUNK_BYTES / recordBytes) * recordBytes;
+  const recordBytes = layout.recordBytes, buffers = writerBuffers(layout);
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
   const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind));
   const finalPaths = finalKeys.map(key => localPath(target.root, key));
@@ -145,7 +157,7 @@ export function createShardedSamplePackWriter(
   const starts = layout.shards.map(() => new Array<number>(layout.channelCount).fill(-1));
   const ends = layout.shards.map(() => 0);
   const written = new Uint8Array(layout.channelCount), compatibleCoverages = new WeakSet<SparseCoverage>([coverage]);
-  const handles = new Map<number, FileHandle>(), finalHandles = new Set<FileHandle>(), created = new Set<string>(), linked = new Set<string>(), blockBuffer = Buffer.allocUnsafe(maximumBlockCells(layout) * recordBytes);
+  const handles = new Map<number, FileHandle>(), finalHandles = new Set<FileHandle>(), created = new Set<string>(), linked = new Set<string>(), blockBuffer = Buffer.allocUnsafe(buffers.block), chunk = Buffer.allocUnsafe(buffers.chunk);
   let finished = false, closed = false, failed = false, completed = 0;
   let inFlight: Promise<unknown> | undefined;
   let cleanupPromise: Promise<void> | undefined;
@@ -216,7 +228,6 @@ export function createShardedSamplePackWriter(
 
   async function writeShardChannel(shard: number, channel: number, source: GridField | RawRecords, packed: SparseCoverage | undefined, outsideRecord?: Uint8Array): Promise<void> {
     const descriptor = layout.shards[shard], sectionBytes = descriptor.byteLength / layout.channelCount;
-    const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, chunkBytes));
     const width = layout.grid.width, wrap = layout.grid.wrapLongitude;
     const raw = source instanceof Uint8Array ? Buffer.from(source.buffer, source.byteOffset, source.byteLength) : undefined;
     const readRecord = typeof source === 'function' ? source : undefined;
@@ -331,7 +342,6 @@ export function createShardedSamplePackWriter(
             }
             const sectionBytes = shardBytes / layout.channelCount;
             if (!Number.isSafeInteger(sectionBytes) || sectionBytes % recordBytes !== 0) throw new Error('Invalid sample shard channel alignment');
-            const chunk = Buffer.allocUnsafe(Math.min(sectionBytes, chunkBytes));
             for (let channel = 0; channel < layout.channelCount; channel++) {
               check();
               const handle = await handleFor(shard);

@@ -6,7 +6,7 @@ import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
 import type { CoverageDescriptor } from './coverage.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS } from './format.js';
 import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
-import { MAX_PROVENANCE_BYTES } from './json.js';
+import { MAX_JSON_CONTAINER_ENTRIES, MAX_PROVENANCE_BYTES } from './json.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 export type ModelId = z.infer<typeof modelIdSchema>;
@@ -118,8 +118,8 @@ export const manifestSchema = z.object({
   version: z.union([z.literal(3), z.literal(4)]), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
   buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
   coverage: coverageReferenceSchema, grid: gridSchema,
-  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), samples: samplePackSchema,
+  frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), samples: samplePackSchema,
   patches: z.array(refinementPatchSchema).min(1).max(MAX_REFINEMENT_ZONES).optional(),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
   tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
@@ -134,8 +134,8 @@ export type ProvenanceFrameReference = z.infer<typeof provenanceFrameReferenceSc
 export const frameProvenanceSchema = z.strictObject({ version: z.literal(1), ...provenanceIdentity,
   frame: frameSchema, hour: z.number().int().positive(), intervals: z.unknown(), receipt: z.unknown() });
 export const provenanceSchema = z.discriminatedUnion('version', [
-  z.strictObject({ version: z.literal(1), ...provenanceDescription, frames: z.array(z.unknown()).max(MAX_SAMPLE_VALUES) }),
-  z.strictObject({ version: z.literal(2), ...provenanceDescription, frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_SAMPLE_VALUES) })
+  z.strictObject({ version: z.literal(1), ...provenanceDescription, frames: z.array(z.unknown()).max(MAX_JSON_CONTAINER_ENTRIES) }),
+  z.strictObject({ version: z.literal(2), ...provenanceDescription, frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })
 ]);
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
@@ -172,7 +172,7 @@ const profilePackSchema = z.strictObject({
   format: z.literal(PROFILE_PACK_FORMAT), blockSize: z.literal(SAMPLE_BLOCK_SIZE),
   levelCount: safePositive.max(MAX_PROFILE_LEVELS), recordBytes: safePositive,
   coverageHash: sha256, blockCount: safePositive, storedCells: safePositive,
-  groups: z.array(z.strictObject({ firstFrame: safeNonnegative, frameCount: safePositive, shards: z.array(shardSchema).min(1).max(MAX_SAMPLE_VALUES) })).min(1).max(MAX_SAMPLE_VALUES)
+  groups: z.array(z.strictObject({ firstFrame: safeNonnegative, frameCount: safePositive, shards: z.array(shardSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })).min(1).max(MAX_JSON_CONTAINER_ENTRIES)
 }).refine(pack => pack.recordBytes === PROFILE_HEADER_BYTES + pack.levelCount * PROFILE_LEVEL_BYTES, 'Profile record width differs from level capacity');
 const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
@@ -193,8 +193,8 @@ export type ForecastSurfaceV5 = z.infer<typeof surfaceV5Schema>;
 const manifestV5BaseSchema = z.strictObject({
   version: z.literal(5), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
   buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
-  frames: z.array(frameSchema).min(1).max(MAX_SAMPLE_VALUES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_SAMPLE_VALUES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
+  frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
   source: manifestSchema.shape.source, tool: manifestSchema.shape.tool, palettes: manifestSchema.shape.palettes, metrics: manifestSchema.shape.metrics,
   mapFrameCount: safePositive.optional()
 });
@@ -239,8 +239,6 @@ function validateV5Records(manifest: ManifestV5): void {
   if (!/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(manifest.buildId)) throw new Error('Invalid build ID');
   const frames = new Set(manifest.frames.map(frame => frame.id)), mapFrames = new Set(renderedFrames(manifest).map(frame => frame.id)), layers = new Set(manifest.layers);
   if (frames.size !== manifest.frames.length || layers.size !== manifest.layers.length) throw new Error('Duplicate frames or layers');
-  const channels = manifest.frames.length * manifest.layers.length;
-  if (!Number.isSafeInteger(channels)) throw new Error('Sample channel count overflow');
   const methods = new Set<string>();
   for (const layer of manifest.layers) {
     const descriptor = manifest.descriptors.layers[layer];
@@ -441,7 +439,8 @@ export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'mod
   const value = frameProvenanceSchema.parse(raw);
   const requiresPrecipitation = identity.layers?.includes('precip-rate') || (value.intervals as { precipitationWindow?: unknown } | null)?.precipitationWindow !== undefined;
   if (value.model !== identity.model || value.buildId !== identity.buildId || value.cycle !== identity.cycle
-      || JSON.stringify(value.frame) !== JSON.stringify(frameSchema.parse(frame)) || Date.parse(frame.validTime) !== Date.parse(identity.cycle) + value.hour * 3_600_000
+      || value.frame.id !== frame.id || value.frame.validTime !== frame.validTime || value.frame.intervalStart !== frame.intervalStart || value.frame.intervalEnd !== frame.intervalEnd
+      || Date.parse(frame.validTime) !== Date.parse(identity.cycle) + value.hour * 3_600_000
       || !matchesFrameIntervals(value.intervals, frame, requiresPrecipitation)) {
     throw new Error('Provenance frame does not match manifest');
   }

@@ -26,7 +26,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
   const m: ManifestV5 = manifest, surface = m.surfaces.find(item => item.kind === 'native');
   if (!surface?.profiles) fail(409, 'profile-unavailable', 'This build has no native profiles');
   const profiles = surface.profiles, { lat, lon } = readPointCoordinates(url);
-  const { frames, layers } = selectSampleFields(m, url, { frames: 'all', layers: surface.layers });
+  const { frames, layers } = selectSampleFields(m, url, surface.layers);
   if (layers.some(layer => !surface.layers.includes(layer))) fail(400, 'invalid-query', 'Profile layers must belong to the native surface');
   const estimated = estimateProfileResponseBytes(frames.length, profiles.levelCount, layers.length);
   if (estimated > MAX_POINT_RESPONSE_BYTES) fail(429, 'sample-limit', 'Select fewer profile frames or layers');
@@ -57,7 +57,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           const selected = frames.filter(frame => { const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount; });
           if (!selected.length) continue;
           const channels = selected.flatMap(frame => layers.map(layer => (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer)));
-          const packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, channels), shard = group.shards[packed.shard]!;
+          const packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, channels, group.shards), shard = group.shards[packed.shard]!;
           jobs.push({ shard, packed, apply(bytes) {
             for (const frame of selected) for (const layer of layers) {
               const channel = (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer);
@@ -78,7 +78,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             if (layout.indexBytes + layout.shards.length * 64 > maximum) fail(503, 'publication-invalid', 'Profile layout exceeds its allocation');
             layouts.set(group.frameCount, layout);
           }
-          const packed = planShardedPackedSample(layout, plan, selected.map(frame => m.frames.indexOf(frame) - group.firstFrame)), shard = shards[packed.shard]!;
+          const packed = planShardedPackedSample(layout, plan, selected.map(frame => m.frames.indexOf(frame) - group.firstFrame), shards), shard = shards[packed.shard]!;
           jobs.push({ shard, packed, apply(bytes) {
             for (const frame of selected) {
               try { columns.set(frame.id, readProfileRecord(packedRecordsFromRange(packed, bytes, m.frames.indexOf(frame) - group.firstFrame)[0]!)); }

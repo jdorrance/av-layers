@@ -452,6 +452,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         }
       }
     }
+    // Admitted template 3.0 has east/north +i/+j axes; scan order changes sample order.
     const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined) => {
       if (!u || !v) return;
       for (let i = 0; i < activeIndices.length; i++) if (u.missing[i] || v.missing[i]) {

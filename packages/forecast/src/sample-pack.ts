@@ -224,7 +224,23 @@ export interface ShardedPackedSamplePlan extends PackedSamplePlan {
   readonly shard: number;
 }
 
-export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample: SamplePlan, channels: readonly number[]): ShardedPackedSamplePlan {
+function declaredBlockOffset(layout: ShardedSamplePackLayout, owner: ShardedSampleBlock, shards?: readonly { bytes: number }[]): Pick<ShardedSampleBlock, 'shard' | 'byteOffset'> {
+  if (!shards) return owner;
+  let absolute = owner.byteOffset;
+  for (let i = 0; i < owner.shard; i++) absolute += layout.shards[i].byteLength;
+  let total = 0, selected: Pick<ShardedSampleBlock, 'shard' | 'byteOffset'> | undefined;
+  for (const [shard, part] of shards.entries()) {
+    const end = total + part.bytes;
+    if (!Number.isSafeInteger(part.bytes) || part.bytes < 1 || part.bytes > SAMPLE_SHARD_TARGET_BYTES || !Number.isSafeInteger(end)) throw new RangeError('Invalid declared shard bytes');
+    if (absolute >= total && absolute + owner.byteLength <= end) selected = { shard, byteOffset: absolute - total };
+    total = end;
+  }
+  if (total !== layout.byteLength || !selected) throw new RangeError('Declared shards do not contain the complete owner block');
+  return selected;
+}
+
+/** Declared shard partitions are coverage-bound before reading their planned ranges. */
+export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample: SamplePlan, channels: readonly number[], shards?: readonly { bytes: number }[]): ShardedPackedSamplePlan {
   const { width, height, wrapLongitude } = layout.grid, channelCount = layout.channelCount;
   if (!channels.length || new Set(channels).size !== channels.length || channels.some(channel => !Number.isSafeInteger(channel) || channel < 0 || channel >= channelCount)) throw new RangeError('Invalid selected pack channels');
   if (!sample.contributors.length || sample.contributors.length > 4) throw new RangeError('Invalid sample contributor count');
@@ -240,15 +256,16 @@ export function planShardedPackedSample(layout: ShardedSamplePackLayout, sample:
   const recordBytes = layout.recordBytes;
   assertRecordBytes(recordBytes);
   const stride = channelCount * recordBytes;
+  const partition = declaredBlockOffset(layout, owner, shards);
   const contributorRanks = sample.contributors.map(c => {
     const row = c.row - owner.row, column = wrapLongitude ? (c.column - owner.column + width) % width : c.column - owner.column;
     if (row < 0 || row >= owner.height || column < 0 || column >= owner.width) throw new RangeError('Sample contributor is outside its owner block');
-    return owner.byteOffset / stride + row * owner.width + column;
+    return partition.byteOffset / stride + row * owner.width + column;
   });
   const first = Math.min(...contributorRanks), last = Math.max(...contributorRanks);
   const firstChannel = Math.min(...channels), lastChannel = Math.max(...channels);
   return {
-    shard: owner.shard,
+    shard: partition.shard,
     byteRange: { offset: first * stride + firstChannel * recordBytes, length: (last - first) * stride + (lastChannel - firstChannel + 1) * recordBytes },
     channelCount, recordBytes, channels: [...channels], contributorRanks
   };

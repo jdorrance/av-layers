@@ -20,7 +20,6 @@ import {
   sampleResponseV5Schema,
   multiPointSampleResponseSchema,
   profileResponseSchema,
-  solarTerrainIndexSchema,
   renderedLayers,
   type LayerId,
   type ModelId,
@@ -28,7 +27,6 @@ import {
 } from '@av/contracts';
 import { serveSample, serveSamples } from './sample';
 import { serveProfile } from './profile';
-import { serveSolarIndex, serveSolarAsset } from './solar-terrain';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveCoverage, resolveSparseTiles, sha256 } from './coverage';
@@ -141,28 +139,6 @@ function registerJsonRoute(
 
 registerJsonRoute('/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
   json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
-
-registerJsonRoute('/v1/terrain/solar/{slug}/index.json', { slug: param }, {}, solarTerrainIndexSchema,
-  c => serveSolarIndex(c.req.raw, c.env.BUCKET, requiredParam(c, 'slug'), undefined, c.executionCtx));
-registerJsonRoute('/v1/terrain/solar/{slug}/{generation}/index.json', { slug: param, generation: param }, {}, solarTerrainIndexSchema,
-  c => serveSolarIndex(c.req.raw, c.env.BUCKET, requiredParam(c, 'slug'), requiredParam(c, 'generation'), c.executionCtx));
-
-for (const suffix of ['{generation}/relief-v1.bin.gz', '{generation}/{z}/{x}/{y}.bin.gz']) {
-  app.openAPIRegistry.registerPath(createRoute({ method: 'get', path: `/v1/terrain/solar/{slug}/${suffix}`,
-    request: { params: z.object({ slug: param, generation: param, ...(suffix.includes('{z}') ? { z: param, x: param, y: param } : {}) }), query: z.object({}) },
-    responses: { 200: { description: 'Verified gzip file bytes', content: { 'application/gzip': { schema: z.string().openapi({ type: 'string', format: 'binary' }) } } }, ...problemResponses } }));
-}
-app.get('/v1/terrain/solar/:slug/:generation/relief-v1.bin.gz', c => {
-  query(new URL(c.req.url), []);
-  return serveSolarAsset(c.req.raw, c.env.BUCKET, requiredParam(c, 'slug'), requiredParam(c, 'generation'), 'relief', c.executionCtx);
-});
-app.get('/v1/terrain/solar/:slug/:generation/:z/:x/:filename', c => {
-  query(new URL(c.req.url), []);
-  const y = /^(0|[1-9][0-9]*)\.bin\.gz$/.exec(requiredParam(c, 'filename'))?.[1];
-  if (y === undefined) fail(400, 'invalid-parameter', 'Invalid solar tile filename');
-  return serveSolarAsset(c.req.raw, c.env.BUCKET, requiredParam(c, 'slug'), requiredParam(c, 'generation'),
-    { z: requiredParam(c, 'z'), x: requiredParam(c, 'x'), y }, c.executionCtx);
-});
 
 const catalogModelSchema = z.object({
   model: z.string(),

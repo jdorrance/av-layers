@@ -130,7 +130,7 @@ Cache each donor's anomaly at its own ground:
 delta_i = T2m_i - E_i(h_i)
 ```
 
-Use the solver's existing ground-launch convention consistently. Introduce no additional 2 m offset in this change. Reconstruct the target environment and anomaly with the same selected weights:
+Use the solver's existing ground-anchored convention consistently. Introduce no additional 2 m offset in this change. Reconstruct the target environment and anomaly with the same selected weights:
 
 ```text
 E(z)   = sum(W_i * E_i(z))
@@ -236,7 +236,7 @@ After physical and humidity validation, calculate surface vapor pressure from th
 
 - Unavailable input: `lclMetersAgl = null`, reachability false.
 - Valid zero specific humidity: no finite LCL; return null/false and leave the cap inactive. Never evaluate `log(0)`.
-- Positive humidity: compute finite dewpoint and call the existing `lclHeightMetersAgl(parcelLaunchTemperatureC, dewpointC)`.
+- Positive humidity: compute finite dewpoint and call the existing `lclHeightMetersAgl(parcelTemperatureC, dewpointC)`.
 - The existing `125 * spread` helper is an approximation. Reuse its owner rather than duplicate the coefficient or describe it as an exact Bolton LCL solution.
 - Calculate the diagnostic before the non-convective early return. Valid non-convective columns can have a finite estimated LCL, but reachability is false.
 

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, profileLevelSchema, type LayerId } from '@av/contracts';
+import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, profileLevelSchema, sampleResponseV5Schema, type LayerId } from '@av/contracts';
 import { nativeColumnCloudDiagnostics, nativeColumnWindAtHeight } from '@av/soaring';
-import { profileRecordBytes } from '@av/forecast';
+import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { createApp } from '../src/index';
@@ -40,7 +40,61 @@ const assertReleased = (f: Fixture) => {
   expect(inFlightAllocationBytes()).toBe(0);
 };
 
+function splitLastNativePacks(f: Fixture) {
+  const surface = f.manifest.surfaces.find(surface => surface.kind === 'native')!;
+  const split = <T extends { key: string; sha256: string; firstBlock: number; blockCount: number; storedCells: number; bytes: number }>(shards: readonly T[], channels: number, recordBytes: number): T[] => {
+    if (shards.length !== 1) throw new Error('Fixture expects one original shard');
+    const original = shards[0]!, source = f.objects.get(original.key)!;
+    const layout = prepareShardedSamplePackLayout(surface.grid, f.native.mask.coverage.blockIds, channels, undefined, recordBytes);
+    return Array.from({ length: layout.blockCount }, (_, ordinal) => {
+      const block = layout.block(ordinal), bytes = source.slice(block.byteOffset, block.byteOffset + block.byteLength);
+      const key = original.key.replace(/(b|\/)0\.bin$/, (_match, prefix: string) => `${prefix}${ordinal}.bin`);
+      const sha256 = createHash('sha256').update(bytes).digest('hex');
+      f.objects.set(key, bytes); f.shardSha.set(key, sha256);
+      return { ...original, firstBlock: ordinal, blockCount: 1, storedCells: bytes.length / (channels * recordBytes), bytes: bytes.length, key, sha256,
+        ...('blockShard' in original ? { blockShard: ordinal } : {}) };
+    });
+  };
+  const samples = surface.samples;
+  if (samples.format === 'frame-group-block-shards-v1') {
+    const last = samples.shards[samples.shards.length - 1]!, start = samples.shards.findIndex(shard => shard.group === last.group);
+    samples.shards.splice(start, samples.shards.length - start, ...split(samples.shards.slice(start), last.frameCount * surface.layers.length, CELL_BYTES));
+  } else samples.shards = split(samples.shards, samples.channelCount, CELL_BYTES);
+  const profiles = surface.profiles!, last = profiles.groups[profiles.groups.length - 1]!;
+  last.shards = split(last.shards, last.frameCount, profiles.recordBytes);
+  f.objects.set(`builds/${f.manifest.model}/${f.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(f.manifest)));
+  return surface;
+}
+
 describe('native profile API', () => {
+  it.each([false, true])('honors declared scalar/profile partitions with grouped samples=%s', async grouped => {
+    const f = attachNativeProfiles(grouped ? createGroupedV5Fixture({ groups: [[1], [2]], nativeLayers: layers, nativeValue })
+      : createV5Fixture({ nativeLayers: layers, nativeValue }), { groupSize: grouped ? 1 : 2 });
+    splitLastNativePacks(f);
+    const point = nativePoint(20, 8), result = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=all`)));
+    expect(result.cell?.index).toBe(8 * 32 + 20);
+    for (const [index, frame] of result.frames.entries()) {
+      expect(frame.profile.modelTerrainM).toBe(120);
+      expect(frame.profile.levels[0]!.temperatureC).toBe(15 + index);
+      expect(frame.profile.levels[0]!.uWindMps).toBe(22);
+      expect(frame.layers['sfc-temp-c']!.value).toBeCloseTo(20.2);
+    }
+    expect(profileReads(f).some(([key]) => key.endsWith('-b1.bin'))).toBe(true);
+    const scalar = sampleResponseV5Schema.parse(await (await f.sample(point.lat, point.lon, '&frame=h002&layers=sfc-temp-c')).json());
+    expect(scalar.frames[0]!.layers['sfc-temp-c']!.value).toBeCloseTo(20.2);
+    assertReleased(f);
+  });
+
+  it.each(['samples', 'profiles'] as const)('rejects malformed declared %s partitions before numeric reads', async kind => {
+    const f = fixture(), surface = splitLastNativePacks(f);
+    const shards = kind === 'samples' ? surface.samples.shards : surface.profiles!.groups[0]!.shards;
+    shards[1]!.firstBlock = 0;
+    f.objects.set(`builds/${f.manifest.model}/${f.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(f.manifest)));
+    const result = await f.request(path(f));
+    expect(result.status).toBe(503); await result.body?.cancel();
+    expect(ranges(f)).toHaveLength(0); assertReleased(f);
+  });
+
   it.each(['temperature', 'pressure', 'height', 'ground'] as const)('preserves %s gaps and only suppresses dependent point diagnostics', async missing => {
     const f = attachNativeProfiles(createV5Fixture({ nativeLayers: layers, nativeValue }), { levels: 3,
       profile: (_frame, x) => ({ modelTerrainM: missing === 'ground' ? null : 100 + x, surfacePressureHpa: 1000,
@@ -82,7 +136,7 @@ describe('native profile API', () => {
   });
 
   it('reads the nearest native cell with measured pressure and point-derived cloud/top-wind diagnostics', async () => {
-    const f = fixture(), point = nativePoint(5.75, 8.2), body = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}`)));
+    const f = fixture(), point = nativePoint(5.75, 8.2), body = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=all`)));
     expect(body.lat).toBe(point.lat); expect(body.lon).toBe(point.lon);
     expect(body.cell).toEqual({ index: 8 * 32 + 6, ...nativePoint(6, 8), surfaceId: 'native' });
     expect(body.frames).toHaveLength(2);
@@ -106,11 +160,20 @@ describe('native profile API', () => {
     assertReleased(f);
   });
 
-  it('defaults to the complete profile timeline beyond the scalar request value limit', async () => {
-    const f = attachNativeProfiles(createV5Fixture({ nativeLayers: layers, nativeValue, frameHours: Array.from({ length: 24 }, (_, index) => index + 1) }), { groupSize: 2 });
-    const body = await read(await f.request(path(f)));
+  it('defaults extended profiles to the first frame and supports bounded complete-field pages', async () => {
+    const grid = { kind: 'regular-latlon' as const, width: 1, height: 18, lon0: -180, lat0: 17, dx: 360, dy: -1, wrapLongitude: true, earthRadiusM: 6371229 };
+    const f = attachNativeProfiles(createV5Fixture({ grid, nativeLayers: layers, nativeValue, mapFrameCount: 24, frameHours: Array.from({ length: 144 }, (_, index) => index + 1) }), { levels: 21, groupSize: 16 });
+    const first = await read(await f.request(path(f, 'lat=9&lon=-180')));
+    expect(first.frames.map(frame => frame.id)).toEqual(['h001']);
+    expect(first.frames[0]!.profile.levels).toHaveLength(21);
+    expect(Object.keys(first.frames[0]!.layers)).toHaveLength(18);
+    const selection = f.manifest.frames.slice(0, 24).map(frame => frame.id).join(',');
+    const body = await read(await f.request(path(f, `lat=9&lon=-180&frame=${selection}`)));
     expect(body.frames).toHaveLength(24);
     expect(body.frames.length * Object.keys(body.frames[0]!.layers).length).toBeGreaterThan(256);
+    const before = ranges(f).length, all = await f.request(path(f, 'lat=9&lon=-180&frame=all'));
+    expect(all.status).toBe(429); await all.body?.cancel();
+    expect(ranges(f)).toHaveLength(before);
     assertReleased(f);
   });
 
@@ -179,7 +242,7 @@ describe('native profile API', () => {
     profiles.levelCount = MAX_PROFILE_LEVELS; profiles.recordBytes = profileRecordBytes(MAX_PROFILE_LEVELS);
     for (const group of profiles.groups) for (const shard of group.shards) shard.bytes = shard.storedCells * group.frameCount * profiles.recordBytes;
     f.objects.set(`builds/gfs/${f.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(f.manifest)));
-    const response = await f.request(path(f));
+    const response = await f.request(path(f, 'lat=8.8&lon=-115.3125&frame=all'));
     expect(response.status).toBe(429); expect(await response.json()).toMatchObject({ title: 'sample-limit' });
     expect(f.get.mock.calls.some(([key]) => key.startsWith('coverage/'))).toBe(false);
     expect(ranges(f)).toHaveLength(0); assertReleased(f);
@@ -208,7 +271,7 @@ describe('native profile API', () => {
       active++; peak = Math.max(peak, active);
       try { await gate; return await original(key, options); } finally { active--; }
     });
-    const pending = f.request(path(f));
+    const pending = f.request(path(f, 'lat=8.8&lon=-115.3125&frame=all'));
     try { await vi.waitFor(() => expect(active).toBe(4)); } finally { release(); }
     expect((await read(await pending)).frames).toHaveLength(6);
     expect(peak).toBe(4); expect(active).toBe(0); assertReleased(f);

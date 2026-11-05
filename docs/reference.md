@@ -32,7 +32,6 @@ Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
 - `prepare-model`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--model <string>`, `--source-cache-dir <string>`.
 - `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
 - `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
-- `solar`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--sites <string>`, `--site <string>`.
 
 Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
 
@@ -402,7 +401,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -427,7 +425,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -444,7 +441,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -469,7 +465,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -520,7 +515,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -545,7 +539,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -562,7 +555,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -587,7 +579,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -604,7 +595,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -629,7 +619,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -646,7 +635,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -671,7 +659,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -688,7 +675,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -713,7 +699,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -730,7 +715,6 @@ Caveats:
 
 Parameters:
 
-- `boundaryLayerWindAnchorAglM`: `0`.
 - `cloudCapSinkRateMps`: `1`.
 - `dryAirGasConstantJkgK`: `287.05`.
 - `dryAirHeatCapacityJkgK`: `1004`.
@@ -755,7 +739,6 @@ Parameters:
 - `saturationVaporPressureScaleHpa`: `6.112`.
 - `shallowLatentHeatCoefficient`: `0.000245268`.
 - `shallowTemperaturePerFlux`: `0.012`.
-- `sourceWindHeightAglM`: `10`.
 - `waterDryAirMolarMassRatio`: `0.622`.
 
 Caveats:
@@ -1021,6 +1004,7 @@ Complete-build limits:
 
 - `elapsedMs`: `3000000`.
 - `gridCells`: `4000000`.
+- `numericBytes`: `68719476736`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.
 - `tiles`: `4000000`.
@@ -1034,6 +1018,7 @@ Shared limits and storage constants:
 - `MAX_COVERAGE_DESCRIPTOR_BYTES`: `131072`.
 - `MAX_FORECAST_SHARDS`: `256`.
 - `MAX_GRID_CELLS`: `4000000`.
+- `MAX_JSON_CONTAINER_ENTRIES`: `256`.
 - `MAX_MANIFEST_BYTES`: `524288`.
 - `MAX_MANIFEST_JSON_TOKENS`: `16384`.
 - `MAX_METADATA_JSON_TOKENS`: `8192`.
@@ -1049,7 +1034,6 @@ Shared limits and storage constants:
 - `MAX_SAMPLE_POINTS`: `64`.
 - `MAX_SAMPLE_RANGE_BYTES`: `262144`.
 - `MAX_SAMPLE_VALUES`: `256`.
-- `MAX_SOLAR_ASSET_BYTES`: `4194304`.
 - `MAX_SPARSE_COVERAGE_BYTES`: `268435456`.
 - `MAX_TILE_BYTES`: `1048576`.
 - `RETENTION_DAYS`: `7`.
@@ -1082,7 +1066,3 @@ The checked-in [OpenAPI document](reference/openapi.json) is generated from the 
 - `GET /v1/models/{model}/runs/{buildId}/samples`.
 - `GET /v1/palettes/{id}.json`.
 - `GET /v1/palettes/{id}.svg`.
-- `GET /v1/terrain/solar/{slug}/index.json`.
-- `GET /v1/terrain/solar/{slug}/{generation}/index.json`.
-- `GET /v1/terrain/solar/{slug}/{generation}/relief-v1.bin.gz`.
-- `GET /v1/terrain/solar/{slug}/{generation}/{z}/{x}/{y}.bin.gz`.

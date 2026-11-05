@@ -80,16 +80,18 @@ export function renderPointSeries(
   summary.style.cssText = 'font-size:12px;line-height:1.6;margin:4px 0 12px';
   chart.style.cssText = 'display:flex;gap:3px;overflow-x:auto;align-items:stretch;min-height:132px;padding:3px';
   legend.style.cssText = 'font-size:11px;opacity:.75;margin:8px 0';
-  legend.textContent = 'UTC · Lift blue · LCL gold · Terrain grey';
+  legend.className = 'av-point-legend';
   const heading = node('summary', 'Values and source surfaces');
   heading.style.cssText = 'font-size:11px;cursor:pointer;margin:8px 0'; details.append(heading, table);
   details.addEventListener('toggle', () => {
     if (details.open && !table.children.length) renderSampleTable(table, payload, Object.keys(payload.frames[0]?.layers ?? {}), build);
   });
-  const heightValues = payload.frames.flatMap(frame => {
-    const view = pointFrameView(frame, build, options.unitSystem);
-    return [view.terrainM, view.mslM, view.lclM].filter((value): value is number => value !== null);
-  });
+  const views = payload.frames.map(frame => pointFrameView(frame, build, options.unitSystem));
+  const knownFloors = views.filter(view => view.terrainM !== null).length;
+  legend.textContent = knownFloors === 0 ? 'UTC · Lift ceiling marks blue · LCL gold · Terrain unknown'
+    : knownFloors === views.length ? 'UTC · Lift bars blue · LCL gold · Terrain grey'
+    : 'UTC · Lift bars blue; ceiling marks where terrain is unknown · LCL gold · Terrain grey where known';
+  const heightValues = views.flatMap(view => [view.terrainM, view.mslM, view.lclM].filter((value): value is number => value !== null));
   const minimum = Math.min(0, ...heightValues), span = Math.max(1, ...heightValues) - minimum;
   const percent = (meters: number) => Math.min(100, Math.max(0, (meters - minimum) / span * 100));
   const bars = payload.frames.map((frame, index) => {
@@ -98,13 +100,14 @@ export function renderPointSeries(
     button.style.cssText = 'flex:1 0 16px;min-width:16px;padding:2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;cursor:pointer';
     plot.style.cssText = 'display:block;position:relative;height:100px;border-bottom:1px solid #89959e';
     hour.style.cssText = 'display:block;font-size:10px;line-height:20px';
-    const view = pointFrameView(frame, build, options.unitSystem);
+    const view = views[index];
     if (view.terrainM !== null) {
-      const floor = node('span'); floor.style.cssText = `position:absolute;display:block;bottom:0;width:100%;height:${percent(view.terrainM)}%;background:#89959e55`;
+      const floor = node('span'); floor.className = 'av-point-terrain'; floor.style.cssText = `position:absolute;display:block;bottom:0;width:100%;height:${percent(view.terrainM)}%;background:#89959e55`;
       plot.append(floor);
     }
     if (view.mslM !== null) {
       const lift = node('span');
+      lift.className = view.terrainM === null ? 'av-point-ceiling-marker' : 'av-point-lift-bar';
       lift.style.cssText = view.terrainM === null
         ? `position:absolute;display:block;bottom:${percent(view.mslM)}%;width:100%;height:3px;background:#229ec6`
         : `position:absolute;display:block;bottom:${percent(view.terrainM)}%;width:100%;height:${Math.max(0, percent(view.mslM) - percent(view.terrainM))}%;background:#229ec6`;

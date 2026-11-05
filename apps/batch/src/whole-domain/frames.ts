@@ -70,6 +70,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   let nativeWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let fineWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let profileWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
+  let profileFrame: ReturnType<typeof prepareNativeProfiles>['forFrame'] | undefined;
   let prefetch: Promise<{ frame: NormalizedFrame; workMs: number }> | undefined;
   let derivePool: Awaited<ReturnType<typeof createWholeDomainDerivePool>> | undefined;
   let packing: Promise<void> | undefined;
@@ -78,7 +79,6 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   try {
     const nativeLayers = prepared.nativeSurfaceLayers.length, fineLayers = prepared.fineSurfaceLayers.length;
     const nativeBlocks = prepared.native.mask.coverage.blockIds;
-    const profilesEnabled = renderedLayers(product.layers).length !== product.layers.length;
     const capacityInput = { product, plan: prepared.plan, nativeBlocks, nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask,
       maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
       auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
@@ -87,6 +87,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       terrainBytes: prepared.terrain.arrayBytes };
     const admission = admitWholeDomain(capacityInput);
     if (admission.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${admission.violations.join('; ')}`);
+    const profilesEnabled = admission.profileBytes > 0;
     phase = 'load-terrain';
     const terrainData = capacityInput.mapFrames ? await loadWholeDomainTerrain({ ref: prepared.terrain, out: root, grid: prepared.plan.fine,
       coverage: prepared.fine.mask.coverage, coverageDescriptor: prepared.fine.bytes, signal }) : undefined;
@@ -189,7 +190,9 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
           await fineWriter!.writeChannel(completedFrames * fineLayers + index, field);
         }
         if (profileWriter) {
-          const profiles = prepareNativeProfiles(frame, prepared.native.mask.coverage);
+          const profiles = profileFrame?.(frame) ?? prepareNativeProfiles(frame, prepared.native.mask.coverage);
+          // Keep the immutable index factory; bound readers retain their input frame.
+          profileFrame ??= profiles.forFrame;
           await profileWriter.writeRawChannel(completedFrames, profiles.readRecord, { outsideRecord: outsideProfile! });
         }
         packWriteWallMs = Date.now() - tPack;

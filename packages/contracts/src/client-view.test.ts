@@ -255,11 +255,30 @@ it('formats point altitude, wind vectors and regime without inventing missing te
     'thermal-velocity': { value: 1, status: 'valid' as const, support: SUPPORT_CUMULUS, interpolated: false, surfaceId: 'gfs-native' }
   } };
   const view = pointFrameView(frame, build, 'imperial');
-  expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Terrain —');
+  expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Terrain unknown');
   expect(view.summary).toContain('10 m 9.7 kt 0°'); expect(view.summary).toContain('Cu');
+  expect(view.summary).toContain('w* 197 ft/min');
+  expect(pointFrameView(frame, build, 'metric').summary).toContain('w* 1.0 m/s');
   expect(view.summary).not.toContain('Blue');
   expect(formatAltitude(1000, 'imperial')).toBe('3281 ft');
   expect(formatAltitude(null, 'metric')).toBe('—');
+});
+
+it.each([
+  { fine: 0, native: 0, top: 0, expected: 'Cloud regime unknown' },
+  { fine: 0, native: SUPPORT_CLOUD_CAPPED, top: 0, expected: 'capped' },
+  { fine: 0, native: SUPPORT_CUMULUS, top: 0, expected: 'Cu' },
+  { fine: SUPPORT_OVERDEVELOPED, native: 0, top: 0, expected: 'OD' },
+  { fine: 0, native: 0, top: SUPPORT_OVERDEVELOPED, expected: 'OD' }
+])('preserves independent cloud support and unknown clear-sky conditions: $expected', ({ fine, native, top, expected }) => {
+  const build = v5Build(), sample = (value: number, support = 0, surfaceId = 'gfs-native') => ({ value, support, surfaceId, status: 'valid' as const, interpolated: false });
+  const frame = { ...build.manifest.frames[0], layers: {
+    'usable-lift-msl': sample(2000, fine, 'gfs-fine'), 'usable-lift-agl': sample(500, fine, 'gfs-fine'),
+    'thermal-velocity': sample(2, native), 'thermal-top-msl': sample(2500, top),
+    'surface-lcl-msl': sample(3000), 'cloud-cover-total': sample(0)
+  } };
+  const summary = pointFrameView(frame, build, 'metric').summary;
+  expect(summary).toContain(expected); expect(summary).not.toContain('Blue');
 });
 
 it('keeps raster prefetch inside the map prefix while the native point axis continues', () => {

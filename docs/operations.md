@@ -203,18 +203,6 @@ Catalog selection binds terrain preparation and cache validation; workers use
 the frozen plan. Changes to source data, grid, coverage or preparation method
 select a new terrain cache. Missing or corrupt assets fail the terrain job.
 
-Publish a launch's sunlight tiles from the same catalog through
-[Launch sunlight terrain](../.github/workflows/solar-terrain.yml):
-
-```sh
-gh workflow run solar-terrain.yml --ref main -f environment=production -f site=am-hatis-500
-```
-
-The workflow reads Windgrams' site catalog. Immutable generation indexes pin
-every gzip asset; the launch index changes through CAS after full verification.
-An existing generation reuses its exact verified bytes. The environment
-`TERRAIN_CATALOG_REF` supplies the default reference.
-
 ## Check a failure
 
 ```sh

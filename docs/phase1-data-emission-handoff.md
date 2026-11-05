@@ -83,8 +83,9 @@ native `precip-rate`. Add these 17 sample-only native channels (18 native channe
 - [x] Acquire NOAA humidity, winds, pressure, gust, PBL, CAPE, clouds and
   profile omega where supported; acquire DWD humidity, winds, pressure, gust, PBL, CAPE, clouds and
   precipitation. Unsupported fields remain unavailable with recorded capability.
-- [x] Rotate grid-relative vectors once at normalization; retain Earth-relative
-  u/v through interpolation. Inspect the GRIB orientation flag before rotation.
+- [x] Rotate projected grid-relative vectors at normalization; retain Earth-relative
+  u/v through interpolation. ICON-EU template 3.0 shares the Earth basis;
+  component flags and scan direction preserve east/north signs.
 - [x] Recover accumulated precipitation and averaged flux windows using the
   existing interval kernel. Preserve native cloud averaging and gust maximum
   windows in descriptors and provenance.
@@ -121,8 +122,8 @@ same-level pressure/temperature; GFS and ICON-EU omega remain unavailable.
   these values are required to recover lift for lower sink rates. Represent
   physical zero convection separately from missing inputs and map no-lift status.
 - [x] Keep native model terrain in the profile header. Derive altitude views
-  from that terrain and the same native column's scalars. Fine DEM terrain and
-  launch elevation retain their separate coordinate references.
+  from that terrain and the same native column's scalars. Fine DEM terrain
+  retains its separate coordinate reference.
 - [x] Expose one pure `deriveSoaringViews` with explicit optional basis inputs:
   1.0/1.143 m/s usable tops, dry hcrit, Cu/OD potentials, wind speeds/directions,
   vector shear and buoyancy/shear ratio. Return missing dependent views when
@@ -141,12 +142,13 @@ same-level pressure/temperature; GFS and ICON-EU omega remain unavailable.
 - [x] Admit profile and scalar storage, acquisition, decoding and all-frame
   reads before fetching weather. Verify generated manifests and provenance fit
   their byte/token/container bounds; shard counts can exceed JSON container caps.
+  Enforce aggregate numeric bytes before acquisition and after assembly.
 - [x] Allow `/sample` to read declared sample-only layers without requiring a
   PMTiles artifact. Keep unknown frame/layer rejection explicit.
 - [x] Add `/samples` with at most 64 coordinate pairs, stable point identity and
   canonical queries. Plan/coalesce all ranges before reading. Enforce combined
   point × frame × layer values, range bytes and response allocations; clients
-  split larger launch/route requests while pinning one build.
+  split larger point/route requests while pinning one build.
 - [x] Add `/profile` with an explicit nearest covered native-cell selection,
   its coordinates and terrain. Read profile and scalar records at that same
   cell, across selected frame groups, using the existing four-read request bound.
@@ -174,8 +176,8 @@ thermal tops and shared profile integrals without another thermal solve.
 - [x] API/workerd tests measure worst-case single profile and multi-point reads;
   combined ranges remain within 256 KiB, with at most four concurrent R2 reads.
   Client batching handles scattered points and all-frame selections.
-- [ ] `pnpm docs:generate`, `pnpm test`, `pnpm verify` and `pnpm build` pass.
-- [ ] Independent correctness, performance and simplification reviews have no
+- [x] `pnpm docs:generate`, `pnpm test`, `pnpm verify` and `pnpm build` pass.
+- [x] Independent correctness, performance and simplification reviews have no
   unresolved actionable findings. Record measurements and remaining limitations.
 - [ ] Push this branch, open and review the PR, resolve CI/review findings and
   merge. Verify the deployed revision, one fresh publication per existing model,

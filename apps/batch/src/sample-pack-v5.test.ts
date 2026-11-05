@@ -7,7 +7,7 @@ import { expect, it, vi } from 'vitest';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, setBit, sparseCoverageFromDense, sparseCoverageLookup, type RegularLatLonGrid } from '@av/contracts';
 import { packedCellsFromRange, packedRecordsFromRange, profileRecordBytes, readProfileRecord, validateProfileRecord, writeProfileRecord, planSample, planShardedPackedSample, prepareSamplePackLayout, prepareShardedSamplePackLayout, type GridField } from '@av/forecast';
 import { createSamplePackBuilder } from './sample-pack.js';
-import { createShardedSamplePackWriter, mergeShardedSamplePacks, sampleShardKey } from './sample-pack-v5.js';
+import { createShardedSamplePackWriter, mergeShardedSamplePacks, samplePackWriterBufferBytes, sampleShardKey } from './sample-pack-v5.js';
 import { localPath } from './validate.js';
 
 const grid = (width: number, height: number, wrapLongitude: boolean): RegularLatLonGrid => ({
@@ -15,6 +15,29 @@ const grid = (width: number, height: number, wrapLongitude: boolean): RegularLat
 });
 
 const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+it('admits actual scalar/profile scratch allocations and reuses the chunk across writes and finish', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-v5-buffers-'));
+  try {
+    for (const recordBytes of [CELL_BYTES, profileRecordBytes(24)]) {
+      const g = grid(160, 32, true), coverage = coverageFor(g, Array.from({ length: 20 }, (_, index) => index));
+      const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 2, undefined, recordBytes);
+      const allocations = vi.spyOn(Buffer, 'allocUnsafe');
+      try {
+        const writer = createShardedSamplePackWriter(layout, coverage, target(join(root, String(recordBytes))));
+        const sizes = allocations.mock.calls.map(([bytes]) => bytes);
+        expect(sizes).toHaveLength(2);
+        expect(sizes.reduce((sum, bytes) => sum + bytes, 0)).toBe(samplePackWriterBufferBytes(layout));
+        const chunkBytes = Math.max(...sizes), record = new Uint8Array(recordBytes), outsideRecord = record.slice();
+        outsideRecord[4] = STATUS_OUTSIDE;
+        await writer.writeRawChannel(1, () => record, { outsideRecord });
+        await writer.writeRawChannel(0, () => record, { outsideRecord });
+        await writer.finish();
+        expect(allocations.mock.calls.filter(([bytes]) => bytes === chunkBytes)).toHaveLength(1);
+      } finally { allocations.mockRestore(); }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function coverageFor(grid: RegularLatLonGrid, blocks: readonly number[]) {
   const width = grid.width, height = grid.height, columns = Math.ceil(width / SAMPLE_BLOCK_SIZE);

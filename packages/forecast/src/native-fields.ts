@@ -1,6 +1,6 @@
 /** Map native arrays to sparse point channels and fixed-width profile records. */
 import {
-  MAX_GRID_CELLS, sparseCoverageLookup, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID,
+  MAX_GRID_CELLS, sparseCoverageLookup, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, isNativeThermalLayer,
   SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED,
   type CoverageMask, type LayerId, type SparseCoverage
 } from '@av/contracts';
@@ -15,13 +15,13 @@ const number = (n: number): number | null => Number.isFinite(n) ? n : null;
 const at = (field: AuxField | undefined, i: number): number | null => field && !field.missing[i] ? number(field.values[i]!) : null;
 const read = (values: Float32Array, missing: Uint8Array, i: number): number => missing[i] ? NaN : values[i]!;
 
-type NativeLevel = NativeDiagnosticLevel & { pressureHpa: number; uWindMps: number | null; vWindMps: number | null; omegaPaS: number | null };
+type NativeLevel = NativeDiagnosticLevel & { pressureHpa: number; omegaPaS: number | null };
 
 function columnReader(frame: NormalizedFrame, includeLevels = true) {
   const maxLevels = frame.hgtM.length;
   const levels: NativeLevel[] = Array.from({ length: maxLevels }, () => ({
     heightM: NaN, temperatureC: NaN, pressureHpa: NaN, dewPointC: null,
-    uMps: null, vMps: null, uWindMps: null, vWindMps: null, omegaPaS: null
+    uMps: null, vMps: null, omegaPaS: null
   }));
   const input: NativeDiagnosticInput = { terrainM: NaN, surfaceTemperatureC: NaN, levels };
   const readColumn = (i: number): number => {
@@ -45,7 +45,7 @@ function columnReader(frame: NormalizedFrame, includeLevels = true) {
       const u = at(frame.auxLevels?.uWindMps?.[j], i), v = at(frame.auxLevels?.vWindMps?.[j], i);
       const level = levels[count++]!;
       level.heightM = height; level.temperatureC = t; level.pressureHpa = p; level.dewPointC = number(td);
-      level.uMps = u; level.vMps = v; level.uWindMps = u; level.vWindMps = v; level.omegaPaS = at(frame.auxLevels?.omegaPaS?.[j], i);
+      level.uMps = u; level.vMps = v; level.omegaPaS = at(frame.auxLevels?.omegaPaS?.[j], i);
     }
     return count;
   };
@@ -83,16 +83,23 @@ export function prepareNativeFields(frame: NormalizedFrame, mask: CoverageMask, 
       if (layer === 'mslp-hpa' && value !== null) value /= 100;
       const field = fields[layer]!;
       field.values[slot] = value ?? NaN;
-      field.flags[slot] = value === null || !Number.isFinite(value) ? STATUS_UNAVAILABLE : STATUS_VALID | (layer.startsWith('thermal-') ? support : 0);
+      field.flags[slot] = value === null || !Number.isFinite(value) ? STATUS_UNAVAILABLE : STATUS_VALID | (isNativeThermalLayer(layer) ? support : 0);
     }
     return support;
   }
   return { fields, write };
 }
 
-/** Stream complete native columns through one borrowed record and a grid-to-active index. */
-export function prepareNativeProfiles(frame: NormalizedFrame, coverage: SparseCoverage) {
-  const cells = frame.grid.width * frame.grid.height;
+interface NativeProfileReader {
+  readonly byteLength: number;
+  readRecord(index: number): Uint8Array;
+  /** Reuse the checked active-index map; each reader owns its borrowed record. */
+  forFrame(frame: NormalizedFrame): NativeProfileReader;
+}
+
+/** Stream complete native columns through one borrowed record and a reusable grid-to-active index. */
+export function prepareNativeProfiles(frame: NormalizedFrame, coverage: SparseCoverage): NativeProfileReader {
+  const { width, height, wrapLongitude } = frame.grid, activeCount = frame.activeIndices.length, cells = width * height;
   if (!Number.isSafeInteger(cells) || cells < 1 || cells > MAX_GRID_CELLS || coverage.width !== frame.grid.width
     || coverage.height !== frame.grid.height || coverage.wrapLongitude !== frame.grid.wrapLongitude) throw new RangeError('Invalid native profile grid');
   const ordinals = new Int32Array(cells).fill(-1);
@@ -101,28 +108,35 @@ export function prepareNativeProfiles(frame: NormalizedFrame, coverage: SparseCo
     if (index >= cells || (i > 0 && index <= frame.activeIndices[i - 1]!)) throw new RangeError('Invalid native profile active indices');
     ordinals[index] = i;
   }
-  const record = new Uint8Array(profileRecordBytes(frame.hgtM.length)), readColumn = columnReader(frame);
-  const scratch = Array.from({ length: frame.hgtM.length }, (): { -readonly [Key in keyof ProfileLevelInput]: ProfileLevelInput[Key] } => ({
-    pressureHpa: null, heightM: null, temperatureC: null, dewPointC: null, uWindMps: null, vWindMps: null, omegaPaS: null
-  }));
-  const profile = { modelTerrainM: null as number | null, surfacePressureHpa: null as number | null,
-    status: 'unavailable' as 'valid' | 'unavailable', levels: [] as ProfileLevelInput[] };
-  return {
-    byteLength: ordinals.byteLength + record.byteLength,
-    readRecord(index: number): Uint8Array {
-      if (!Number.isSafeInteger(index) || index < 0 || index >= cells || ordinals[index]! < 0) throw new RangeError('Native profile cell was not acquired');
-      const count = readColumn.read(ordinals[index]!), input = readColumn.input;
-      profile.modelTerrainM = number(input.terrainM); profile.surfacePressureHpa = input.surfacePressureHpa ?? null;
-      profile.status = profile.modelTerrainM === null ? 'unavailable' : 'valid';
-      profile.levels.length = count;
-      for (let j = 0; j < profile.levels.length; j++) {
-        const level = input.levels[j] as NativeLevel, target = scratch[j]!;
-        target.pressureHpa = number(level.pressureHpa); target.heightM = number(level.heightM); target.temperatureC = number(level.temperatureC);
-        target.dewPointC = level.dewPointC ?? null; target.uWindMps = level.uWindMps; target.vWindMps = level.vWindMps; target.omegaPaS = level.omegaPaS;
-        profile.levels[j] = target;
-      }
-      writeProfileRecord(record, profile);
-      return record;
+  const forFrame = (next: NormalizedFrame): NativeProfileReader => {
+    if (next.grid.width !== width || next.grid.height !== height || next.grid.wrapLongitude !== wrapLongitude
+      || next.activeIndices.length !== activeCount || next.activeIndices.some((index, i) => index >= cells || ordinals[index] !== i)) {
+      throw new RangeError('Native profile frame differs from the prepared index');
     }
+    const record = new Uint8Array(profileRecordBytes(next.hgtM.length)), readColumn = columnReader(next);
+    const scratch = Array.from({ length: next.hgtM.length }, (): { -readonly [Key in keyof ProfileLevelInput]: ProfileLevelInput[Key] } => ({
+      pressureHpa: null, heightM: null, temperatureC: null, dewPointC: null, uWindMps: null, vWindMps: null, omegaPaS: null
+    }));
+    const profile = { modelTerrainM: null as number | null, surfacePressureHpa: null as number | null,
+      status: 'unavailable' as 'valid' | 'unavailable', levels: [] as ProfileLevelInput[] };
+    return {
+      byteLength: ordinals.byteLength + record.byteLength, forFrame,
+      readRecord(index: number): Uint8Array {
+        if (!Number.isSafeInteger(index) || index < 0 || index >= cells || ordinals[index]! < 0) throw new RangeError('Native profile cell was not acquired');
+        const count = readColumn.read(ordinals[index]!), input = readColumn.input;
+        profile.modelTerrainM = number(input.terrainM); profile.surfacePressureHpa = input.surfacePressureHpa ?? null;
+        profile.status = profile.modelTerrainM === null ? 'unavailable' : 'valid';
+        profile.levels.length = count;
+        for (let j = 0; j < profile.levels.length; j++) {
+          const level = input.levels[j] as NativeLevel, target = scratch[j]!;
+          target.pressureHpa = number(level.pressureHpa); target.heightM = number(level.heightM); target.temperatureC = number(level.temperatureC);
+          target.dewPointC = level.dewPointC ?? null; target.uWindMps = level.uMps ?? null; target.vWindMps = level.vMps ?? null; target.omegaPaS = level.omegaPaS;
+          profile.levels[j] = target;
+        }
+        writeProfileRecord(record, profile);
+        return record;
+      }
+    };
   };
+  return forFrame(frame);
 }

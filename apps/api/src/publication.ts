@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, renderedLayers, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -203,7 +203,7 @@ export function servedSource(m: PublishedManifest, origin: string): Manifest['so
 
 export function artifact(m: PublishedManifest, layer: LayerId, frame: string) {
   validateId(frame);
-  if (!m.layers.includes(layer) || !renderedFrames(m).some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
+  if (!renderedLayers(m.layers, m.descriptors.layers).includes(layer) || !renderedFrames(m).some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
   const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
   if (!item) fail(503, 'publication-incomplete', 'Artifact missing from manifest');
   const prefix = `builds/${m.model}/${m.buildId}`;

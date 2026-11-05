@@ -12,7 +12,9 @@ import { describeSparseCoverage } from './coverage.js';
 import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { admitWholeDomain } from './whole-domain/capacity.js';
+import { admitWholeDomain, wholeDomainSampleLayouts } from './whole-domain/capacity.js';
+import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
+import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, checkPerformance } from './capacity.js';
 import { fixtureProvider } from '../parallel-fixtures.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
@@ -54,7 +56,7 @@ vi.mock('./render.js', async importOriginal => {
     return { ...renderer, renderArchives };
   } };
 });
-vi.mock('./raster-pool.js', async importOriginal => ({ ...await importOriginal<typeof import('./raster-pool.js')>(), rasterWorkerCount: () => 0 }));
+vi.mock('./raster-pool.js', async importOriginal => ({ ...await importOriginal<typeof import('./raster-pool.js')>(), rasterWorkerCount: vi.fn(() => 0) }));
 vi.mock('./terrain/source.js', async importOriginal => ({ ...await importOriginal<typeof import('./terrain/source.js')>(), verifyTerrainCatalogInventory: async () => undefined }));
 vi.mock('./terrain/reader.js', async importOriginal => ({
   ...await importOriginal<typeof import('./terrain/reader.js')>(),
@@ -925,9 +927,21 @@ describe('whole-domain v5 production', () => {
       frames: product.frameHours.length, nativeLayers: 1, fineLayers: 2, columns, terrainBytes: active.length * 5, maxLevels: 3, retainedGeometryFields: 0 };
     const admitted = admitWholeDomain(input);
     expect(admitted.violations).toEqual([]);
+    const layouts = wholeDomainSampleLayouts(input);
+    expect(admitted.workingSet.packBuffers).toBe(samplePackWriterBufferBytes(layouts.native!) + samplePackWriterBufferBytes(layouts.fine!));
+    vi.mocked(rasterWorkerCount).mockReturnValueOnce(3);
+    const threaded = admitWholeDomain(input), nativeCells = plan.native.width * plan.native.height, activeBytes = active.byteLength;
+    expect(threaded.deriveWorkers).toBeGreaterThan(0);
+    const copyBytes = activeBytes + nativeCells * 10;
+    expect(threaded.workingSet.deriveSharedInputs).toBe(input.terrainBytes + fine.coverage.blockIds.byteLength
+      + fine.coverage.offsets.byteLength + fine.coverage.output.byteLength + fine.coverage.halo.byteLength + activeBytes + copyBytes);
+    expect(threaded.deriveFrameCopyBytes).toBe(copyBytes + BUILD_BUDGETS.peakRssBytes - threaded.estimatedPeakBytes);
     expect(admitted.tiles).toBe(product.frameHours.length * 3);
     expect(admitted.estimatedPeakBytes).toBe(Object.values(admitted.workingSet).reduce((sum, value) => sum + value, 0));
-    expect(admitted.fineStoredCells).toBeGreaterThan(0);
+    expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(180);
+    expect(admitted.fineStoredCells).toBe((17 + 17 + 5) * 5);
+    expect(admitted.fineSampleBytes).toBe(3900);
+    expect(admitted.numericBytes).toBe(admitted.nativeSampleBytes + 3900);
     expect(admitted.workingSet.nativeFields).toBe(cells * product.layers.length * 5);
     expect(admitted.workingSet.diagnostics).toBe(cells * 9);
     expect(admitted.prefetchFrameCount).toBe(1);

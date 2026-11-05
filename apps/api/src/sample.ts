@@ -203,7 +203,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
           const jobs = jobsByGroup[index]!;
           if (!jobs.length) continue;
           let packed: ReturnType<typeof planShardedPackedSample> | null = null;
-          try { if (plan) packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, jobs.map(job => job.channel)); }
+          try { if (plan) packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, jobs.map(job => job.channel), group.shards); }
           catch { fail(503, 'publication-invalid', 'Invalid sample layout'); }
           const shard = packed ? group.shards[packed.shard] : undefined;
           if (packed) {

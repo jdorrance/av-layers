@@ -10,4 +10,3 @@ export * from './sparse-coverage.js';
 export * from './publication.js';
 export * from './json.js';
 export * from './point-products.js';
-export * from './solar-terrain.js';

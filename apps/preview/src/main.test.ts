@@ -1,7 +1,7 @@
-import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
+import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createProductDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
+import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { type RasterTileProtocol } from '@av/contracts/client';
 
@@ -136,6 +136,7 @@ function v5Manifest() {
   const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
   if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
   const prefix = `builds/${base.model}/${base.buildId}`;
+  const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
   const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
   const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
   const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
@@ -156,7 +157,8 @@ function v5Manifest() {
     };
   };
   return manifestV5Schema.parse({
-    ...rest, version: 5,
+    ...rest, version: 5, descriptors,
+    method: { ...rest.method, id: [...new Set(rest.layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
     surfaces: [
       surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
       surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
@@ -468,7 +470,7 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
       ...frame,
       layers: Object.fromEntries(published.layers.map(layer => {
         const surface = published.surfaces.find(item => item.layers.includes(layer))!;
-        return [layer, { value: layer === 'precip-rate' ? 1 : 500, status: 'valid', support: 0, interpolated: false, surfaceId: surface.id }];
+        return [layer, { value: layer === 'precip-rate' ? 1 : layer === 'usable-lift-msl' ? 2000 : 500, status: 'valid', support: 0, interpolated: false, surfaceId: surface.id }];
       }))
     }))
   })));
@@ -477,7 +479,11 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   expect(ui('point-status').textContent).toContain('coverage gfs-native, gfs-fine');
   const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
   expect(chart.children).toHaveLength(published.frames.length);
-  expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('MSL 500 m');
+  expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('MSL 2000 m');
+  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Lift bars blue');
+  const plot = chart.children[0].children[0];
+  expect(plot.children.find(child => child.className === 'av-point-terrain')?.style.cssText).toContain('height:75%');
+  expect(plot.children.find(child => child.className === 'av-point-lift-bar')?.style.cssText).toContain('bottom:75%;width:100%;height:25%');
 });
 
 it('uses Google terrain, remembers the view in the query string, and restores it from the back button', async () => {
@@ -520,7 +526,10 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   await vi.advanceTimersByTimeAsync(16);
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[0].id}/`);
   expect(readout.textContent).toContain('MSL 1000 m');
-  expect(readout.textContent).toContain('Terrain —');
+  expect(readout.textContent).toContain('Terrain unknown');
+  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Lift ceiling marks blue');
+  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Terrain unknown');
+  expect(chart.children[0].children[0].children.map(child => child.className)).toEqual(['av-point-ceiling-marker']);
   ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
   expect(readout.textContent).toContain('3281 ft');
   chart.children[0].dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));

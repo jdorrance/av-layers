@@ -2,4 +2,3 @@
 export { DEFAULT_HORIZON_DEG } from './parameters.js';
 export * from './position.js';
 export * from './grid.js';
-export * from './irradiance.js';

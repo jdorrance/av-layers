@@ -3,6 +3,15 @@ import { dataIdentity, encodeJson, parseJson, terrainAssetSchema, terrainCatalog
 import { terrainCatalogFixture } from './test-fixtures.js';
 
 describe('terrain physical and storage identity', () => {
+  it('admits only the declared Copernicus source, release, surface and vertical datum', () => {
+    const catalog = terrainCatalogFixture();
+    for (const change of [{ id: 'another-dem' }, { release: '2022' }, { surface: 'DTM' }, { verticalDatum: 'WGS84' }]) {
+      const result = terrainCatalogSchema.safeParse({ ...catalog, source: { ...catalog.source, ...change } });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues.some(issue => issue.path[0] === 'source')).toBe(true);
+    }
+  });
+
   it('retains data identity across lossless storage changes, but includes physical placement and source bytes', () => {
     const initial = terrainCatalogFixture(), repacked = structuredClone(initial);
     repacked.tiles[0].asset = { key: 'terrain/assets/new.tif', bytes: 200, sha256: 'd'.repeat(64) };

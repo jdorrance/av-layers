@@ -18,11 +18,11 @@ export function readPointCoordinates(url: URL) {
 }
 
 /** Resolve unique published selections in canonical order; the caller admits its output work. */
-export function selectSampleFields(m: PublishedManifest, url: URL, defaults: { frames: 'first' | 'all'; layers?: readonly LayerId[] } = { frames: 'first' }) {
+export function selectSampleFields(m: PublishedManifest, url: URL, defaultLayers: readonly LayerId[] = m.layers) {
   const requested = url.searchParams.get('frame');
-  const frameIds = requested === 'all' || (requested === null && defaults.frames === 'all') ? m.frames.map(frame => frame.id)
+  const frameIds = requested === 'all' ? m.frames.map(frame => frame.id)
     : requested === null ? [m.frames[0]!.id] : requested.split(',');
-  const layers = url.searchParams.get('layers')?.split(',') ?? [...(defaults.layers ?? m.layers)];
+  const layers = url.searchParams.get('layers')?.split(',') ?? [...defaultLayers];
   if (!frameIds.length || !layers.length || new Set(frameIds).size !== frameIds.length || new Set(layers).size !== layers.length) fail(400, 'invalid-query', 'Select distinct frames and layers');
   const selectedLayers = layers.map(layer => {
     if (!isLayerId(layer) || !m.layers.includes(layer)) fail(404, 'unknown-layer', 'Unknown layer');

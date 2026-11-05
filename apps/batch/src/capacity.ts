@@ -10,6 +10,7 @@ export const BUILD_BUDGETS = {
   gridCells: MAX_GRID_CELLS,
   tiles: 4_000_000,
   samplePackBytes: 256 * 1024 * 1024,
+  numericBytes: 64 * 1024 ** 3,
   elapsedMs: 50 * 60_000,
   peakRssBytes: 2 * 1024 ** 3
 } as const;
@@ -17,6 +18,17 @@ export const BUILD_BUDGETS = {
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
 export const MAX_V5_SHARD_BYTES = 64 * 1024 * 1024;
 export type PreparedBuild = ReturnType<typeof prepareBuild<LoadedRefinement>> & { terrain?: PreparedTerrain };
+
+interface FrameResources { maxLevels: number; auxiliarySurfaceFields?: number; auxiliaryLevelFields?: number }
+export function normalizedFrameBytes(activeCells: number, verticalCoordinate: ProductDefinition['capabilities']['verticalCoordinate'], resources: FrameResources): number {
+  const { maxLevels, auxiliarySurfaceFields = 0, auxiliaryLevelFields = 0 } = resources;
+  if (!Number.isSafeInteger(activeCells) || activeCells < 0 || !Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256
+      || ![auxiliarySurfaceFields, auxiliaryLevelFields].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 32)) throw new RangeError('Invalid normalized frame dimensions');
+  const fieldsPerLevel = (verticalCoordinate === 'model-levels' ? 3 : 2) + auxiliaryLevelFields;
+  const bytes = activeCells * (7 + auxiliarySurfaceFields + fieldsPerLevel * maxLevels) * CELL_BYTES;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError('Unsafe normalized frame bytes');
+  return bytes;
+}
 
 export interface CapacityScenario {
   frames?: number;
@@ -65,7 +77,7 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
 }
 
 /** Prepare reusable geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: { maxLevels: number; retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
+export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: FrameResources & { retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
   mask = coverageAtZoom(mask, product.maxNativeZoom);
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
@@ -98,11 +110,10 @@ export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedR
   if (!Number.isSafeInteger(terrainBytes) || terrainBytes < 0 || terrainBytes > MAX_PREPARED_TERRAIN_BYTES) throw new Error('Invalid prepared terrain byte budget');
   const cells = mask.grid.width * mask.grid.height, activeCells = indices.active.length;
   const rasterWorkers = rasterWorkerCount(undefined, product.execution.workers);
-  const fieldsPerLevel = product.capabilities.verticalCoordinate === 'model-levels' ? 3 : 2;
   const workingSet = {
     samplePack: capacity.samplePackBytes,
     derivedFields: (cells * product.layers.length + refinementSize.gridCells * TERRAIN_COLUMN_METHOD.outputs.length) * CELL_BYTES,
-    normalizedFrame: activeCells * (7 + fieldsPerLevel * resources.maxLevels) * CELL_BYTES,
+    normalizedFrame: normalizedFrameBytes(activeCells, product.capabilities.verticalCoordinate, resources),
     diagnostics: refinements.length ? cells * 9 : 0,
     retainedGeometry: activeCells * retainedGeometryFields * CELL_BYTES,
     // Validation can hold encoded bytes and decoded arrays together.
@@ -166,7 +177,7 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
     if (!Number.isSafeInteger(tiles)) failures.push('unsafe tile count');
   }
   if (manifest.version === 5) {
-    let samplePackBytes = 0, emittedSampleBytes = 0, gridCells = 0;
+    let samplePackBytes = 0, emittedSampleBytes = 0, profileBytes = 0, gridCells = 0;
     for (const surface of manifest.surfaces) {
       if (surface.kind === 'native') gridCells += surface.grid.width * surface.grid.height;
       const shardBytes = surface.samples.storedCells * surface.samples.channelCount * CELL_BYTES;
@@ -179,16 +190,24 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
         emittedSampleBytes += shard.bytes;
         if (shard.bytes > MAX_V5_SHARD_BYTES) failures.push(`samplePackBytes: ${shard.bytes} exceeds ${MAX_V5_SHARD_BYTES}`);
       }
+      for (const group of surface.profiles?.groups ?? []) for (const shard of group.shards) {
+        const bytes = shard.storedCells * group.frameCount * surface.profiles!.recordBytes;
+        if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(shard.bytes) || bytes <= 0 || bytes !== shard.bytes) { failures.push('invalid v5 profile shard size'); continue; }
+        profileBytes += bytes;
+        if (bytes > MAX_V5_SHARD_BYTES) failures.push(`profile shard bytes: ${bytes} exceeds ${MAX_V5_SHARD_BYTES}`);
+      }
     }
-    const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes, gridCells };
-    for (const key of ['gridCells', 'tiles', 'elapsedMs', 'peakRssBytes'] as const) {
+    const numericBytes = emittedSampleBytes + profileBytes;
+    if (!Number.isSafeInteger(numericBytes)) failures.push('unsafe v5 numeric bytes');
+    const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes, profileBytes, numericBytes, gridCells };
+    for (const key of ['gridCells', 'tiles', 'elapsedMs', 'peakRssBytes', 'numericBytes'] as const) {
       if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);
     }
     return { version: 1, buildId: manifest.buildId, cycle: manifest.cycle, observed, budgets: { ...BUILD_BUDGETS, samplePackBytes: MAX_V5_SHARD_BYTES }, passed: failures.length === 0, failures };
   }
   const grids = forecastGrids(manifest);
   const samplePackBytes = grids.reduce((sum, grid) => sum + grid.samples.bytes, 0);
-  const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes: samplePackBytes,
+  const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes: samplePackBytes, profileBytes: 0, numericBytes: samplePackBytes,
     gridCells: grids.reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) };
   for (const key of Object.keys(BUILD_BUDGETS) as (keyof typeof BUILD_BUDGETS)[]) {
     if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);

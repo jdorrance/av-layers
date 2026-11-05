@@ -49,6 +49,7 @@ function parcelDepth(input: NativeDiagnosticInput, count: number): { depthM: num
     if (l.heightM > terrainM + P.minimumLevelAglM) above++;
   }
   if (!finite(terrainM) || !finite(t) || t <= -C.kelvinOffset || above < P.minimumThermalLevels) return result(null, 'unavailable');
+  if (input.daylight === false) return result(0, 'non-convective');
   let previous: NativeDiagnosticLevel | undefined;
   for (let i = 0; i < count; i++) {
     const level = levels[i], height = level.heightM - terrainM;
@@ -71,9 +72,11 @@ function parcelDepth(input: NativeDiagnosticInput, count: number): { depthM: num
 
 function thermalVelocity(input: NativeDiagnosticInput, depth: number | null, pressure: number | null): number | null {
   const { surfaceTemperatureC: t, surfaceDewPointC: td, sensibleHeatFluxWm2: sh, latentHeatFluxWm2: lh } = input;
-  if (!finite(depth) || depth < 0 || !finite(pressure) || pressure <= 0 || !finite(t) || t <= -C.kelvinOffset || !finite(sh) || !finite(lh) || !finite(td)) return null;
+  if (!finite(depth) || depth < 0 || !finite(pressure) || pressure <= 0 || !finite(t) || t <= -C.kelvinOffset || !finite(td)) return null;
   const r = mixingRatioFromDewPointKgKg(Math.min(t, td), pressure);
   if (!finite(r)) return null;
+  if (input.daylight === false) return 0;
+  if (!finite(sh) || !finite(lh)) return null;
   const tk = t + C.kelvinOffset, q = r / (1 + r), delta = (1 - C.waterDryAirMolarMassRatio) / C.waterDryAirMolarMassRatio;
   const tv = tk * (1 + r / C.waterDryAirMolarMassRatio) / (1 + r);
   const density = pressure * C.pascalsPerHectopascal / (C.dryAirGasConstantJkgK * tv);
@@ -144,15 +147,14 @@ function layerWind(input: NativeDiagnosticInput, count: number, top: number | nu
 /** Missing levels invalidate dependent integrals; unknown depth remains distinct from zero. */
 export function deriveNativeColumnDiagnostics(input: NativeDiagnosticInput, levelCount = input.levels.length) {
   checkLevelCount(input, levelCount);
-  const night = input.daylight === false && finite(input.terrainM);
-  const depth = night ? { depthM: 0, branch: 'non-convective' as const } : parcelDepth(input, levelCount);
+  const depth = parcelDepth(input, levelCount);
   const { terrainM } = input;
   const pressure = surfacePressure(input, levelCount);
   const thermalTopM = depth.depthM !== null ? terrainM + depth.depthM : null;
   const top = depth.depthM !== null && depth.depthM > 0 ? thermalTopM
     : finite(input.pblHeightM) && input.pblHeightM >= 0 ? terrainM + input.pblHeightM : depth.depthM === 0 ? terrainM : null;
   const cloud = cloudDiagnostics(input, levelCount, top, pressure);
-  const thermalVelocityMps = night ? 0 : thermalVelocity(input, depth.depthM, pressure);
+  const thermalVelocityMps = thermalVelocity(input, depth.depthM, pressure);
   const thermalTopRhPercent = topHumidity(input, levelCount, thermalTopM);
   const regime = deriveCloudRegime({ terrainM, thermalTopM, thermalVelocityMps, thermalTopRhPercent, ...cloud });
   return {

@@ -1,7 +1,7 @@
 import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, paletteBinLabel, renderedLayers, renderedFrames, type LayerId, type Manifest } from './index.ts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { compilePaletteColor, samplePaletteValueInto } from './palette-color.ts';
-import { deriveSoaringViews } from '@av/soaring';
+import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
 
 export type UnitSystem = 'metric' | 'imperial';
 
@@ -37,17 +37,19 @@ export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: Un
   const terrainM = deriveTerrainM(frame, build), mslM = read('usable-lift-msl'), aglM = read('usable-lift-agl'), lclM = read('surface-lcl-msl');
   const wind = deriveSoaringViews({ wind10mU: read('wind-10m-u'), wind10mV: read('wind-10m-v'), blMeanWindU: read('bl-mean-wind-u'), blMeanWindV: read('bl-mean-wind-v') });
   const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(units === 'imperial' ? speed * 3600 / 1852 : speed).toFixed(1)} ${units === 'imperial' ? 'kt' : 'm/s'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
-  const liftText = (layer: LayerId, meters: number | null) => frame.layers[layer]?.status === 'no-usable-lift' ? 'no lift' : formatAltitude(meters, units);
-  const thermal = read('thermal-velocity'), cloud = read('cloud-cover-total');
-  const fine = frame.layers['usable-lift-agl'] ?? frame.layers['usable-lift-msl'];
-  const support = fine?.support ?? frame.layers['thermal-velocity']?.support ?? 0;
-  const knownFine = !fine || fine.status === 'valid' || fine.status === 'no-usable-lift';
-  const regime = support & SUPPORT_OVERDEVELOPED ? 'OD' : support & SUPPORT_CUMULUS ? 'Cu' : knownFine && thermal !== null && thermal > 0 && lclM !== null && cloud === 0 ? 'Blue' : null;
+  const liftText = (layer: LayerId, meters: number | null) => frame.layers[layer]?.status === 'no-usable-lift' ? 'no usable lift' : formatAltitude(meters, units);
+  const thermal = read('thermal-velocity');
+  const support = (['usable-lift-agl', 'usable-lift-msl', 'thermal-velocity', 'thermal-top-msl'] as const).reduce((flags, layer) => {
+    const value = frame.layers[layer];
+    return flags | (value?.status === 'valid' || value?.status === 'no-usable-lift' ? value.support : 0);
+  }, 0);
+  const regime = support & SUPPORT_OVERDEVELOPED ? 'OD' : support & SUPPORT_CUMULUS ? 'Cu' : 'Cloud regime unknown';
+  const thermalText = thermal === null ? '—' : units === 'imperial' ? `${Math.round(thermal / FEET_PER_MINUTE_TO_MPS)} ft/min` : `${thermal.toFixed(1)} m/s`;
   const summary = [
-    `MSL ${liftText('usable-lift-msl', mslM)}`, `AGL ${liftText('usable-lift-agl', aglM)}`, `Terrain ${formatAltitude(terrainM, units)}`,
-    `w* ${thermal === null ? '—' : `${thermal.toFixed(1)} m/s`}`, `LCL ${formatAltitude(lclM, units)}`,
+    `MSL ${liftText('usable-lift-msl', mslM)}`, `AGL ${liftText('usable-lift-agl', aglM)}`, `Terrain ${terrainM === null ? 'unknown' : formatAltitude(terrainM, units)}`,
+    `w* ${thermalText}`, `LCL ${formatAltitude(lclM, units)}`,
     `10 m ${windText(wind.wind10mSpeedMps, wind.wind10mDirDeg)}`, `BL ${windText(wind.blMeanWindSpeedMps, wind.blMeanWindDirDeg)}`,
-    ...(regime ? [regime] : []), ...(support & SUPPORT_CLOUD_CAPPED ? ['capped'] : [])
+    regime, ...(support & SUPPORT_CLOUD_CAPPED ? ['capped'] : [])
   ].join(' · ');
   return { id: frame.id, validTime: frame.validTime, terrainM, mslM, aglM, lclM, summary };
 }

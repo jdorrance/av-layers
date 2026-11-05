@@ -4,7 +4,7 @@ import { DEFAULT_SOARING_PARAMETERS, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/so
 import { DEFAULT_HORIZON_DEG } from '@av/solar/parameters';
 import { NATIVE_LAYERS, NATIVE_LAYER_IDS, nativeMethodId, type NativeLayerId, type NativeMethodGroup } from './native-layers.js';
 import type { ProductDefinition } from './product.js';
-export { nativeLayerTimeSupport } from './native-layers.js';
+export { isNativeThermalLayer, nativeLayerTimeSupport } from './native-layers.js';
 
 const auxiliaryInputs = {
   mslpPa: ['mean-sea-level-pressure', 'Pa', 'cell', 'MSL'], u10mMps: ['eastward-wind', 'm/s', 'cell', '10 m model AGL'],

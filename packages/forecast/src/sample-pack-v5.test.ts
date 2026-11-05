@@ -165,3 +165,34 @@ it('admits full scalar horizons separately from bounded point requests', () => {
   expect(layout.shards[0].byteLength).toBe(17 * 17 * 720 * CELL_BYTES);
   expect(prepareShardedSamplePackLayout(g, Uint32Array.of(0), MAX_PACK_CHANNELS).shards[0].byteLength).toBeLessThan(SAMPLE_SHARD_TARGET_BYTES);
 });
+
+it.each([5, 36])('reads declared partitions independently of the cached %i-byte layout', recordBytes => {
+  const g = grid(33, 19, true), ids = Uint32Array.of(0, 1, 2, 3, 4, 5), channels = 2;
+  for (const target of [SAMPLE_SHARD_TARGET_BYTES, 17 * 17 * channels * recordBytes]) {
+    const layout = prepareShardedSamplePackLayout(g, ids, channels, target, recordBytes), bytes = new Uint8Array(layout.byteLength), view = new DataView(bytes.buffer);
+    let absolute = 0;
+    for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+      const block = layout.block(ordinal);
+      for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) for (let channel = 0; channel < channels; channel++) {
+        const index = (block.row + y) * g.width + (block.column + x) % g.width;
+        view.setUint32(absolute + ((y * block.width + x) * channels + channel) * recordBytes, index * 10 + channel, true);
+      }
+      absolute += block.byteLength;
+    }
+    const firstBytes = layout.block(0).byteLength, parts = [{ bytes: firstBytes }, { bytes: bytes.length - firstBytes }];
+    for (const [lat, lon] of [[18, 16], [17.5, 31.5], [0, 32]]) {
+      const sample = planSample(g, lat, lon)!, plan = planShardedPackedSample(layout, sample, [1, 0], parts);
+      expect(plan.shard).toBe(1);
+      const start = firstBytes + plan.byteRange.offset, range = bytes.subarray(start, start + plan.byteRange.length);
+      for (const channel of plan.channels) {
+        expect(packedRecordsFromRange(plan, range, channel).map(record => new DataView(record.buffer, record.byteOffset).getUint32(0, true)))
+          .toEqual(sample.contributors.map(cell => cell.index * 10 + channel));
+      }
+    }
+    const sample = planSample(g, 18, 16)!;
+    for (const invalid of [[{ bytes: 0 }, { bytes: bytes.length }], [{ bytes: bytes.length - 1 }],
+      [{ bytes: firstBytes + 1 }, { bytes: bytes.length - firstBytes - 1 }]]) {
+      expect(() => planShardedPackedSample(layout, sample, [0], invalid)).toThrow(/declared/i);
+    }
+  }
+});

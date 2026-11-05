@@ -170,7 +170,7 @@ export class PluginController {
       badge: this.badge,
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
       notice: this.notice,
-      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice(this.build.manifest, this.now()) : null
+      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice({ frames: renderedFrames(this.build.manifest) }, this.now()) : null
     };
   }
 

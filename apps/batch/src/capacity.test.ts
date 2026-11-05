@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
-import { BUILD_BUDGETS, checkPerformance, estimateCapacity, prepareBuild } from './capacity.js';
+import { BUILD_BUDGETS, checkPerformance, estimateCapacity, normalizedFrameBytes, prepareBuild } from './capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,33 @@ import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.j
 const TILES_BY_ZOOM = [1, 4];
 const TOTAL_TILES = 30;
 const SAMPLE_PACK_BYTES = 180;
+
+it('counts auxiliary fields in the shared normalized-frame memory estimate', () => {
+  const resources = { maxLevels: 25, auxiliarySurfaceFields: 8, auxiliaryLevelFields: 4 };
+  expect(normalizedFrameBytes(100, 'isobaric', resources)).toBe(100 * (7 + 8 + 6 * 25) * 5);
+  expect(normalizedFrameBytes(100, 'model-levels', resources)).toBe(100 * (7 + 8 + 7 * 25) * 5);
+  const { mask, product } = input();
+  const { capacity, indices } = prepareBuild(mask, product, resources);
+  expect(capacity.workingSet.normalizedFrame).toBe(normalizedFrameBytes(indices.active.length, product.capabilities.verticalCoordinate, resources));
+  expect(() => normalizedFrameBytes(100, 'isobaric', { ...resources, auxiliaryLevelFields: -1 })).toThrow('dimensions');
+});
+
+it('admits aggregate scalar and profile bytes independently of the per-shard limit', () => {
+  const cells = 64 * 17 * 17, recordBytes = 8 + 14 * 256, shardsPerGroup = 130;
+  const sampleShards = Array.from({ length: shardsPerGroup }, () => ({ frameCount: 8, storedCells: cells, bytes: cells * 8 * 5 }));
+  const profileShards = Array.from({ length: shardsPerGroup }, () => ({ storedCells: cells, bytes: cells * recordBytes }));
+  const manifest = { version: 5, buildId: 'budget', cycle: '2026-11-05T00:00:00Z', artifacts: [{}],
+    metrics: { elapsedMs: 1, peakRssBytes: 1, tiles: [1] },
+    surfaces: [{ kind: 'native', grid: { width: 5000, height: 500 }, coverage: { maxZoom: 0 }, layers: ['sfc-temp-c'],
+      samples: { storedCells: cells * shardsPerGroup, channelCount: 8, shards: sampleShards },
+      profiles: { recordBytes, groups: Array.from({ length: 8 }, () => ({ frameCount: 1, shards: profileShards })) } }] } as unknown as ManifestV5;
+  const over = checkPerformance(manifest);
+  expect(over.observed.numericBytes).toBe(over.observed.emittedSampleBytes + over.observed.profileBytes);
+  expect(over.observed.profileBytes).toBeGreaterThan(BUILD_BUDGETS.numericBytes);
+  expect(over.failures).toEqual([expect.stringContaining('numericBytes:')]);
+  manifest.surfaces[0]!.profiles!.groups.pop();
+  expect(checkPerformance(manifest).passed).toBe(true);
+});
 function input() {
   const grid = { kind: 'regular-latlon' as const, width: 2, height: 2, earthRadiusM: 6371229, lon0: -180, lat0: 1, dx: 180, dy: -1, wrapLongitude: true };
   const product = { ...INDEXED_PRODUCT, grid, maxNativeZoom: 1, frameHours: [1, 2], intervalHours: 1,

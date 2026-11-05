@@ -4,6 +4,7 @@ import { ApiClient, ExpiredBuildError, InvalidApiResponseError } from './client'
 import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD, type LayerId, type ManifestV5 } from './index';
 import { computeFreshness, latestSchema } from './publication';
 import { deriveSoaringViews } from '@av/soaring';
+import { profileRecordBytes } from '@av/forecast';
 import { profileResponseSchema, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, type ProfileResponse } from './point-products';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 
@@ -64,14 +65,29 @@ function nativeLatestPayload(includeTemplate = false) {
   return payload;
 }
 
-function profileLatestPayload() {
+function profileLatestPayload(frameCount = 1, levelCount = 3) {
   const payload = nativeLatestPayload(), extended = payload.manifest!;
   if (extended.version !== 5) throw new Error('Expected a v5 fixture');
+  const first = extended.frames[0]!, archives = extended.artifacts, start = Date.parse(first.validTime);
+  extended.frames = Array.from({ length: frameCount }, (_, index) => {
+    const validTime = new Date(start + index * 3_600_000).toISOString();
+    return { ...first, id: `h${String(index + 1).padStart(3, '0')}`, validTime, intervalStart: new Date(start + (index - 1) * 3_600_000).toISOString(), intervalEnd: validTime };
+  });
+  extended.mapFrameCount = Math.min(24, frameCount);
+  extended.artifacts = extended.frames.slice(0, extended.mapFrameCount).flatMap(frame => archives.map(artifact => ({ ...artifact, frame: frame.id, tilesKey: `${prefix}/${artifact.layer}/${frame.id}.pmtiles` })));
+  for (const surface of extended.surfaces) {
+    const count = surface.kind === 'fine' ? extended.mapFrameCount : frameCount;
+    surface.samples.channelCount *= count; surface.samples.shards[0].bytes *= count;
+  }
   const native = extended.surfaces.find(surface => surface.kind === 'native')!;
+  const recordBytes = profileRecordBytes(levelCount);
   native.profiles = {
-    format: 'native-column-profile-v1', blockSize: 16, levelCount: 3, recordBytes: 50,
+    format: 'native-column-profile-v1', blockSize: 16, levelCount, recordBytes,
     coverageHash: native.coverage.hash, blockCount: 1, storedCells: 1,
-    groups: [{ firstFrame: 0, frameCount: 1, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 50, key: `${prefix}/surfaces/native/profiles/g0-b0.bin`, sha256: hash('a') }] }]
+    groups: Array.from({ length: Math.ceil(frameCount / 16) }, (_, group) => {
+      const count = Math.min(16, frameCount - group * 16);
+      return { firstFrame: group * 16, frameCount: count, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: count * recordBytes, key: `${prefix}/surfaces/native/profiles/g${group}-b0.bin`, sha256: hash('a') }] };
+    })
   };
   payload.manifest = manifestV5Schema.parse(extended);
   return payload;
@@ -244,24 +260,33 @@ describe('ApiClient native profiles', () => {
   });
 
   it('rejects oversized profile JSON selections before fetching data', async () => {
-    const payload = profileLatestPayload(), extended = payload.manifest!;
-    if (extended.version !== 5) throw new Error('Expected v5 fixture');
-    const frame = extended.frames[0], archives = extended.artifacts;
-    extended.frames = Array.from({ length: 30 }, (_, i) => ({ ...frame, id: `h${String(i + 1).padStart(3, '0')}` }));
-    extended.artifacts = extended.frames.flatMap(frame => archives.map(artifact => ({ ...artifact, frame: frame.id, tilesKey: `${prefix}/${artifact.layer}/${frame.id}.pmtiles` })));
-    for (const surface of extended.surfaces) {
-      surface.samples.channelCount *= 30; surface.samples.shards[0].bytes *= 30;
-      if (surface.profiles) {
-        surface.profiles.levelCount = 256; surface.profiles.recordBytes = 3592;
-        surface.profiles.groups = [16, 14].map((frameCount, group) => ({ firstFrame: group * 16, frameCount,
-          shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: frameCount * 3592,
-            key: `${prefix}/surfaces/native/profiles/g${group}-b0.bin`, sha256: hash('a') }] }));
-      }
-    }
-    payload.manifest = manifestV5Schema.parse(extended);
+    const payload = profileLatestPayload(30, 256);
     const { fetchImpl, client: api } = client(() => payload);
-    await expect(api.profile(await api.latest('gfs'), { lat: 0.5, lon: 0.5 })).rejects.toThrow('Selected profile response exceeds byte budget');
+    await expect(api.profile(await api.latest('gfs'), { lat: 0.5, lon: 0.5, frames: 'all' })).rejects.toThrow('Selected profile response exceeds byte budget');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults extended v5 point products to one frame and checks explicit all selections', async () => {
+    const latest = profileLatestPayload(144, 30), pinned = latest.manifest!;
+    if (pinned.version !== 5) throw new Error('Expected a v5 fixture');
+    const sample = samplePayload();
+    if (sample.version !== 5) throw new Error('Expected a v5 sample');
+    sample.method = pinned.method;
+    sample.surfaces = pinned.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage }));
+    sample.frames[0]!.layers['thermal-velocity'] = profilePayload().frames[0]!.layers['thermal-velocity']!;
+    const points = [{ lat: 0.5, lon: 0.5 }, { lat: 0.25, lon: 0.75 }];
+    const batch = { version: 1, model: 'gfs', buildId, expiresAt,
+      points: points.map((point, index) => ({ index, sample: { ...sample, ...point } })) };
+    const { fetchImpl, client: api } = client(() => latest), build = await api.latest('gfs');
+    fetchImpl.mockResolvedValueOnce(jsonResponse(sample)).mockResolvedValueOnce(jsonResponse(batch)).mockResolvedValueOnce(jsonResponse(profilePayload()));
+    expect((await api.sample(build, points[0]!)).frames.map(frame => frame.id)).toEqual(['h001']);
+    expect((await api.samples(build, { points })).points).toHaveLength(2);
+    expect((await api.profile(build, points[0]!)).frames.map(frame => frame.id)).toEqual(['h001']);
+    for (const [url] of fetchImpl.mock.calls.slice(1)) expect(new URL(String(url)).searchParams.get('frame')).toBe('h001');
+    await expect(api.sample(build, { ...points[0]!, frames: 'all' })).rejects.toThrow('point/frame/layer');
+    await expect(api.samples(build, { points, frames: 'all' })).rejects.toThrow('point/frame/layer');
+    await expect(api.profile(build, { ...points[0]!, frames: 'all' })).rejects.toThrow('Selected profile response exceeds byte budget');
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it('loads all native fields while preserving native model ground and missing profile values', async () => {

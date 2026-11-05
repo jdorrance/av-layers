@@ -5,6 +5,29 @@ import { deriveFrame } from '@av/forecast/frame';
 import { preparePackedTerrainColumns } from '@av/forecast/refinement';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
 import { createWholeDomainDerivePool } from './derive-pool.js';
+import { createNormalizedFrameTarget } from '../provider.js';
+
+it('admits native clearance copies even when every frame buffer is already shared', async () => {
+  const native: RegularLatLonGrid = { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229,
+    lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+  const plan = planWholeDomainGrid(native, 2), fineCells = plan.fine.width * plan.fine.height;
+  const bits = new Uint8Array(Math.ceil(fineCells / 8));
+  for (let i = 0; i < fineCells; i++) setBit(bits, i);
+  const coverage = sparseCoverageFromDense({ ...plan.fine, gridHash: createHash('sha256').update(canonicalGridJson(plan.fine)).digest('hex'),
+    output: bits, halo: new Uint8Array(bits.length) });
+  const activeIndices = new Uint32Array(new SharedArrayBuffer(16)); activeIndices.set([0, 1, 2, 3]);
+  const frame = normalizedFixtureFrame(native, activeIndices, '2026-03-20T00:00:00Z', 12, 1);
+  Object.assign(frame, createNormalizedFrameTarget(4, 3, false, false), { activeIndices });
+  const size = coverage.offsets[coverage.blockIds.length]!, field = () => ({ values: new Float32Array(new SharedArrayBuffer(size * 4)), flags: new Uint8Array(new SharedArrayBuffer(size)) });
+  const pool = await createWholeDomainDerivePool({ plan, coverage, activeIndices, maxLevels: 3,
+    terrain: { elevationM: new Float32Array(size), valid: new Uint8Array(size) },
+    output: { 'usable-lift-msl': field(), 'usable-lift-agl': field() }, workers: 1, maxFrameCopyBytes: 39 });
+  try {
+    await expect(pool.derive({ generation: 0, frame, time: { intervalStart: '2026-03-20T11:00:00Z', validTime: '2026-03-20T12:00:00Z' },
+      nativeClearance: { grid: native, validTime: '2026-03-20T12:00:00Z', flags: new Uint8Array(4),
+        diagnostics: { ceilingMslM: new Float32Array(4), buoyancyM2S3: new Float32Array(4), branch: new Uint8Array(4) } } })).rejects.toThrow('copy budget exceeded');
+  } finally { await pool.close(); }
+});
 
 it.each(['isobaric', 'model-levels'] as const)('matches serial packed derivation across generations and drains failure for %s', async coordinate => {
   const native: RegularLatLonGrid = { kind: 'regular-latlon', width: 4, height: 3, earthRadiusM: 6371229,

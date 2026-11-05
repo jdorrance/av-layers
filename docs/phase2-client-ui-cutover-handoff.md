@@ -38,6 +38,7 @@ with point identities while canonicalizing cache keys. Coordinate rounding is
 an explicit client choice reflected in returned coordinates. Bound points,
 values, response bytes and combined R2 ranges using the Phase 1 planner;
 client chunking respects those limits. Enforce request-wide read concurrency.
+V5 point requests default to the first frame; full timelines use bounded pages.
 See [serving budgets](serving-budgets.md).
 
 Review delivery filtering, compatibility, cancellation and resource admission
@@ -52,7 +53,7 @@ and model switches. Change its mechanism only with measured improvement and
 preserved behavior.
 
 Keep the lean 18 native and two fine scalar channels. Profiles retain every
-covered native cell. Compute mixed-layer LCL, effective cloud limit and BL top
+covered native cell and nullable P/H/T slot. Compute mixed-layer LCL, effective cloud limit and BL top
 wind on demand from each profile and its emitted thermal top; use shared pure
 helpers and preserve the model-PBL fallback for stable columns. These values
 remain available to Windgrams without additional scalar channels.
@@ -60,19 +61,20 @@ remain available to Windgrams without additional scalar channels.
 On click, fetch a bounded diurnal selection containing lift MSL/AGL,
 precipitation, thermal velocity, LCL, 10 m and boundary-layer wind components,
 and cloud cover. Render the selected frame summary and a keyboard-accessible
-chart: terrain floor, usable-lift bar and LCL marker. Selecting a chart frame
+chart: known terrain floor, usable-lift bar and LCL marker. Unknown floors use
+ceiling markers and an explicit unknown label. Selecting a chart frame
 updates the map from the cached series. Preserve missing values and diagnostic
 support in labels; absence of cloud flags alone cannot establish a blue regime.
 
 Use the shared soaring view function for scalar wind and sink-threshold
 calculations. Add terse labels for cumulus, overdevelopment and cloud capping.
-Format displayed altitudes in the chosen units.
+Format displayed heights and velocities in the chosen units.
 
 Terrain comes from an explicit fine-surface terrain value when available.
 Current public no-lift MSL samples are null. A lift-height difference is usable
 only for matching, valid, uninterpolated fine values. Mixed no-lift donors use
 different MSL and AGL interpolation weights. Show unknown terrain otherwise.
-Keep native model elevation, fine terrain and launch elevation distinct.
+Keep native model elevation and fine terrain distinct.
 
 Windy's current pane owns model and opacity controls. Add its point selection,
 chart and listeners with explicit pane/overlay lifecycle ownership and cleanup;
@@ -90,14 +92,14 @@ Run client tests and browser checks before proceeding.
 
 Add one transport adapter in
 [`@windgrams/data-client`](https://github.com/jdorrance/windgrams/blob/main/packages/data-client/README.md).
-Keep windgram and Skew-T renderers on their existing published profile types.
-Resolve launch coordinates through the site catalogue and route configured AV
-models through a pinned latest response and profile endpoint.
+Extend published profile types and renderers to preserve nullable native rows and independent field gaps.
+Accept arbitrary coordinates and route configured AV models through a pinned
+latest response and profile endpoint.
 
 Map `cycle` to run reference time and use the manifest generation timestamp for
 capture time. Preserve surface field units, precipitation interval meaning,
 nulls, source availability, vertical resolution and diagnostic support. Retain
-native model elevation independently of launch elevation and fine terrain.
+native model elevation independently of fine terrain.
 Compute shared derived views once. Validate serialized output with
 [`parsePublishedProfileJson`](https://github.com/jdorrance/windgrams/blob/main/packages/contracts/src/published-lift.ts).
 
@@ -109,26 +111,25 @@ regional interface required by current callers, including sampling semantics,
 selected coordinates, time and field status, before adapting those callers.
 Preserve existing saved-dataset readers.
 
-Render lift and precipitation through AV tile templates. Populate launch
+Render lift and precipitation through AV tile templates. Populate point
 comparison tables and route cross-sections with bounded multi-point requests,
 coalesced by build/frame/field selection. Load a clicked profile on demand for
 the existing windgram and sounding views. Expose unavailable fields and gaps.
 Keep outstanding requests and cached profiles bounded.
 
 Verify Blanchard and Aparan adapter fixtures, model switching, height inspection,
-sounding scrubbing, launch tables, routes and missing coverage in browser tests.
+sounding scrubbing, point tables, routes and missing coverage in browser tests.
 Review contract parity and sampling semantics independently.
 
 ## Milestone 2D: Offline parity and production cutover
 
 Windgrams snapshots verify exact file bytes against an inventory of sizes and
-SHA-256 digests. Current AV sample ETags identify queries. Add a versioned AV
-snapshot inventory and body-digest contract, retaining build identity and scope,
-before adapting offline storage. Preserve atomic saves, resume, cancellation,
+SHA-256 digests. AV multi-point/profile ETags hash response bodies. Save a versioned
+AV snapshot inventory retaining build identity, selected points, route and scope. Preserve atomic saves, resume, cancellation,
 quota handling and reopening without network access.
 
 Run the Windgrams root checks in its README, including consumer, browser and
-build checks. Measure 32-point launch/route queries and profile reads with cold
+build checks. Measure 32-point batches and profile reads with cold
 and warm caches against the existing serving limits. Keep configured limits
 until measurements justify a change.
 
@@ -138,7 +139,7 @@ failed-overlay retention/recovery and pending-point cancellation on model reload
 One cached series request supplied those point interactions; absent native
 measurements stayed unknown. The synthetic fixture exposes one model.
 
-Deploy both adapters with the old builders available. Verify production launch
+Deploy both adapters with the old builders available. Verify production point
 windgrams, soundings, maps, tables, routes and offline reopening against pinned
 builds; record model, cycle, endpoint and parity evidence.
 
@@ -148,7 +149,7 @@ Then retire the matching jobs in
 portion of
 [`refresh-noaa-cloud.yml`](https://github.com/jdorrance/windgrams/blob/main/.github/workflows/refresh-noaa-cloud.yml).
 Update Pages artifact collection and provider health together. Retain the other
-model and observation workflows; this cutover serves GFS, ICON-EU and RRFS.
+model, terrain and observation workflows; this cutover serves GFS, ICON-EU and RRFS.
 Document and exercise rollback before deleting duplicated acquisition code.
 
 Review the PRs again after checks pass, merge coordinated changes, and verify

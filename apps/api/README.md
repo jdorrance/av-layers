@@ -32,15 +32,14 @@ pnpm --filter @av/api build
 
 `/samples?points=lat,lon;lat,lon` batches coordinates in request order.
 `/profile?lat=...&lon=...` returns the nearest covered native cell's full levels,
-measured surface pressure and point-derived cloud/wind diagnostics. `frame` and
-`layers` select scalar inputs; omitted dependencies produce null derived values.
-Profiles default to all frames; extended runs need bounded frame pages. See the [OpenAPI spec](../../docs/reference/openapi.json)
+measured surface pressure and point-derived cloud/wind diagnostics. `frame`
+selects times; `layers` selects scalar inputs. Omitted dependencies produce null derived values.
+Point routes default to the first frame; callers select bounded frame pages for
+complete timelines. See the [OpenAPI spec](../../docs/reference/openapi.json)
 for request limits and response schemas.
 
 `/provenance` serves the run receipt or frame index; `?frame=f001` selects a
-verified source receipt from an indexed run. `/v1/terrain/solar/:slug/index.json`
-revalidates the current sunlight generation. Generation URLs serve verified
-gzip file bytes for explicit client decompression.
+verified source receipt from an indexed run.
 
 Catalog, latest and retained-run lists use short edge caching within the
 [pointer freshness budget](../../docs/serving-budgets.md); browsers revalidate.

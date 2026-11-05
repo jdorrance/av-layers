@@ -317,7 +317,7 @@ function startPreview(): void {
       expireView();
       return;
     }
-    const notice = forecastHorizonNotice(build.manifest, now);
+    const notice = forecastHorizonNotice({ frames: renderedFrames(build.manifest) }, now);
     horizonNotice.textContent = notice ?? '';
     horizonNotice.hidden = notice === null;
     freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);

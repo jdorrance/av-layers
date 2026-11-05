@@ -1,6 +1,6 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema } from './index.js';
+import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema, getProduct } from './index.js';
 import { deriveSoaringViews, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring';
 
 describe('implemented method snapshots', () => {
@@ -157,6 +157,26 @@ describe('implemented method snapshots', () => {
 });
 
 describe('native method metadata', () => {
+  it.each([
+    { model: 'gfs', pressure: 'pressureLevelsHpa', otherPressure: 'pressurePa', gust: 'valid-time' },
+    { model: 'icon-eu', pressure: 'pressurePa', otherPressure: 'pressureLevelsHpa', gust: 'interval-maximum' },
+    { model: 'rrfs', pressure: 'pressureLevelsHpa', otherPressure: 'pressurePa', gust: 'valid-time' }
+  ] as const)('binds the full production $model registry to its physical inputs', ({ model, pressure, otherPressure, gust }) => {
+    const product = getProduct(model);
+    if (!product) throw new Error(`Missing production product: ${model}`);
+    const descriptors = createWholeDomainDescriptors(product);
+    expect(product.layers).toHaveLength(20);
+    for (const layer of ['thermal-velocity', 'bl-mean-wind-u', 'bl-mean-wind-v'] as const) {
+      const method = descriptors.methods[descriptors.layers[layer]!.methodId]!;
+      expect(method.requiredInputs).toContain(pressure);
+      expect(method.requiredInputs).not.toContain(otherPressure);
+    }
+    const layer = descriptors.layers['wind-gust-10m']!;
+    expect(layer.timeSupport).toBe(gust);
+    expect(descriptors.methods[layer.methodId]!.inputs.gust10mMps!.timeSupport).toBe(gust);
+    expect(descriptorSchema.safeParse(descriptors).success).toBe(true);
+  });
+
   it.each(['isobaric', 'model-levels'] as const)('binds %s pressures and every actual dependency within descriptor bounds', coordinate => {
     const methods = NATIVE_METHODS_BY_VERTICAL_COORDINATE[coordinate];
     const pressure = coordinate === 'isobaric' ? 'pressureLevelsHpa' : 'pressurePa';
@@ -181,9 +201,11 @@ describe('native method metadata', () => {
     expect(NATIVE_METHOD_PARAMETERS).toMatchObject({
       nearSaturationSpreadC: 0.5, overdevelopmentRelativeHumidityPercent: 85,
       minimumLevelAglM: 20, mixedLayerPoissonExponent: 0.2854,
-      sourceWindHeightAglM: 10, boundaryLayerWindAnchorAglM: 0,
       cloudCapSinkRateMps: 1, lenschowScale: 4, lenschowShape: 0.8, lenschowPeakZeta: 0.3125
     });
+    expect(NATIVE_METHOD_PARAMETERS).not.toHaveProperty('sourceWindHeightAglM');
+    expect(NATIVE_METHOD_PARAMETERS).not.toHaveProperty('boundaryLayerWindAnchorAglM');
+    expect(nativeMethodForLayer('bl-mean-wind-u', 'isobaric')!.caveats.join(' ')).toContain('10 m vector anchored at ground');
     for (const [key, parameter] of Object.entries(NATIVE_DIAGNOSTIC_PARAMETERS)) expect(NATIVE_METHOD_PARAMETERS).toHaveProperty(key, parameter);
     const basis = { thermalTopM: 2000, mixedLayerLclM: 1500, thermalVelocityMps: 1 };
     expect(deriveSoaringViews({ ...basis, thermalTopRhPercent: NATIVE_METHOD_PARAMETERS.overdevelopmentRelativeHumidityPercent - 0.01 }).overdeveloped).toBe(false);

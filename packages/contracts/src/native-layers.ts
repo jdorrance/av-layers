@@ -25,6 +25,10 @@ export const NATIVE_LAYER_IDS = Object.keys(NATIVE_LAYERS) as NativeLayerId[];
 export const nativeMethodId = (group: NativeMethodGroup, coordinate: 'isobaric' | 'model-levels' = 'isobaric') =>
   `native-${group}${coordinate === 'model-levels' ? '-model-levels' : ''}-v1`;
 
+export function isNativeThermalLayer(id: string): boolean {
+  return id === 'thermal-velocity' || id === 'thermal-top-msl';
+}
+
 export function nativeLayerTimeSupport(id: NativeLayerId): 'valid-time' | 'interval-mean' | 'interval-flux-endpoint-profile' {
-  return id.endsWith('heat-flux') ? 'interval-mean' : id.startsWith('thermal-') ? 'interval-flux-endpoint-profile' : 'valid-time';
+  return id.endsWith('heat-flux') ? 'interval-mean' : isNativeThermalLayer(id) ? 'interval-flux-endpoint-profile' : 'valid-time';
 }

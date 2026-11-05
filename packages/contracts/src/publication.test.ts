@@ -24,6 +24,18 @@ it('requires advertised precipitation support when API and rollback verify a fra
   for (const binding of [identity, manifest]) expect(() => parseFrameProvenance(invalid, binding, frame)).toThrow('does not match');
 });
 
+it('binds provenance frame values independently of input key order', () => {
+  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const expected = { intervalEnd: frame.intervalEnd, validTime: frame.validTime, id: frame.id, intervalStart: frame.intervalStart };
+  const window = { start: frame.intervalStart, end: frame.intervalEnd };
+  const chunk = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+    hour: (Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000,
+    frame: { validTime: frame.validTime, intervalStart: frame.intervalStart, intervalEnd: frame.intervalEnd, id: frame.id },
+    intervals: { profileTime: frame.validTime, fluxWindow: window, precipitationWindow: window }, receipt: {} };
+  expect(parseFrameProvenance(chunk, manifest, expected).frame).toEqual(frame);
+  expect(() => parseFrameProvenance(chunk, manifest, { ...expected, intervalStart: frame.intervalEnd })).toThrow('does not match');
+});
+
 describe('refined forecast publications', () => {
   it('round-trips v3 and v4 without changing the public model, frame axis or raster archive paths', () => {
     for (const manifest of [fixtureManifest(), refined()]) {

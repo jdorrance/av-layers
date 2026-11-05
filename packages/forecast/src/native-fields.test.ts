@@ -44,6 +44,34 @@ it('emits synoptic fields, LCL and PBL winds through darkness while skipping con
   expect(fields['precip-rate']!.values[0]).toBe(3);
 });
 
+it.each(['surface-temperature', 'level-temperature', 'level-height', 'surface-pressure', 'surface-humidity', 'flux'] as const)(
+  'retains nighttime native dependencies when %s is missing', missing => {
+    const { frame, mask, coverage } = fixture(3);
+    if (missing === 'surface-temperature') frame.missing.temp2m[0] = 1;
+    if (missing === 'level-temperature') frame.missing.temp[1]![0] = 1;
+    if (missing === 'level-height') frame.missing.hgt[1]![0] = 1;
+    if (missing === 'surface-pressure') frame.missing.surfacePressure[0] = 1;
+    if (missing === 'surface-humidity') frame.missing.humidity2m[0] = 1;
+    if (missing === 'flux') { frame.missing.sensibleHeatFlux[0] = 1; frame.missing.latentHeatFlux[0] = 1; }
+    const fields = deriveFrame(frame, mask, { layers: LAYER_IDS, nativeCoverage: coverage });
+    const slot = sparseCoverageLookup(coverage, 0, 0)!.offset;
+    const missingColumn = ['surface-temperature', 'level-temperature', 'level-height'].includes(missing);
+    expect(fields['thermal-top-msl']!.flags[slot] & STATUS_MASK).toBe(missingColumn ? STATUS_UNAVAILABLE : STATUS_VALID);
+    expect(fields['thermal-velocity']!.flags[slot] & STATUS_MASK).toBe(missing === 'flux' ? STATUS_VALID : STATUS_UNAVAILABLE);
+    if (missingColumn) expect(fields['thermal-top-msl']!.values[slot]).toBeNaN();
+    else expect(fields['thermal-top-msl']!.values[slot]).toBe(100);
+    if (missing === 'flux') expect(fields['thermal-velocity']!.values[slot]).toBe(0);
+    else expect(fields['thermal-velocity']!.values[slot]).toBeNaN();
+    expect(fields['wind-10m-u']!.flags[slot]).toBe(STATUS_VALID);
+    expect(fields['wind-10m-u']!.values[slot]).toBe(3);
+    expect(fields['cloud-cover-total']!.values[slot]).toBe(60);
+    expect(fields['precip-rate']!.values[0]).toBe(3);
+    expect(fields['usable-lift-agl']!.flags[0]).toBe(STATUS_NO_LIFT);
+    expect(fields['sfc-temp-c']!.flags[slot]).toBe(missing === 'surface-temperature' ? STATUS_UNAVAILABLE : STATUS_VALID);
+    expect(fields['bl-mean-wind-u']!.flags[slot]).toBe(missing === 'level-height' ? STATUS_UNAVAILABLE : STATUS_VALID);
+  }
+);
+
 it('keeps positive thermal velocity below the map sink threshold', () => {
   const { frame, mask, coverage } = fixture();
   frame.sensibleHeatFluxWm2.fill(1); frame.latentHeatFluxWm2.fill(0);
@@ -109,4 +137,22 @@ it('retains complete nighttime profiles per covered cell with independent option
     if (i === 0) expect(profile.levels[1]!.dewPointC).toBeNull();
   }
   expect(() => reader.readRecord(1)).toThrow('not acquired');
+});
+
+it('reuses the checked profile index across independently borrowed frame records', () => {
+  const { frame, coverage } = fixture(3), next = fixture(4).frame;
+  next.tempK[0]![0] += 5;
+  next.missing.temp[1]![0] = 1;
+  const first = prepareNativeProfiles(frame, coverage), firstBytes = first.readRecord(0).slice();
+  const reader = first.forFrame(next), nextBytes = reader.readRecord(0).slice();
+  expect(nextBytes).toEqual(prepareNativeProfiles(next, coverage).readRecord(0));
+  expect(readProfileRecord(nextBytes).levels[0]!.temperatureC).toBe(28);
+  expect(readProfileRecord(nextBytes).levels[1]!.temperatureC).toBeNull();
+  expect(first.readRecord(0)).toEqual(firstBytes);
+  expect(reader.forFrame).toBe(first.forFrame);
+  const mutated = fixture(5).frame;
+  mutated.activeIndices[1] = 17;
+  expect(() => reader.forFrame(mutated)).toThrow('prepared index');
+  expect(() => reader.forFrame({ ...next, activeIndices: next.activeIndices.subarray(1) })).toThrow('prepared index');
+  expect(() => reader.forFrame({ ...next, grid: { ...next.grid, width: 33 } })).toThrow('prepared index');
 });

@@ -96,6 +96,31 @@ describe('native diagnostics', () => {
     expect(out.blTopWindU).toBeCloseTo(1); expect(out.blTopWindV).toBeCloseTo(-5.5);
   });
 
+  it.each(['surface-temperature', 'level-temperature', 'level-height', 'short-profile'] as const)('keeps missing nighttime %s distinct from physical zero', missing => {
+    const input = { ...column(), daylight: false, pblHeightM: 300 };
+    delete input.sensibleHeatFluxWm2; delete input.latentHeatFluxWm2;
+    if (missing === 'surface-temperature') input.surfaceTemperatureC = NaN;
+    if (missing === 'level-temperature') input.levels[1]!.temperatureC = NaN;
+    if (missing === 'level-height') input.levels[1]!.heightM = NaN;
+    const out = deriveNativeColumnDiagnostics(input, missing === 'short-profile' ? 2 : 3);
+    expect(out.thermalDepthM).toBeNull(); expect(out.thermalTopM).toBeNull();
+    expect(out.thermalVelocityMps).toBeNull(); expect(out.depthBranch).toBe('unavailable');
+    if (missing !== 'level-height') expect(out.blTopWindU).toBeCloseTo(1);
+  });
+
+  it('requires pressure and moisture for nighttime velocity while dry depth remains independently known', () => {
+    const input = { ...column(), daylight: false, pblHeightM: 300 };
+    for (const missing of ['pressure', 'moisture'] as const) {
+      const incomplete = { ...input, ...(missing === 'pressure' ? { surfacePressureHpa: null,
+        levels: input.levels.map(level => ({ ...level, pressureHpa: null })) } : { surfaceDewPointC: null }) };
+      const out = deriveNativeColumnDiagnostics(incomplete);
+      expect(out.thermalDepthM).toBe(0); expect(out.thermalTopM).toBe(100);
+      expect(out.thermalVelocityMps).toBeNull(); expect(out.blTopWindU).toBeCloseTo(1);
+    }
+    delete input.sensibleHeatFluxWm2; delete input.latentHeatFluxWm2;
+    expect(deriveNativeColumnDiagnostics(input).thermalVelocityMps).toBe(0);
+  });
+
   it('interpolates humidity at the thermal top and preserves a missing humidity bracket', () => {
     const input = column(), out = deriveNativeColumnDiagnostics(input);
     expect(out.thermalTopRhPercent).toBeGreaterThan(0); expect(out.thermalTopRhPercent).toBeLessThan(100);

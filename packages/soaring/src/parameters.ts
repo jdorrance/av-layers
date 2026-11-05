@@ -29,7 +29,5 @@ export const NATIVE_DIAGNOSTIC_PARAMETERS = Object.freeze({
   nearSaturationSpreadC: 0.5,
   overdevelopmentRelativeHumidityPercent: 85,
   minimumShearMps: 0.2,
-  cloudCapSinkRateMps: 1,
-  sourceWindHeightAglM: 10,
-  boundaryLayerWindAnchorAglM: 0
+  cloudCapSinkRateMps: 1
 } as const);

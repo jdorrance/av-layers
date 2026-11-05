@@ -24,5 +24,9 @@ trailing rates with the shared interval kernel and GRIB packing tolerances.
 pure-TypeScript decoding. Reference tests cover libaec, ecCodes and bzip2 data.
 The optional retained DWD fixture check uses `ICON_DWD_PROBE_DIR`.
 
+Admitted template 3.0 has matching grid-relative and Earth-relative wind axes
+([NOAA](https://www.cpc.ncep.noaa.gov/products/tools/wgrib2/new_grid_winds.html)).
+Scan modes 0 and 64 change sample order while preserving east/north component signs.
+
 See [science](../../../../docs/science.md#input-fields) for midpoint heights and
 flux recovery, and [third-party notices](../../../../THIRD_PARTY_NOTICES.txt).

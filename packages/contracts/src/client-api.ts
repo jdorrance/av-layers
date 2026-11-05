@@ -9,6 +9,7 @@ export interface RequestOptions {
 export interface SampleRequest extends RequestOptions {
   lat: number;
   lon: number;
+  /** Defaults to the first v5 frame; retained v3/v4 samples default to all frames. */
   frames?: 'all' | readonly string[];
   layers?: readonly LayerId[];
   now?: number;
@@ -123,7 +124,7 @@ function validatePoint(point: GeoPoint): void {
 }
 
 function sampleSelection(build: PinnedBuild, request: Pick<SampleRequest, 'frames' | 'layers'>, defaults = build.manifest.layers, points = 1, scalarLimit = true) {
-  const frames = request.frames ?? 'all';
+  const frames = request.frames ?? (build.manifest.version === 5 ? [build.manifest.frames[0]!.id] : 'all');
   const expectedFrames = frames === 'all' ? build.manifest.frames.map(frame => frame.id) : [...frames];
   const layers = request.layers ?? defaults;
   if (!expectedFrames.length || new Set(expectedFrames).size !== expectedFrames.length) throw new RangeError('frames must be non-empty and unique');
