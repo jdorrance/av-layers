@@ -15,7 +15,7 @@ import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.
 import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
 
 const fallback = vi.hoisted(() => ({ legacy: false, compared: 0, filled: 0, mappingBytes: [] as number[] }));
-const metricsHooks = vi.hoisted(() => ({ afterPrepare: undefined as (() => void) | undefined, afterMerge: undefined as (() => void) | undefined, afterValidate: undefined as (() => void) | undefined }));
+const metricsHooks = vi.hoisted(() => ({ afterPrepare: undefined as (() => void) | undefined, afterMerge: undefined as (() => void) | undefined, afterValidate: undefined as (() => void) | undefined, afterShardValidate: undefined as (() => void) | undefined }));
 vi.mock('./whole-domain/prepare.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./whole-domain/prepare.js')>();
   return { ...actual, loadWholeDomainTerrain: async (...args: Parameters<typeof actual.loadWholeDomainTerrain>) => {
@@ -32,7 +32,9 @@ vi.mock('./sample-pack-v5.js', async importOriginal => {
 });
 vi.mock('./validate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./validate.js')>();
-  return { ...actual, validateBuild: async (...args: Parameters<typeof actual.validateBuild>) => {
+  return { ...actual, validateSampleGroup: async (...args: Parameters<typeof actual.validateSampleGroup>) => {
+    const result = await actual.validateSampleGroup(...args); metricsHooks.afterShardValidate?.(); return result;
+  }, validateBuild: async (...args: Parameters<typeof actual.validateBuild>) => {
     const result = await actual.validateBuild(...args); metricsHooks.afterValidate?.(); return result;
   } };
 });
@@ -85,6 +87,7 @@ vi.mock('./terrain/source.js', async importOriginal => ({
 
 afterEach(async () => {
   metricsHooks.afterPrepare = undefined; metricsHooks.afterMerge = undefined; metricsHooks.afterValidate = undefined;
+  metricsHooks.afterShardValidate = undefined;
   vi.unstubAllEnvs();
   await cleanupTemporaryRoots();
 });
@@ -322,6 +325,30 @@ describe('whole-domain parallel receipt integrity', () => {
     expect(manifest.metrics.peakRssBytes).toBeGreaterThanOrEqual(plan.preparation!.peakRssBytes);
     expect(onValidated).toHaveBeenCalledOnce();
     expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();
+  }, 60_000);
+
+  it.each(['over-budget', 'higher', 'lower'] as const)('gates the post-validation shard RSS peak when it is %s', async kind => {
+    const out = await copyCompleted();
+    await rm(join(out, 'shards'), { recursive: true }); await rm(join(out, 'builds'), { recursive: true });
+    const usage = process.resourceUsage(), core = 1024 ** 3;
+    let measured = core;
+    const rss = vi.spyOn(process, 'resourceUsage').mockImplementation(() => ({ ...usage, maxRSS: measured / 1024 }));
+    const peak = kind === 'over-budget' ? BUILD_BUDGETS.peakRssBytes + 1024 : kind === 'higher' ? core * 1.5 : core / 2;
+    metricsHooks.afterShardValidate = () => { measured = peak; };
+    try {
+      const pending = buildShard({ plan, shard: 0, out, product: wholeProduct, mask: wholeMask, provider: source.provider });
+      if (kind === 'over-budget') {
+        await expect(pending).rejects.toThrow('peakRssBytes');
+        await expect(readFile(receiptPath(out, 0))).rejects.toThrow();
+        const failure = JSON.parse(await readFile(join(out, 'shards/0/worker-failure.json'), 'utf8'));
+        expect(failure.error.message).toContain('peakRssBytes');
+        expect(failure.error.message).toContain(String(peak));
+      } else {
+        const receipt = JSON.parse(await readFile(await pending, 'utf8'));
+        expect(receipt.metrics.peakRssBytes).toBe(Math.max(core, peak));
+      }
+      expect(measured).toBe(peak);
+    } finally { rss.mockRestore(); }
   }, 60_000);
 
   it.each(['assembly-rss', 'validation-rss', 'validation-elapsed'])('rejects over-budget %s before publication', async kind => {

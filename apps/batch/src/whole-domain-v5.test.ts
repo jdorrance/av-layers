@@ -15,17 +15,17 @@ import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseAc
 import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
 import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
 import { rasterWorkerCount } from './raster-pool.js';
-import { BUILD_BUDGETS, checkPerformance } from './capacity.js';
+import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, checkPerformance } from './capacity.js';
 import { fixtureProvider } from '../parallel-fixtures.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import type { ForecastProvider } from './provider.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain } from './whole-domain/prepare.js';
 import { prepareWholeDomainTerrain } from './whole-domain/terrain.js';
 import { buildWholeDomainFrames } from './whole-domain/frames.js';
-import { assertValidatedBuild, sha256, validateBuild, type ValidatedBuild } from './validate.js';
+import { assertValidatedBuild, sha256, validateBuild, validateSampleGroup, type ValidatedBuild } from './validate.js';
 import { workflowAuthority } from './authority.js';
 import { cleanup, publish, rollback } from './publication.js';
-import { readLocalFile } from './local-file.js';
+import { createLocalFileReader, readLocalFile } from './local-file.js';
 import type { ArchiveTarget } from './render.js';
 import type { ObjectStorage } from './storage.js';
 
@@ -38,7 +38,11 @@ vi.mock('@av/forecast', async importOriginal => {
 });
 vi.mock('./local-file.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./local-file.js')>();
-  return { ...actual, readLocalFile: vi.fn(actual.readLocalFile) };
+  return { ...actual, readLocalFile: vi.fn(actual.readLocalFile), createLocalFileReader: vi.fn(actual.createLocalFileReader) };
+});
+vi.mock('./validate.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('./validate.js')>();
+  return { ...actual, validateSampleGroup: vi.fn(actual.validateSampleGroup) };
 });
 vi.mock('./sample-pack-v5.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./sample-pack-v5.js')>();
@@ -88,7 +92,7 @@ class PublicationStore implements ObjectStorage {
     if (key === this.failKey) throw new Error('injected upload failure');
     const previous = this.objects.get(key);
     if ((condition.ifNoneMatch && previous) || (condition.ifMatch && condition.ifMatch !== previous?.etag)) throw new Error('precondition failed');
-    this.objects.set(key, { bytes: bytes.slice(), etag: `"${createHash('md5').update(bytes).digest('hex')}"`, metadata });
+    this.objects.set(key, { bytes: Buffer.from(bytes), etag: `"${createHash('md5').update(bytes).digest('hex')}"`, metadata });
     if (key === 'catalog/gfs/latest.json' && this.failAfterPointer) { this.failAfterPointer = false; throw new Error('lost pointer response'); }
   }
   async list(prefix: string) { return [...this.objects].filter(([key]) => key.startsWith(prefix)).map(([key, item]) => ({ key, size: item.bytes.length, lastModified: new Date(0) })); }
@@ -496,6 +500,48 @@ describe('whole-domain v5 production', () => {
     }
     expect(coverageIndices(nativeMask).output.length).toBe(cells - 1);
     expect(plan.wholeDomain).toBeDefined();
+  }, 60_000);
+
+  it.each([false, true])('seals the full post-upload shard RSS peak and rejects excess=%s', async excess => {
+    const setup = await fixture(), out = await root('wd-upload-rss'), store = new PublicationStore(), source = fixtureProvider();
+    const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [2], layers: [...product.layers, 'sfc-temp-c'] };
+    const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 1, store });
+    vi.mocked(createLocalFileReader).mockClear(); vi.mocked(validateSampleGroup).mockClear();
+    const usage = process.resourceUsage(), core = 128 * 1024 ** 2, peak = excess ? BUILD_BUDGETS.peakRssBytes + 1024 : 1024 ** 3;
+    const buffers: ArrayBufferLike[] = [], hashes = new Set<string>();
+    let measured = core;
+    const rss = vi.spyOn(process, 'resourceUsage').mockImplementation(() => ({ ...usage, maxRSS: measured / 1024 }));
+    const put = store.put.bind(store), upload = vi.spyOn(store, 'put').mockImplementation(async (...args) => {
+      await put(...args);
+      if (args[0].startsWith('builds/')) measured = peak;
+      if (args[0].endsWith('.bin')) { buffers.push(args[1].buffer); hashes.add(sha256(args[1])); }
+    });
+    try {
+      const pending = buildShard({ plan, shard: 0, out, product: configured, mask: nativeMask, provider: source.provider, store });
+      if (excess) {
+        await expect(pending).rejects.toThrow('peakRssBytes');
+        await expect(readFile(join(out, 'shards/0/receipt.json'))).rejects.toThrow();
+        const failure = JSON.parse(await readFile(join(out, 'shards/0/worker-failure.json'), 'utf8'));
+        expect(failure.error.message).toContain('peakRssBytes');
+        expect(failure.error.message).toContain(String(peak));
+      } else {
+        const receipt = JSON.parse(await readFile(await pending, 'utf8'));
+        expect(receipt.metrics.peakRssBytes).toBe(peak);
+        expect(receipt.objects.length).toBeGreaterThan(0);
+        for (const object of receipt.objects) expect(sha256(store.objects.get(object.key)!.bytes)).toBe(object.sha256);
+      }
+      expect(upload.mock.calls.some(([key]) => key.startsWith('builds/'))).toBe(true);
+      expect(measured).toBe(peak);
+      expect(createLocalFileReader).toHaveBeenCalledExactlyOnceWith(MAX_V5_SHARD_BYTES);
+      const reader = vi.mocked(createLocalFileReader).mock.results[0].value;
+      const validations = vi.mocked(validateSampleGroup).mock.calls, profiles = validations.filter(args => args[4].recordBytes !== undefined);
+      expect(validations.length).toBeGreaterThan(1); expect(profiles.length).toBeGreaterThan(0);
+      expect(validations.every(args => args[5]?.reader === reader)).toBe(true);
+      const uploaded = new Set(upload.mock.calls.map(([key]) => key));
+      expect(profiles.every(args => args[4].shards.every(shard => uploaded.has(shard.key)))).toBe(true);
+      expect(buffers.length).toBeGreaterThan(1); expect(hashes.size).toBeGreaterThan(1);
+      expect(buffers.every(buffer => buffer === buffers[0])).toBe(true);
+    } finally { upload.mockRestore(); rss.mockRestore(); }
   }, 60_000);
 
   it.each([
