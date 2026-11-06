@@ -413,7 +413,7 @@
         }
       },
       "terrainSubdivisionFactor": 2,
-      "execution": {"zoom": 10, "shards": 24, "parallelism": 20, "schedule": ["27 3,9,15,21 * * *"]}
+      "execution": {"zoom": 10, "shards": 24, "parallelism": 12, "schedule": ["27 3,9,15,21 * * *"]}
     }
   ]
 }
