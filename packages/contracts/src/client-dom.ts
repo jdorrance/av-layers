@@ -77,11 +77,13 @@ export function renderPointSeries(
   const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
   const focused = previous?.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
   const wasOpen = container.querySelector?.<HTMLDetailsElement>('details')?.open ?? false;
-  const section = node('section'), summary = node('p'), time = node('p'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
+  const section = node('section'), summary = node('p'), time = node('p'), incomplete = node('p', 'Forecast incomplete. Some hours could not be loaded.'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
   section.className = 'av-point-series'; summary.className = 'av-point-values'; chart.className = 'av-point-chart';
   chart.role = 'group'; chart.ariaLabel = 'Point forecast times in UTC; heights MSL';
   summary.style.cssText = 'font-size:12px;line-height:1.6;margin:4px 0 12px';
   time.className = 'av-point-time'; time.style.cssText = 'font-size:11px;line-height:1.5;margin:4px 0';
+  incomplete.className = 'av-point-incomplete'; incomplete.role = 'status';
+  incomplete.style.cssText = 'font-size:12px;font-weight:600;margin:4px 0';
   chart.style.cssText = 'display:flex;gap:3px;overflow-x:auto;align-items:stretch;min-height:132px;padding:3px';
   legend.style.cssText = 'font-size:11px;opacity:.75;margin:8px 0';
   legend.className = 'av-point-legend';
@@ -99,12 +101,14 @@ export function renderPointSeries(
   const heightValues = views.flatMap(view => [view.terrainM, view.mslM, view.lclM, view.thermalTopM].filter((value): value is number => value !== null));
   const minimum = Math.min(0, ...heightValues), span = Math.max(1, ...heightValues) - minimum;
   const percent = (meters: number) => Math.min(100, Math.max(0, (meters - minimum) / span * 100));
+  const elapsed = payload.frames.map((frame, index) => index ? (Date.parse(frame.validTime) - Date.parse(payload.frames[index - 1].validTime)) / 3600000 : 0);
   const bars = payload.frames.map((frame, index) => {
     const date = frame.validTime.slice(0, 10), firstOfDay = index === 0 || date !== payload.frames[index - 1].validTime.slice(0, 10);
     const width = firstOfDay ? 54 : 20;
+    const gapText = elapsed[index] > 1 ? `+${elapsed[index]} h` : '', gapWidth = gapText ? Math.max(24, gapText.length * 6) : 0;
     const button = node('button'), plot = node('span'), hour = node('span', `${firstOfDay ? `${date.slice(5)} ` : ''}${frame.validTime.slice(11, 13)}`);
     button.type = 'button'; button.value = frame.id;
-    button.style.cssText = `flex:1 0 ${width}px;min-width:${width}px;padding:2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;cursor:pointer`;
+    button.style.cssText = `position:relative;flex:1 0 ${width}px;min-width:${width}px;margin-left:${gapWidth}px;padding:2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;cursor:pointer`;
     plot.style.cssText = 'display:block;position:relative;height:100px;border-bottom:1px solid #89959e';
     hour.style.cssText = 'display:block;font-size:10px;line-height:20px;white-space:nowrap';
     const view = views[index];
@@ -130,6 +134,11 @@ export function renderPointSeries(
       plot.append(top);
     }
     button.append(plot, hour); button.addEventListener('click', () => options.onFrame(frame.id));
+    if (gapText) {
+      const gap = node('span', gapText); gap.className = 'av-point-gap'; gap.ariaHidden = 'true';
+      gap.style.cssText = `position:absolute;left:-${gapWidth + 2}px;bottom:2px;width:${gapWidth}px;text-align:center;font-size:9px;line-height:20px;white-space:nowrap;opacity:.75`;
+      button.append(gap);
+    }
     button.addEventListener('keydown', event => {
       const target = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? payload.frames.length - 1 : -1;
       if (target < 0 || target >= payload.frames.length) return;
@@ -137,7 +146,7 @@ export function renderPointSeries(
     });
     chart.append(button); return button;
   });
-  section.append(time, summary, chart, legend, details); container.replaceChildren(section);
+  section.append(time, incomplete, summary, chart, legend, details); container.replaceChildren(section);
   chart.scrollLeft = previous?.scrollLeft ?? 0;
   details.open = wasOpen;
   let units = options.unitSystem;
@@ -146,6 +155,7 @@ export function renderPointSeries(
   const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
     units = nextUnits;
     loading = nextLoading;
+    incomplete.hidden = !options.loading || loading;
     mapFrameId = nextMapFrameId;
     const frame = payload.frames.find(frame => frame.id === frameId);
     const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);
@@ -159,7 +169,7 @@ export function renderPointSeries(
       const frame = payload.frames[index], selected = frame.id === frameId;
       bar.ariaPressed = String(selected); bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
       bar.style.borderColor = selected ? '#229ec6' : 'transparent';
-      bar.ariaLabel = `${frame.validTime} · ${pointFrameView(frame, build, units).summary}`;
+      bar.ariaLabel = `${frame.validTime}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${pointFrameView(frame, build, units).summary}`;
       bar.title = bar.ariaLabel;
     });
   };

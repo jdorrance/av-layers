@@ -315,7 +315,7 @@ export interface CleanupSummary {
   version: 1; prefix: string; observedAt: string; status: 'complete' | 'failed';
   listed: CleanupObjects | null; protected: CleanupObjects | null; unreferenced: CleanupObjects | null;
   eligible: CleanupObjects | null; deleted: CleanupObjects | null;
-  sourceInputs?: { deleted: number; deferred: number; reason?: string };
+  sourceInputs?: { deleted: number | null; deferred: number | null; reason?: string };
 }
 const emptyCleanupObjects = (): CleanupObjects => ({ objects: 0, knownBytes: 0, unknownSizeObjects: 0 });
 function countCleanupObject(total: CleanupObjects, object: { size?: number }): void {
@@ -344,7 +344,7 @@ async function cleanupSourceInputs(store: ObjectStorage, model: ModelId, id: str
     signal?.throwIfAborted();
     await store.delete(disposable, signal);
     return { deleted: disposable.length, deferred: 0 };
-  } catch (error) { return { deleted: 0, deferred: disposable.length, reason: String(error) }; }
+  } catch (error) { return { deleted: null, deferred: null, reason: String(error) }; }
 }
 
 /** Report only the listed build prefix. Missing sizes and partial deletion failures stay explicit. */
@@ -379,6 +379,7 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       const group = groups.get(id) ?? []; group.push(object); groups.set(id, group);
     }
     const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
+    let confirmedSourceDeletes = 0;
     for (const [id, group] of groups) {
       const retained = current.pointer.retained.find(item => item.buildId === id);
       if (!retained && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
@@ -389,8 +390,10 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       if (source.length && (retained || buildIdTime(id) + MAX_BUILD_LIFETIME_MS <= now)) {
         const state = await cleanupSourceInputs(store, model, id, source.map(item => item.key), retained, signal);
         if (state) {
+          confirmedSourceDeletes += state.deleted ?? 0;
           const inputs = summary.sourceInputs ??= { deleted: 0, deferred: 0 };
-          inputs.deleted += state.deleted; inputs.deferred += state.deferred;
+          inputs.deleted = inputs.deleted === null || state.deleted === null ? null : inputs.deleted + state.deleted;
+          inputs.deferred = inputs.deferred === null || state.deferred === null ? null : inputs.deferred + state.deferred;
           if (state.reason) inputs.reason = state.reason;
         }
       }
@@ -403,6 +406,6 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       summary.deleted = { ...eligible };
     }
     summary.status = 'complete';
-    return deletes.length + (summary.sourceInputs?.deleted ?? 0);
+    return deletes.length + confirmedSourceDeletes;
   } finally { onReport?.(summary); }
 }

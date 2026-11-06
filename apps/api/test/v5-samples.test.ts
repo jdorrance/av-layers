@@ -146,6 +146,35 @@ describe('version-5 batch samples', () => {
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
+  it('preserves samples across compacted f024/f027 groups on the complete 40-frame axis', async () => {
+    const nativeLayers = getProduct('gfs')!.layers.filter(layer => layerSurface(layer) === 'native');
+    const hours = [...Array.from({ length: 24 }, (_, index) => index + 1), ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)];
+    const nativeValue = (layer: typeof nativeLayers[number], frame: number, x: number, y: number) => {
+      if (layer === 'wind-10m-u' && x === 0 && y === 9) return null;
+      if (layer === 'wind-10m-v' && frame === 24 && x === 16 && y === 9) return 0;
+      return (frame + 1) / 10 + x / 100 + y / 1000 + nativeLayers.indexOf(layer) / 10000;
+    };
+    const packed = createGroupedV5Fixture({ groups: [hours.slice(0, 24), hours.slice(24)], nativeLayers, nativeValue });
+    const hourly = createGroupedV5Fixture({ groups: hours.map(hour => [hour]), nativeLayers, nativeValue });
+    const points = [finePoint(4, 17), finePoint(5, 17), nativePoint(31.75, 8.35), nativePoint(0, 9), nativePoint(16, 9)];
+    const layers = 'usable-lift-msl,usable-lift-agl,thermal-velocity,wind-10m-u,wind-10m-v';
+    const selection = `&frame=h024,h027&layers=${layers}`, coordinates = points.map(({ lat, lon }) => `${lat},${lon}`).join(';');
+    const result = await body(await batch(packed, coordinates, selection));
+    expect(result).toEqual(await body(await batch(hourly, coordinates, selection)));
+    expect(result.points[0]!.sample.frames.map(frame => frame.layers['usable-lift-msl']!.status)).toEqual(['no-usable-lift', 'no-usable-lift']);
+    expect(result.points[1]!.sample.frames.every(frame => frame.layers['usable-lift-agl']!.status === 'unavailable')).toBe(true);
+    expect(result.points[3]!.sample.frames.every(frame => frame.layers['wind-10m-u']!.status === 'unavailable')).toBe(true);
+    expect(result.points[4]!.sample.frames[1]!.layers['wind-10m-v']).toMatchObject({ value: 0, status: 'valid' });
+    expect(result.points[0]!.sample.frames.map(frame => frame.intervalStart)).toEqual([23, 26].map(hour => new Date(NOW + hour * 3_600_000).toISOString()));
+    for (const surface of packed.manifest.surfaces) for (const shard of surface.samples.shards) expect(numericReads(packed).some(([key]) => key === shard.key)).toBe(true);
+    expect(numericReads(packed).reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
+    const point = points[2]!, url = new URL(`https://api.test/v1/models/gfs/runs/${packed.buildId}/sample?lat=${point.lat}&lon=${point.lon}${selection}`);
+    const single = await serveSample(new Request(url), packed.bucket, { waitUntil() {}, responseCacheEnabled: false }, packed.manifest, url);
+    expect(sampleResponseV5Schema.parse(await single.json())).toEqual(result.points[2]!.sample);
+    for (const fixture of [packed, hourly]) expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
   it('limits frame-group reads to four and drains every lease', async () => {
     const fixture = createGroupedV5Fixture({ groups: [[1], [2], [3], [4], [5], [6]] });
     const original = fixture.get.getMockImplementation()!;

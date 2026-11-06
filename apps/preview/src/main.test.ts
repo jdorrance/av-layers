@@ -583,7 +583,7 @@ it('pages the full native point forecast while later point times keep the raster
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
 
-it.each([false, true])('keeps the selected hour and last-good map through 40-frame progress (late page fails=%s)', async fail => {
+it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress and last-good map (fails=%s, selected hour loaded=%s)', async (fail, keepKnown) => {
   const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
   const build = fixturePointBuild({ frameHours: hours, mapFrameCount: 40 }), published = build.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
@@ -612,27 +612,35 @@ it.each([false, true])('keeps the selected hour and last-good map through 40-fra
     const series = ui('point-body').children[0];
     expect(series.children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(fail ? 24 : 1);
     expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 2500 m');
+    expect(series.children.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
     const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
     expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(39)} UTC · Map: ${stamp(0)} UTC`);
-    await selectFrame(38);
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Loading selected point hour…');
-    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
+    if (!keepKnown) {
+      await selectFrame(38);
+      expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Loading selected point hour…');
+      expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
+    }
   } finally { release(); }
   if (fail) {
     await vi.waitFor(() => expect(ui('point-status').textContent).toContain('Series failed: Late page failed'));
     const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
     expect(chart.children).toHaveLength(24);
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Selected point hour unavailable.');
-    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain(keepKnown ? 'Native top 2500 m' : 'Selected point hour unavailable.');
+    const incomplete = series.children.find(child => child.className === 'av-point-incomplete')!;
+    expect(incomplete.hidden).toBe(false); expect((incomplete as unknown as HTMLElement).role).toBe('status');
+    expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
+    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
     ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Selected point hour unavailable.');
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain(keepKnown ? 'Native top 8202 ft' : 'Selected point hour unavailable.');
     chart.children.find(child => child.value === 'f072')!.dispatchEvent(new Event('click'));
     expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 8202 ft');
+    expect(incomplete.hidden).toBe(false);
     return;
   }
   await vi.waitFor(() => expect(ui('point-status').textContent.startsWith('40 frames ·')).toBe(true));
   expect(requests.map(page => page.length)).toEqual([1, 23, 16]);
   expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(40);
+  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
   expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
 });
 

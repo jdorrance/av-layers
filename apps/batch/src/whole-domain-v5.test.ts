@@ -615,12 +615,23 @@ describe('whole-domain v5 production', () => {
     let sourceCleanup: CleanupSummary | undefined;
     const locked = vi.spyOn(store, 'delete').mockRejectedValueOnce(new Error('bucket lock is active'));
     expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(0);
-    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: 0, deferred: hourKeys.size });
+    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: null, deferred: null });
     expect([...hourKeys].every(key => store.objects.has(key))).toBe(true);
     locked.mockRestore();
+    const partialKey = [...hourKeys][1]!, deleteObjects = store.delete.bind(store);
+    const partial = vi.spyOn(store, 'delete').mockImplementationOnce(async () => {
+      await deleteObjects([partialKey]);
+      throw new Error('partial source deletion');
+    });
+    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(0);
+    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: null, deferred: null, reason: 'Error: partial source deletion' });
+    expect(store.objects.has(partialKey)).toBe(false);
+    expect([...hourKeys].filter(key => store.objects.has(key))).toHaveLength(hourKeys.size - 1);
+    expect(manifest.surfaces.every(surface => surface.samples.shards.every(shard => store.objects.has(shard.key)))).toBe(true);
+    partial.mockRestore();
     const savedInput = [...hourKeys][0]!, savedBytes = store.objects.get(savedInput)!;
-    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(hourKeys.size);
-    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: hourKeys.size, deferred: 0 });
+    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(hourKeys.size - 1);
+    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: hourKeys.size - 1, deferred: 0 });
     expect([...hourKeys].some(key => store.objects.has(key))).toBe(false);
     await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0);
     await verifySampleServing(store, manifest, configured);

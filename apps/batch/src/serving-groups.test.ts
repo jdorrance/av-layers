@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { RegularLatLonGrid } from '@av/contracts';
@@ -9,11 +9,24 @@ import { TerrainTestStorage } from './terrain/test-fixtures.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { servingGroupResources, writeServingGroups, type HourSamplePart } from './serving-groups.js';
 
+const disk = vi.hoisted(() => ({ available: undefined as number | undefined, beforeCheck: undefined as (() => Promise<void>) | undefined }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...fs, link: vi.fn(fs.link), statfs: async (path: string) => {
+    const actual = await fs.statfs(path);
+    await disk.beforeCheck?.();
+    return disk.available === undefined ? actual : { ...actual, bavail: disk.available, bsize: 1 };
+  } };
+});
+
 const grid: RegularLatLonGrid = { kind: 'regular-latlon', width: 33, height: 17, lon0: 0, lat0: 16, dx: 1, dy: -1, wrapLongitude: true, earthRadiusM: 6371229 };
 const blocks = Uint32Array.of(0, 1, 2, 3, 4, 5), layers = 2;
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => {
+  disk.available = undefined; disk.beforeCheck = undefined; vi.mocked(link).mockClear();
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
+});
 class Store extends TerrainTestStorage {
   metadata = new Map<string, Record<string, string>>();
   buffers: ArrayBufferLike[] = [];
@@ -52,6 +65,59 @@ async function fixture() {
   }
   return { root, store, parts, model: 'gfs', buildId: 'build', surfaceId: 'fine', grid, blockIds: blocks, layers };
 }
+
+async function localInputs(input: Awaited<ReturnType<typeof fixture>>, parts = input.parts): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const part of parts) for (const shard of part.shards) {
+    const path = join(input.root, shard.key);
+    await mkdir(dirname(path), { recursive: true }); await writeFile(path, input.store.objects.get(shard.key)!);
+    keys.add(shard.key);
+  }
+  return keys;
+}
+
+it('admits existing local inputs with free space for outputs alone and preserves the originals', async () => {
+  const input = await fixture(), keys = await localInputs(input), resources = servingGroupResources(input, keys);
+  expect(resources.diskBytes).toBe(resources.outputBytes);
+  expect(resources.diskBytes).toBeLessThan(servingGroupResources(input).diskBytes);
+  disk.available = resources.outputBytes;
+  const result = await writeServingGroups(input);
+  expect(vi.mocked(link).mock.calls.filter(([, destination]) => String(destination).includes('/.serving-'))).toHaveLength(keys.size);
+  for (const key of keys) {
+    expect(input.store.gets.filter(read => read === key)).toEqual([]);
+    expect(await readFile(join(input.root, key))).toEqual(Buffer.from(input.store.objects.get(key)!));
+  }
+  for (const shard of result.shards) expect(await readFile(join(input.root, shard.key))).toEqual(packed(shard.firstFrame, shard.frameCount).bytes[shard.blockShard]);
+});
+
+it.each([false, true])('admits remote input staging only when the peak additional bytes fit: %s', async enough => {
+  const input = await fixture(), resources = servingGroupResources(input);
+  disk.available = resources.diskBytes - (enough ? 0 : 1);
+  if (enough) await expect(writeServingGroups(input)).resolves.toHaveProperty('shards');
+  else {
+    await expect(writeServingGroups(input)).rejects.toThrow('Insufficient serving compaction disk');
+    expect(input.store.gets).toEqual([]);
+    expect((await readdir(input.root)).filter(name => name.startsWith('.serving-'))).toEqual([]);
+  }
+});
+
+it('charges only missing inputs when local and remote source parts share a group', async () => {
+  const input = await fixture(), keys = await localInputs(input, input.parts.slice(2));
+  const resources = servingGroupResources(input, keys);
+  expect(resources.diskBytes).toBeLessThan(servingGroupResources(input).diskBytes);
+  disk.available = resources.diskBytes;
+  await writeServingGroups(input);
+  for (const part of input.parts) for (const shard of part.shards) expect(input.store.gets.filter(key => key === shard.key)).toHaveLength(keys.has(shard.key) ? 0 : 1);
+});
+
+it('fails if a local input disappears after admission instead of downloading unreserved bytes', async () => {
+  const input = await fixture(), keys = await localInputs(input), key = [...keys][0]!;
+  disk.available = servingGroupResources(input, keys).diskBytes;
+  disk.beforeCheck = () => rm(join(input.root, key));
+  await expect(writeServingGroups(input)).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(input.store.gets).toEqual([]);
+  expect((await readdir(input.root)).filter(name => name.startsWith('.serving-'))).toEqual([]);
+});
 it('streams40 frames across a source-part boundary with exact values/flags and one GET per input', async () => {
   const input = await fixture(), result = await writeServingGroups(input);
   expect(result.shards.map(shard => [shard.firstFrame, shard.frameCount])).toEqual([[0, 24], [24, 16]]);

@@ -71,12 +71,16 @@ clean up expired builds, and verify live API serving. Terrain preparation has it
 own operation budget per attempt from [build budgets](../apps/batch/src/capacity.ts);
 forecast elapsed time starts with planning.
 
-The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
-the configured shard target. Set that target to the candidate frame count for
-one hour per shard. Publish stages verified scalar inputs on disk and streams
+The [window settings](../packages/contracts/src/forecast-windows.ts) own each
+model's selected hours and `framesPerShard`. The registry derives the shard
+target from their frame count; set `framesPerShard` to 1 for one selected frame
+per job. The [planner](../apps/batch/src/parallel.ts) balances those frames across
+the target groups. Publish stages verified scalar inputs on disk and streams
 24-frame sample groups through the [merger](../apps/batch/src/sample-pack-v5.ts).
 [Compaction admission](../apps/batch/src/serving-groups.ts) checks temporary disk
-against free space and bounds memory. Profiles retain their compute groups.
+against free space and bounds memory. It counts new serving outputs and live
+downloaded inputs; existing local inputs use hardlinks. Completed groups release
+their staged inputs. Profiles retain their compute groups.
 Each model and each group sharing a cron expression fit the
 job budget. Use the same cron string for models intended to run together. The
 global worker default may be overridden per model; CPU and memory admission bounds
@@ -137,7 +141,8 @@ matching the `builds/` bucket lock. Post-commit maintenance also attempts to
 remove unadvertised `src-g` scalar inputs from committed builds and assembled
 builds past publication lifetime. Advertised serving packs, profiles and archives
 remain protected. Bucket locks defer input deletion until a later cleanup;
-`source-cleanup.json` records confirmed deletion and deferred counts. The seven-day
+`source-cleanup.json` records deletion and deferral counts; null counts mark an
+unconfirmed provider outcome. The seven-day
 setup lock retains those inputs until it expires.
 
 R2 independently expires `builds/` objects eight days after upload and
