@@ -75,6 +75,10 @@ export function renderPointSeries(
   options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; totalFrames?: number; loading?: boolean; onFrame(id: string): void }
 ): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void {
   const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
+  const previousScroll = previous?.scrollLeft ?? 0;
+  const previousSelected = previous?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+  let followSelection = !previous || previous.clientWidth <= 0 || !previousSelected || previousSelected.value !== options.frameId ||
+    (previousSelected.offsetLeft >= previousScroll && previousSelected.offsetLeft + previousSelected.offsetWidth <= previousScroll + previous.clientWidth);
   const focused = previous?.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
   const wasOpen = container.querySelector?.<HTMLDetailsElement>('details')?.open ?? false;
   const section = node('section'), summary = node('p'), time = node('p'), incomplete = node('p', 'Forecast incomplete. Some hours could not be loaded.'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
@@ -84,7 +88,7 @@ export function renderPointSeries(
   time.className = 'av-point-time'; time.style.cssText = 'font-size:11px;line-height:1.5;margin:4px 0';
   incomplete.className = 'av-point-incomplete'; incomplete.role = 'status';
   incomplete.style.cssText = 'font-size:12px;font-weight:600;margin:4px 0';
-  chart.style.cssText = 'display:flex;gap:3px;overflow-x:auto;align-items:stretch;min-height:132px;padding:3px';
+  chart.style.cssText = 'position:relative;display:flex;gap:3px;overflow-x:auto;align-items:stretch;min-height:132px;padding:3px';
   legend.style.cssText = 'font-size:11px;opacity:.75;margin:8px 0';
   legend.className = 'av-point-legend';
   const heading = node('summary', 'Values and source surfaces');
@@ -149,18 +153,21 @@ export function renderPointSeries(
     chart.append(button); return button;
   });
   section.append(time, incomplete, summary, chart, legend, details); container.replaceChildren(section);
-  chart.scrollLeft = previous?.scrollLeft ?? 0;
+  chart.scrollLeft = previousScroll;
   details.open = wasOpen;
   let units = options.unitSystem;
   const partial = options.totalFrames === undefined ? options.loading === true : payload.frames.length < options.totalFrames;
   let loading = options.loading ?? partial;
+  let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
   const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
     units = nextUnits;
     loading = nextLoading;
+    followSelection ||= frameId !== selectedFrameId;
+    selectedFrameId = frameId;
     incomplete.hidden = !partial || loading;
     mapFrameId = nextMapFrameId;
-    const frame = payload.frames.find(frame => frame.id === frameId);
+    const selectedIndex = payload.frames.findIndex(frame => frame.id === frameId), frame = payload.frames[selectedIndex];
     const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
     const utc = (value: string) => `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
@@ -175,6 +182,14 @@ export function renderPointSeries(
       bar.ariaLabel = `${frame.validTime}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${pointFrameView(frame, build, units).summary}`;
       bar.title = bar.ariaLabel;
     });
+    const selected = bars[selectedIndex];
+    if (followSelection && selected && chart.clientWidth > 0) {
+      const left = selected.offsetLeft, width = selected.offsetWidth;
+      if (width > 0 && Number.isFinite(left + width + chart.scrollLeft + chart.clientWidth)) {
+        chart.scrollLeft = Math.max(left + width - chart.clientWidth, Math.min(chart.scrollLeft, left));
+        followSelection = false;
+      }
+    }
   };
   update(options.frameId);
   if (focused) bars.find(bar => bar.value === focused.value)?.focus({ preventScroll: true });
