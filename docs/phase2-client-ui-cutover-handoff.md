@@ -104,6 +104,14 @@ Record actual full-build RSS and elapsed time before declaring each model ready.
 Review the PR again after checks pass, merge, then verify production endpoints
 and rendered views. Correct failures and repeat the affected checks.
 
+Completed 2026-11-06: production preview checks pass for GFS's 384-hour and
+ICON-EU/RRFS's 48-hour horizons at 320 px and 393 px, including bounded paging,
+cache reuse, units and retained map captions. All native fields are valid
+across 48 ICON frames near the approximate screenshot location. See the
+[production evidence](phase3-models-and-sunlight-handoff.md#completion).
+Windy controller/bundle checks pass; its production developer loader requires
+an authenticated host session.
+
 ## Deferred consumer cutover
 
 Windgrams adapters, offline snapshots, activation and retirement of its duplicated

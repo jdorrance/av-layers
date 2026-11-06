@@ -84,7 +84,7 @@ recovers trailing-hour flux/precipitation and RRFS 48 directly supplies 47–48.
 Admission with real coverage, provider arrays and 24-hour map prefixes peaks at
 2,047,103,276 bytes for GFS, 2,130,306,286 for ICON-EU and 2,040,638,525 for RRFS;
 RRFS uses one input frame. Profile output totals 12.73/10.86/27.47 GB respectively.
-These totals include auxiliary fields, shared diagnostics, writer buffers and a 256 MiB runtime
+Working-set estimates include auxiliary fields, shared diagnostics, writer buffers and a 256 MiB runtime
 reserve. Record actual worker RSS and elapsed time before changing a limit.
 
 Numeric validation and upload share the borrowed workspace in
@@ -112,6 +112,22 @@ to successful publish-step completion took 46m29s; peak worker RSS was
 scalar parity and nighttime values, exercised all three first-frame profile partitions
 after scalar reads, and verified map artifacts, provenance and browser paging.
 
+[Production RRFS](https://github.com/jdorrance/av-layers/actions/runs/42151691053)
+published all 48 hourly frames and complete native-cell profiles. All 48 shard
+receipts captured the full process peak; the maximum was 2,008,121,344 bytes.
+Pre-publication elapsed time was 61m35s, followed by 5m26s of publication work.
+API checks cover all nine first-frame profile partitions after scalar reads,
+nighttime values and native-only late frames. Mobile checks cover paging, units
+and retained map captions. All 39 available prior-hour controls match exactly
+across 132 scalar and 351 profile files.
+
+[Production ICON-EU](https://github.com/jdorrance/av-layers/actions/runs/42154667582)
+published all 48 hourly frames and complete native-cell profiles. All 48 full
+process peaks passed, with a maximum of 1,400,418,304 bytes. Pre-publication time
+was 51m48s, followed by 3m12s of publication work. API checks cover all four
+first-frame profile partitions; all 18 native channels are valid across all 48
+frames at the approximate screenshot location, 40.749°N, 42.4°E.
+
 Numeric packs total 20.79/15.95/35.88 GB per build. The configured daily cadence
 and seven-day retention project 1.52 TB across the three models. Admission and
 assembly enforce the aggregate numeric-byte budget in
@@ -135,3 +151,9 @@ Run root checks, all three model proofs and AV client browser checks. Include
 measured budgets and publication evidence in the PR.
 After review and green CI, merge and verify the deployed revision, manifests,
 map-window boundaries and extended samples/profiles in production.
+
+Completed 2026-11-06. Independent correctness, resource and browser reviews pass
+for all three models. The [all-model production health run](https://github.com/jdorrance/av-layers/actions/runs/42160468908)
+passes freshness, horizon and serving checks. Retained payloads, conditional
+requests and response hashes pass live readback. All forecast workers drained
+before this completion record was committed.
