@@ -83,7 +83,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
 - Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–10.
-- Execution: 24 target shards; at most 8 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
+- Execution: 48 target shards; at most 8 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
@@ -101,7 +101,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
-- Execution: 24 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["27 3,9,15,21 * * *"]`.
+- Execution: 48 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["27 3,9,15,21 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 25.
