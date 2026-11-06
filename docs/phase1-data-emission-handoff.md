@@ -170,7 +170,7 @@ thermal tops and shared profile integrals without another thermal solve.
 
 - [x] Unit/schema/codec tests cover LCL, humidity, vector rotation, BL integration,
   quantization and missingness with independent controls.
-- [ ] Existing fine lift values and rendered artifacts match frozen controls;
+- [x] Existing fine lift values and rendered artifacts match frozen controls;
   nocturnal synoptic/profile cases pass for regional models.
 - [x] `pnpm capacity --model MODEL` passes for every existing model, including
   profiles and all-hour frames, within current build budgets.
@@ -180,9 +180,14 @@ thermal tops and shared profile integrals without another thermal solve.
 - [x] `pnpm docs:generate`, `pnpm test`, `pnpm verify` and `pnpm build` pass.
 - [x] Independent correctness, performance and simplification reviews have no
   unresolved actionable findings. Record measurements and remaining limitations.
-- [ ] Push this branch, open and review the PR, resolve CI/review findings and
+- [x] Push this branch, open and review the PR, resolve CI/review findings and
   merge. Verify the deployed revision, one fresh publication per existing model,
   old retained URLs, nighttime samples, profiles, multi-point reads and rollback.
+
+Production publications, resource measurements and health checks are recorded
+in [Phase 3](phase3-models-and-sunlight-handoff.md). Rollback identity, provenance
+and CAS controls pass in the publication test suite; retained URLs pass live
+readback.
 
 Horizontal convergence, 80 m winds, 925 hPa scalars, CIN, middle/high cloud
 channels, BL-top channels and mixed-layer/cloud-limit scalar channels are
