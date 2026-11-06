@@ -19,7 +19,7 @@ pnpm verify
 ### 1.1 Primary Scope vs. Gated Promotions
 1. **Primary Deliverable (Milestones 1–4):**
    - Fix the three immediate baseline/serving prerequisites (Section 3.1) and optimize the shipping whole-domain configuration (**ICON-EU `k=5` at `maxNativeZoom: 8`** and **GFS `k=10` at `maxNativeZoom: 7`**, Africa excluded, GFS precipitation on its native surface).
-   - Deliver **both** baseline and post-optimization full-domain build and serving receipts on comparable inputs within the enforced `BUILD_BUDGETS.elapsedMs` deadline contract (**45 minutes** hard ceiling; **20 minutes** is an unproven optimization target to be evaluated against the measured critical path).
+   - Deliver baseline and post-optimization full-domain build and serving receipts on comparable inputs within the elapsed budget in [capacity.ts](../apps/batch/src/capacity.ts).
 2. **Separately Gated Promotions (Milestone 5):**
    - **8-shard fan-out**, **GFS `k=25`**, and **higher native zooms (`z=9`, `z=10`)** are **not** bundled into the initial rollout. Because `z=10` increases tile counts by `~14×` (ICON-EU) to `~50×` (GFS), each step (`4 vs. 8` shards, `k=25`, `z=9`, `z=10`) requires its own full-domain build measurement, R2 storage/operation accounting, Worker memory check, and runner-cost justification before promotion.
 
@@ -27,7 +27,7 @@ pnpm verify
 Reconcile the operational wall-clock ceiling with `BUILD_BUDGETS.elapsedMs` ([capacity.ts](../apps/batch/src/capacity.ts#L13)) and [publication-workflow.ts](../scripts/publication-workflow.ts#L49):
 1. **Start and End Boundaries:**
    - `createdAt` is stamped once in `createBuildPlan` (or `buildForecast` for sequential builds).
-   - Persist `deadlineAt = new Date(Date.parse(createdAt) + BUILD_BUDGETS.elapsedMs).toISOString()` in `plan.json` (tightening `BUILD_BUDGETS.elapsedMs` from `50 * 60_000` to `45 * 60_000` once Milestones 1–4 are verified).
+   - Persist `deadlineAt = new Date(Date.parse(createdAt) + BUILD_BUDGETS.elapsedMs).toISOString()` in `plan.json`.
    - Propagate `AbortSignal.timeout(Math.max(1, Date.parse(plan.deadlineAt) - Date.now()))` through `prepare`, `shard`, and `build-publish`.
 2. **Pre-CAS Reserve vs. Post-CAS Committed Outcome:**
    - Before `publish()` executes `casPointer` ([publication.ts](../apps/batch/src/publication.ts#L114)), enforce `now() <= Date.parse(plan.deadlineAt) - SMOKE_VERIFY_RESERVE_MS` (`60_000 ms` reserve) in addition to `assertLifetime` and `assertUsefulHorizon`.

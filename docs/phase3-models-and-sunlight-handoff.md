@@ -25,9 +25,10 @@ every selected level throughout the published horizon.
 - Nest profile shards by frame group, retaining full block/byte/digest metadata.
   Real coverage/layout measurements with current capacity metrics: GFS 144
   frames uses 175,006 bytes/11,566 structural tokens; ICON-EU 48 uses
-  134,054/8,446; RRFS 48 uses 216,032/13,188. RRFS has 432 profile shards across
-  small groups. Its conservative decoded estimate is 837,330 bytes; retained
-  V8 parse heap measures 236,707 bytes. Admit manifests at 16,384 tokens while
+  141,519/8,998; RRFS 48 uses 225,646/13,958. RRFS has 432 profile shards across
+  48 frame groups. Its metadata fixture has an 879,394-byte conservative
+  decoded estimate and 247,931-byte measured retained V8 parse heap.
+  Admit manifests at 16,384 tokens while
   retaining existing byte, container, cache and process budgets.
 - Write bounded per-frame provenance chunks and a versioned run index; bind
   every chunk to its frame, digest and byte count during publication and rollback.
@@ -81,21 +82,31 @@ Live 2026-11-05 inventories contain all 120 configured GFS fields at
 hourly support through 120 and three-hour support from 123; ICON-EU 48/47
 recovers trailing-hour flux/precipitation and RRFS 48 directly supplies 47–48.
 Admission with real coverage, provider arrays and 24-hour map prefixes peaks at
-2,047,103,276 bytes for GFS, 2,129,563,330 for ICON-EU and 2,040,005,669 for RRFS;
+2,047,103,276 bytes for GFS, 2,130,306,286 for ICON-EU and 2,040,638,525 for RRFS;
 RRFS uses one input frame. Profile output totals 12.73/10.86/27.47 GB respectively.
 These totals include auxiliary fields, shared diagnostics, writer buffers and a 256 MiB runtime
 reserve. Record actual worker RSS and elapsed time before changing a limit.
 
-GFS uses 72 frame groups and ICON-EU uses 24, with parallelism fixed at 12/8.
-Both now assign two map frames per job. Six-frame ICON groups measured 21–28
-minutes of build work plus 5–7 minutes of validation/upload, at 1.945–2.069 GB
-peak RSS. GFS completed only two to four map frames in 31–40 minutes.
-Tile and numeric totals stay fixed. Verify the new grouping through publication
-before closing the gate.
+GFS uses 72 two-frame groups. ICON-EU and RRFS use 48 one-frame groups, with
+parallelism 8/20. Source inputs, tile totals and numeric totals retain their
+configured values.
 
-Use a 90-minute elapsed budget for the complete plan. An ICON daytime pair
-measured 33.6 minutes; later groups waited 13 minutes before starting. The
-deadline also covers assembly and publication.
+Use a 90-minute elapsed budget for the entire plan. Two-frame
+ICON and RRFS workers measured 50m51s and 57m27s of core work, then exhausted
+their scoped credentials during post-core work. One-frame groups retain the
+existing job, credential and memory bounds.
+
+Start RRFS first. Start ICON after all 48 RRFS build jobs are visible and either
+running or passed, with at most 12 running. Keep main stable and avoid
+reruns until both publications finish. This stagger stays within 20 active
+workers and gives late RRFS map frames more credential headroom.
+
+[Production GFS](https://github.com/jdorrance/av-layers/actions/runs/42124895821)
+published all 144 frames through hour 384 with a 24-hour map prefix. Build stamp
+to successful publish-step completion took 46m29s; peak worker RSS was
+1,705,320,448 bytes. Production checks paged every profile frame, checked native
+scalar parity and nighttime values, exercised all three first-frame profile partitions
+after scalar reads, and verified map artifacts, provenance and browser paging.
 
 Numeric packs total 20.79/15.95/35.88 GB per build. The configured daily cadence
 and seven-day retention project 1.52 TB across the three models. Admission and
