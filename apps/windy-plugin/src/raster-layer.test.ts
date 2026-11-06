@@ -3,7 +3,7 @@ import { windyTileOptions } from '@av/contracts/client';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { forecastStackZIndex, WindyRasterLayer, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const url = (frame: string) => `https://tiles.example/tiles/gfs/build-1/precip-rate/${frame}/{z}/{x}/{y}.webp`;
 function fixture() {
   const handlers = new Map<string, Set<() => void>>();
@@ -118,6 +118,8 @@ it('stacks above weather colors and below wind particles', () => {
 });
 
 it.each(['commit', 'failure', 'freeze'] as const)('preserves prefetched target bytes across URL changes until %s', async outcome => {
+  const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));
   const requests: { url: string; signal: AbortSignal; resolve(response: Response): void }[] = [];
   vi.stubGlobal('fetch', vi.fn<typeof fetch>((url, init) => new Promise((resolve, reject) => {
     const signal = init!.signal!;
@@ -127,7 +129,7 @@ it.each(['commit', 'failure', 'freeze'] as const)('preserves prefetched target b
   const f = fixture();
   let interactive: Promise<unknown> | null = null;
   try {
-    f.layer.setBuild(fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example'));
+    f.layer.setBuild(build);
     f.layer.addTo(f.map); f.complete(); f.emit('idle');
     expect(requests.length).toBeGreaterThan(0);
     const target = requests[0];
