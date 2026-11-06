@@ -131,7 +131,7 @@ export function terrainColumnCapacity(sourceActiveCells: number, targetActiveCel
   }
   const mappingBufferBytes = sourceActiveCells * 4 + targetActiveCells * 53 + donorCount * 8;
   const daylightBufferBytes = terrainColumnDaylightBufferBytes(targetGrid, 3);
-  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBufferBytes;
+  const workspaceBufferBytes = donorCount * (maxLevels * 16 + 53) + 4 * (maxLevels + 3) * 58 + 4 + daylightBufferBytes;
   const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
   const workspaceBytes = workspaceBufferBytes + workspaceObjectBudgetBytes;
   if (![mappingBufferBytes, workspaceBufferBytes, workspaceObjectBudgetBytes, workspaceBytes].every(Number.isSafeInteger)) {
@@ -252,7 +252,7 @@ export function preparePackedTerrainColumns(plan: WholeDomainGrid, coverage: Spa
   if (partition && (!Number.isSafeInteger(partition.index) || !Number.isSafeInteger(partition.count) || partition.count < 1 || partition.index < 0 || partition.index >= partition.count)) throw new RangeError('Invalid terrain column partition');
   const byteLength = sourceActiveIndices.length * 4 + (target.width + target.height) * 12 +
     (source.width + source.height) * 8 + Math.ceil(source.width * source.height / 8) + 96;
-  const workspaceBufferBytes = Math.min(4, sourceActiveIndices.length) * (maxLevels * 16 + 45) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
+  const workspaceBufferBytes = Math.min(4, sourceActiveIndices.length) * (maxLevels * 16 + 53) + 4 * (maxLevels + 3) * 58 + 4 + daylightBytes(target, 3);
   const workspaceObjectBudgetBytes = 66560 + maxLevels * 256;
   const outputBufferBytes = targetCount * 10;
   const admittedBytes = byteLength + workspaceBufferBytes + workspaceObjectBudgetBytes + outputBufferBytes;

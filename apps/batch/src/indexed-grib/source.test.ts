@@ -260,7 +260,7 @@ describe('inventory admission and transport accounting', () => {
         specs = specs.filter((spec) => spec.key !== '625.tmp');
       }
       const duplicateMode = mode === 'duplicates' || mode === 'conflict-5' || mode === 'conflict-6';
-      if (duplicateMode && product === 'primary' && (hour === 5 || hour === 6)) {
+      if (duplicateMode && product === 'primary' && (hour === 5 || hour === 6 || hour === 24)) {
         const i = specs.findIndex((spec) => spec.key === 'precipitation');
         specs.splice(i, 0, specs[i]!);
       }
@@ -276,6 +276,74 @@ describe('inventory admission and transport accounting', () => {
   it('labels complete inventories as decoded admission not checked', async () => {
     const result = await discoverIndexedGribRun(profile, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl: inventoryFetch('complete') });
     expect(result).toMatchObject({ cycle: '2026-10-30T00:00:00Z', inventoryComplete: true, decodedAdmission: 'not-checked', availableHours: Array.from({ length: 24 }, (_, i) => i + 1) });
+  });
+
+  it('rejects an absent final hour before loading earlier inventories', async () => {
+    const source = indexedSource({ ...profile.model, forecast: { ...profile.model.forecast, hours: [1, 2, 72] },
+      upstream: { ...profile.upstream, discoveryCandidates: 1 } });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
+    await expect(discoverIndexedGribRun(source, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl })).rejects.toMatchObject({ code: 'run-unavailable' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]![0])).toContain('.f072.idx');
+  });
+
+  it('refreshes missing final-hour fields before loading earlier inventories', async () => {
+    const source = indexedSource({ ...profile.model, upstream: { ...profile.upstream, discoveryCandidates: 1 } });
+    const fetchImpl = vi.fn(inventoryFetch('missing-secondary'));
+    await expect(discoverIndexedGribRun(source, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl })).rejects.toMatchObject({ code: 'run-unavailable' });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    expect(fetchImpl.mock.calls.every(([url]) => String(url).endsWith('.f024.idx'))).toBe(true);
+  });
+
+  it('bounds inventory fan-out and drains terminal conflicts after an unavailable peer', async () => {
+    const source = indexedSource({ ...profile.model, upstream: { ...profile.upstream, discoveryCandidates: 1 } });
+    const baseFetch = inventoryFetch('complete');
+    let releaseMissing!: () => void, releaseRest!: () => void, active = 0, peak = 0, settled = false;
+    const missing = new Promise<void>(resolve => { releaseMissing = resolve; });
+    const rest = new Promise<void>(resolve => { releaseRest = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('.f024.idx')) return baseFetch(input, init);
+      active++; peak = Math.max(peak, active);
+      try {
+        if (url.includes('pgrb2.0p25.f001')) { await missing; return new Response(null, { status: 404 }); }
+        await rest;
+        const response = await baseFetch(input, init);
+        return url.includes('pgrb2b.0p25.f001') ? new Response((await response.text()).replaceAll('d=2026103000', 'd=1999010100')) : response;
+      } finally { active--; }
+    });
+    const pending = discoverIndexedGribRun(source, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl }).catch(error => error);
+    void pending.then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => { expect(active).toBe(8); });
+      releaseMissing();
+      await vi.waitFor(() => { expect(active).toBe(7); });
+      expect(settled).toBe(false);
+      releaseRest();
+      expect(await pending).toMatchObject({ code: 'source-conflict' });
+      expect(peak).toBe(8); expect(active).toBe(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(10);
+    } finally { releaseMissing(); releaseRest(); await pending; }
+  });
+
+  it('aborts and drains all admitted inventory requests without starting another cycle', async () => {
+    const source = indexedSource({ ...profile.model, upstream: { ...profile.upstream, discoveryCandidates: 1 } });
+    const baseFetch = inventoryFetch('complete'), controller = new AbortController();
+    let active = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith('.f024.idx')) return baseFetch(input, init);
+      active++;
+      try { return await new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true })); }
+      finally { active--; }
+    });
+    const pending = discoverIndexedGribRun(source, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl, signal: controller.signal }).catch(error => error);
+    try {
+      await vi.waitFor(() => { expect(active).toBe(8); });
+      controller.abort(new Error('cancel discovery'));
+      expect(await pending).toMatchObject({ message: 'cancel discovery' });
+      expect(active).toBe(0);
+      expect(fetchImpl).toHaveBeenCalledTimes(10);
+    } finally { controller.abort(); await pending; }
   });
 
   it('rejects candidate runs with an unbounded required record or a missing secondary level', async () => {
@@ -299,6 +367,9 @@ describe('inventory admission and transport accounting', () => {
     expect(result).toMatchObject({ inventoryComplete: true, decodedAdmission: 'not-checked' });
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'current')).toBe(true);
     expect(result.duplicates.some((item) => item.key === 'precipitation' && item.role === 'companion')).toBe(true);
+    expect(result.duplicates.map(item => [item.role, /\.f(\d{3})$/.exec(item.url)![1]])).toEqual([
+      ['current', '005'], ['current', '006'], ['companion', '005'], ['current', '024']
+    ]);
     for (const mode of ['conflict-5', 'conflict-6'] as const) {
       await expect(discoverIndexedGribRun(profile, { ...options, fetchImpl: inventoryFetch(mode) })).rejects.toMatchObject({ code: 'record-ambiguous' });
     }

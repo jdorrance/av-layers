@@ -595,6 +595,16 @@ it('pages the full native point forecast while later point times keep the raster
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
 
+it('labels an unprefixed v5 point day as 24 hours while keeping its full forecast available', async () => {
+  const build = fixturePointBuild({ frameHours: Array.from({ length: 48 }, (_, index) => index + 1), mapFrameCount: 48 }), m = build.manifest;
+  if (m.version !== 5) throw new Error('Expected v5');
+  delete m.mapFrameCount;
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify(v5Latest(m))));
+  await start();
+  expect(ui('point-horizon-label').hidden).toBe(false);
+  expect(ui('point-horizon').children[0].textContent).toBe('24 hours');
+});
+
 it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress and last-good map (fails=%s, selected hour loaded=%s)', async (fail, keepKnown) => {
   const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
   const build = fixturePointBuild({ frameHours: hours, mapFrameCount: 40 }), published = build.manifest;

@@ -123,6 +123,25 @@ it('distinguishes neutral and lowest-layer valley extrapolation', () => {
   expect(neutral - workspace.environmentAtGroundC).toBeCloseTo(3.8, 10);
 });
 
+it('refreshes admitted lapse rates for one-level, clamped and failed donors', () => {
+  const input = donor(), workspace = new ReconstructedProfileWorkspace(1, 3);
+  const slots = Uint32Array.of(0), weights = Float64Array.of(1);
+  const check = (levels: ColumnInput['levels'], lapse: number) => {
+    expect(workspace.admit(0, { ...input, levels }, levels.length)).toBe(true);
+    expect(workspace.reconstruct(slots, weights, 0, 1, 1400, 1000, 'lowest-layer')).toBe(true);
+    expect(workspace.environmentAtGroundC).toBe(levels[0]!.temperatureC + lapse * (levels[0]!.heightM - 1500) + lapse * 100);
+  };
+  check(input.levels, 0.006);
+  check([{ heightM: 2500, temperatureC: 14 }], 0.0098);
+  check([{ heightM: 2500, temperatureC: 14 }, { heightM: 3000, temperatureC: 16 }], 0);
+  check([{ heightM: 2500, temperatureC: 14 }, { heightM: 3000, temperatureC: 4 }], 0.0098);
+  expect(workspace.admit(0, { ...input, levels: [{ heightM: 2500, temperatureC: NaN }] }, 1)).toBe(false);
+  expect(workspace.reconstruct(slots, weights, 0, 1, 1400, 1000)).toBe(false);
+  check(input.levels, 0.006);
+  workspace.reset();
+  expect(workspace.reconstruct(slots, weights, 0, 1, 1400, 1000)).toBe(false);
+});
+
 it('requires all donors at the bridge endpoint and the lowest donor top', () => {
   const a = { ...donor(), terrainM: 0, levels: [{ heightM: 500, temperatureC: 17 },
     { heightM: 1000, temperatureC: 14 }, { heightM: 1500, temperatureC: 11 }] };
@@ -200,7 +219,7 @@ it('crosses an entering donor jump at its height instead of ramping toward it', 
     { heightM: 3500, temperatureC: 14 }, { heightM: 4000, temperatureC: 11 }
   ] };
   const workspace = new ReconstructedProfileWorkspace(2, 4);
-  expect(workspace.byteLength).toBe(2 * (4 * 16 + 28) + 4 * (4 + 3) * 58 + 4);
+  expect(workspace.byteLength).toBe(2 * (4 * 16 + 36) + 4 * (4 + 3) * 58 + 4);
   expect(deriveLift({ ...low, levels: [low.levels[0]!, low.levels[0]!] }, 2).status).toBe('unavailable');
   expect(workspace.admit(0, { ...low, levels: [low.levels[0]!, low.levels[0]!] }, 2)).toBe(false);
   expect(workspace.admit(0, low, 4)).toBe(true);

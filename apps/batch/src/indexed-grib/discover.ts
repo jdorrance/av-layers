@@ -1,11 +1,16 @@
 import { sourceIntervalHours } from '@av/contracts';
 import { recentSourceCycles } from '../source.js';
+import { runConcurrent } from '../concurrent.js';
 import type { IndexedSource } from './source.js';
 import { IndexedGribError } from './errors.ts';
 import { cycleStamp, indexedGribCompanionSpecs, indexedGribCurrentSpecs, indexedGribFileUrl, indexedGribWindowNeedsCompanion } from './fields.ts';
 import { IndexedGribTransport, selectIndexedGribRecord, type IndexResult, type IndexedGribTransportStats } from './transport.ts';
 import type { DiscoveredIndexedGribRun, DiscoverIndexedGribRunOptions, IndexedGribFieldSpec } from './types.ts';
 
+function unavailableRun(error: unknown): boolean {
+  return error instanceof IndexedGribError && (error.code === 'record-missing' ||
+    (error.code === 'transport' && error.details?.reason === 'upstream-not-ready'));
+}
 
 async function checkSpecList(source: IndexedSource,
   cycle: string,
@@ -29,18 +34,30 @@ async function checkRun(source: IndexedSource, cycle: string, transport: Indexed
   const stamp = cycleStamp(cycle);
   const indexes = new Map<string, IndexResult>();
   const duplicates: DiscoveredIndexedGribRun['duplicates'] = [];
+  const lastHour = source.model.forecast.hours.at(-1)!;
+  const loadInventory = async ({ hour, product }: { hour: number; product: string }): Promise<void> => {
+    const index = await transport.index(`${indexedGribFileUrl(source, cycle, hour, source.upstream.products[product])}.idx`, stamp, refresh);
+    indexes.set(`${product}:${hour}`, index);
+  };
+  for (const product of Object.keys(source.upstream.products)) await loadInventory({ hour: lastHour, product });
+  const lastDuplicates: DiscoveredIndexedGribRun['duplicates'] = [];
+  await checkSpecList(source, cycle, transport, indexes, indexedGribCurrentSpecs(source, lastHour), lastHour, 'current', lastDuplicates);
   const inventoryJobs = new Map<string, { hour: number; product: string }>();
   const addInventory = (hour: number, product: string) => inventoryJobs.set(`${product}:${hour}`, { hour, product });
   for (const hour of source.model.forecast.hours) {
     for (const product of Object.keys(source.upstream.products)) addInventory(hour, product);
     for (const spec of indexedGribCompanionSpecs(source, hour)) addInventory(hour - sourceIntervalHours(source.model.forecast, hour), spec.product);
   }
-  for (const { hour, product } of inventoryJobs.values()) {
-    const index = await transport.index(`${indexedGribFileUrl(source, cycle, hour, source.upstream.products[product])}.idx`, stamp, refresh);
-    indexes.set(`${product}:${hour}`, index);
-  }
+  let terminalFailure: { error: unknown } | undefined;
+  try {
+    await runConcurrent([...inventoryJobs.values()].filter(({ hour, product }) => !indexes.has(`${product}:${hour}`)), 8, async job => {
+      try { await loadInventory(job); }
+      catch (error) { if (!unavailableRun(error)) terminalFailure ??= { error }; throw error; }
+    });
+  } catch (error) { throw terminalFailure?.error ?? error; }
   for (const hour of source.model.forecast.hours) {
-    await checkSpecList(source, cycle, transport, indexes, indexedGribCurrentSpecs(source, hour), hour, 'current', duplicates);
+    if (hour === lastHour) duplicates.push(...lastDuplicates);
+    else await checkSpecList(source, cycle, transport, indexes, indexedGribCurrentSpecs(source, hour), hour, 'current', duplicates);
     if (indexedGribWindowNeedsCompanion(source, hour)) {
       await checkSpecList(source, cycle, transport, indexes, indexedGribCompanionSpecs(source, hour), hour - sourceIntervalHours(source.model.forecast, hour), 'companion', duplicates);
     }
@@ -77,7 +94,7 @@ export async function discoverIndexedGribRunWithTransport(source: IndexedSource,
       }
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      if (!(error instanceof IndexedGribError) || (error.code !== 'record-missing' && !(error.code === 'transport' && error.details?.reason === 'upstream-not-ready'))) throw error;
+      if (!unavailableRun(error)) throw error;
       failures.push(`${cycle}: ${(error as Error).message}`);
     }
   }

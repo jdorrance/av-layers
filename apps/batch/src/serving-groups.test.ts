@@ -8,8 +8,13 @@ import type { RegularLatLonGrid } from '@av/contracts';
 import { TerrainTestStorage } from './terrain/test-fixtures.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { servingGroupResources, writeServingGroups, type HourSamplePart } from './serving-groups.js';
+import { MAX_V5_SHARD_BYTES } from './capacity.js';
 
-const disk = vi.hoisted(() => ({ available: undefined as number | undefined, beforeCheck: undefined as (() => Promise<void>) | undefined }));
+const disk = vi.hoisted(() => ({ available: undefined as number | undefined, beforeCheck: undefined as (() => Promise<void>) | undefined, shardBytes: undefined as number | undefined }));
+vi.mock('./capacity.js', async importOriginal => {
+  const capacity = await importOriginal<typeof import('./capacity.js')>();
+  return { ...capacity, get MAX_V5_SHARD_BYTES() { return disk.shardBytes ?? capacity.MAX_V5_SHARD_BYTES; } };
+});
 vi.mock('node:fs/promises', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs/promises')>();
   return { ...fs, link: vi.fn(fs.link), statfs: async (path: string) => {
@@ -24,7 +29,7 @@ const blocks = Uint32Array.of(0, 1, 2, 3, 4, 5), layers = 2;
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const roots: string[] = [];
 afterEach(async () => {
-  disk.available = undefined; disk.beforeCheck = undefined; vi.mocked(link).mockClear();
+  disk.available = undefined; disk.beforeCheck = undefined; disk.shardBytes = undefined; vi.mocked(link).mockClear();
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 class Store extends TerrainTestStorage {
@@ -38,7 +43,7 @@ class Store extends TerrainTestStorage {
   }
 }
 function packed(firstFrame: number, frameCount: number) {
-  const layout = prepareShardedSamplePackLayout(grid, blocks, frameCount * layers);
+  const layout = prepareShardedSamplePackLayout(grid, blocks, frameCount * layers, MAX_V5_SHARD_BYTES);
   const bytes = layout.shards.map(shard => Buffer.alloc(shard.byteLength));
   for (let b = 0; b < layout.blockCount; b++) {
     const block = layout.block(b), out = bytes[block.shard]!;
@@ -154,6 +159,67 @@ it('cleans staged files after a later failure and retries immutable completed ou
   const before = input.store.buffers.length;
   await expect(writeServingGroups(input)).resolves.toMatchObject({ shards: expect.arrayContaining([expect.objectContaining({ firstFrame: 24, frameCount: 16 })]) });
   expect(input.store.buffers.length - before).toBe(1);
+});
+it('uploads with two distinct reusable buffers, preserves order and exact bytes, and reserves both lanes', async () => {
+  disk.shardBytes = 75 * 1024;
+  const input = await fixture(), put = input.store.put.bind(input.store);
+  let active = 0, peak = 0;
+  vi.spyOn(input.store, 'put').mockImplementation(async (...args) => {
+    active++; peak = Math.max(peak, active);
+    try {
+      const before = Buffer.from(args[1]);
+      await new Promise(resolve => setTimeout(resolve, 2));
+      expect(args[1]).toEqual(before);
+      await put(...args);
+    } finally { active--; }
+  });
+  const remote = servingGroupResources(input), local = servingGroupResources(input, new Set(), false);
+  expect(remote.workingBytes - local.workingBytes).toBe(4 * MAX_V5_SHARD_BYTES);
+  const result = await writeServingGroups(input);
+  expect(peak).toBe(2); expect(active).toBe(0);
+  expect(new Set(input.store.buffers).size).toBe(2);
+  expect(result.objects.map(object => object.key)).toEqual(result.shards.map(shard => shard.key));
+  for (const shard of result.shards) {
+    const expected = packed(shard.firstFrame, shard.frameCount).bytes[shard.blockShard]!;
+    expect(input.store.objects.get(shard.key)).toEqual(new Uint8Array(expected));
+    expect(shard.sha256).toBe(digest(expected));
+  }
+  expect(result.phasesMs).toEqual({ stageMs: expect.any(Number), mergeMs: expect.any(Number), uploadMs: expect.any(Number) });
+  expect(result.phasesMs.uploadMs).toBeGreaterThan(0);
+});
+it.each(['failure', 'abort'] as const)('drains both admitted uploads before cleanup on %s and retries immutable outputs', async mode => {
+  disk.shardBytes = 75 * 1024;
+  const input = await fixture(), controller = new AbortController(), put = input.store.put.bind(input.store);
+  const keys: string[] = [];
+  let release!: () => void, started!: () => void, active = 0, settled = false;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const admitted = new Promise<void>(resolve => { started = resolve; });
+  const spy = vi.spyOn(input.store, 'put').mockImplementation(async (...args) => {
+    keys.push(args[0]); active++;
+    try {
+      if (keys.length === 2) {
+        started(); await blocked;
+      } else if (keys.length === 1) {
+        await admitted;
+        if (mode === 'failure') throw new Error('upload failed');
+        controller.abort(new Error('upload aborted'));
+      }
+      await put(...args);
+    } finally { active--; }
+  });
+  const work = writeServingGroups({ ...input, signal: controller.signal }).finally(() => { settled = true; });
+  const rejected = expect(work).rejects.toThrow(mode === 'failure' ? 'upload failed' : 'upload aborted');
+  await admitted;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(settled).toBe(false); expect(active).toBe(1); expect(keys).toHaveLength(2);
+  expect((await readdir(input.root)).some(name => name.startsWith('.serving-'))).toBe(true);
+  release(); await rejected;
+  expect(active).toBe(0);
+  expect((await readdir(input.root)).some(name => name.startsWith('.serving-'))).toBe(false);
+  spy.mockRestore();
+  const result = await writeServingGroups(input);
+  expect(result.objects.map(object => object.key)).toEqual(result.shards.map(shard => shard.key));
+  for (const shard of result.shards) expect(input.store.objects.get(shard.key)).toEqual(new Uint8Array(packed(shard.firstFrame, shard.frameCount).bytes[shard.blockShard]!));
 });
 it('settles cancellation and removes staged files without publishing an incomplete group', async () => {
   const input = await fixture(), controller = new AbortController(), get = input.store.get.bind(input.store);

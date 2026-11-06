@@ -3,8 +3,9 @@ import { expect, it, vi } from 'vitest';
 import { canonicalGridJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, CLOUD_SUPPORT_MASK, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, STATUS_NO_LIFT, STATUS_OUTSIDE, TERRAIN_CLEARANCE_METHOD,
   type CoverageMask, type Grid, type RegularLatLonGrid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
+import { ReconstructedProfileWorkspace } from '@av/soaring';
 import { deriveFrame, FRAME_BRANCH } from './frame.js';
-import { preparePackedTerrainColumns, prepareTerrainColumns } from './refinement.js';
+import { preparePackedTerrainColumns, prepareTerrainColumns, terrainColumnDaylightBufferBytes } from './refinement.js';
 
 const day = { intervalStart: '2026-03-20T11:00:00Z', validTime: '2026-03-20T12:00:00Z' };
 const gridHash = (grid: Grid) => createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
@@ -212,6 +213,7 @@ it('admits a large native frame and small output under a bounded donor-workspace
   const coverage = sparseCoverageFromDense({ ...plan.fine, gridHash: gridHash(plan.fine), output: target.output, halo: target.halo });
   const active = Uint32Array.from({ length: native.width * native.height }, (_, index) => index);
   const prepared = preparePackedTerrainColumns(plan, coverage, active, 25, { maxBytes: 1024 * 1024, expectedGridHash: gridHash(plan.fine) });
+  expect(prepared.workspaceBufferBytes).toBe(new ReconstructedProfileWorkspace(4, 25).byteLength + 4 * 17 + terrainColumnDaylightBufferBytes(plan.fine, 3));
   expect(prepared.workspaceBufferBytes).toBeLessThan(32 * 1024);
 });
 

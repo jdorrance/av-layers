@@ -248,17 +248,23 @@ export function createShardedSamplePackWriter(
     for (let ordinal = descriptor.firstBlock; ordinal < descriptor.firstBlock + descriptor.blockCount; ordinal++) {
       check();
       const block = layout.block(ordinal), cells = block.width * block.height;
+      const coreWidth = Math.min(SAMPLE_BLOCK_SIZE, width - block.column);
+      let coreOffset = coverage.offsets[ordinal]!;
       for (let i = 0; i < cells; i++) {
         const x = i % block.width, y = (i - x) / block.width;
         const column = wrap ? (block.column + x) % width : block.column + x;
         const row = block.row + y, destination = i * recordBytes;
-        const lookup = sparseCoverageLookup(coverage, column, row);
-        if (!lookup) {
+        let sourceOffset: number | undefined;
+        if (x < coreWidth && y < SAMPLE_BLOCK_SIZE) {
+          const local = y * SAMPLE_BLOCK_SIZE + x, byte = ordinal * (SAMPLE_BLOCK_SIZE * SAMPLE_BLOCK_SIZE / 8) + (local >>> 3);
+          if (((coverage.output[byte]! | coverage.halo[byte]!) & (1 << (local & 7))) !== 0) sourceOffset = coreOffset++;
+        } else sourceOffset = sparseCoverageLookup(coverage, column, row)?.offset;
+        if (sourceOffset === undefined) {
           if (outsideRecord) blockBuffer.set(outsideRecord, destination);
           else { blockBuffer.fill(0, destination, destination + recordBytes); blockBuffer[destination + 4] = STATUS_OUTSIDE; }
           continue;
         }
-        const index = packed ? (packed === coverage ? lookup.offset : sparseCoverageLookup(packed, column, row)!.offset) : row * width + column;
+        const index = packed ? (packed === coverage ? sourceOffset : sparseCoverageLookup(packed, column, row)!.offset) : row * width + column;
         if (readRecord) {
           const record = readRecord(row * width + column);
           if (!(record instanceof Uint8Array) || record.byteLength !== recordBytes) throw new RangeError('Invalid callback record width');

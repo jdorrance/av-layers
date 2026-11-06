@@ -135,7 +135,7 @@ it('maps sparse global contributors to compact slots and conserves RH at zero di
   expect(capacity.workspaceBytes).toBe(prepared.workspaceBytes);
   expect(terrainColumnCapacity(4, 1, 3, targetMask.grid).mappingBufferBytes).toBeGreaterThanOrEqual(prepared.byteLength);
   expect(prepared.workspaceBytes).toBe(prepared.workspaceBufferBytes + prepared.workspaceObjectBudgetBytes);
-  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 45) + 4 * (3 + 3) * 58 + 4 + 88);
+  expect(prepared.workspaceBufferBytes).toBe(4 * (3 * 16 + 53) + 4 * (3 + 3) * 58 + 4 + 88);
   const result = prepared.derive(input, terrain(250), day, { daylightOnly: false, probeIndices: [0] });
   expect(result.daylightBufferBytes).toBe(0);
   const probe = result.probes[0]!;

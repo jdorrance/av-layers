@@ -30,11 +30,17 @@ describe('cached point forecast pages', () => {
     expect(fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(',').length)).toEqual([1, 23]);
   });
 
-  it('uses the full v5 map axis when its optional prefix count is absent', () => {
+  it('keeps unprefixed v5 point days within 24 hours and preserves the full forecast', async () => {
     const build = fixturePointBuild({ frameHours: [1, 2, 24, 27, 72], mapFrameCount: 5 });
     if (build.manifest.version !== 5) throw new Error('Expected v5');
     delete build.manifest.mapFrameCount;
-    expect(pointSeriesSelection(build).frames).toEqual(['f001', 'f002', 'f024', 'f027', 'f072']);
+    expect(pointSeriesSelection(build).frames).toEqual(['f001', 'f002', 'f024']);
+    const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const loader = api.pointSeries(build, point);
+    expect((await loader.load('day')).frames.map(frame => frame.id)).toEqual(['f001', 'f002', 'f024']);
+    expect((await loader.load('forecast')).frames.map(frame => frame.id)).toEqual(['f001', 'f002', 'f024', 'f027', 'f072']);
+    expect(fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(',').length)).toEqual([1, 2, 2]);
   });
 
   it('publishes the selected hour before the remaining 23-frame page and reuses the complete range', async () => {
