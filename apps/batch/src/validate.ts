@@ -11,7 +11,7 @@ import { decodeWebp } from './webp.js';
 import { describeCoverage, describeSparseCoverage, loadCoverage, readGridCoverage, readSparseCoverage } from './coverage.js';
 import { forecastGrids, type ForecastGrid } from '@av/contracts';
 import { validateRefinementCoverage } from './refinement/coverage.js';
-import { localPath, readLocalFile } from './local-file.js';
+import { localPath, readLocalFile, type createLocalFileReader } from './local-file.js';
 import { readLocalProvenance, readFrameProvenance } from './frame-provenance.js';
 export { localPath } from './local-file.js';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './whole-domain/coverage.js';
@@ -306,69 +306,73 @@ function packedGroupLayout(surface: Pick<ManifestV5['surfaces'][number], 'grid'>
   return layout;
 }
 
-export async function validateSampleGroup(root: string, surface: Pick<ManifestV5['surfaces'][number], 'grid' | 'layers'>, coverage: Awaited<ReturnType<typeof readSparseCoverage>>['mask']['coverage'], descriptors: ManifestV5['descriptors'], group: PackedGroup): Promise<void> {
+export async function validateSampleGroup(root: string, surface: Pick<ManifestV5['surfaces'][number], 'grid' | 'layers'>, coverage: Awaited<ReturnType<typeof readSparseCoverage>>['mask']['coverage'], descriptors: ManifestV5['descriptors'], group: PackedGroup, options: { reader?: ReturnType<typeof createLocalFileReader>; signal?: AbortSignal } = {}): Promise<void> {
     const layout = packedGroupLayout(surface, coverage, group), recordBytes = group.recordBytes ?? CELL_BYTES;
     const stride = group.channels * recordBytes, gridWidth = surface.grid.width;
     let scratch: Buffer | undefined;
     for (let i = 0; i < group.shards.length; i++) {
-      const shard = group.shards[i], data = await readLocalFile(localPath(root, shard.key), shard.bytes, shard.bytes);
-      if (sha256(data) !== shard.sha256) throw new Error(`Invalid sample shard hash ${shard.key}`);
-      const view = new DataView(data.buffer, data.byteOffset, data.byteLength), specs = surface.layers.map(layer => descriptors.layers[layer]);
-      for (let ordinal = shard.firstBlock; ordinal < shard.firstBlock + shard.blockCount; ordinal++) {
-        const block = layout.block(ordinal);
-        const compare = async (neighbor: ShardedSampleBlock | null, x: number, y: number, dx: number, dy: number, count: number): Promise<void> => {
-          if (!neighbor) return;
-          let bytes = data, base = neighbor.byteOffset;
-          if (neighbor.shard !== i) {
-            const other = group.shards[neighbor.shard], file = await open(localPath(root, other.key), 'r');
-            try {
-              const before = await file.stat();
-              if (!before.isFile() || before.size !== other.bytes) throw new Error(`Invalid sample shard size ${other.key}`);
-              scratch ??= Buffer.alloc((SAMPLE_BLOCK_SIZE + 1) ** 2 * stride);
-              bytes = scratch.subarray(0, neighbor.byteLength); base = 0;
-              for (let offset = 0; offset < bytes.length;) {
-                const part = await file.read(bytes, offset, bytes.length - offset, neighbor.byteOffset + offset);
-                if (!part.bytesRead) throw new Error(`Short sample shard read ${other.key}`);
-                offset += part.bytesRead;
-              }
-              const after = await file.stat();
-              // A read can move ctime when Linux updates atime. Content changes move mtime.
-              if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error(`Sample shard changed during read ${other.key}`);
-            } finally { await file.close(); }
+      const shard = group.shards[i];
+      const consume = async (data: Buffer): Promise<void> => {
+        if (sha256(data) !== shard.sha256) throw new Error(`Invalid sample shard hash ${shard.key}`);
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength), specs = surface.layers.map(layer => descriptors.layers[layer]);
+        for (let ordinal = shard.firstBlock; ordinal < shard.firstBlock + shard.blockCount; ordinal++) {
+          const block = layout.block(ordinal);
+          const compare = async (neighbor: ShardedSampleBlock | null, x: number, y: number, dx: number, dy: number, count: number): Promise<void> => {
+            if (!neighbor) return;
+            let bytes = data, base = neighbor.byteOffset;
+            if (neighbor.shard !== i) {
+              const other = group.shards[neighbor.shard], file = await open(localPath(root, other.key), 'r');
+              try {
+                const before = await file.stat();
+                if (!before.isFile() || before.size !== other.bytes) throw new Error(`Invalid sample shard size ${other.key}`);
+                scratch ??= Buffer.alloc((SAMPLE_BLOCK_SIZE + 1) ** 2 * stride);
+                bytes = scratch.subarray(0, neighbor.byteLength); base = 0;
+                for (let offset = 0; offset < bytes.length;) {
+                  const part = await file.read(bytes, offset, bytes.length - offset, neighbor.byteOffset + offset);
+                  if (!part.bytesRead) throw new Error(`Short sample shard read ${other.key}`);
+                  offset += part.bytesRead;
+                }
+                const after = await file.stat();
+                // A read can move ctime when Linux updates atime. Content changes move mtime.
+                if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error(`Sample shard changed during read ${other.key}`);
+              } finally { await file.close(); }
+            }
+            for (let n = 0; n < count; n++) {
+              const column = (block.column + x + n * dx) % gridWidth, row = block.row + y + n * dy;
+              const nx = (column - neighbor.column + gridWidth) % gridWidth, ny = row - neighbor.row;
+              if (nx >= neighbor.width || ny < 0 || ny >= neighbor.height) throw new Error('Invalid sample block overlap');
+              const a = block.byteOffset + ((y + n * dy) * block.width + x + n * dx) * stride;
+              const b = base + (ny * neighbor.width + nx) * stride;
+              if (!data.subarray(a, a + stride).equals(bytes.subarray(b, b + stride))) throw new Error(`Duplicate sample cell differs: ${shard.key} cell ${row * gridWidth + column}`);
+            }
+          };
+          if (block.width > Math.min(SAMPLE_BLOCK_SIZE, gridWidth - block.column)) {
+            const x = block.width - 1, column = (block.column + x) % gridWidth;
+            await compare(layout.blockFor(block.row * gridWidth + column), x, 0, 0, 1, block.height);
           }
-          for (let n = 0; n < count; n++) {
-            const column = (block.column + x + n * dx) % gridWidth, row = block.row + y + n * dy;
-            const nx = (column - neighbor.column + gridWidth) % gridWidth, ny = row - neighbor.row;
-            if (nx >= neighbor.width || ny < 0 || ny >= neighbor.height) throw new Error('Invalid sample block overlap');
-            const a = block.byteOffset + ((y + n * dy) * block.width + x + n * dx) * stride;
-            const b = base + (ny * neighbor.width + nx) * stride;
-            if (!data.subarray(a, a + stride).equals(bytes.subarray(b, b + stride))) throw new Error(`Duplicate sample cell differs: ${shard.key} cell ${row * gridWidth + column}`);
+          if (block.height > SAMPLE_BLOCK_SIZE) {
+            const y = block.height - 1, row = block.row + y, right = (block.column + block.width - 1) % gridWidth;
+            await compare(layout.blockFor(row * gridWidth + block.column), 0, y, 1, 0, block.width);
+            await compare(layout.blockFor(row * gridWidth + right), block.width - 1, y, 0, 0, 1);
+            if (block.column > 0 || surface.grid.wrapLongitude) {
+              const left = layout.blockFor(row * gridWidth + (block.column + gridWidth - 1) % gridWidth);
+              if (left && (left.column + left.width - 1) % gridWidth === block.column) await compare(left, 0, y, 0, 0, 1);
+            }
           }
-        };
-        if (block.width > Math.min(SAMPLE_BLOCK_SIZE, gridWidth - block.column)) {
-          const x = block.width - 1, column = (block.column + x) % gridWidth;
-          await compare(layout.blockFor(block.row * gridWidth + column), x, 0, 0, 1, block.height);
+          for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
+            const active = !!sparseCoverageLookup(coverage, (block.column + x) % surface.grid.width, block.row + y);
+            const offset = block.byteOffset + (y * block.width + x) * stride;
+            for (let channel = 0; channel < group.channels; channel++) {
+              const record = offset + channel * recordBytes;
+              if (group.recordBytes !== undefined) {
+                validateProfileRecord(data.subarray(record, record + recordBytes));
+                if ((view.getUint8(record + 4) === STATUS_OUTSIDE) === active) throw new Error(`Profile coverage mismatch in ${shard.key}`);
+              } else validateSampleCell(view, record, specs[channel % specs.length], shard.key, active);
+            }
+          }
         }
-        if (block.height > SAMPLE_BLOCK_SIZE) {
-          const y = block.height - 1, row = block.row + y, right = (block.column + block.width - 1) % gridWidth;
-          await compare(layout.blockFor(row * gridWidth + block.column), 0, y, 1, 0, block.width);
-          await compare(layout.blockFor(row * gridWidth + right), block.width - 1, y, 0, 0, 1);
-          if (block.column > 0 || surface.grid.wrapLongitude) {
-            const left = layout.blockFor(row * gridWidth + (block.column + gridWidth - 1) % gridWidth);
-            if (left && (left.column + left.width - 1) % gridWidth === block.column) await compare(left, 0, y, 0, 0, 1);
-          }
-        }
-        for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
-          const active = !!sparseCoverageLookup(coverage, (block.column + x) % surface.grid.width, block.row + y);
-          const offset = block.byteOffset + (y * block.width + x) * stride;
-          for (let channel = 0; channel < group.channels; channel++) {
-            const record = offset + channel * recordBytes;
-            if (group.recordBytes !== undefined) {
-              validateProfileRecord(data.subarray(record, record + recordBytes));
-              if ((view.getUint8(record + 4) === STATUS_OUTSIDE) === active) throw new Error(`Profile coverage mismatch in ${shard.key}`);
-            } else validateSampleCell(view, record, specs[channel % specs.length], shard.key, active);
-          }
-        }
-      }
+      };
+      if (options.reader) await options.reader(localPath(root, shard.key), shard.bytes, consume, options.signal);
+      else await consume(await readLocalFile(localPath(root, shard.key), shard.bytes, shard.bytes));
     }
 }

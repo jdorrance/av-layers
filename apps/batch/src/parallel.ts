@@ -9,7 +9,7 @@ import { createBuildStamp, finishForecast, type BuildOptions } from './build.js'
 import { describeCoverage, loadCoverage, writeCoverage } from './coverage.js';
 import { buildFrames, forecastFrame, matchesFrameIntervals, type ForecastInputs, type FrameBuildResult } from './frame-build.js';
 import { buildIdentity } from './identity.js';
-import { readLocalFile } from './local-file.js';
+import { createLocalFileReader, readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
 import { mergeSamplePacks } from './sample-pack.js';
 import { fileSha256, localPath, sha256, validateArchive, validateSampleGroup } from './validate.js';
@@ -70,6 +70,12 @@ const metricsSchema = z.strictObject({
   renderer: z.record(z.string(), z.unknown()), acquisition: z.record(z.string(), z.unknown()),
   elapsedMs: nonnegativeNumber.max(BUILD_BUDGETS.elapsedMs), peakRssBytes: nonnegativeNumber.max(BUILD_BUDGETS.peakRssBytes)
 });
+function withProcessPeakRss(metrics: z.infer<typeof metricsSchema>) {
+  const peakRssBytes = Math.max(metrics.peakRssBytes, process.resourceUsage().maxRSS * 1024);
+  const parsed = metricsSchema.safeParse({ ...metrics, peakRssBytes });
+  if (!parsed.success) throw new Error(`Invalid forecast shard metrics (peakRssBytes=${peakRssBytes}): ${parsed.error.message}`);
+  return parsed.data;
+}
 const receiptSchema = z.strictObject({
   version: z.literal(1), planHash: digestSchema, shard: z.number().int().min(0).max(MAX_FORECAST_SHARDS - 1),
   sampleSha256: digestSchema, tileSha256: z.array(digestSchema).min(1).max(MAX_SAMPLE_VALUES),
@@ -305,12 +311,13 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
       const result = await buildWholeDomainFrames({ ...options, prepared: whole, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
         hours: plan.groups[shard], journalPrefix: prefix, sampleGroup: shard });
+      const numericReader = createLocalFileReader(MAX_V5_SHARD_BYTES), validation = { reader: numericReader, signal: options.signal };
       for (const surface of result.surfaces) {
         const coverage = surface.id === 'native' ? whole.native : whole.fine;
-        await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), { channels: surface.layout.channelCount, shards: surface.shards! });
+        await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), { channels: surface.layout.channelCount, shards: surface.shards! }, validation);
         if (surface.profiles) await validateSampleGroup(root, surface, coverage.mask.coverage, createWholeDomainDescriptors(options.product), {
           channels: surface.profiles.layout.channelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards
-        });
+        }, validation);
       }
       for (const artifact of result.artifacts) {
         const coverage = layerSurface(artifact.layer) === 'native' ? whole.native : whole.fine;
@@ -318,22 +325,25 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
         await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
       }
       await assertWholeDomainProvenance(root, plan, shard, options.product, result.receipts);
-      const objects: ObjectReceipt[] = [];
-      if (options.store) {
+      const objects: ObjectReceipt[] = [], store = options.store;
+      if (store) {
         const files = [...result.surfaces.flatMap(surface => [...surface.shards!, ...(surface.profiles?.shards ?? [])].map(item => ({ key: item.key, hash: item.sha256, type: 'application/octet-stream' }))),
           ...result.artifacts.map(item => ({ key: item.tilesKey, hash: item.tilesSha256, type: 'application/vnd.pmtiles' })),
           ...result.receipts.map(item => ({ key: item.key, hash: item.sha256, type: 'application/json' }))];
         for (const file of files) {
-          const bytes = await readLocalFile(localPath(root, file.key), BUILD_BUDGETS.samplePackBytes);
-          if (sha256(bytes) !== file.hash) throw new Error(`Local hash mismatch: ${file.key}`);
-          objects.push(await putImmutableReceipt(options.store, file.key, bytes, file.type, options.signal));
+          const upload = async (bytes: Buffer): Promise<void> => {
+            if (sha256(bytes) !== file.hash) throw new Error(`Local hash mismatch: ${file.key}`);
+            objects.push(await putImmutableReceipt(store, file.key, bytes, file.type, options.signal));
+          };
+          if (file.type === 'application/octet-stream') await numericReader(localPath(root, file.key), undefined, upload, options.signal);
+          else await upload(await readLocalFile(localPath(root, file.key), BUILD_BUDGETS.samplePackBytes));
         }
       }
       const receipt: WholeDomainReceipt = wholeDomainReceiptSchema.parse({ version: 2, planHash: planHash(plan), shard,
         artifacts: result.artifacts, provenance: result.receipts,
         surfaces: result.surfaces.map(surface => ({ id: surface.id, channelCount: surface.layout.channelCount,
           shards: surface.shards!.map(item => ({ ...item, key: item.key })),
-          ...(surface.profiles ? { profiles: { levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards } } : {}) })), metrics: result.metrics, ...(objects.length ? { objects } : {}) });
+          ...(surface.profiles ? { profiles: { levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards } } : {}) })), metrics: withProcessPeakRss(result.metrics), ...(objects.length ? { objects } : {}) });
       options.signal?.throwIfAborted();
       const path = localPath(root, `${prefix}/receipt.json`);
       await writeFile(path + '.tmp', encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
@@ -344,7 +354,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix, refinementPrefix: `${prefix}/refinements` });
     const receipt = receiptSchema.parse({ version: 1, planHash: planHash(plan), shard,
       sampleSha256: result.samples.sha256, tileSha256: result.artifacts.map(artifact => artifact.tilesSha256),
-      provenance: result.receipts, metrics: result.metrics,
+      provenance: result.receipts, metrics: withProcessPeakRss(result.metrics),
       ...(result.refinements?.length ? { refinements: result.refinements.map(({ id, samples }) => ({ id, sampleSha256: samples.sha256 })) } : {}) });
     options.signal?.throwIfAborted();
     const path = localPath(root, `${prefix}/receipt.json`);

@@ -87,6 +87,10 @@ RRFS uses one input frame. Profile output totals 12.73/10.86/27.47 GB respective
 These totals include auxiliary fields, shared diagnostics, writer buffers and a 256 MiB runtime
 reserve. Record actual worker RSS and elapsed time before changing a limit.
 
+Numeric validation and upload share the borrowed workspace in
+[`createLocalFileReader`](../apps/batch/src/local-file.ts). Successful shard
+receipts record and enforce the process peak after those phases.
+
 GFS uses 72 two-frame groups. ICON-EU and RRFS use 48 one-frame groups, with
 parallelism 8/20. Source inputs, tile totals and numeric totals retain their
 configured values.
