@@ -335,10 +335,11 @@ export function createShardedSamplePackWriter(
         if (completed !== layout.channelCount) return fail(new Error(`Incomplete sample pack: ${completed}/${layout.channelCount} channels`));
         const descriptors: ShardedSamplePackShard[] = [];
         try {
+          const workspace = Buffer.allocUnsafe(layout.shards.reduce((maximum, shard) => Math.max(maximum, shard.byteLength), 0));
           for (let shard = 0; shard < layout.shards.length; shard++) {
             check();
             const descriptor = layout.shards[shard], shardBytes = descriptor.byteLength;
-            const buffer = Buffer.allocUnsafe(shardBytes), blocks: { cells: number; byteOffset: number }[] = [];
+            const buffer = workspace.subarray(0, shardBytes), blocks: { cells: number; byteOffset: number }[] = [];
             let cells = 0;
             for (let ordinal = descriptor.firstBlock; ordinal < descriptor.firstBlock + descriptor.blockCount; ordinal++) {
               const block = layout.block(ordinal);
