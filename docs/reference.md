@@ -53,7 +53,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 Sources: [model settings](../packages/contracts/config/models.json) and [forecast windows](../packages/contracts/src/forecast-windows.ts). See [deployments](status.md) for live applications and runs.
 
-Forecast trigger budget: 20 shard jobs; default workers 3.
+Forecast trigger budget: 40 shard jobs; default workers 3.
 
 ### GFS (gfs-soaring)
 
@@ -83,7 +83,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
 - Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–10.
-- Execution: 40 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["20 5,11,17,23 * * *"]`.
+- Execution: 40 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["20 5,11,17,23 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
@@ -101,7 +101,7 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
-- Execution: 40 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
+- Execution: 40 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 25.

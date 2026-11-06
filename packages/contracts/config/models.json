@@ -1,6 +1,6 @@
 {
   "defaultModel": "gfs",
-  "parallelism": {"jobs": 20, "workers": 3},
+  "parallelism": {"jobs": 40, "workers": 3},
   "models": [
     {
       "modelId": "gfs",
@@ -265,7 +265,7 @@
         }
       },
       "terrainSubdivisionFactor": 5,
-      "execution": {"zoom": 10, "parallelism": 20, "schedule": ["20 5,11,17,23 * * *"]}
+      "execution": {"zoom": 10, "parallelism": 40, "schedule": ["20 5,11,17,23 * * *"]}
     },
     {
       "modelId": "rrfs",
@@ -407,7 +407,7 @@
         }
       },
       "terrainSubdivisionFactor": 2,
-      "execution": {"zoom": 10, "parallelism": 20, "schedule": ["45 3,9,15,21 * * *"]}
+      "execution": {"zoom": 10, "parallelism": 40, "schedule": ["45 3,9,15,21 * * *"]}
     }
   ]
 }
