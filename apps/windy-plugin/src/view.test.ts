@@ -18,6 +18,12 @@ class FakeElement {
   htmlFor = '';
   role = '';
   ariaLabel = '';
+  ariaPressed = '';
+  scrollLeft = 0;
+  scrollTop = 0;
+  offsetLeft = 0;
+  offsetWidth = 20;
+  clientWidth = 0;
   value = '';
   disabled = false;
   type = '';
@@ -44,11 +50,16 @@ class FakeElement {
     return !event.defaultPrevented;
   }
   focus(): void { (document as unknown as { activeElement: FakeElement | null }).activeElement = this; }
+  contains(value: unknown): boolean { return visit(this).includes(value as FakeElement); }
+  querySelector(selector: string): FakeElement | null {
+    return visit(this).slice(1).find(node => selector.startsWith('.') ? node.className === selector.slice(1)
+      : selector === 'button[aria-pressed="true"]' ? node.tag === 'button' && node.ariaPressed === 'true' : node.tag === selector) ?? null;
+  }
 }
 
 const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn(), onPointHorizon: vi.fn() });
 
-function installDom(active: FakeElement | null = null): { activeElement: FakeElement | null } {
+function installDom(active: FakeElement | null = null) {
   const document = {
     activeElement: active,
     getElementById: () => null,
@@ -60,6 +71,21 @@ function installDom(active: FakeElement | null = null): { activeElement: FakeEle
     constructor(text: string, value: string) { super('option'); this.textContent = text; this.value = value; }
   });
   return document;
+}
+
+function chartLayout(doc: ReturnType<typeof installDom>) {
+  let positions: Record<string, { left: number; width?: number }> = {}, width = 100;
+  const create = doc.createElement;
+  vi.spyOn(doc, 'createElement').mockImplementation(tag => {
+    const element = create(tag), layout = positions;
+    Object.defineProperties(element, {
+      offsetLeft: { get: () => layout[element.value]?.left ?? 0 },
+      offsetWidth: { get: () => layout[element.value]?.width ?? 20 },
+      clientWidth: { get: () => element.className === 'av-point-chart' ? width : 0 }
+    });
+    return element;
+  });
+  return { positions(next: typeof positions) { positions = next; }, width(next: number) { width = next; } };
 }
 
 function visit(element: FakeElement): FakeElement[] {
@@ -255,6 +281,64 @@ it('labels irregular elapsed time while keeping one keyboard target per shown fo
   expect(doc.activeElement).toBe(chart.children[4]); expect(chooseFrame).toHaveBeenLastCalledWith('f013');
   chart.children[4].dispatchEvent(key('Home'));
   expect(doc.activeElement).toBe(chart.children[0]); expect(chooseFrame).toHaveBeenLastCalledWith('f001');
+});
+
+it('follows a visible selection through progress and preserves a manual pan, unit changes and vertical position', async () => {
+  const doc = installDom(), layout = chartLayout(doc), build = fixturePointBuild({ frameHours: [1, 24, 27, 69, 72], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), container = new FakeElement('div'), control = new FakeElement('select');
+  doc.activeElement = control; container.scrollTop = 77;
+  const options = { frameId: 'f072', unitSystem: 'metric' as const, totalFrames: 5, onFrame: vi.fn() };
+  const chart = () => container.querySelector('.av-point-chart')!;
+  layout.positions({ f072: { left: 0, width: 54 } });
+  renderPointSeries(container as unknown as HTMLElement, { frames: [payload.frames[4]] }, build, options);
+  expect(chart().scrollLeft).toBe(0);
+  layout.positions({ f001: { left: 0 }, f024: { left: 100 }, f072: { left: 200, width: 54 } });
+  renderPointSeries(container as unknown as HTMLElement, { frames: [payload.frames[0], payload.frames[1], payload.frames[4]] }, build, options);
+  expect(chart().scrollLeft).toBe(154);
+  chart().scrollLeft = 47;
+  const replace = container.replaceChildren.bind(container);
+  vi.spyOn(container, 'replaceChildren').mockImplementation((...children) => {
+    chart().scrollLeft = 0;
+    replace(...children);
+  });
+  layout.positions({ f001: { left: 0 }, f024: { left: 100 }, f027: { left: 250 }, f069: { left: 420 }, f072: { left: 500 } });
+  const update = renderPointSeries(container as unknown as HTMLElement, payload, build, options);
+  expect(chart().scrollLeft).toBe(47);
+  update('f072', 'imperial', 'f024');
+  expect(chart().scrollLeft).toBe(47);
+  update('f069'); expect(chart().scrollLeft).toBe(340);
+  update('f001'); expect(chart().scrollLeft).toBe(0);
+  expect(container.scrollTop).toBe(77); expect(doc.activeElement).toBe(control);
+});
+
+it.each([0, 100])('reveals a cached full-series selection when layout becomes available (initial width=%s)', async initialWidth => {
+  const doc = installDom(), layout = chartLayout(doc), build = fixturePointBuild({ frameHours: [1, 24, 27, 69, 72], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), container = new FakeElement('div');
+  layout.positions({ f072: { left: 500 } }); layout.width(initialWidth);
+  const options = { frameId: 'f072', unitSystem: 'metric' as const, onFrame: vi.fn() };
+  let update = renderPointSeries(container as unknown as HTMLElement, payload, build, options);
+  let chart = container.querySelector('.av-point-chart')!;
+  expect(chart.scrollLeft).toBe(initialWidth ? 420 : 0);
+  if (!initialWidth) {
+    update = renderPointSeries(container as unknown as HTMLElement, payload, build, options);
+    chart = container.querySelector('.av-point-chart')!;
+    expect(chart.scrollLeft).toBe(0);
+  }
+  layout.width(100); update('f072', 'imperial'); expect(chart.scrollLeft).toBe(420);
+});
+
+it('reveals a requested hour when its pending page first makes that selection available', async () => {
+  const doc = installDom(), layout = chartLayout(doc), build = fixturePointBuild({ frameHours: [1, 24, 27, 69, 72], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), container = new FakeElement('div');
+  const options = { frameId: 'f069', unitSystem: 'metric' as const, totalFrames: 5, onFrame: vi.fn() };
+  renderPointSeries(container as unknown as HTMLElement, { frames: [payload.frames[4]] }, build, options);
+  expect(container.querySelector('.av-point-chart')?.scrollLeft).toBe(0);
+  layout.positions({ f069: { left: 420 }, f072: { left: 500 } });
+  renderPointSeries(container as unknown as HTMLElement, payload, build, options);
+  expect(container.querySelector('.av-point-chart')?.scrollLeft).toBe(340);
 });
 
 it('keeps missing pages distinct from forecast gaps and records partial data independently of loading', async () => {
