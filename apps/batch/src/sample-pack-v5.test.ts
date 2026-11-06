@@ -186,9 +186,23 @@ it('retains every channel after LRU eviction across more than 32 shards', async 
       const values = Float32Array.from({ length: 35 }, (_, i) => (i + 1) * 17.25 + channel * 1000);
       await writer.writeChannel(channel, { values, flags: Uint8Array.from(values, (_, i) => i % 4), coverage } as GridField);
     }
-    const shards = await writer.finish();
+    const largestShard = Math.max(...layout.shards.map(shard => shard.byteLength)), allocations = vi.spyOn(Buffer, 'allocUnsafe');
+    let shards: Awaited<ReturnType<typeof writer.finish>>;
+    try {
+      shards = await writer.finish();
+      expect(allocations.mock.calls.filter(([bytes]) => bytes === largestShard)).toHaveLength(1);
+    } finally { allocations.mockRestore(); }
+    expect(layout.shards.at(-1)!.byteLength).toBeLessThan(largestShard);
     for (let i = 0; i < layout.blockCount; i++) {
       const block = layout.block(i), bytes = await readFile(localPath(root, shards[block.shard].key));
+      const expected = Buffer.alloc(layout.shards[block.shard].byteLength);
+      expect(bytes.byteLength).toBe(expected.byteLength);
+      for (let x = 0; x < block.width; x++) for (let channel = 0; channel < 3; channel++) {
+        const active = sparseCoverageLookup(coverage, block.column + x, block.row), offset = (x * 3 + channel) * CELL_BYTES;
+        expected.writeFloatLE(active ? (active.offset + 1) * 17.25 + channel * 1000 : 0, offset);
+        expected[offset + 4] = active ? active.offset % 4 : STATUS_OUTSIDE;
+      }
+      expect(bytes).toEqual(expected);
       for (let channel = 0; channel < 3; channel++) {
         expect(bytes.readFloatLE(block.byteOffset + channel * CELL_BYTES)).toBe((i + 1) * 17.25 + channel * 1000);
         expect(bytes[block.byteOffset + channel * CELL_BYTES + 4]).toBe(i % 4);
