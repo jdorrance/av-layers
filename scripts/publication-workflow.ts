@@ -353,10 +353,6 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
         if (receiptsOnly) break;
       }
       await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
-      if (receiptsOnly) {
-        const { verifyBuildReceipts } = await import('../apps/batch/src/parallel.js');
-        await verifyBuildReceipts(root, manifest, store, deadlineSignal);
-      }
       deadlineSignal.throwIfAborted();
       await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
       return;

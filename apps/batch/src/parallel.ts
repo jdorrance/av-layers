@@ -27,6 +27,7 @@ import { readFrameProvenance } from './frame-provenance.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { servingSampleShards, writeServingGroups, type HourSamplePart } from './serving-groups.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
+import { runConcurrent } from './concurrent.js';
 
 export { MAX_FORECAST_SHARDS } from '@av/contracts';
 const digestSchema = manifestSchema.shape.samples.shape.sha256;
@@ -440,6 +441,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     const surfaces: WholeDomainSurfaceResult[] = [];
     const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
     const servingObjects: ObjectReceipt[] = [];
+    const scalarPhasesMs = { scalarStageMs: 0, scalarMergeMs: 0, scalarUploadMs: 0 };
     let profileGroups: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'] | undefined;
     for (const id of ['native', 'fine'] as const) {
       const layout = id === 'native' ? layouts.native : layouts.fine, info = id === 'native' ? whole.native : whole.fine;
@@ -450,6 +452,9 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
         parts: hourSampleParts(receipts, plan, options.product, id), store: options.store, signal: options.signal });
       sampleGroups[id] = written.shards;
       servingObjects.push(...written.objects);
+      scalarPhasesMs.scalarStageMs += written.phasesMs.stageMs;
+      scalarPhasesMs.scalarMergeMs += written.phasesMs.mergeMs;
+      scalarPhasesMs.scalarUploadMs += written.phasesMs.uploadMs;
       const shards = written.shards;
       let profiles: WholeDomainSurfaceResult['profiles'];
       if (id === 'native' && renderedLayers(options.product.layers).length !== options.product.layers.length) {
@@ -477,7 +482,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     const frames = plan.groups.flat().map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(options.product, hour)));
     const result: FinishWholeDomainOptions['result'] = { cycle: plan.cycle, frames, artifacts: receipts.flatMap(receipt => receipt.artifacts),
       receipts: receipts.flatMap(receipt => receipt.provenance), surfaces, capacity,
-      metrics: { phasesMs, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
+      metrics: { phasesMs: { ...phasesMs, ...scalarPhasesMs }, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
         peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
     const hourObjects = options.store ? receipts.flatMap(receipt => {
       if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
@@ -605,14 +610,15 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     return !object || object.sha256 !== item.sha256 || ('bytes' in item && object.bytes !== item.bytes);
   })) throw new Error('Forecast object receipt set mismatch');
   const hourSampleKeys = new Set(hourSamples.map(item => item.key));
-  const published: ObjectReceipt[] = [];
-  for (const surface of manifest.surfaces) for (const shard of surface.samples.shards) {
+  const serving = manifest.surfaces.flatMap(surface => surface.samples.shards);
+  const published = new Array<ObjectReceipt>(serving.length);
+  await runConcurrent(serving.map((shard, index) => ({ shard, index })), 4, async ({ shard, index }) => {
     signal?.throwIfAborted();
     const head = await store.head(shard.key, signal);
     signal?.throwIfAborted();
     if (!head || head.size !== shard.bytes || !head.etag || head.metadata?.sha256 !== shard.sha256) throw new Error(`Remote object receipt mismatch: ${shard.key}`);
-    published.push({ key: shard.key, bytes: shard.bytes, sha256: shard.sha256, etag: head.etag });
-  }
+    published[index] = { key: shard.key, bytes: shard.bytes, sha256: shard.sha256, etag: head.etag };
+  });
   const workerObjects: ObjectReceipt[] = [];
   for (const item of hourExpected) {
     if (hourSampleKeys.has(item.key)) continue;

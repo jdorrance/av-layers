@@ -24,6 +24,29 @@ frame validation for all 30 ICON and 25 RRFS profile levels, surface fields and
 one-hour intervals. Inventories cover every selected tail hour and required
 companions through f072.
 
+The first forty-frame production runs published complete scalar, profile and
+map axes: [GFS](https://github.com/jdorrance/av-layers/actions/runs/42201781555)
+in 55m59s, [ICON-EU](https://github.com/jdorrance/av-layers/actions/runs/42209341588)
+in 53m20s and [RRFS](https://github.com/jdorrance/av-layers/actions/runs/42219296865)
+in 85m28s from plan creation through publication. Their retained plans, receipts
+and provenance bind every selected hour and companion to its source digest.
+These runs used serial serving uploads; finalization now records scalar staging,
+merge and upload wall time separately.
+
+At the configured four runs per day, those inventories project 18,379,520 GFS,
+13,887,520 ICON and 9,289,440 RRFS raster tiles daily. GFS/ICON map-frame work is
+160 per day versus the earlier 48. Complete build uploads total about 340 GB/day,
+including raw scalar inputs and compacted serving copies, or 2.38 TB over the
+seven-day retention. Source caches and failed attempts add storage. Cadence and
+window settings own this tradeoff; tune windows in the linked configuration.
+
+Production point traces across all three models measured 0.70–1.10 s to the
+selected hour and 1.25–2.04 s to all forty frames in a cold browser. Priority plus
+paged requests transferred 11.3–11.8 kB compressed in total; exact repeats used
+the client cache with zero network transfers. Map clients fetch their selected viewport
+and bounded prefetch candidates. Per-day client egress depends on navigation and
+build refreshes.
+
 ```sh
 pnpm test
 pnpm verify
@@ -132,7 +155,7 @@ scalar parity and nighttime values, exercised all three first-frame profile part
 after scalar reads, and verified map artifacts, provenance and browser paging.
 Its 12 two-frame map jobs measured 13m13s–33m30s of core work and
 15m47s–37m24s for the complete build step. They rendered two frames per job;
-the rolling window's complete all-map run still needs production timing proof.
+the forty-frame runs above measure the rolling window's complete map axis.
 
 [Production RRFS](https://github.com/jdorrance/av-layers/actions/runs/42151691053)
 published all 48 hourly frames and complete native-cell profiles. All 48 shard

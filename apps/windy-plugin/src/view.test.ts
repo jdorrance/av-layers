@@ -3,6 +3,7 @@ import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 import { renderPointSeries } from '@av/contracts/client/dom';
 import { ApiClient } from '@av/contracts/client';
+import * as clientView from '../../../packages/contracts/src/client-view';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -128,12 +129,16 @@ it('associates visible labels with the model and opacity controls', () => {
 it('offers a horizon choice only when a pinned build has additional point frames', () => {
   installDom();
   const matching = fixturePointBuild({ frameHours: [1, 2, 3], mapFrameCount: 3 });
-  for (const [build, hidden] of [[matching, true], [retainedPointBuild(), false], [retainedLegacyPointBuild(), false]] as const) {
+  const unprefixed = fixturePointBuild({ frameHours: Array.from({ length: 48 }, (_, index) => index + 1), mapFrameCount: 48 });
+  if (unprefixed.manifest.version !== 5) throw new Error('Expected v5');
+  delete unprefixed.manifest.mapFrameCount;
+  for (const [build, hidden, label] of [[matching, true, 'Map forecast'], [retainedPointBuild(), false, 'Map forecast'],
+    [retainedLegacyPointBuild(), false, '24 hours'], [unprefixed, false, '24 hours']] as const) {
     const panel = new PluginPanel(callbacks());
     panel.renderBuild(build);
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.find(node => node.id === 'av-point-horizon')?.hidden).toBe(hidden);
-    expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe(build.manifest.version === 5 ? 'Map forecast' : '24 hours');
+    expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe(label);
     expect(nodes.find(node => node.htmlFor === 'av-point-horizon')?.hidden).toBe(hidden);
   }
 });
@@ -281,6 +286,38 @@ it('labels irregular elapsed time while keeping one keyboard target per shown fo
   expect(doc.activeElement).toBe(chart.children[4]); expect(chooseFrame).toHaveBeenLastCalledWith('f013');
   chart.children[4].dispatchEvent(key('Home'));
   expect(doc.activeElement).toBe(chart.children[0]); expect(chooseFrame).toHaveBeenLastCalledWith('f001');
+});
+
+it('formats each mounted point frame once per unit system and only relabels bars on unit changes', async () => {
+  installDom();
+  const build = fixturePointBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), container = new FakeElement('div');
+  const format = vi.spyOn(clientView, 'pointFrameView');
+  try {
+    const update = renderPointSeries(container as unknown as HTMLElement, payload, build, { frameId: 'f001', unitSystem: 'metric', onFrame: vi.fn() });
+    const bars = container.querySelector('.av-point-chart')!.children, metricLabels = bars.map(bar => bar.ariaLabel);
+    let labelsWritten = 0;
+    for (const bar of bars) {
+      let label = bar.ariaLabel;
+      Object.defineProperty(bar, 'ariaLabel', { get: () => label, set: (value: string) => { labelsWritten++; label = value; } });
+    }
+    expect(format).toHaveBeenCalledTimes(payload.frames.length);
+    update('f004'); update('f007', 'metric', 'f002');
+    expect(format).toHaveBeenCalledTimes(payload.frames.length);
+    expect(labelsWritten).toBe(0);
+    expect(bars[3].ariaPressed).toBe('true');
+    expect(container.querySelector('.av-point-values')!.textContent).toContain('Native top 2500 m');
+    update('f007', 'imperial');
+    expect(format).toHaveBeenCalledTimes(payload.frames.length * 2);
+    expect(labelsWritten).toBe(payload.frames.length);
+    expect(bars[3].ariaLabel).toContain('Native top 8202 ft');
+    update('f013', 'metric');
+    expect(format).toHaveBeenCalledTimes(payload.frames.length * 2);
+    expect(bars.map(bar => bar.ariaLabel)).toEqual(metricLabels);
+    update('f001', 'imperial');
+    expect(format).toHaveBeenCalledTimes(payload.frames.length * 2);
+  } finally { format.mockRestore(); }
 });
 
 it('follows a visible selection through progress and preserves a manual pan, unit changes and vertical position', async () => {

@@ -529,7 +529,7 @@ function startPreview(): void {
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
-      pointHorizonSelect.children[0].textContent = next.manifest.version === 5 ? 'Map forecast' : '24 hours';
+      pointHorizonSelect.children[0].textContent = next.manifest.version === 5 && next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
       chooseFrame(next);
       updateOverlay();
       updateFreshness();

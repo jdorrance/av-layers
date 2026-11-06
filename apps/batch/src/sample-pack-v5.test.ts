@@ -162,6 +162,74 @@ it('preserves distinct packed values at nonzero offsets in little-endian layout'
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it.each([[33, 19, false], [33, 19, true], [3, 17, true], [16, 17, true]] as const)(
+  'preserves core ranks and border records on %i×%i grids (wrap %s)', async (width, height, wrap) => {
+    const root = await mkdtemp(join(tmpdir(), 'av-v5-core-'));
+    try {
+      const g = grid(width, height, wrap), cells = width * height;
+      const output = new Uint8Array(Math.ceil(cells / 8)), halo = new Uint8Array(output.length);
+      for (let i = 0; i < cells; i++) {
+        if (i % width >= 16 && i % width < 32 && i < width * 16) continue;
+        if (i % 5 === 0) setBit(output, i);
+        else if (i % 7 === 0) setBit(halo, i);
+      }
+      const coverage = sparseCoverageFromDense({ width, height, wrapLongitude: wrap, gridHash: 'a'.repeat(64), output, halo });
+      const fields = denseFields(g, coverage, 2), active = coverage.offsets.at(-1)!;
+      for (const field of fields) for (let i = 0; i < cells; i++) if (i % 11 === 0) { field.values[i] = NaN; field.flags[i] |= 8; }
+      for (const kind of ['dense', 'packed', 'clone', 'raw', 'callback']) {
+        const raw = kind === 'raw' || kind === 'callback', recordBytes = raw ? profileRecordBytes(1) : CELL_BYTES;
+        const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 2, 16 * 1024, recordBytes);
+        const location = join(root, kind), writer = createShardedSamplePackWriter(layout, coverage, target(location));
+        const outside = Buffer.alloc(recordBytes);
+        if (raw) writeProfileRecord(outside, { status: 'outside-domain', modelTerrainM: null, levels: [] });
+        else outside[4] = STATUS_OUTSIDE;
+        const record = (index: number, channel: number): Buffer => {
+          const bytes = Buffer.alloc(recordBytes);
+          if (raw) writeProfileRecord(bytes, { status: 'valid', modelTerrainM: index / 10, levels: [{
+            pressureHpa: 950, heightM: 500, temperatureC: 10 + channel + index % 50 / 10,
+            dewPointC: 5, uWindMps: index / 10, vWindMps: -channel, omegaPaS: -0.1
+          }] });
+          else { bytes.writeFloatLE(fields[channel].values[index]); bytes[4] = fields[channel].flags[index]; }
+          return bytes;
+        };
+        for (const channel of [1, 0]) {
+          if (raw) {
+            const records = Buffer.alloc(active * recordBytes);
+            for (let i = 0; i < cells; i++) {
+              const lookup = sparseCoverageLookup(coverage, i % width, Math.floor(i / width));
+              if (lookup) records.set(record(i, channel), lookup.offset * recordBytes);
+            }
+            await writer.writeRawChannel(channel, kind === 'raw' ? records : index => record(index, channel), { outsideRecord: outside });
+          } else if (kind === 'dense') await writer.writeChannel(channel, fields[channel]);
+          else {
+            const values = new Float32Array(active), flags = new Uint8Array(active);
+            for (let i = 0; i < cells; i++) {
+              const lookup = sparseCoverageLookup(coverage, i % width, Math.floor(i / width));
+              if (lookup) { values[lookup.offset] = fields[channel].values[i]; flags[lookup.offset] = fields[channel].flags[i]; }
+            }
+            const packed = kind === 'clone' ? sparseCoverageFromDense({ ...coverage, output, halo }) : coverage;
+            await writer.writeChannel(channel, { values, flags, coverage: packed } as GridField);
+          }
+        }
+        const shards = await writer.finish(), expected = layout.shards.map(shard => Buffer.alloc(shard.byteLength));
+        for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+          const block = layout.block(ordinal);
+          for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
+            const column = (block.column + x) % width, row = block.row + y, index = row * width + column;
+            const lookup = sparseCoverageLookup(coverage, column, row);
+            for (let channel = 0; channel < 2; channel++) expected[block.shard].set(lookup ? record(index, channel) : outside,
+              block.byteOffset + ((y * block.width + x) * 2 + channel) * recordBytes);
+          }
+        }
+        for (const [i, shard] of shards.entries()) {
+          expect(await readFile(localPath(location, shard.key))).toEqual(expected[i]);
+          expect(shard.bytes).toBe(expected[i].byteLength); expect(shard.sha256).toBe(sha(expected[i]));
+        }
+      }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+);
+
 it('writes surface-namespaced frame-group shard keys', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-v5-group-'));
   try {

@@ -32,7 +32,7 @@ complete timelines; explicit `all` selections retain the serving budgets.
 map and full-forecast views. Its loader's `onProgress` publishes the selected
 hour before the remaining pages. [client-point.ts](src/client-point.ts) bounds
 paging and owns cancellation; the map keeps its rendered frame prefix.
-Legacy point day views retain the first 24 hours; v5 uses its declared map axis.
+Point day views use an explicit v5 `mapFrameCount`; older builds retain 24 hours.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
 positive-weight native donor support. [sparse-coverage.ts](src/sparse-coverage.ts)

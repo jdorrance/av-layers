@@ -10,7 +10,7 @@ export function pointSeriesSelection(build: PinnedBuild, horizon: PointHorizon =
   const layers = fields.filter(layer => build.manifest.layers.includes(layer));
   let frames = build.manifest.frames;
   if (horizon !== 'forecast') {
-    if (build.manifest.version === 5) frames = renderedFrames(build.manifest);
+    if (build.manifest.version === 5 && build.manifest.mapFrameCount !== undefined) frames = renderedFrames(build.manifest);
     else {
       const until = Date.parse(frames[0].validTime) + 24 * 3600000;
       frames = frames.filter(frame => Date.parse(frame.validTime) < until);

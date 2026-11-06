@@ -96,7 +96,9 @@ export function renderPointSeries(
   details.addEventListener('toggle', () => {
     if (details.open && !table.children.length) renderSampleTable(table, payload, Object.keys(payload.frames[0]?.layers ?? {}), build);
   });
-  const views = payload.frames.map(frame => pointFrameView(frame, build, options.unitSystem));
+  const viewsByUnit: Partial<Record<UnitSystem, ReturnType<typeof pointFrameView>[]>> = {};
+  const getViews = (units: UnitSystem) => viewsByUnit[units] ??= payload.frames.map(frame => pointFrameView(frame, build, units));
+  const views = getViews(options.unitSystem);
   const knownFloors = views.filter(view => view.terrainM !== null).length;
   legend.textContent = knownFloors === 0 ? 'UTC · Heights MSL · Lift ceiling marks blue · LCL gold · Terrain unknown'
     : knownFloors === views.length ? 'UTC · Heights MSL · Lift bars blue · LCL gold · Terrain grey'
@@ -160,6 +162,7 @@ export function renderPointSeries(
   let loading = options.loading ?? partial;
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
+  let labelledUnits: UnitSystem | undefined;
   const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
     units = nextUnits;
     loading = nextLoading;
@@ -167,6 +170,7 @@ export function renderPointSeries(
     selectedFrameId = frameId;
     incomplete.hidden = !partial || loading;
     mapFrameId = nextMapFrameId;
+    const currentViews = getViews(units);
     const selectedIndex = payload.frames.findIndex(frame => frame.id === frameId), frame = payload.frames[selectedIndex];
     const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
@@ -174,14 +178,17 @@ export function renderPointSeries(
     time.textContent = pointFrame && pointFrame.id !== mapFrameId ? `Point: ${utc(pointFrame.validTime)} · Map: ${mapFrame ? utc(mapFrame.validTime) : 'unavailable'}`
       : pointFrame ? `Point and map: ${utc(pointFrame.validTime)}` : 'Point time unavailable';
     const hasSelection = frame !== undefined;
-    summary.textContent = frame ? pointFrameView(frame, build, units).summary : loading ? 'Loading selected point hour…' : 'Selected point hour unavailable.';
+    summary.textContent = frame ? currentViews[selectedIndex].summary : loading ? 'Loading selected point hour…' : 'Selected point hour unavailable.';
     bars.forEach((bar, index) => {
       const frame = payload.frames[index], selected = frame.id === frameId;
       bar.ariaPressed = String(selected); bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
       bar.style.borderColor = selected ? '#229ec6' : 'transparent';
-      bar.ariaLabel = `${frame.validTime}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${pointFrameView(frame, build, units).summary}`;
-      bar.title = bar.ariaLabel;
+      if (labelledUnits !== units) {
+        bar.ariaLabel = `${frame.validTime}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${currentViews[index].summary}`;
+        bar.title = bar.ariaLabel;
+      }
     });
+    labelledUnits = units;
     const selected = bars[selectedIndex];
     if (followSelection && selected && chart.clientWidth > 0) {
       const left = selected.offsetLeft, width = selected.offsetWidth;

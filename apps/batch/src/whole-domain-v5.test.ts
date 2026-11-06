@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import z from 'zod';
 import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
@@ -476,6 +477,14 @@ describe('whole-domain v5 production', () => {
       onValidated: async result => { assertValidatedBuild(parallelRoot, result.manifest, result); parallelSealed = true; } });
     expect(parallelSealed).toBe(true);
     const parallel = await readV5(parallelPath);
+    const timings = z.record(z.string(), z.number().nonnegative()).parse(parallel.metrics.phasesMs);
+    const scalarMs = ['scalarStageMs', 'scalarMergeMs', 'scalarUploadMs'].map(key => {
+      expect(timings[key]).toEqual(expect.any(Number));
+      expect(timings[key]).toBeGreaterThanOrEqual(0);
+      return timings[key]!;
+    });
+    expect(scalarMs.reduce((sum, value) => sum + value, 0)).toBeLessThanOrEqual(timings.assemblyMs ?? -1);
+    expect(timings.scalarUploadMs).toBe(0);
     expect(source.observed.cycles).toHaveLength(3);
     expect(source.observed.sessions).toBe(0);
     expect(source.observed.peakSessions).toBe(1);
@@ -501,13 +510,75 @@ describe('whole-domain v5 production', () => {
     expect(plan.wholeDomain).toBeDefined();
   }, 60_000);
 
-  it('rejects prebranch g-key receipts before compaction mutates their local or remote payloads', async () => {
+  it.each(['complete', 'failure', 'abort'] as const)('bounds serving receipt HEADs and drains admitted work: %s', async mode => {
+    const controller = new AbortController(), pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
+    let running: ReturnType<typeof verifyBuildReceipts> | undefined;
+    shardTarget.bytes = 5000;
+    try {
+      const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], terrainSubdivisionFactor: 4 };
+      const setup = await fixture(configured), out = await root('wd-receipt-heads'), store = new PublicationStore(), source = fixtureProvider();
+      const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
+      const plan = await createBuildPlan({ ...inputs, cycle: CYCLE, wholeDomain: setup, shards: 2 });
+      for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ ...inputs, plan, shard });
+      const manifest = await readV5(await finalizeBuild({ ...inputs, plan }));
+      const keys = manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => shard.key)), serving = new Set(keys);
+      expect(keys.length).toBeGreaterThan(4);
+      const head = store.head.bind(store), started: string[] = [];
+      let active = 0, peak = 0, settled = false;
+      vi.spyOn(store, 'head').mockImplementation(async key => {
+        if (!serving.has(key)) return head(key);
+        started.push(key); active++; peak = Math.max(peak, active);
+        try {
+          await new Promise<void>((resolve, reject) => { pending.set(key, { resolve, reject }); });
+          return await head(key);
+        } finally { active--; }
+      });
+      running = verifyBuildReceipts(out, manifest, store, controller.signal, inputs);
+      void running.then(() => { settled = true; }, () => { settled = true; });
+      await vi.waitFor(() => expect(pending.size).toBe(4));
+      if (mode === 'complete') {
+        let completed = 0;
+        while (completed < keys.length) {
+          const batch = [...pending.values()]; pending.clear(); completed += batch.length;
+          for (const gate of batch.reverse()) gate.resolve();
+          if (completed < keys.length) await vi.waitFor(() => expect(pending.size).toBe(Math.min(4, keys.length - completed)));
+        }
+        const objects = await running;
+        expect(objects.slice(0, keys.length).map(object => object.key)).toEqual(keys);
+      } else {
+        const error = new Error(`receipt HEAD ${mode}`);
+        if (mode === 'failure') { pending.get(keys[0])!.reject(error); pending.delete(keys[0]); }
+        else controller.abort(error);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(started).toHaveLength(4);
+        for (const gate of pending.values()) gate.resolve(); pending.clear();
+        await expect(running).rejects.toThrow(error.message);
+        expect(started).toHaveLength(4);
+      }
+      expect(peak).toBe(4); expect(active).toBe(0);
+    } finally {
+      controller.abort(new Error('receipt HEAD test cleanup'));
+      for (const gate of pending.values()) gate.resolve();
+      await running?.catch(() => {});
+      shardTarget.bytes = 0;
+    }
+  }, 60_000);
+
+  it('rejects prebranch g-key receipts during finalize and receipt-only resume before payload mutation', async () => {
     const setup = await fixture(), out = await root('wd-legacy-receipts'), store = new PublicationStore(), source = fixtureProvider();
     const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], layers: [...product.layers, 'sfc-temp-c'] };
     const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
+    const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
+    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ ...inputs, plan, shard });
+    const manifest = await readV5(await finalizeBuild({ ...inputs, plan }));
+    for (const surface of manifest.surfaces) for (const item of surface.samples.shards) {
+      await rm(join(out, item.key)); store.objects.delete(item.key);
+    }
     const originals = new Map<string, Uint8Array>();
+    const receipts: WholeDomainReceipt[] = [];
     for (let shard = 0; shard < plan.groups.length; shard++) {
-      const path = await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+      const path = join(out, `shards/${shard}/receipt.json`);
       const receipt = JSON.parse(await readFile(path, 'utf8')) as WholeDomainReceipt;
       for (const surface of receipt.surfaces) for (const item of surface.shards) {
         const previous = item.key, legacy = previous.replace('/samples/src-g', '/samples/g'), object = store.objects.get(previous)!;
@@ -517,12 +588,25 @@ describe('whole-domain v5 production', () => {
         receipt.objects!.find(object => object.key === previous)!.key = legacy;
       }
       await writeFile(path, JSON.stringify(receipt));
+      receipts.push(receipt);
     }
+    for (const surface of manifest.surfaces) {
+      if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Expected grouped samples');
+      let firstFrame = 0;
+      surface.samples.shards = receipts.flatMap(receipt => {
+        const part = receipt.surfaces.find(part => part.id === surface.id);
+        if (!part) throw new Error('Missing legacy surface');
+        const frameCount = plan.groups[receipt.shard].length, start = firstFrame;
+        firstFrame += frameCount;
+        return part.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame: start, frameCount, blockShard }));
+      });
+    }
+    const legacy = manifestV5Schema.parse(manifest);
     const put = vi.spyOn(store, 'put');
-    const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
     const stale = { ...plan, recipe: { ...plan.recipe, hash: '0'.repeat(64), sourceRevision: '93e69f6d8ba9a1a8368d1e8d48d7adecff56a2de', sourceDirty: false } };
     await expect(finalizeBuild({ ...inputs, plan: stale })).rejects.toThrow('recipe or source revision changed; start a fresh forecast');
     await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('Legacy forecast sample receipts');
+    await expect(verifyBuildReceipts(out, legacy, store, undefined, inputs)).rejects.toThrow('Legacy forecast sample receipts');
     expect(put).not.toHaveBeenCalled();
     for (const [key, bytes] of originals) {
       expect(await readFile(join(out, key))).toEqual(Buffer.from(bytes));

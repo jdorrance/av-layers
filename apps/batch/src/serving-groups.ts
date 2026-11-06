@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
 import { prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from './capacity.js';
+import { runConcurrent } from './concurrent.js';
 import { putImmutableReceipt, type ObjectReceipt } from './immutable-upload.js';
 import { createLocalFileReader, localPath } from './local-file.js';
 import { mergeShardedSamplePacks, sampleShardKey, type ShardedSamplePackInput } from './sample-pack-v5.js';
@@ -66,6 +67,10 @@ interface PlannedGroup {
   readonly shards: readonly PlannedShard[];
 }
 
+function uploadLanes(groups: readonly PlannedGroup[]): number {
+  return Math.min(2, Math.max(1, ...groups.map(group => group.shards.length)));
+}
+
 function assertHourLayout(layout: ShardedSamplePackLayout, shards: readonly HourSampleShard[]): void {
   if (layout.shards.length !== shards.length) throw new Error('Forecast shard surface layout mismatch');
   for (const [index, shard] of layout.shards.entries()) {
@@ -121,7 +126,7 @@ function digest(bytes: Uint8Array): string {
 }
 
 /** Additional disk holds outputs and live remote inputs; local inputs use hardlinks. */
-export function servingGroupResources(input: ServingPlan, localInputs: ReadonlySet<string> = new Set()): { diskBytes: number; workingBytes: number; sourceBytes: number; outputBytes: number } {
+export function servingGroupResources(input: ServingPlan, localInputs: ReadonlySet<string> = new Set(), remoteUploads = true): { diskBytes: number; workingBytes: number; sourceBytes: number; outputBytes: number } {
   const groups = planGroups(input), partBytes = input.parts.map(part => part.shards.reduce((n, shard) => n + shard.bytes, 0));
   const stagedBytes = input.parts.map(part => part.shards.reduce((n, shard) => n + (localInputs.has(shard.key) ? 0 : shard.bytes), 0));
   const lastUse = input.parts.map((_, index) => Math.max(...groups.filter(group => group.sources.some(source => source.partIndex === index)).map(group => group.group)));
@@ -137,11 +142,11 @@ export function servingGroupResources(input: ServingPlan, localInputs: ReadonlyS
   }
   if (![diskBytes, sourceBytes, outputBytes, mergeBytes].every(Number.isSafeInteger) || outputBytes > BUILD_BUDGETS.numericBytes || sourceBytes > BUILD_BUDGETS.numericBytes) throw new Error('Serving sample bytes exceed build budget');
   // Borrowed local/upload buffer plus bounded SDK body, concatenation and transport storage.
-  return { diskBytes, workingBytes: 4 * MAX_V5_SHARD_BYTES + mergeBytes, sourceBytes, outputBytes };
+  return { diskBytes, workingBytes: 4 * MAX_V5_SHARD_BYTES * (remoteUploads ? uploadLanes(groups) : 1) + mergeBytes, sourceBytes, outputBytes };
 }
 
 /** Stage each verified input once; merger cursors retain only individual blocks. */
-export async function writeServingGroups(input: ServingPlan & { root: string; store?: ObjectStorage; signal?: AbortSignal }): Promise<{ shards: ServingSampleShard[]; objects: ObjectReceipt[] }> {
+export async function writeServingGroups(input: ServingPlan & { root: string; store?: ObjectStorage; signal?: AbortSignal }): Promise<{ shards: ServingSampleShard[]; objects: ObjectReceipt[]; phasesMs: { stageMs: number; mergeMs: number; uploadMs: number } }> {
   const groups = planGroups(input), localInputs = new Set<string>();
   input.signal?.throwIfAborted();
   await mkdir(input.root, { recursive: true });
@@ -155,13 +160,15 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
       localInputs.add(shard.key);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
-  const resources = servingGroupResources(input, localInputs);
+  const resources = servingGroupResources(input, localInputs, !!input.store);
   const disk = await statfs(input.root);
   if (disk.bavail * disk.bsize < resources.diskBytes) throw new Error(`Insufficient serving compaction disk: requires ${resources.diskBytes} bytes`);
   if (process.memoryUsage().rss + resources.workingBytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Serving compaction exceeds memory budget');
-  const staging = await mkdtemp(join(input.root, '.serving-')), read = createLocalFileReader(MAX_V5_SHARD_BYTES);
+  const staging = await mkdtemp(join(input.root, '.serving-'));
+  const readers = Array.from({ length: input.store ? uploadLanes(groups) : 0 }, () => createLocalFileReader(MAX_V5_SHARD_BYTES));
   const staged = new Set<number>(), lastUse = input.parts.map((_, index) => Math.max(...groups.filter(group => group.sources.some(source => source.partIndex === index)).map(group => group.group)));
   const shards: ServingSampleShard[] = [], objects: ObjectReceipt[] = [];
+  const phasesMs = { stageMs: 0, mergeMs: 0, uploadMs: 0 };
   async function stage(hour: HourSampleShard): Promise<void> {
     input.signal?.throwIfAborted();
     const destination = localPath(staging, hour.key);
@@ -179,28 +186,43 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
   try {
     for (const group of groups) {
       input.signal?.throwIfAborted();
+      let started = Date.now();
       for (const source of group.sources) if (!staged.has(source.partIndex)) {
         for (const hour of input.parts[source.partIndex]!.shards) await stage(hour);
         staged.add(source.partIndex);
       }
+      phasesMs.stageMs += Date.now() - started;
       const sources: ShardedSamplePackInput[] = group.sources.map(source => ({ root: staging,
         channelCount: input.parts[source.partIndex]!.frameCount * input.layers,
         selection: { firstChannel: source.sourceFrame * input.layers, channelCount: source.frames * input.layers },
         shards: input.parts[source.partIndex]!.shards }));
+      started = Date.now();
       const merged = await mergeShardedSamplePacks(group.layout, sources,
         { root: input.root, model: input.model, buildId: input.buildId, surfaceId: input.surfaceId, group: group.group, role: 'serving' }, { signal: input.signal });
+      phasesMs.mergeMs += Date.now() - started;
       for (const [index, shard] of merged.entries()) {
         input.signal?.throwIfAborted();
         shards.push({ ...group.shards[index]!, sha256: shard.sha256 });
-        if (input.store) await read(localPath(input.root, shard.key), shard.bytes, async bytes => {
-          objects.push(await putImmutableReceipt(input.store!, shard.key, bytes, 'application/octet-stream', input.signal, shard.sha256));
-        }, input.signal);
+      }
+      if (input.store) {
+        started = Date.now();
+        const uploaded: ObjectReceipt[] = new Array(merged.length);
+        await runConcurrent([...merged.entries()], readers.length, async ([index, shard]) => {
+          input.signal?.throwIfAborted();
+          const read = readers.pop()!;
+          try {
+            uploaded[index] = await read(localPath(input.root, shard.key), shard.bytes,
+              bytes => putImmutableReceipt(input.store!, shard.key, bytes, 'application/octet-stream', input.signal, shard.sha256), input.signal);
+          } finally { readers.push(read); }
+        });
+        objects.push(...uploaded);
+        phasesMs.uploadMs += Date.now() - started;
       }
       for (const index of staged) if (lastUse[index] === group.group) {
         for (const hour of input.parts[index]!.shards) await rm(localPath(staging, hour.key), { force: true });
         staged.delete(index);
       }
     }
-    return { shards, objects };
+    return { shards, objects, phasesMs };
   } finally { await rm(staging, { recursive: true, force: true }); }
 }

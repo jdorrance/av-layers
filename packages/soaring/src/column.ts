@@ -271,6 +271,7 @@ export class ReconstructedProfileWorkspace {
   readonly #temperatures: Float64Array;
   readonly #grounds: Float64Array;
   readonly #groundEnvironments: Float64Array;
+  readonly #lowestLapses: Float64Array;
   readonly #surfaceExcesses: Float64Array;
   readonly #counts: Uint32Array;
   readonly #knots: Float64Array;
@@ -304,6 +305,7 @@ export class ReconstructedProfileWorkspace {
     this.#temperatures = new Float64Array(donorCount * maxLevels);
     this.#grounds = new Float64Array(donorCount);
     this.#groundEnvironments = new Float64Array(donorCount);
+    this.#lowestLapses = new Float64Array(donorCount);
     this.#surfaceExcesses = new Float64Array(donorCount);
     this.#counts = new Uint32Array(donorCount);
     this.#knots = new Float64Array(4 * (maxLevels + 3));
@@ -313,7 +315,7 @@ export class ReconstructedProfileWorkspace {
     this.#knotIndices = new Uint8Array(4);
     this.#profile = { heights: new Float64Array(this.#knots.length), temperatures: new Float64Array(this.#knots.length) };
     this.byteLength = this.#heights.byteLength + this.#temperatures.byteLength + this.#grounds.byteLength +
-      this.#groundEnvironments.byteLength + this.#surfaceExcesses.byteLength +
+      this.#groundEnvironments.byteLength + this.#lowestLapses.byteLength + this.#surfaceExcesses.byteLength +
       this.#counts.byteLength + this.#knots.byteLength + this.#knotTemperatures.byteLength + this.#knotSupport.byteLength +
       this.#knotOrigin.byteLength + this.#knotIndices.byteLength +
       this.#profile.heights.byteLength + this.#profile.temperatures.byteLength;
@@ -375,6 +377,7 @@ export class ReconstructedProfileWorkspace {
       this.#grounds[slot] = snapshot.terrainM;
       const lapse = count > 1 ? Math.max(0, Math.min(DRY_LAPSE_RATE,
         (this.#temperatures[base]! - this.#temperatures[base + 1]!) / (this.#heights[base + 1]! - this.#heights[base]!))) : DRY_LAPSE_RATE;
+      this.#lowestLapses[slot] = lapse;
       this.#groundEnvironments[slot] = this.#temperatures[base]! + lapse * (this.#heights[base]! - snapshot.terrainM);
       this.#surfaceExcesses[slot] = snapshot.surfaceTemperatureC - this.#groundEnvironments[slot]!;
       this.#counts[slot] = count;
@@ -422,8 +425,7 @@ export class ReconstructedProfileWorkspace {
         const ground = this.#grounds[slot]!, first = this.#heights[base]!, t = this.#temperatures[base]!;
         if (height < ground - bridgeM || (left && height === ground - bridgeM)) continue;
         if (height > this.#heights[base + n - 1]!) { this.#failure = 'unsupportedHeight'; return NaN; }
-        const lapse = n > 1 ? Math.max(0, Math.min(DRY_LAPSE_RATE,
-          (t - this.#temperatures[base + 1]!) / (this.#heights[base + 1]! - first))) : DRY_LAPSE_RATE;
+        const lapse = this.#lowestLapses[slot]!;
         let temperature: number;
         if (height < ground) {
           this.#bridgeUsed = true;
@@ -482,8 +484,7 @@ export class ReconstructedProfileWorkspace {
           if (height === ground - bridgeM || height === ground) origin |= 1 << i;
           for (let j = 0; j < n; j++) if (height === this.#heights[base + j]!) origin |= 1 << i;
           if (height < ground - bridgeM || height > this.#heights[base + n - 1]!) continue;
-          const lapse = n > 1 ? Math.max(0, Math.min(DRY_LAPSE_RATE,
-            (t - this.#temperatures[base + 1]!) / (this.#heights[base + 1]! - first))) : DRY_LAPSE_RATE;
+          const lapse = this.#lowestLapses[slot]!;
           let temperature: number;
           if (height < ground) {
             temperature = t + lapse * (first - ground) + (bridgeMode === 'neutral' ? DRY_LAPSE_RATE : lapse) * (ground - height);

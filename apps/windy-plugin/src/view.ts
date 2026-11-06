@@ -148,7 +148,7 @@ export class PluginPanel {
     this.renderedBuildId = key;
     this.modelSelect.value = build.manifest.model;
     this.pointHorizonLabel.hidden = this.pointHorizon.hidden = pointSeriesSelection(build).frames.length === build.manifest.frames.length;
-    this.pointHorizon.children[0].textContent = build.manifest.version === 5 ? 'Map forecast' : '24 hours';
+    this.pointHorizon.children[0].textContent = build.manifest.version === 5 && build.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
   }
 
   renderState(state: ControllerState): void {

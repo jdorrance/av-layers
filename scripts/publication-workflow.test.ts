@@ -505,7 +505,7 @@ it.each([true, false])('allows expired-deadline recovery only for an authoritati
   }
 });
 
-it('resumes frame-group receipts without local sample payloads after remote verification', async () => {
+it('delegates frame-group receipt validation to publication without an earlier duplicate pass', async () => {
   const { manifest, plan, files } = v5ResumeFixture();
   for (const surface of manifest.surfaces) {
     const shard = surface.samples.shards[0]!;
@@ -517,13 +517,14 @@ it('resumes frame-group receipts without local sample payloads after remote veri
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await resumePublication(revision);
-  expect(fake.verifyReceipts).toHaveBeenCalledWith('output', expect.objectContaining({ version: 5 }), {}, expect.any(AbortSignal));
+  expect(fake.verifyReceipts).not.toHaveBeenCalled();
   expect(fake.verifyDependencies).not.toHaveBeenCalled();
   expect(fake.publish).toHaveBeenCalledWith({}, 'output', expect.anything(), expect.objectContaining({ receiptsOnly: true }));
-  fake.verifyReceipts.mockRejectedValueOnce(new Error('receipt mismatch'));
   fake.publish.mockClear();
+  fake.publish.mockRejectedValueOnce(new Error('receipt mismatch'));
   await expect(resumePublication(revision)).rejects.toThrow('receipt mismatch');
-  expect(fake.publish).not.toHaveBeenCalled();
+  expect(fake.verifyReceipts).not.toHaveBeenCalled();
+  expect(fake.publish).toHaveBeenCalledOnce();
 });
 
 it('rejects a prebranch grouped artifact at the recipe guard before receipt or numeric reads', async () => {
