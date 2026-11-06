@@ -22,9 +22,13 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
-Click the map for a point chart and choose 24 hours or Full forecast. Both ranges
-share cached scalar pages. Chart times within the map horizon select raster
-frames; later point times retain the map frame and show both UTC times.
+Click the map for a point chart; a horizon choice appears when additional point
+times are available. The
+selected hour appears first while cached scalar pages fill the chart. Chart
+times within the map horizon select raster frames; later point times retain
+the map frame and show both UTC times. Legacy builds offer a 24-hour point view.
+Elapsed-time markers follow gaps in the published axis. Failed pages leave an
+incomplete notice beside retained values.
 Heights use MSL. Native thermal tops have separate markers from usable lift;
 missing fine lift and terrain stay unknown. Units include metres/m/s or
 feet/knots, with vertical lift in ft/min for imperial displays.

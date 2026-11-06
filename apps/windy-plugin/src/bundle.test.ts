@@ -96,7 +96,7 @@ it.each([
       return Promise.resolve(new Response(JSON.stringify({
         model, buildId: manifest.buildId, lat: Number(query.get('lat')), lon: Number(query.get('lon')),
         method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt,
-        frames: manifest.frames.map(frame => ({ ...frame, layers: { [layerId]: { value: 1200, status: 'valid', support: 0, interpolated: false } } }))
+        frames: manifest.frames.filter(frame => query.get('frame')!.split(',').includes(frame.id)).map(frame => ({ ...frame, layers: { [layerId]: { value: 1200, status: 'valid', support: 0, interpolated: false } } }))
       })));
     }
     return Promise.reject(new Error(`unexpected ${String(url)}`));
@@ -131,7 +131,9 @@ it.each([
     setPaintProperty: vi.fn(),
     on: (name: string, listener: () => void) => { const listeners = renderListeners.get(name) ?? new Set(); listeners.add(listener); renderListeners.set(name, listeners); },
     off: (name: string, listener: () => void) => renderListeners.get(name)?.delete(listener),
-    isMoving: () => false
+    isMoving: () => false,
+    getZoom: () => 7,
+    getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   } };
   const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
   let destroyApp: (() => void) | undefined;
@@ -140,7 +142,9 @@ it.each([
   vi.stubGlobal('document', document);
   vi.stubGlobal('window', win);
   vi.stubGlobal('Option', FakeOption);
-  vi.stubGlobal('fetch', fetchImpl);
+  vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) => String(input).includes('/tiles/')
+    ? Promise.resolve(new Response(Uint8Array.of(82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80), { headers: { 'content-type': 'image/webp', 'content-length': '12' } }))
+    : fetchImpl(input, init));
   vi.stubGlobal('W', { map: { map, layerOrder: { MAIN: 200, PARTICLES: 400, PARTICLES_HIGH_ZOOM: 450 } }, singleclick: { singleclick }, store, broadcast });
   const protocols = new Map<string, unknown>();
   vi.stubGlobal('L', {
@@ -242,15 +246,15 @@ it.each([
 
   // The open pane owns point clicks; frame inspection reuses its pinned series.
   click({ lat: point.lat, lon: point.lon });
-  await vi.waitFor(() => expect(elements.some(element => element.className === 'av-point-chart')).toBe(true));
+  await vi.waitFor(() => expect(elements.findLast(element => element.className === 'av-point-chart')?.children).toHaveLength(2));
   expect(openWeatherPicker).not.toHaveBeenCalled();
-  expect(fetchImpl).toHaveBeenCalledTimes(2);
-  const chart = elements.find(element => element.className === 'av-point-chart')!;
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  const chart = elements.findLast(element => element.className === 'av-point-chart')!;
   chart.children[0].dispatch('click');
   selects[1].value = 'imperial'; selects[1].dispatch('change');
-  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
   expect(layer.url).toContain('/f003/');
-  expect(elements.find(element => element.className === 'av-point-values')?.textContent).toContain('3937 ft');
+  expect(elements.findLast(element => element.className === 'av-point-values')?.textContent).toContain('3937 ft');
   let pointSignal: AbortSignal | null | undefined;
   fetchImpl.mockImplementationOnce((_url, init) => {
     pointSignal = init?.signal;
@@ -273,7 +277,7 @@ it.each([
   destroyApp = () => reopened.$destroy();
   reopened.onopen();
   await Promise.resolve();
-  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
   expect(map.addLayer).toHaveBeenCalledTimes(2);
   const root = target.children.find(element => element.className.split(' ').includes('av-panel'))!;
   const mobileHeader = target.children.find(element => element.className.split(' ').includes('plugin__mobile-header'))!;

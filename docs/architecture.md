@@ -40,6 +40,8 @@ surfaces share each model's cycle, timeline, publication and URLs. See
 
 [models.json](../packages/contracts/config/models.json) owns model identities,
 source fields and URLs, grids, coverage, capabilities, timing and execution.
+[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts) owns output
+windows and derives selected hours, map end, minimum horizon and shard counts.
 [products.ts](../packages/contracts/src/products.ts) validates the registry;
 the Python mask generator reads the same file. `pnpm docs:generate` projects
 the configured cron union into the forecast workflow. The

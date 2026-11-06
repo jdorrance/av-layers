@@ -91,6 +91,7 @@ export class WindyRasterLayer implements HostTileLayer {
         this.listeners.get('tileloadstart')?.forEach(callback => callback({ tile }));
         this.listeners.get('tileerror')?.forEach(callback => callback({ tile }));
       }
+      this.prefetch();
     });
   };
   private readonly move = (): void => { this.prefetchAbort?.abort(); this.prefetchAbort = null; };

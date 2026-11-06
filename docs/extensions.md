@@ -6,9 +6,10 @@ Follow [development](development.md) for setup and
 ## Configure a model
 
 [models.json](../packages/contracts/config/models.json) owns each model's source
-profile, grid, coverage, capabilities, schedule, zoom and shard settings, with
+profile, grid, coverage, capabilities, schedule and zoom, with
 shared job and worker defaults. Model parallelism is its fixed job cap; the sum
-must fit the shared job budget. Edit this file, then run:
+must fit the shared job budget. Set its window and frames per shard in
+[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts), then run:
 
 ```sh
 pnpm docs:generate
@@ -16,8 +17,8 @@ pnpm capacity --model MODEL
 pnpm verify
 ```
 
-Adding a model with an existing source protocol requires one registry entry.
-Choose its URL template, fields, grid, forecast hours and coverage in that entry.
+Adding a model with an existing source protocol requires a registry entry and
+window settings. Choose its URL template, fields, grid and coverage in the registry.
 After changing a grid or coverage policy, generate its native and fine masks:
 
 ```sh

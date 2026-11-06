@@ -18,6 +18,8 @@ import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './wh
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import type { ObjectStorage } from './storage.js';
+import { runConcurrent } from './concurrent.js';
+export { runConcurrent } from './concurrent.js';
 
 export const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
 
@@ -25,16 +27,19 @@ export const sha256 = (data: Uint8Array): string => createHash('sha256').update(
 const validationSeal = Symbol('ValidatedBuild');
 export interface ValidatedBuild<T extends PublishedManifest = PublishedManifest> { readonly [validationSeal]: true; readonly root: string; readonly manifest: T; readonly hash: string }
 const seals = new WeakSet<object>();
+const remoteSeals = new WeakMap<object, ObjectStorage>();
 const manifestHash = (manifest: PublishedManifest): string => sha256(Buffer.from(JSON.stringify(manifest)));
-function validatedResult<T extends PublishedManifest>(root: string, manifest: T): ValidatedBuild<T> {
+function validatedResult<T extends PublishedManifest>(root: string, manifest: T, remoteStore?: ObjectStorage): ValidatedBuild<T> {
   const result = { [validationSeal]: true as const, root: resolve(root), manifest, hash: manifestHash(manifest) };
   Object.defineProperty(result, validationSeal, { enumerable: false });
   seals.add(result);
+  if (remoteStore) remoteSeals.set(result, remoteStore);
   return Object.freeze(result);
 }
 
-export function assertValidatedBuild(root: string, manifest: PublishedManifest, result: ValidatedBuild): void {
+export function assertValidatedBuild(root: string, manifest: PublishedManifest, result: ValidatedBuild, remoteStore?: ObjectStorage): void {
   if (!seals.has(result) || result[validationSeal] !== true || result.root !== resolve(root) || result.hash !== manifestHash(result.manifest) || result.hash !== manifestHash(manifest)) throw new Error('Build validation result is missing or changed');
+  if (remoteStore && remoteSeals.get(result) !== remoteStore) throw new Error('Build validation result does not cover this remote store');
 }
 
 export function assertTerrainManifestBinding(manifest: ManifestV5, terrain: NonNullable<ManifestV5['surfaces'][number]['terrain']>, descriptor: Awaited<ReturnType<typeof validateSparsePreparedTerrain>>['descriptor'], arrayBytes: number, product: ProductDefinition): void {
@@ -54,7 +59,7 @@ export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, m
   assertValidatedBuild(root, result.manifest, result);
   const manifest = publishedManifestSchema.parse({ ...result.manifest, metrics: structuredClone(metrics) });
   encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
-  return validatedResult(root, manifest);
+  return validatedResult(root, manifest, remoteSeals.get(result));
 }
 
 export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINITY): Promise<string> {
@@ -67,20 +72,6 @@ export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINI
     hash.update(chunk);
   }
   return hash.digest('hex');
-}
-
-export async function runConcurrent<T>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const iterator = items.values();
-  let failed = false, failure: unknown;
-  const worker = async (): Promise<void> => {
-    for (const item of iterator) {
-      if (failed) return;
-      try { await fn(item); }
-      catch (error) { if (!failed) { failed = true; failure = error; } return; }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  if (failed) throw failure;
 }
 
 /** Bound digest identities; share pending decodes as well as successfully verified content. */
@@ -292,7 +283,7 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     })) throw new Error('Remote receipt artifact set mismatch');
     await verifyObjectReceipts(remote.store, remote.objects, remote.signal);
   }
-  return validatedResult(root, manifest);
+  return validatedResult(root, manifest, remote?.store);
 }
 
 interface PackedGroup {

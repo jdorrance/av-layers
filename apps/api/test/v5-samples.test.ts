@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LAYERS, MAX_SAMPLE_POINTS, multiPointSampleResponseSchema, sampleResponseV5Schema } from '@av/contracts';
+import { LAYERS, MAX_SAMPLE_POINTS, MAX_SAMPLE_RANGE_BYTES, getProduct, layerSurface, multiPointSampleResponseSchema, sampleResponseV5Schema } from '@av/contracts';
 import { serveSample, serveSamples } from '../src/sample';
 import { coverageMemory } from '../src/coverage';
-import { inFlightAllocationBytes } from '../src/resources';
-import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture, finePoint } from './v5-fixture';
+import { inFlightAllocationBytes, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
+import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture, finePoint, nativePoint } from './v5-fixture';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -99,12 +99,79 @@ describe('version-5 batch samples', () => {
     expect(sampleResponseV5Schema.parse(await response.json())).toEqual(result.points[0]!.sample);
   });
 
-  it('rejects the combined merged byte cost before reading any numeric object', async () => {
+  it('narrows scattered single-hour queries inside the combined byte budget', async () => {
     const fixture = createV5Fixture({ frameHours: Array.from({ length: 85 }, (_, index) => index + 1) });
     const points = Array.from({ length: 64 }, (_, index) => finePoint(index % 16 * 4 + 0.25, 16.25 + Math.floor(index / 16)));
-    await expect(batch(fixture, points.map(({ lat, lon }) => `${lat},${lon}`).join(';'), '&layers=usable-lift-msl')).rejects.toMatchObject({ status: 429, code: 'sample-limit' });
-    expect(numericReads(fixture)).toHaveLength(0);
+    const result = await body(await batch(fixture, points.map(({ lat, lon }) => `${lat},${lon}`).join(';'), '&layers=usable-lift-msl'));
+    expect(result.points).toHaveLength(64);
+    expect(numericReads(fixture).reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
+  it('keeps compacted timeline and scattered point values identical to one-frame groups', async () => {
+    const nativeLayers = getProduct('gfs')!.layers.filter(layer => layerSurface(layer) === 'native');
+    const hours = Array.from({ length: 24 }, (_, index) => index + 1);
+    const packed = createGroupedV5Fixture({ groups: [hours], nativeLayers });
+    const hourly = createGroupedV5Fixture({ groups: hours.map(hour => [hour]), nativeLayers });
+    const layers = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'thermal-velocity', 'thermal-top-msl',
+      'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
+    const points = Array.from({ length: 8 }, (_, index) => finePoint(index * 8 + 1.25, 16.5));
+    const coordinates = points.map(({ lat, lon }) => `${lat},${lon}`).join(';');
+    const selection = `&frame=h020&layers=${layers.join(',')}`;
+    expect(await body(await batch(packed, coordinates, selection))).toEqual(await body(await batch(hourly, coordinates, selection)));
+    const ranges = numericReads(packed);
+    expect(ranges.reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
+    packed.get.mockClear(); hourly.get.mockClear();
+    const point = `${points[0]!.lat},${points[0]!.lon}`;
+    const timeline = `&frame=${packed.manifest.frames.slice(0, 23).map(frame => frame.id).join(',')}&layers=${layers.join(',')}`;
+    expect(await body(await batch(packed, point, timeline))).toEqual(await body(await batch(hourly, point, timeline)));
+    expect(numericReads(packed).length).toBeLessThanOrEqual(MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST);
+    expect(numericReads(packed).reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThan(10_000);
+    expect(coverageMemory(packed.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
+  it('reads sparse hours for 64 points without copying intervening channels', async () => {
+    const hours = Array.from({ length: 24 }, (_, index) => index + 1);
+    const nativeLayers = getProduct('gfs')!.layers.filter(layer => layerSurface(layer) === 'native');
+    const packed = createGroupedV5Fixture({ groups: [hours], nativeLayers });
+    const hourly = createGroupedV5Fixture({ groups: hours.map(hour => [hour]), nativeLayers });
+    const points = Array.from({ length: 64 }, (_, index) => nativePoint(index % 16 * 2 + 0.25, 8.25 + Math.floor(index / 16) % 3 + (index >= 48 ? 0.1 : 0)));
+    const coordinates = points.map(({ lat, lon }) => `${lat},${lon}`).join(';');
+    const selection = '&frame=h001,h024&layers=wind-10m-u';
+    expect(await body(await batch(packed, coordinates, selection))).toEqual(await body(await batch(hourly, coordinates, selection)));
+    expect(numericReads(packed).reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThan(10_000);
+    expect(coverageMemory(packed.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
+  it('preserves samples across compacted f024/f027 groups on the complete 40-frame axis', async () => {
+    const nativeLayers = getProduct('gfs')!.layers.filter(layer => layerSurface(layer) === 'native');
+    const hours = [...Array.from({ length: 24 }, (_, index) => index + 1), ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)];
+    const nativeValue = (layer: typeof nativeLayers[number], frame: number, x: number, y: number) => {
+      if (layer === 'wind-10m-u' && x === 0 && y === 9) return null;
+      if (layer === 'wind-10m-v' && frame === 24 && x === 16 && y === 9) return 0;
+      return (frame + 1) / 10 + x / 100 + y / 1000 + nativeLayers.indexOf(layer) / 10000;
+    };
+    const packed = createGroupedV5Fixture({ groups: [hours.slice(0, 24), hours.slice(24)], nativeLayers, nativeValue });
+    const hourly = createGroupedV5Fixture({ groups: hours.map(hour => [hour]), nativeLayers, nativeValue });
+    const points = [finePoint(4, 17), finePoint(5, 17), nativePoint(31.75, 8.35), nativePoint(0, 9), nativePoint(16, 9)];
+    const layers = 'usable-lift-msl,usable-lift-agl,thermal-velocity,wind-10m-u,wind-10m-v';
+    const selection = `&frame=h024,h027&layers=${layers}`, coordinates = points.map(({ lat, lon }) => `${lat},${lon}`).join(';');
+    const result = await body(await batch(packed, coordinates, selection));
+    expect(result).toEqual(await body(await batch(hourly, coordinates, selection)));
+    expect(result.points[0]!.sample.frames.map(frame => frame.layers['usable-lift-msl']!.status)).toEqual(['no-usable-lift', 'no-usable-lift']);
+    expect(result.points[1]!.sample.frames.every(frame => frame.layers['usable-lift-agl']!.status === 'unavailable')).toBe(true);
+    expect(result.points[3]!.sample.frames.every(frame => frame.layers['wind-10m-u']!.status === 'unavailable')).toBe(true);
+    expect(result.points[4]!.sample.frames[1]!.layers['wind-10m-v']).toMatchObject({ value: 0, status: 'valid' });
+    expect(result.points[0]!.sample.frames.map(frame => frame.intervalStart)).toEqual([23, 26].map(hour => new Date(NOW + hour * 3_600_000).toISOString()));
+    for (const surface of packed.manifest.surfaces) for (const shard of surface.samples.shards) expect(numericReads(packed).some(([key]) => key === shard.key)).toBe(true);
+    expect(numericReads(packed).reduce((total, [, options]) => total + options!.range!.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
+    const point = points[2]!, url = new URL(`https://api.test/v1/models/gfs/runs/${packed.buildId}/sample?lat=${point.lat}&lon=${point.lon}${selection}`);
+    const single = await serveSample(new Request(url), packed.bucket, { waitUntil() {}, responseCacheEnabled: false }, packed.manifest, url);
+    expect(sampleResponseV5Schema.parse(await single.json())).toEqual(result.points[2]!.sample);
+    for (const fixture of [packed, hourly]) expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
@@ -122,7 +189,30 @@ describe('version-5 batch samples', () => {
     try { await vi.waitFor(() => expect(active).toBe(4)); } finally { release(); }
     const result = await body(await pending);
     expect(result.points.every(({ sample }) => sample.frames.length === 6)).toBe(true);
-    expect(peak).toBe(4); expect(active).toBe(0);
+    expect(peak).toBe(4);
+    expect(peak).toBeLessThanOrEqual(MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST);
+    expect(active).toBe(0);
+    expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
+    expect(inFlightAllocationBytes()).toBe(0);
+  });
+
+  it('drains a successful sibling coverage load after another surface fails', async () => {
+    const fixture = createV5Fixture(), original = fixture.get.getMockImplementation()!;
+    let started!: () => void, release!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    fixture.get.mockImplementation(async (key, options) => {
+      if (key === fixture.native.surface.coverage.maskKey) return null;
+      if (key === fixture.fine.surface.coverage.maskKey) { started(); await gate; }
+      return original(key, options);
+    });
+    const owners: Promise<unknown>[] = [], url = new URL(`https://api.test/v1/models/gfs/runs/${fixture.buildId}/samples?points=9,-180`);
+    const pending = serveSamples(new Request(url), fixture.bucket, { waitUntil: promise => { owners.push(promise); }, responseCacheEnabled: false }, fixture.manifest, url);
+    void pending.catch(() => {});
+    await reading;
+    await vi.waitFor(() => expect(coverageMemory(fixture.bucket).leaseRefs).toBe(1));
+    release();
+    await expect(pending).rejects.toThrow('Coverage descriptor missing');
+    await Promise.allSettled(owners);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
     expect(inFlightAllocationBytes()).toBe(0);
   });

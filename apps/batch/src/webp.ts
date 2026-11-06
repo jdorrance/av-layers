@@ -6,7 +6,7 @@ export interface WebpImage {
   data: Uint8Array;
 }
 
-const options = { lossless: true, exact: true, quality: 75, effort: 4 } as const;
+const options = { lossless: true, exact: true, quality: 75, effort: 2 } as const;
 export const WEBP_ENCODER = { package: 'sharp', version: sharp.versions.sharp, libwebp: sharp.versions.webp, libvips: sharp.versions.vips, options } as const;
 
 export async function encodeWebp(rgba: Uint8Array, width = 256, height = 256, effort: number = options.effort): Promise<Buffer> {

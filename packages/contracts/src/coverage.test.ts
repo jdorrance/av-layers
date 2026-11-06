@@ -83,3 +83,27 @@ it('checks sparse halos at clipped, wrapped and missing block boundaries', () =>
     }
   }
 });
+
+it('requires every halo-only neighbor block around output edges and corners', () => {
+  for (const width of [33, 48, 49]) for (const height of [33, 48, 49]) for (const wrapLongitude of [false, true]) {
+    for (const [x, y] of [[16, 16], [31, 16], [16, 31], [31, 31], [0, 16], [width - 1, 16], [16, 0], [16, height - 1]]) {
+      const output = new Uint8Array(Math.ceil(width * height / 8)), halo = new Uint8Array(output.length), own = y * width + x;
+      setBit(output, own);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = wrapLongitude ? ((x + dx) % width + width) % width : x + dx, yy = y + dy;
+        if (xx >= 0 && xx < width && yy >= 0 && yy < height && yy * width + xx !== own) setBit(halo, yy * width + xx);
+      }
+      const input = { width, height, wrapLongitude, gridHash: 'a'.repeat(64), output, halo }, coverage = sparseCoverageFromDense(input), columns = Math.ceil(width / 16);
+      expect(() => assertSparseCoverageHalo(coverage)).not.toThrow();
+      for (const id of coverage.blockIds) {
+        if (id === Math.floor(y / 16) * columns + Math.floor(x / 16)) continue;
+        const missing = halo.slice(), x0 = id % columns * 16, y0 = Math.floor(id / columns) * 16;
+        for (let yy = y0; yy < Math.min(y0 + 16, height); yy++) for (let xx = x0; xx < Math.min(x0 + 16, width); xx++) setBit(missing, yy * width + xx, false);
+        expect(() => assertSparseCoverageHalo(sparseCoverageFromDense({ ...input, halo: missing }))).toThrow('halo mismatch');
+      }
+      const overlap = coverage.halo.slice();
+      for (let byte = 0; byte < overlap.length; byte++) overlap[byte] |= coverage.output[byte];
+      expect(() => assertSparseCoverageHalo({ ...coverage, halo: overlap })).toThrow('Invalid sparse coverage masks');
+    }
+  }
+});

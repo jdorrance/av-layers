@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { renderPointSeries } from '@av/contracts/client/dom';
 import { ApiClient } from '@av/contracts/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
@@ -16,6 +17,7 @@ class FakeElement {
   id = '';
   htmlFor = '';
   role = '';
+  ariaLabel = '';
   value = '';
   disabled = false;
   type = '';
@@ -41,6 +43,7 @@ class FakeElement {
     if (event.bubbles && !event.cancelBubble) this.parent?.dispatchEvent(event);
     return !event.defaultPrevented;
   }
+  focus(): void { (document as unknown as { activeElement: FakeElement | null }).activeElement = this; }
 }
 
 const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn(), onPointHorizon: vi.fn() });
@@ -94,6 +97,19 @@ it('associates visible labels with the model and opacity controls', () => {
   expect(nodes.find(node => node.className === 'av-notice')?.role).toBe('status');
   expect(nodes.find(node => node.className === 'av-error')?.role).toBe('alert');
   expect(nodes.find(node => node.className === 'av-warning')?.role).toBe('status');
+});
+
+it('offers a horizon choice only when a pinned build has additional point frames', () => {
+  installDom();
+  const matching = fixturePointBuild({ frameHours: [1, 2, 3], mapFrameCount: 3 });
+  for (const [build, hidden] of [[matching, true], [retainedPointBuild(), false], [retainedLegacyPointBuild(), false]] as const) {
+    const panel = new PluginPanel(callbacks());
+    panel.renderBuild(build);
+    const nodes = visit(panel.root as unknown as FakeElement);
+    expect(nodes.find(node => node.id === 'av-point-horizon')?.hidden).toBe(hidden);
+    expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe(build.manifest.version === 5 ? 'Map forecast' : '24 hours');
+    expect(nodes.find(node => node.htmlFor === 'av-point-horizon')?.hidden).toBe(hidden);
+  }
 });
 
 it('keeps native panel control keys separate from page shortcuts while allowing Escape and Tab', () => {
@@ -185,7 +201,7 @@ it('leaves the opacity slider alone while it is being dragged', () => {
 
 it('inspects the full point forecast independently of an unchanged Windy map frame', async () => {
   installDom();
-  const build = fixturePointBuild(), m = build.manifest;
+  const build = retainedPointBuild(), m = build.manifest;
   if (m.version !== 5) throw new Error('Expected v5');
   const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
@@ -220,6 +236,108 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   panel.renderPoint(await loader.load('forecast'), build, null, chooseFrame);
   nodes = visit(panel.root as unknown as FakeElement);
   expect(nodes.find(element => element.className === 'av-point-time')!.textContent).toContain('Map: unavailable');
+});
+
+it('labels irregular elapsed time while keeping one keyboard target per shown forecast', async () => {
+  const doc = installDom(), build = fixturePointBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const panel = new PluginPanel(callbacks()), chooseFrame = vi.fn();
+  panel.renderPoint(await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), build, 'f001', chooseFrame);
+  const nodes = visit(panel.root as unknown as FakeElement), chart = nodes.find(node => node.className === 'av-point-chart')!;
+  expect(chart.children.map(button => button.value)).toEqual(['f001', 'f002', 'f004', 'f007', 'f013']);
+  expect(chart.children.map(button => button.children.find(node => node.className === 'av-point-gap')?.textContent ?? '')).toEqual(['', '', '+2 h', '+3 h', '+6 h']);
+  expect(chart.children[2].ariaLabel).toContain('2 h after previous shown time');
+  expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
+  const key = (value: string) => Object.assign(new Event('keydown', { cancelable: true }), { key: value });
+  chart.children[1].dispatchEvent(key('ArrowRight'));
+  expect(doc.activeElement).toBe(chart.children[2]); expect(chooseFrame).toHaveBeenLastCalledWith('f004');
+  chart.children[2].dispatchEvent(key('End'));
+  expect(doc.activeElement).toBe(chart.children[4]); expect(chooseFrame).toHaveBeenLastCalledWith('f013');
+  chart.children[4].dispatchEvent(key('Home'));
+  expect(doc.activeElement).toBe(chart.children[0]); expect(chooseFrame).toHaveBeenLastCalledWith('f001');
+});
+
+it('keeps missing pages distinct from forecast gaps and records partial data independently of loading', async () => {
+  installDom();
+  const build = fixturePointBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day');
+  const container = new FakeElement('div'), partial = { frames: [payload.frames[0], payload.frames[2], payload.frames[3], payload.frames[4]] };
+  const update = renderPointSeries(container as unknown as HTMLElement, partial, build, { frameId: 'f001', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame: vi.fn() });
+  const nodes = visit(container), chart = nodes.find(node => node.className === 'av-point-chart')!;
+  expect(chart.children.map(button => button.children.find(node => node.className === 'av-point-gap')?.textContent ?? '')).toEqual(['', '', '+3 h', '+6 h']);
+  expect(chart.children[1].ariaLabel).not.toContain('after previous shown time');
+  const notice = nodes.find(node => node.className === 'av-point-incomplete')!;
+  expect(notice.hidden).toBe(false);
+  update('f013', 'imperial');
+  expect(notice.hidden).toBe(false);
+  expect(nodes.find(node => node.className === 'av-point-values')?.textContent).toContain('Native top 8202 ft');
+});
+
+it.each([[false, false], [true, false], [true, true]])('preserves Windy progress and terminal failure (fails=%s, selected hour loaded=%s)', async (fail, keepKnown) => {
+  installDom();
+  const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
+  const build = fixturePointBuild({ frameHours: [...hours, 75, 78], mapFrameCount: 40 }), m = build.manifest;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    if (fetchImpl.mock.calls.length === (fail ? 3 : 2)) await gate;
+    if (fail && fetchImpl.mock.calls.length === 3) throw new Error('Late page failed');
+    return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+  });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
+  const panel = new PluginPanel(callbacks()), point = { lat: 32.9, lon: -117.25 };
+  panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f072', displayedFrameId: m.frames[0].id });
+  panel.loadPoint(point);
+  const pending = api.pointSeries(build, point).load('day', undefined, { frameId: 'f072', onProgress(series, total) {
+    panel.renderPoint(series, build, 'f072', vi.fn(), total);
+  } });
+  const rejected = fail ? expect(pending).rejects.toThrow('Late page failed') : null;
+  try {
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(fail ? 3 : 2));
+    const nodes = visit(panel.root as unknown as FakeElement);
+    expect(nodes.some(node => node.textContent === `${fail ? 24 : 1}/40 frames · Loading…`)).toBe(true);
+    expect(nodes.find(node => node.className === 'av-point-chart')?.children).toHaveLength(fail ? 24 : 1);
+    expect(nodes.find(node => node.className === 'av-point-chart')?.children.at(-1)?.children.find(node => node.className === 'av-point-gap')).toBeUndefined();
+    expect(nodes.find(node => node.className === 'av-point-values')?.textContent).toContain('Native top 2500 m');
+    expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(' · Map: ');
+    expect(panel.pointFrame).toBe('f072');
+    expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe('Map forecast');
+    if (!keepKnown) {
+      panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f069', displayedFrameId: m.frames[0].id });
+      expect(nodes.find(node => node.className === 'av-point-values')?.textContent).toBe('Loading selected point hour…');
+    }
+  } finally { release(); }
+  if (fail) {
+    await rejected;
+    panel.pointError('Late page failed');
+    const nodes = visit(panel.root as unknown as FakeElement), summary = nodes.find(node => node.className === 'av-point-values')!;
+    expect(panel.pointFrame).toBe(keepKnown ? 'f072' : 'f069');
+    expect(summary.textContent).toContain(keepKnown ? 'Native top 2500 m' : 'Selected point hour unavailable.');
+    const incomplete = nodes.find(node => node.className === 'av-point-incomplete')!;
+    expect(incomplete.hidden).toBe(false); expect(incomplete.role).toBe('status');
+    expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
+    const units = nodes.find(node => node.id === 'av-units')!;
+    units.value = 'imperial'; units.dispatchEvent(new Event('change'));
+    expect(summary.textContent).toContain(keepKnown ? 'Native top 8202 ft' : 'Selected point hour unavailable.');
+    const chart = nodes.find(node => node.className === 'av-point-chart')!;
+    expect(chart.children).toHaveLength(24);
+    expect(chart.children.at(-1)?.children.find(node => node.className === 'av-point-gap')).toBeUndefined();
+    chart.children.find(node => node.value === 'f072')!.dispatchEvent(new Event('click'));
+    expect(summary.textContent).toContain('Native top 8202 ft');
+    expect(incomplete.hidden).toBe(false);
+    return;
+  }
+  await pending;
+  const nodes = visit(panel.root as unknown as FakeElement);
+  expect(nodes.some(node => node.textContent.startsWith('40 frames ·'))).toBe(true);
+  expect(nodes.find(node => node.className === 'av-point-chart')?.children).toHaveLength(40);
+  expect(nodes.find(node => node.className === 'av-point-chart')?.children[24].children.find(node => node.className === 'av-point-gap')?.textContent).toBe('+3 h');
+  expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
+  expect(panel.pointFrame).toBe('f069');
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
 });
 
 it('keeps selected point time separate from pending and failed Windy raster replacements', async () => {

@@ -8,6 +8,7 @@ import {
   activePalettes,
   assertNotExpired,
   pointSeriesLabel,
+  pointSeriesSelection,
   forecastHorizonNotice,
   formatBuildFreshness,
   normalizePoint,
@@ -50,6 +51,7 @@ const pointStatus = element<HTMLParagraphElement>('point-status');
 const pointBody = element<HTMLDivElement>('point-body');
 const pointUnits = element<HTMLSelectElement>('point-units');
 const pointHorizonSelect = element<HTMLSelectElement>('point-horizon');
+const pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label');
 const meta = element<HTMLDListElement>('meta');
 
 const ARMENIA: [[number, number], [number, number]] = [[43.45, 38.84], [46.63, 41.3]];
@@ -526,6 +528,8 @@ function startPreview(): void {
       const next = await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
+      pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
+      pointHorizonSelect.children[0].textContent = next.manifest.version === 5 ? 'Map forecast' : '24 hours';
       chooseFrame(next);
       updateOverlay();
       updateFreshness();
@@ -557,20 +561,20 @@ function startPreview(): void {
     else if (model === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
   }
 
-  function showPoint(point: GeoPoint, payload: PointSeries): void {
+  function showPoint(point: GeoPoint, payload: PointSeries, totalFrames = payload.frames.length): void {
     const place = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     pointSummary.textContent = place;
     if (build) {
       const requestedBuild = build;
-      if (!payload.frames.some(frame => frame.id === pointFrameId)) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
-      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, onFrame(id) {
+      if (pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === pointFrameId))) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
+      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, onFrame(id) {
         if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
         pointFrameId = id;
         updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());
         selectIndex(renderedFrames(build.manifest).findIndex(frame => frame.id === id), 'push');
       } });
       pointBody.tabIndex = 0;
-      pointStatus.textContent = pointSeriesLabel(payload);
+      pointStatus.textContent = pointSeriesLabel(payload, totalFrames);
     }
   }
 
@@ -592,19 +596,23 @@ function startPreview(): void {
     seriesAbort = requestAbort;
     const requestedBuild = build;
     const requestedPoint = { ...clicked }, requestedLoader = pointLoader;
+    const frames = pointSeriesSelection(requestedBuild, pointHorizon).frames;
+    if (!frames.includes(pointFrameId ?? '')) pointFrameId = frames.includes(selectedFrame ?? '') ? selectedFrame : frames[0] ?? null;
     pointSummary.textContent = `${requestedPoint.lat.toFixed(3)}°, ${requestedPoint.lon.toFixed(3)}°`;
     pointStatus.textContent = pointHorizon === 'forecast' ? 'Loading full point forecast…' : 'Loading point…';
     renderBuildDiagnostics(meta, requestedBuild);
     try {
-      const payload = await requestedLoader.load(pointHorizon, requestAbort.signal);
-      if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
-      showPoint(requestedPoint, payload);
+      await requestedLoader.load(pointHorizon, requestAbort.signal, { frameId: pointFrameId ?? selectedFrame, onProgress(payload, totalFrames) {
+        if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
+        showPoint(requestedPoint, payload, totalFrames);
+      } });
     } catch (error) {
       if (requestAbort.signal.aborted || build !== requestedBuild || !samePoint(clicked, requestedPoint)) {
         if (pointInterrupted) pointStatus.textContent = 'Point request interrupted. Click the map again.';
         return;
       }
       if (!ensureLive()) return;
+      updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame(), false);
       pointStatus.textContent = `Series failed: ${error instanceof Error ? error.message : String(error)}`;
     } finally {
       if (seriesAbort === requestAbort) seriesAbort = null;

@@ -51,7 +51,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 ## Configured models
 
-Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
+Sources: [model settings](../packages/contracts/config/models.json) and [forecast windows](../packages/contracts/src/forecast-windows.ts). See [deployments](status.md) for live applications and runs.
 
 Forecast trigger budget: 20 shard jobs; default workers 3.
 
@@ -64,15 +64,15 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–9.
-- Execution: 72 target shards; at most 12 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
-- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72,75,78,81,84,87,90,93,96,99,102,105,108,111,114,117,120,123,126,129,132,135,138,141,144,147,150,153,156,159,162,165,168,171,174,177,180,183,186,189,192,195,198,201,204,207,210,213,216,219,222,225,228,231,234,237,240,243,246,249,252,255,258,261,264,267,270,273,276,279,282,285,288,291,294,297,300,303,306,309,312,315,318,321,324,327,330,333,336,339,342,345,348,351,354,357,360,363,366,369,372,375,378,381,384]`; interval: 1 hours; frame policy: `all-hours`.
-- Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
+- Execution: 20 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["25 0,6,12,18 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Source interval changes at hour 123 to 3 hours.
 - Vertical coordinate: `isobaric`; maximum levels: 21.
 - Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
-- Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
+- Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### ICON-EU (icon-eu-soaring)
 
@@ -83,14 +83,14 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
 - Coverage: `icon-eu-land-v1`. Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–10.
-- Execution: 48 target shards; at most 8 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["17 5,17 * * *"]`.
-- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]`; interval: 1 hours; frame policy: `all-hours`.
-- Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
+- Execution: 40 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["20 5,11,17,23 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `model-levels`; maximum levels: 30.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
-- Publication timing: cycle age at most 18 hours; remaining horizon at least 6 hours.
+- Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### RRFS (CONUS) (rrfs-conus-soaring)
 
@@ -101,14 +101,14 @@ Forecast trigger budget: 20 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
-- Execution: 48 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["27 3,9,15,21 * * *"]`.
-- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]`; interval: 1 hours; frame policy: `all-hours`.
-- Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
+- Execution: 40 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 25.
 - Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
-- Publication timing: cycle age at most 12 hours; remaining horizon at least 6 hours.
+- Publication timing: cycle age at most 12 hours; remaining horizon at least 48 hours.
 
 ## Scalar quantities and units
 
@@ -1007,7 +1007,7 @@ Complete-build limits:
 - `numericBytes`: `68719476736`.
 - `peakRssBytes`: `2147483648`.
 - `samplePackBytes`: `268435456`.
-- `tiles`: `4000000`.
+- `tiles`: `5000000`.
 
 Shared limits and storage constants:
 

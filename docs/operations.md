@@ -52,8 +52,10 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
 `all` expands to `MODEL_IDS`. [models.json](../packages/contracts/config/models.json)
-owns per-model UTC schedules, rendered zoom, shard targets and parallelism.
-Run `pnpm docs:generate` after editing it, then `pnpm verify` and `pnpm capacity --model MODEL`.
+owns per-model UTC schedules, rendered zoom and parallelism.
+[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts) owns output
+windows, minimum horizons and frames per shard. Tune that entry, then run
+`pnpm docs:generate`, `pnpm verify` and `pnpm capacity --model MODEL`.
 Generated workflow triggers select models by the cron expression that fired,
 including delayed starts. Manual runs finish each model before starting the next;
 scheduled runs start selected models concurrently. Without `cycle`, each model
@@ -69,9 +71,17 @@ clean up expired builds, and verify live API serving. Terrain preparation has it
 own operation budget per attempt from [build budgets](../apps/batch/src/capacity.ts);
 forecast elapsed time starts with planning.
 
-The [planner](../apps/batch/src/parallel.ts) balances resolved frame hours across
-the configured shard target. Set that target to the candidate frame count for
-one hour per shard. Each model and each group sharing a cron expression fit the
+The [window settings](../packages/contracts/src/forecast-windows.ts) own each
+model's selected hours and `framesPerShard`. The registry derives the shard
+target from their frame count; set `framesPerShard` to 1 for one selected frame
+per job. The [planner](../apps/batch/src/parallel.ts) balances those frames across
+the target groups. Publish stages verified scalar inputs on disk and streams
+24-frame sample groups through the [merger](../apps/batch/src/sample-pack-v5.ts).
+[Compaction admission](../apps/batch/src/serving-groups.ts) checks temporary disk
+against free space and bounds memory. It counts new serving outputs and live
+downloaded inputs; existing local inputs use hardlinks. Completed groups release
+their staged inputs. Profiles retain their compute groups.
+Each model and each group sharing a cron expression fit the
 job budget. Use the same cron string for models intended to run together. The
 global worker default may be overridden per model; CPU and memory admission bounds
 actual workers. Plans freeze rendered zoom,
@@ -106,8 +116,8 @@ bound to the bucket, model, build ID and deadline. Shards receive only their
 model's environment key. Terrain preparation, planning and publication receive
 the parent R2 credentials. The write credential permits `PutObject` under its build prefix; the
 read credential permits `GetObject` and `HeadObject` under that prefix,
-`coverage/`, and `terrain/prepared/`. Both expire at the plan deadline or after
-one hour, whichever comes first. Protect the encryption key and plan artifact as
+`coverage/`, and `terrain/prepared/`. Both expire at the plan deadline or the
+[elapsed build budget](../apps/batch/src/capacity.ts), whichever comes first. Protect the encryption key and plan artifact as
 credentials until expiry.
 GitHub reads [environment secrets when a job starts](https://docs.github.com/en/actions/reference/security/secrets#when-github-actions-reads-secrets).
 The `needs: prepare` barrier starts shards after key rotation. The
@@ -121,11 +131,14 @@ in the frozen plan. Workers stage verified terrain from R2 and derive fine lift
 surfaces from the same native weather frames. Assembly requires every grid's
 complete shard set before validating and publishing the build.
 
-Admission requires a source cycle within its configured age bound (**18 hours** for GFS and ICON-EU; **12 hours** for RRFS), at least **6 hours
-of remaining forecast coverage**, and a build created within the last **6 hours**.
+[Publication admission](../apps/batch/src/publication.ts) checks configured source
+age, useful rendered-map horizon and build lifetime. Source age comes from
+[models.json](../packages/contracts/config/models.json); minimum horizon comes
+from [forecast-windows.ts](../packages/contracts/src/forecast-windows.ts).
 Published builds are retained for 7 days.
 Cleanup waits until every object in an unreferenced build has aged seven days,
-matching the `builds/` bucket lock.
+matching the `builds/` bucket lock. Scalar source inputs share that retention;
+the build cleanup and lifecycle remove them with the other build objects.
 
 R2 independently expires `builds/` objects eight days after upload and
 `terrain/checkpoints/` after seven days, including when workflows stop.

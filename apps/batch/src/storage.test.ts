@@ -32,7 +32,7 @@ async function withBackoff<T>(start: () => Promise<T>): Promise<T> {
 
 describe('R2 bucket lock preflight', () => {
   const lockEnv = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: issuer.R2_BUCKET, CLOUDFLARE_API_TOKEN: 'api-token' };
-  const rule = { enabled: true, prefix: 'builds/', condition: { type: 'Age', maxAgeSeconds: 3600 } };
+  const rule = { enabled: true, prefix: 'builds/', condition: { type: 'Age', maxAgeSeconds: Math.ceil(BUILD_BUDGETS.elapsedMs / 1000) } };
   const response = (rules: unknown, success = true) => Response.json({ success, result: { rules } });
   const futurePlan = () => ({ ...plan, deadlineAt: new Date(Date.now() + 30_000).toISOString() });
   it('accepts covering age, indefinite and sufficiently distant date rules', async () => {
@@ -55,7 +55,7 @@ describe('R2 bucket lock preflight', () => {
     const current = futurePlan();
     for (const result of [response([]), response(undefined), response([{ ...rule, enabled: false }]),
       response([{ ...rule, prefix: `builds/${current.model}/${current.buildId}/tiles/` }]),
-      response([{ ...rule, prefix: 'builds/icon-eu/' }]), response([{ ...rule, condition: { type: 'Age', maxAgeSeconds: 3599 } }]),
+      response([{ ...rule, prefix: 'builds/icon-eu/' }]), response([{ ...rule, condition: { type: 'Age', maxAgeSeconds: 3600 } }]),
       response([{ ...rule, condition: { type: 'Date', date: new Date(Date.parse(current.deadlineAt) - 1).toISOString() } }]),
       response([rule], false), new Response('', { status: 403 }), new Response('{')]) {
       await expect(assertBuildBucketLock(lockEnv, current, vi.fn<typeof fetch>().mockResolvedValue(result))).rejects.toThrow();
@@ -114,18 +114,18 @@ describe('R2 shard credentials', () => {
     } finally { send.mockRestore(); clock.mockRestore(); }
   });
 
-  it('caps expiry at one hour and rejects expired or invalid deadlines', async () => {
+  it('caps expiry at the build budget and rejects expired or invalid deadlines', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
     const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 1, ETag: 'etag' } as never);
     try {
       await makeStore({ ...plan, deadlineAt: '2026-11-04T22:00:00.000Z' }).head('key');
       const credentials = await (send.mock.contexts[0] as S3Client).config.credentials();
       const jwt = Buffer.from(credentials.sessionToken!, 'base64').toString().slice(4);
-      expect(JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString()).exp).toBe(Date.parse('2026-11-04T20:10:00.000Z') / 1000);
+      expect(JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString()).exp).toBe((Date.now() + BUILD_BUDGETS.elapsedMs) / 1000);
       await makeStore({ ...plan, deadlineAt: undefined }).head('key');
       const fallback = await (send.mock.contexts[1] as S3Client).config.credentials();
       const fallbackJwt = Buffer.from(fallback.sessionToken!, 'base64').toString().slice(4);
-      expect(JSON.parse(Buffer.from(fallbackJwt.split('.')[1]!, 'base64url').toString()).exp).toBe(Date.parse('2026-11-04T20:10:00.000Z') / 1000);
+      expect(JSON.parse(Buffer.from(fallbackJwt.split('.')[1]!, 'base64url').toString()).exp).toBe((Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs) / 1000);
       const fallbackDeadline = Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs;
       clock.mockReturnValue(fallbackDeadline - 30_000);
       await makeStore({ ...plan, deadlineAt: undefined }).head('key');

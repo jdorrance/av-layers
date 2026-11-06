@@ -65,7 +65,7 @@ export class RasterOverlay {
     this.replacementFailed = false;
     this.incomplete = next.sourceFailed || next.failed.size > 0;
     this.cancelPrefetch();
-    queueMicrotask(() => this.drop(previous));
+    queueMicrotask(() => { this.drop(previous); this.prefetch(); });
     if (previous && previous.build.manifest.buildId !== next.build.manifest.buildId) this.protocol?.evictBuild(previous.build.manifest.buildId);
     this.armExpiry(); this.emit();
   };

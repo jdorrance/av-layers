@@ -1,15 +1,16 @@
 import { CELL_BYTES, createRecipeIdentity, createWholeDomainDescriptors, getProduct, layerSurface, mapFrameCount,
   manifestV5Schema, publishedSampleResponseSchema, renderedLayers, sourceIntervalHours, type LayerId } from '@av/contracts';
 import type { PinnedBuild, SamplePayload } from '@av/contracts/client';
-import { fixtureManifest } from './forecast-fixture';
+import { fixtureBuild, fixtureManifest, fixturePatch } from './forecast-fixture';
 
-/** Production GFS axes and fields on a tiny two-surface test grid. */
-export function fixturePointBuild(): PinnedBuild {
+/** GFS fields on a tiny two-surface grid with selectable frame axes. */
+export function fixturePointBuild(options: { frameHours?: readonly number[]; mapFrameCount?: number } = {}): PinnedBuild {
   const base = fixtureManifest(), product = getProduct('gfs');
   if (!product || base.grid.kind !== 'regular-latlon') throw new Error('Point fixture requires GFS');
   const { version: _version, grid, coverage, samples: _samples, ...rest } = base;
-  const prefix = `builds/gfs/${base.buildId}`, cycle = Date.parse(base.cycle), count = mapFrameCount(product);
-  const frames = product.frameHours.map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
+  const prefix = `builds/gfs/${base.buildId}`, cycle = Date.parse(base.cycle), frameHours = options.frameHours ?? product.frameHours;
+  const count = options.mapFrameCount ?? mapFrameCount({ frameHours, mapEndHour: product.mapEndHour });
+  const frames = frameHours.map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
     validTime: new Date(cycle + hour * 3600000).toISOString(), intervalEnd: new Date(cycle + hour * 3600000).toISOString(),
     intervalStart: new Date(cycle + (hour - sourceIntervalHours(product, hour)) * 3600000).toISOString() }));
   const layers = [...product.layers], descriptors = createWholeDomainDescriptors(product);
@@ -33,6 +34,18 @@ export function fixturePointBuild(): PinnedBuild {
       tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'a'.repeat(64) }))) });
   return { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: Object.fromEntries(renderedLayers(layers).map(layer =>
     [layer, `https://api.test/tiles/gfs/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])) };
+}
+
+/** Retained GFS publication with a 24-hour map prefix and 384-hour native horizon. */
+export function retainedPointBuild(): PinnedBuild {
+  return fixturePointBuild({ frameHours: [...Array.from({ length: 24 }, (_, i) => i + 1),
+    ...Array.from({ length: 120 }, (_, i) => 27 + i * 3)], mapFrameCount: 24 });
+}
+
+/** Retained single-surface reader with the same long forecast axis. */
+export function retainedLegacyPointBuild(version: 3 | 4 = 4): PinnedBuild {
+  const base = fixtureManifest({ layers: ['usable-lift-agl'], frames: retainedPointBuild().manifest.frames });
+  return fixtureBuild({ ...base, version, ...(version === 4 ? { patches: [fixturePatch(base)] } : {}) });
 }
 
 /** Reply only with requested cells; fine fields become unavailable outside the map prefix. */

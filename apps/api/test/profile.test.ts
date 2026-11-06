@@ -4,7 +4,7 @@ import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileRespons
 import { nativeColumnCloudDiagnostics, nativeColumnWindAtHeight } from '@av/soaring';
 import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
 import { coverageMemory } from '../src/coverage';
-import { inFlightAllocationBytes } from '../src/resources';
+import { inFlightAllocationBytes, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
 import { createApp } from '../src/index';
 import { NOW, attachNativeProfiles, createGroupedV5Fixture, createV5Fixture, nativePoint } from './v5-fixture';
 
@@ -274,7 +274,9 @@ describe('native profile API', () => {
     const pending = f.request(path(f, 'lat=8.8&lon=-115.3125&frame=all'));
     try { await vi.waitFor(() => expect(active).toBe(4)); } finally { release(); }
     expect((await read(await pending)).frames).toHaveLength(6);
-    expect(peak).toBe(4); expect(active).toBe(0); assertReleased(f);
+    expect(peak).toBe(4);
+    expect(peak).toBeLessThanOrEqual(MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST);
+    expect(active).toBe(0); assertReleased(f);
   });
 
   it('releases an aborted profile request while its R2 owner drains', async () => {

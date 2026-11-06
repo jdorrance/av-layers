@@ -2,7 +2,8 @@ import { countRead, MaterializedReads, type WaitContext, readBoundedStream, read
 import { Compression, EtagMismatch, PMTiles, ResolvedValueCache, TileType, type RangeResponse, type Source } from 'pmtiles';
 
 const MAX_ARCHIVE_RANGE_BYTES = 1024 * 1024;
-const TILE_READ_CONCURRENCY = 4;
+const TILE_READ_CONCURRENCY = 8;
+const TILE_READ_WAITERS = 128;
 export async function decompress(buffer: ArrayBuffer, compression: Compression): Promise<ArrayBuffer> {
   if (buffer.byteLength > MAX_ARCHIVE_RANGE_BYTES) throw new ResourceLimitError('Archive range exceeds byte budget');
   if (compression === Compression.None) return buffer;
@@ -48,7 +49,7 @@ export class R2Source implements Source {
   async getBytes(offset: number, length: number, signal?: AbortSignal, etag?: string): Promise<RangeResponse> {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0 || length > MAX_ARCHIVE_RANGE_BYTES) throw new ResourceLimitError('Invalid or oversized archive range');
     let reads = archiveRangeReads.get(this.bucket);
-    if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY); archiveRangeReads.set(this.bucket, reads); }
+    if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY, undefined, TILE_READ_WAITERS); archiveRangeReads.set(this.bucket, reads); }
     const waiterSignal = this.signal && signal ? AbortSignal.any([this.signal, signal]) : this.signal ?? signal;
     return reads.run(`${this.key}:${offset}:${length}:${etag ?? ''}`, async operationSignal => {
       countRead(this.ctx);
@@ -63,7 +64,7 @@ export class R2Source implements Source {
 const tileReads = new WeakMap<R2Bucket, MaterializedReads<ArrayBuffer>>();
 export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext): Promise<ArrayBuffer> {
   let reads = tileReads.get(bucket);
-  if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY); tileReads.set(bucket, reads); }
+  if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY, undefined, TILE_READ_WAITERS); tileReads.set(bucket, reads); }
   return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx);
 }
 async function loadTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, signal?: AbortSignal): Promise<ArrayBuffer> {

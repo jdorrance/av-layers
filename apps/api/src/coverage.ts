@@ -1,6 +1,6 @@
 import { MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, assertCoverageBinding, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
 import { SAMPLE_SHARD_TARGET_BYTES, prepareSamplePackLayout, prepareShardedSamplePackLayout, type SamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
-import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
 export interface ResolvedCoverage { descriptor: CoverageDescriptor; mask: CoverageMask; layout: SamplePackLayout }
@@ -33,6 +33,74 @@ export async function sha256(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>)), b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function coverageCache(): Cache | undefined {
+  return (globalThis as { caches?: CacheStorage & { default?: Cache } }).caches?.default;
+}
+
+function coverageBlobUrl(digest: string): string {
+  return `https://coverage.av/blob/${digest}`;
+}
+
+async function matchVerifiedBlob(digest: string, limit: number, signal: AbortSignal, reserved: boolean): Promise<Uint8Array | undefined> {
+  const cache = coverageCache();
+  if (!cache || !/^[a-f0-9]{64}$/.test(digest)) return undefined;
+  let hit: Response | undefined;
+  try { hit = await cache.match(new Request(coverageBlobUrl(digest))); }
+  catch { return undefined; }
+  if (!hit?.body) return undefined;
+  try {
+    signal.throwIfAborted();
+    const length = hit.headers.get('content-length');
+    if (length !== null && (!Number.isSafeInteger(Number(length)) || Number(length) <= 0 || Number(length) > limit)) {
+      await hit.body.cancel();
+      return undefined;
+    }
+    const bytes = await readBoundedStream(hit.body, limit, undefined, { signal, reserved });
+    return bytes.byteLength ? bytes : undefined;
+  } catch {
+    void hit.body.cancel().catch(() => {});
+    signal.throwIfAborted();
+    return undefined;
+  }
+}
+
+async function rememberVerifiedBlob(digest: string, bytes: Uint8Array): Promise<void> {
+  const cache = coverageCache();
+  if (!cache) return;
+  let release: () => void;
+  try { release = reserveAllocation(bytes.byteLength * 2); }
+  catch { return; }
+  try {
+    await cache.put(new Request(coverageBlobUrl(digest)), new Response(bytes, {
+      headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.byteLength) }
+    }));
+  } catch { /* Cache population is optional. */ }
+  finally { release(); }
+}
+
+/** Verified bytes stay in the Cache API under their SHA-256. The in-memory cache remains the hot path. */
+async function readVerifiedBlob(bucket: R2Bucket, key: string, digest: string, limit: number, ctx: WaitContext | undefined, signal: AbortSignal, label: string, reserved = false): Promise<Uint8Array> {
+  signal.throwIfAborted();
+  const cached = await matchVerifiedBlob(digest, limit, signal, reserved);
+  signal.throwIfAborted();
+  if (cached && await sha256(cached) === digest) {
+    signal.throwIfAborted();
+    countCacheHit(ctx);
+    return cached;
+  }
+  countRead(ctx);
+  const object = await bucket.get(key);
+  if (!object) throw new CoverageError(`${label} missing`);
+  const bytes = await readObjectBytes(object, limit, false, ctx, signal, reserved);
+  if (await sha256(bytes) !== digest) throw new CoverageError(`${label} hash mismatch`);
+  signal.throwIfAborted();
+  const stored = rememberVerifiedBlob(digest, bytes);
+  if (ctx) ctx.waitUntil(stored);
+  else await stored;
+  signal.throwIfAborted();
+  return bytes;
+}
+
 /** Only hash-verified materialized bytes cross request boundaries; R2 bodies never do. */
 export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<ResolvedCoverage> {
   waiterSignal?.throwIfAborted();
@@ -47,21 +115,14 @@ export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, 
     let reads = flights.get(bucket);
     if (!reads) { reads = new MaterializedReads(2); flights.set(bucket, reads); }
     resolved = await reads.run(hash, async signal => {
-      countRead(ctx);
-      const object = await bucket.get(maskKey);
-      if (!object) throw new CoverageError('Coverage descriptor missing');
-      const bytes = await readObjectBytes(object, MAX_COVERAGE_DESCRIPTOR_BYTES, false, ctx, signal);
-      if (await sha256(bytes) !== hash) throw new CoverageError('Coverage descriptor hash mismatch');
+      const bytes = await readVerifiedBlob(bucket, maskKey, hash, MAX_COVERAGE_DESCRIPTOR_BYTES, ctx, signal, 'Coverage descriptor');
       let descriptor;
       try { descriptor = coverageDescriptorSchema.parse(parseBoundedJson(bytes)); }
       catch { throw new CoverageError('Invalid coverage descriptor'); }
       const reads = await Promise.allSettled((['output', 'halo', 'tiles'] as const).map(async name => {
         const file = descriptor.files[name];
-        countRead(ctx);
-        const blob = await bucket.get(`${prefix}/${name}.bin`);
-        if (!blob) throw new CoverageError(`Coverage ${name} missing`);
-        const data = await readObjectBytes(blob, file.bytes, false, ctx, signal);
-        if (data.length !== file.bytes || await sha256(data) !== file.sha256) throw new CoverageError(`Coverage ${name} hash mismatch`);
+        const data = await readVerifiedBlob(bucket, `${prefix}/${name}.bin`, file.sha256, file.bytes, ctx, signal, `Coverage ${name}`);
+        if (data.length !== file.bytes) throw new CoverageError(`Coverage ${name} hash mismatch`);
         return data;
       }));
       // Keep the owner admitted until every R2 operation settles, even if one
@@ -100,20 +161,13 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
     let reads = tileFlights.get(bucket);
     if (!reads) { reads = new MaterializedReads(2); tileFlights.set(bucket, reads); }
     result = await reads.run(cacheKey, async signal => {
-      countRead(ctx);
-      const object = await bucket.get(maskKey);
-      if (!object) throw new CoverageError('Coverage descriptor missing');
-      const bytes = await readObjectBytes(object, MAX_COVERAGE_DESCRIPTOR_BYTES, false, ctx, signal);
-      if (await sha256(bytes) !== hash) throw new CoverageError('Coverage descriptor hash mismatch');
+      const bytes = await readVerifiedBlob(bucket, maskKey, hash, MAX_COVERAGE_DESCRIPTOR_BYTES, ctx, signal, 'Coverage descriptor');
       let descriptor: SparseCoverageDescriptor;
       try { descriptor = sparseCoverageDescriptorSchema.parse(parseBoundedJson(bytes)); }
       catch { throw new CoverageError('Invalid sparse coverage descriptor'); }
       if (await sha256(new TextEncoder().encode(canonicalGridJson(descriptor.grid))) !== descriptor.gridHash) throw new CoverageError('Sparse coverage grid hash mismatch');
-      countRead(ctx);
-      const objectTiles = await bucket.get(`${prefix}/tiles.bin`);
-      if (!objectTiles) throw new CoverageError('Coverage tiles missing');
-      const tiles = await readObjectBytes(objectTiles, descriptor.files.tiles.bytes, false, ctx, signal);
-      if (tiles.length !== descriptor.files.tiles.bytes || await sha256(tiles) !== descriptor.files.tiles.sha256) throw new CoverageError('Coverage tiles hash mismatch');
+      const tiles = await readVerifiedBlob(bucket, `${prefix}/tiles.bin`, descriptor.files.tiles.sha256, descriptor.files.tiles.bytes, ctx, signal, 'Coverage tiles');
+      if (tiles.length !== descriptor.files.tiles.bytes) throw new CoverageError('Coverage tiles hash mismatch');
       const value = { descriptor, tiles };
       cache!.set(cacheKey, value, tiles.byteLength + bytes.length * 4, Date.now() + 3_600_000);
       return value;
@@ -188,11 +242,8 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       state.bytes = descriptor.files.sparse.bytes * 2 + retained;
       try {
         const file = descriptor.files.sparse;
-        countRead(ctx);
-        const blob = await bucket.get(`${prefix}/sparse.bin`);
-        if (!blob) throw new CoverageError('Coverage sparse missing');
-        const sparse = await readObjectBytes(blob, file.bytes, false, ctx, signal, true);
-        if (sparse.length !== file.bytes || await sha256(sparse) !== file.sha256) throw new CoverageError('Coverage sparse hash mismatch');
+        const sparse = await readVerifiedBlob(bucket, `${prefix}/sparse.bin`, file.sha256, file.bytes, ctx, signal, 'Coverage sparse', true);
+        if (sparse.length !== file.bytes) throw new CoverageError('Coverage sparse hash mismatch');
         const coverage = decodeSparseCoverage(sparse, descriptor.gridHash);
         if (coverage.width !== descriptor.grid.width || coverage.height !== descriptor.grid.height || coverage.wrapLongitude !== descriptor.grid.wrapLongitude || !coverage.blockIds.length) throw new CoverageError('Sparse coverage grid mismatch');
         assertSparseCoverageHalo(coverage);

@@ -1,6 +1,6 @@
 import { MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_POINTS, SAMPLE_STATUSES, STATUS_OUTSIDE, STATUS_UNAVAILABLE, surfaceFrameCount, isCovered, type ForecastGrid, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
 import { refinementCandidate } from '@av/contracts/refinement';
-import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Sample } from '@av/forecast';
+import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Cell, type PackedSamplePlan, type Sample } from '@av/forecast';
 import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from './coverage';
 import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObjectBytes, waitFor, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 import { artifact, servedSource, type PublishedManifest } from './publication';
@@ -150,26 +150,49 @@ interface V5Plan {
   point: number; surface: ForecastSurfaceV5; jobs: SampleJob[];
   plan: ReturnType<typeof planSample>; packed: ReturnType<typeof planShardedPackedSample> | null;
   shard: ForecastSurfaceV5['samples']['shards'][number] | undefined;
+  cells: Map<number, Cell[]>;
 }
-interface V5Range { shard: NonNullable<V5Plan['shard']>; offset: number; length: number; plans: V5Plan[] }
+interface V5Part { plan: V5Plan; packed: PackedSamplePlan; contributors: number[] }
+interface V5Range { shard: NonNullable<V5Plan['shard']>; offset: number; length: number; parts: V5Part[] }
 
-function sampleRanges(plans: V5Plan[]): V5Range[] {
-  const byShard = new Map<string, V5Plan[]>();
+function sampleParts(plan: V5Plan, mode: 'span' | 'rows' | 'records'): V5Part[] {
+  const packed = plan.packed!;
+  const all = packed.contributorRanks.map((_, index) => index);
+  if (mode === 'span') return [{ plan, packed, contributors: all }];
+  const groups: number[][] = [];
+  for (const index of all) {
+    const previous = groups.at(-1)?.[0];
+    if (mode === 'records' || previous === undefined || plan.plan!.contributors[previous]!.row !== plan.plan!.contributors[index]!.row) groups.push([]);
+    groups.at(-1)!.push(index);
+  }
+  const channels = mode === 'records' ? packed.channels.map(channel => [channel]) : [packed.channels];
+  return groups.flatMap(contributors => channels.map(selected => {
+    const ranks = contributors.map(index => packed.contributorRanks[index]!);
+    const first = Math.min(...ranks), last = Math.max(...ranks), low = Math.min(...selected), high = Math.max(...selected);
+    return { plan, contributors, packed: { ...packed, channels: selected, contributorRanks: ranks,
+      byteRange: { offset: (first * packed.channelCount + low) * packed.recordBytes,
+        length: ((last - first) * packed.channelCount + high - low + 1) * packed.recordBytes } } };
+  }));
+}
+
+function sampleRanges(plans: V5Plan[], mode: 'span' | 'rows' | 'records' = 'span'): V5Range[] {
+  const byShard = new Map<string, V5Part[]>();
   for (const plan of plans) {
     if (!plan.packed || !plan.shard) continue;
     const key = `${plan.shard.key}:${plan.shard.sha256}`, group = byShard.get(key);
-    if (group) group.push(plan); else byShard.set(key, [plan]);
+    const parts = sampleParts(plan, mode);
+    if (group) group.push(...parts); else byShard.set(key, parts);
   }
   const ranges: V5Range[] = [];
   for (const group of byShard.values()) {
-    group.sort((left, right) => left.packed!.byteRange.offset - right.packed!.byteRange.offset);
+    group.sort((left, right) => left.packed.byteRange.offset - right.packed.byteRange.offset);
     let previous: V5Range | undefined;
-    for (const plan of group) {
-      const range = plan.packed!.byteRange;
+    for (const part of group) {
+      const range = part.packed.byteRange;
       if (previous && range.offset <= previous.offset + previous.length) {
         previous.length = Math.max(previous.length, range.offset + range.length - previous.offset);
-        previous.plans.push(plan);
-      } else { previous = { shard: plan.shard!, ...range, plans: [plan] }; ranges.push(previous); }
+        previous.parts.push(part);
+      } else { previous = { shard: part.plan.shard!, ...range, parts: [part] }; ranges.push(previous); }
     }
   }
   return ranges;
@@ -180,6 +203,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
   try {
     const plans: V5Plan[] = [];
     const values = points.map(() => new Map<string, Sample & { surfaceId: string }>());
+    const pending = [];
     for (const surface of m.surfaces) {
       const selected = layers.filter(layer => surface.layers.includes(layer));
       if (!selected.length) continue;
@@ -188,10 +212,19 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
         point.set(`${frame.id}/${layer}`, { value: null, status: STATUS_UNAVAILABLE, support: 0, interpolated: false, surfaceId: surface.id });
       }
       if (!available.length) continue;
-      const lease = await resolveSparseCoverage(bucket, surface, ctx, m.descriptors.bounds, request.signal);
-      releases.push(lease.release);
-      request.signal.throwIfAborted();
-      const coverage = lease.coverage;
+      pending.push((async () => {
+        const lease = await resolveSparseCoverage(bucket, surface, ctx, m.descriptors.bounds, request.signal);
+        releases.push(lease.release);
+        return { surface, selected, available, count, coverage: lease.coverage };
+      })());
+    }
+    const loaded = [];
+    for (const result of await Promise.allSettled(pending)) {
+      if (result.status === 'rejected') throw result.reason;
+      loaded.push(result.value);
+    }
+    request.signal.throwIfAborted();
+    for (const { surface, selected, available, count, coverage } of loaded) {
       const groups = coverage.groups ?? [{ firstFrame: 0, frameCount: count, channelCount: surface.samples.channelCount, shards: surface.samples.shards }];
       const jobsByGroup = groups.map(group => available.filter(frame => {
         const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount;
@@ -210,20 +243,20 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
             const { offset, length } = packed.byteRange;
             if (!shard || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || !Number.isSafeInteger(offset + length) || offset + length > shard.bytes) fail(503, 'publication-invalid', 'Invalid sample range');
           }
-          plans.push({ point, surface, jobs, plan, packed, shard });
+          plans.push({ point, surface, jobs, plan, packed, shard, cells: new Map() });
         }
       }
     }
-    const ranges = sampleRanges(plans);
-    if (ranges.reduce((total, range) => total + range.length, 0) > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
-    const consume = ({ point, surface, jobs, plan, packed }: V5Plan, bytes: Uint8Array) => {
-      for (const job of jobs) {
-        const value = plan && packed ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), m.descriptors.layers[job.layer])
-          : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
-        values[point]!.set(`${job.frame.id}/${job.layer}`, { ...value, surfaceId: surface.id });
-      }
-    };
-    for (const plan of plans) if (!plan.packed) consume(plan, new Uint8Array());
+    const rangeBytes = (ranges: V5Range[]) => ranges.reduce((total, range) => total + range.length, 0);
+    let ranges = sampleRanges(plans);
+    // Keep one-wave reads narrow; scattered queries split further to retain the byte budget.
+    if (ranges.length <= MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST || rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) {
+      const rows = sampleRanges(plans, 'rows');
+      if (rows.length === ranges.length || rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES
+          || rows.length <= MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST && rangeBytes(ranges) - rangeBytes(rows) >= 4096) ranges = rows;
+    }
+    if (rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) ranges = sampleRanges(plans, 'records');
+    if (rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
     let next = 0, failed = false, failure: unknown;
     const work = async () => {
       while (!failed && next < ranges.length) {
@@ -241,9 +274,15 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
           }, ctx, request.signal);
           ensureLive(m.expiresAt);
           if (bytes.byteLength !== range.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-          for (const plan of range.plans) {
-            const selected = plan.packed!.byteRange, offset = selected.offset - range.offset;
-            consume(plan, bytes.subarray(offset, offset + selected.length));
+          for (const part of range.parts) {
+            const selected = part.packed.byteRange, offset = selected.offset - range.offset;
+            const contents = bytes.subarray(offset, offset + selected.length);
+            for (const channel of part.packed.channels) {
+              let cells = part.plan.cells.get(channel);
+              if (!cells) { cells = new Array(part.plan.plan!.contributors.length); part.plan.cells.set(channel, cells); }
+              const decoded = packedCellsFromRange(part.packed, contents, channel);
+              for (const [index, contributor] of part.contributors.entries()) cells[contributor] = decoded[index]!;
+            }
           }
         } catch (error) { if (!failed) { failed = true; failure = error; } }
       }
@@ -251,6 +290,13 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
     await Promise.all(Array.from({ length: Math.min(ranges.length, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST) }, work));
     if (failed) throw failure;
     request.signal.throwIfAborted();
+    for (const { point, surface, jobs, plan, packed, cells } of plans) for (const job of jobs) {
+      const contributors = cells.get(job.channel);
+      if (packed && (!contributors || packed.contributorRanks.some((_, index) => !contributors[index]))) fail(503, 'publication-invalid', 'Sample range lacks a contributor');
+      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer])
+        : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
+      values[point]!.set(`${job.frame.id}/${job.layer}`, { ...value, surfaceId: surface.id });
+    }
     const source = servedSource(m, origin), surfaces = m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage }));
     return points.map(({ lat, lon }, point) => ({
       version: 5 as const, model: m.model, buildId: m.buildId, lat, lon, method: m.method, source, surfaces, expiresAt: m.expiresAt,

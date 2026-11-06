@@ -56,11 +56,14 @@ wind on demand from each profile and its emitted thermal top; use shared pure
 helpers and preserve the model-PBL fallback for stable columns. These values
 remain available through the profile API without additional scalar channels.
 
-On click, fetch a bounded diurnal selection containing lift MSL/AGL,
+On click, fetch the configured map selection containing lift MSL/AGL,
 precipitation, thermal velocity, LCL, 10 m and boundary-layer wind components,
 and cloud cover. Render the selected frame summary and a keyboard-accessible
-chart: known terrain floor, usable-lift bar and LCL marker. Unknown floors use
-ceiling markers and an explicit unknown label. Selecting a chart frame
+chart: known terrain floor, usable-lift bar and LCL marker. Load the selected
+hour first, then the remaining bounded pages; reuse completed frames. Mark
+elapsed gaps between adjacent published times and identify incomplete series
+after failed pages. Legacy readers retain their 24-hour initial point view.
+Unknown floors use ceiling markers and an explicit unknown label. Selecting a chart frame
 updates the map from the cached series. Offer the full native point horizon
 through bounded frame pages. Keep point time and displayed map time explicit
 when a selected native frame falls beyond the map prefix. Preserve missing
@@ -104,12 +107,16 @@ Record actual full-build RSS and elapsed time before declaring each model ready.
 Review the PR again after checks pass, merge, then verify production endpoints
 and rendered views. Correct failures and repeat the affected checks.
 
-Completed 2026-11-06: production preview checks pass for GFS's 384-hour and
-ICON-EU/RRFS's 48-hour horizons at 320 px and 393 px, including bounded paging,
-cache reuse, units and retained map captions. All native fields are valid
+Historical validation (2026-11-06): production preview checks passed for the
+then-published GFS 384-hour and ICON-EU/RRFS 48-hour horizons at 320 px and
+393 px, including bounded paging, cache reuse, units and retained map captions.
+All native fields were valid
 across 48 ICON frames near the approximate screenshot location. See the
 [production evidence](phase3-models-and-sunlight-handoff.md#completion).
-Windy controller/bundle checks pass; its production developer loader requires
+Current output windows come from
+[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts); each new
+publication requires the production checks above. Windy controller/bundle checks
+pass; its production developer loader requires
 an authenticated host session.
 
 ## Deferred consumer cutover

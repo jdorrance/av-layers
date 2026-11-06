@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL, renderedFrames, type ModelId } from '@av/contracts';
-import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, type GeoPoint, type RasterTileProtocol, type PointSeriesLoader, type PointHorizon } from '@av/contracts/client';
+import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, pointSeriesSelection, type GeoPoint, type RasterTileProtocol, type PointSeriesLoader, type PointHorizon } from '@av/contracts/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -50,13 +50,17 @@ async function loadPointRange(): Promise<void> {
   if (!paneOpen || !active || !build || !loader || active.state().phase !== 'ready' || active.checkExpiry()) return;
   pointAbort?.abort();
   const pending = new AbortController(); pointAbort = pending;
-  panel?.pointLoading();
+  const frames = pointSeriesSelection(build, pointHorizon).frames;
+  const selected = panel?.pointFrame;
+  const frameId = selected && frames.includes(selected) ? selected : active.state().frameId;
+  panel?.pointLoading(frameId);
   try {
-    const payload = await loader.load(pointHorizon, pending.signal);
-    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
-    panel?.renderPoint(payload, build, active.state().frameId, id => {
-      if (paneOpen && controller === active && active.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
-    });
+    await loader.load(pointHorizon, pending.signal, { frameId, onProgress(payload, totalFrames) {
+      if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
+      panel?.renderPoint(payload, build, active.state().frameId, id => {
+        if (paneOpen && controller === active && active.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
+      }, totalFrames);
+    } });
   } catch (error) {
     if (pending.signal.aborted || controller !== active || !paneOpen) return;
     panel?.pointError(error instanceof Error ? error.message : String(error));

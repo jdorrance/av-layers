@@ -461,10 +461,10 @@ export function provenanceObjects(value: z.infer<typeof provenanceSchema>): (Pro
 }
 
 export function computeFreshness(
-  manifest: Pick<Manifest, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'>,
+  manifest: Pick<Manifest, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { version?: number; mapFrameCount?: number },
   nowMs = Date.now()
 ): Required<FreshnessSummary> {
-  const validTimes = manifest.frames.map(f => Date.parse(f.validTime)).filter(Number.isFinite);
+  const validTimes = renderedFrames(manifest).map(f => Date.parse(f.validTime)).filter(Number.isFinite);
   const earliestMs = validTimes.length > 0 ? Math.min(...validTimes) : Date.parse(manifest.cycle);
   const latestMs = validTimes.length > 0 ? Math.max(...validTimes) : Date.parse(manifest.cycle);
   return {
@@ -537,7 +537,7 @@ export function validateArtifactRecords(manifest: Manifest): void {
 }
 
 /** Raster consumers use the ordered map prefix; legacy manifests expose all frames. */
-export function renderedFrames(manifest: PublishedManifest): PublishedManifest['frames'] {
+export function renderedFrames(manifest: { frames: PublishedManifest['frames']; version?: number; mapFrameCount?: number }): PublishedManifest['frames'] {
   return manifest.version === 5 && manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
 }
 

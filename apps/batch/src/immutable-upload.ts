@@ -1,26 +1,38 @@
 import { createHash } from 'node:crypto';
 import type { ObjectStorage } from './storage.js';
+import { runConcurrent } from './concurrent.js';
 
 export interface ObjectReceipt { key: string; bytes: number; sha256: string; etag: string }
+const MAX_STORAGE_OPERATIONS = 4;
 
 export async function verifyObjectReceipts(store: Pick<ObjectStorage, 'head'>, receipts: readonly ObjectReceipt[], signal?: AbortSignal): Promise<void> {
   const keys = new Set<string>();
   for (const receipt of receipts) {
     if (keys.has(receipt.key) || !Number.isSafeInteger(receipt.bytes) || receipt.bytes < 1 || !/^[a-f0-9]{64}$/.test(receipt.sha256) || !receipt.etag) throw new Error('Invalid object receipt');
     keys.add(receipt.key);
-    const head = await store.head(receipt.key, signal);
-    if (!head || head.size !== receipt.bytes || head.etag !== receipt.etag || head.metadata?.sha256 !== receipt.sha256) throw new Error(`Remote object receipt mismatch: ${receipt.key}`);
   }
+  await runConcurrent(receipts, MAX_STORAGE_OPERATIONS, async receipt => {
+    signal?.throwIfAborted();
+    const head = await store.head(receipt.key, signal);
+    signal?.throwIfAborted();
+    if (!head || head.size !== receipt.bytes || head.etag !== receipt.etag || head.metadata?.sha256 !== receipt.sha256) throw new Error(`Remote object receipt mismatch: ${receipt.key}`);
+  });
 }
 
 /** Retries prove every byte of an existing object; they never overwrite immutable keys. */
 export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal, requireDigestMetadata = false): Promise<void> {
+  await writeImmutable(store, key, bytes, contentType, signal, requireDigestMetadata);
+}
+
+async function writeImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal: AbortSignal | undefined, requireDigestMetadata: boolean, expectedSha256?: string): Promise<ObjectReceipt> {
   signal?.throwIfAborted();
-  const md5 = createHash('md5').update(bytes).digest(), sha = createHash('sha256').update(bytes).digest('hex');
-  const proveExisting = async (): Promise<boolean> => {
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  if (expectedSha256 !== undefined && sha !== expectedSha256) throw new Error(`Local hash mismatch: ${key}`);
+  const md5 = createHash('md5').update(bytes).digest();
+  const proveExisting = async (): Promise<ObjectReceipt | null> => {
     signal?.throwIfAborted();
     const head = await store.head(key, signal);
-    if (!head) return false;
+    if (!head) return null;
     if (head.size !== bytes.byteLength) throw new Error(`Immutable object size mismatch: ${key}`);
     if (requireDigestMetadata && head.metadata?.sha256 !== sha) throw new Error(`Immutable object digest metadata mismatch: ${key}`);
     const hash = createHash('sha256');
@@ -32,16 +44,16 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
       hash.update(part.bytes);
     }
     if (hash.digest('hex') !== sha) throw new Error(`Immutable object hash mismatch: ${key}`);
-    return true;
+    return { key, bytes: head.size, sha256: sha, etag: head.etag };
   };
   const existing = await proveExisting();
-  if (existing) return;
+  if (existing) return existing;
   signal?.throwIfAborted();
   try { await store.put(key, bytes, { ifNoneMatch: '*' }, contentType, md5.toString('base64'), { sha256: sha }); }
   catch (error) {
     // A timeout can follow a successful create. Reconcile before deciding whether to retry.
     const existing = await proveExisting();
-    if (existing) return;
+    if (existing) return existing;
     throw error;
   }
   signal?.throwIfAborted();
@@ -50,13 +62,11 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
   if (requireDigestMetadata && head.metadata?.sha256 !== sha) throw new Error(`Immutable object digest metadata mismatch: ${key}`);
   const length = Math.min(bytes.byteLength, 32), tail = await store.get(key, { offset: bytes.byteLength - length, length }, length, signal);
   if (!tail || tail.etag !== etag || !Buffer.from(tail.bytes).equals(bytes.subarray(bytes.byteLength - length))) throw new Error(`R2 tail or ETag mismatch: ${key}`);
+  return { key, bytes: head.size, sha256: sha, etag: head.etag };
 }
 
-export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<ObjectReceipt> {
-  await putImmutable(store, key, bytes, contentType, signal, true);
-  const head = await store.head(key, signal), digest = createHash('sha256').update(bytes).digest('hex');
-  if (!head || head.size !== bytes.length || head.metadata?.sha256 !== digest) throw new Error(`Immutable object receipt mismatch: ${key}`);
-  return { key, bytes: bytes.length, sha256: digest, etag: head.etag };
+export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal, expectedSha256?: string): Promise<ObjectReceipt> {
+  return writeImmutable(store, key, bytes, contentType, signal, true, expectedSha256);
 }
 
 /** Reservations include the file and an SDK/transport copy; stop admission and drain on failure. */
@@ -67,7 +77,7 @@ export async function uploadBounded<T extends { size: number }>(items: readonly 
   let reserved = 0, failed = false, failure: unknown;
   for (const item of items) {
     const charge = item.size * 2;
-    while (!failed && (jobs.size >= 4 || reserved + charge > limitBytes)) await Promise.race(jobs);
+    while (!failed && (jobs.size >= MAX_STORAGE_OPERATIONS || reserved + charge > limitBytes)) await Promise.race(jobs);
     if (failed) break;
     reserved += charge;
     const job = Promise.resolve().then(() => run(item)).catch(error => { if (!failed) { failed = true; failure = error; } }).finally(() => { reserved -= charge; jobs.delete(job); });

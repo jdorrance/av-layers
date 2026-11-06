@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, renderedFrames, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -52,9 +52,9 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
   const product = getProduct(manifest.model);
   if (!product) throw new Error('No trusted publication recipe');
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
-  const horizonHours = (Math.max(...manifest.frames.map(frame => Date.parse(frame.validTime))) - now) / 3600000;
+  const horizonHours = (Math.max(...renderedFrames(manifest).map(frame => Date.parse(frame.validTime))) - now) / 3600000;
   const daylightFiltered = product.capabilities.daylightFrames === 'regional-daylight';
-  const coverageHours = daylightFiltered ? product.frameHours.at(-1)! - cycleAgeHours : horizonHours;
+  const coverageHours = daylightFiltered ? (product.mapEndHour ?? product.frameHours.at(-1)!) - cycleAgeHours : horizonHours;
   if (cycleAgeHours < 0 || cycleAgeHours > product.freshness.maxCycleAgeHours || coverageHours < product.freshness.minHorizonHours || horizonHours <= 0) {
     throw new Error('Build lacks the required useful forecast horizon');
   }
@@ -62,7 +62,8 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
   const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
-  if (options.validated) assertValidatedBuild(root, manifest, options.validated);
+  if (options.receiptsOnly && manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+  if (options.validated) assertValidatedBuild(root, manifest, options.validated, options.receiptsOnly ? store : undefined);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   const captured = await readPointer(store, manifest.model, options.signal);
@@ -80,8 +81,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (options.receiptsOnly) {
-    if (manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+  if (manifest.version === 5 && options.receiptsOnly && !options.validated) {
     const { verifyBuildReceipts } = await import('./parallel.js');
     const objects = await verifyBuildReceipts(root, manifest, store, options.signal);
     const product = getProduct(manifest.model);
@@ -356,8 +356,11 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
     }
     const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
     for (const [id, group] of groups) {
-      if (protectedIds.has(id) || buildIdTime(id) > cutoff || group.some(object => object.lastModified.getTime() > cutoff)) continue;
-      for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
+      const retained = current.pointer.retained.find(item => item.buildId === id);
+      if (!retained && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
+        for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
+        continue;
+      }
     }
     summary.eligible = eligible;
     signal?.throwIfAborted();

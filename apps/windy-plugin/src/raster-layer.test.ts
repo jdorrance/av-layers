@@ -58,6 +58,33 @@ it('loads hidden staging tiles and commits only successful render readiness', as
   f.layer.remove();
 });
 
+it.each(['ready', 'supersede', 'move', 'freeze', 'remove', 'expire'] as const)('warms committed Windy frames only while current (%s)', async action => {
+  const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(Uint8Array.of(82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80), {
+    headers: { 'content-type': 'image/webp', 'content-length': '12' }
+  }));
+  vi.stubGlobal('fetch', fetchImpl);
+  const f = fixture();
+  try {
+    f.layer.setBuild(build); f.layer.addTo(f.map); f.complete();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    if (action === 'supersede') f.layer.setUrl(url('f006'));
+    else if (action === 'move') f.move(true);
+    else if (action === 'freeze') f.layer.freeze();
+    else if (action === 'remove') f.layer.remove();
+    else if (action === 'expire') vi.mocked(Date.now).mockReturnValue(build.expiresAtMs + 1);
+    await Promise.resolve();
+    if (action === 'ready') {
+      expect(fetchImpl).toHaveBeenCalled();
+      expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/f006/'))).toBe(true);
+      const started = fetchImpl.mock.calls.length;
+      f.emit('idle'); f.emit('idle');
+      expect(fetchImpl).toHaveBeenCalledTimes(started);
+    } else expect(fetchImpl).not.toHaveBeenCalled();
+  } finally { f.layer.remove(); }
+});
+
 it('retains the committed layer on failed or superseded staging generations', async () => {
   const f = fixture(), statuses = vi.fn();
   f.layer.onStatus(statuses); f.layer.addTo(f.map); f.complete();

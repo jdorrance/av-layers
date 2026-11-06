@@ -26,12 +26,14 @@ export interface ShardedSamplePackTarget {
   readonly surfaceId: string;
   readonly group?: number;
   readonly kind?: 'samples' | 'profiles';
+  readonly role?: 'serving' | 'hour';
 }
 
 export interface ShardedSamplePackInput {
   readonly root: string;
   readonly recordBytes?: number;
   readonly channelCount: number;
+  readonly selection?: { readonly firstChannel: number; readonly channelCount: number };
   readonly shards: readonly ShardedSamplePackShard[];
 }
 
@@ -40,14 +42,16 @@ function component(value: unknown, name: string): string {
   return value;
 }
 
-export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number, kind: 'samples' | 'profiles' = 'samples'): string {
+export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number, kind: 'samples' | 'profiles' = 'samples', role: 'serving' | 'hour' = 'serving'): string {
   if (kind !== 'samples' && kind !== 'profiles') throw new RangeError('Invalid sample shard kind');
+  if (role !== 'serving' && role !== 'hour') throw new RangeError('Invalid sample shard role');
   component(model, 'model');
   component(buildId, 'build ID');
   component(surfaceId, 'surface ID');
   if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('Invalid sample shard index');
   if (group !== undefined && (!Number.isSafeInteger(group) || group < 0)) throw new RangeError('Invalid sample frame group');
-  return `builds/${model}/${buildId}/surfaces/${surfaceId}/${kind}/${group === undefined ? index : `g${group}-b${index}`}.bin`;
+  const stem = group === undefined ? String(index) : `${role === 'hour' ? 'src-g' : 'g'}${group}-b${index}`;
+  return `builds/${model}/${buildId}/surfaces/${surfaceId}/${kind}/${stem}.bin`;
 }
 
 function assertChannels(channelCount: number): void {
@@ -150,7 +154,8 @@ export function createShardedSamplePackWriter(
   assertCoverage(layout, coverage);
   const recordBytes = layout.recordBytes, buffers = writerBuffers(layout);
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind));
+  const role = target.role ?? (target.group !== undefined && target.kind !== 'profiles' ? 'hour' : 'serving');
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind, role));
   const finalPaths = finalKeys.map(key => localPath(target.root, key));
   const tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.channels`));
   const finalTempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
@@ -406,12 +411,15 @@ export async function mergeShardedSamplePacks(
   assertLayout(layout);
   const recordBytes = layout.recordBytes;
   if (!inputs.length || inputs.length > MAX_SAMPLE_VALUES) throw new RangeError('Invalid sample pack input count');
-  let channels = 0;
+  let channels = 0, sourceChannels = 0;
   for (const input of inputs) {
     assertChannels(input.channelCount);
     if ((input.recordBytes ?? CELL_BYTES) !== recordBytes) throw new RangeError('Sample record width mismatch');
-    channels += input.channelCount;
-    if (channels > MAX_PACK_CHANNELS || typeof input.root !== 'string' || !input.root || !Array.isArray(input.shards) || !input.shards.length) throw new RangeError('Invalid sample pack input');
+    const selection = input.selection ?? { firstChannel: 0, channelCount: input.channelCount };
+    if (![selection.firstChannel, selection.channelCount].every(Number.isSafeInteger) || selection.firstChannel < 0 || selection.channelCount < 1
+        || selection.firstChannel + selection.channelCount > input.channelCount) throw new RangeError('Invalid sample channel selection');
+    channels += selection.channelCount; sourceChannels += input.channelCount;
+    if (channels > MAX_PACK_CHANNELS || sourceChannels > MAX_PACK_CHANNELS || typeof input.root !== 'string' || !input.root || !Array.isArray(input.shards) || !input.shards.length) throw new RangeError('Invalid sample pack input');
     let next = 0, stored = 0, previousKey = '';
     for (const shard of input.shards) {
       if (!Number.isSafeInteger(shard.firstBlock) || shard.firstBlock !== next || !Number.isSafeInteger(shard.blockCount) || shard.blockCount < 1
@@ -432,7 +440,8 @@ export async function mergeShardedSamplePacks(
   options.signal?.throwIfAborted();
 
   const suffix = `${process.pid}-${Date.now()}-${randomUUID()}`;
-  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind));
+  const role = target.role ?? (target.group !== undefined && target.kind !== 'profiles' ? 'hour' : 'serving');
+  const finalKeys = layout.shards.map((_, index) => sampleShardKey(target.model, target.buildId, target.surfaceId, index, target.group, target.kind, role));
   const finalPaths = finalKeys.map(key => localPath(target.root, key)), tempPaths = finalPaths.map(path => join(dirname(path), `.${basename(path)}.${suffix}.partial`));
   const linked = new Set<string>(), created = new Set<string>(), finalStride = layout.channelCount * recordBytes;
   const shardStates = layout.shards.map(() => ({ handle: undefined as FileHandle | undefined, hash: undefined as ReturnType<typeof createHash> | undefined, bytes: 0 }));
@@ -490,18 +499,21 @@ export async function mergeShardedSamplePacks(
   }
 
   let shard = 0;
+  const outputBuffer = Buffer.allocUnsafe(maxCells * finalStride);
   try {
     for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
       options.signal?.throwIfAborted();
       const block = layout.block(ordinal), cells = block.width * block.height, outputBytes = cells * finalStride;
-      const output = Buffer.allocUnsafe(outputBytes);
+      const output = outputBuffer.subarray(0, outputBytes);
       let channelOffset = 0;
       for (const cursor of cursors) {
         const inputStride = cursor.input.channelCount * recordBytes;
+        const selected = cursor.input.selection ?? { firstChannel: 0, channelCount: cursor.input.channelCount };
+        const start = selected.firstChannel * recordBytes, copyBytes = selected.channelCount * recordBytes;
         await readBlock(cursor, ordinal, cells * inputStride);
-        if (cursors.length === 1 && inputStride === finalStride) cursor.buffer.copy(output, 0, 0, outputBytes);
-        else for (let cell = 0; cell < cells; cell++) cursor.buffer.copy(output, cell * finalStride + channelOffset, cell * inputStride, (cell + 1) * inputStride);
-        channelOffset += inputStride;
+        if (cursors.length === 1 && inputStride === finalStride && start === 0) cursor.buffer.copy(output, 0, 0, outputBytes);
+        else for (let cell = 0; cell < cells; cell++) cursor.buffer.copy(output, cell * finalStride + channelOffset, cell * inputStride + start, cell * inputStride + start + copyBytes);
+        channelOffset += copyBytes;
       }
       if (channelOffset !== finalStride) throw new Error('Sample channel ordering mismatch');
       while (ordinal >= layout.shards[shard].firstBlock + layout.shards[shard].blockCount) {

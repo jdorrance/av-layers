@@ -68,3 +68,9 @@ it('reports an unknown model before probing', async () => {
   expect((await monitor('https://api.example', 'unknown')).findings.join(';')).toContain('Unknown forecast model');
   expect(probe).not.toHaveBeenCalled();
 });
+
+it('finds an exhausted map prefix even when later native samples remain', async () => {
+  const retained = fixture(DEFAULT_PRODUCT, '2026-11-06T00:00:00Z', [1, 24, 72, 384]);
+  const manifest = { ...retained, version: 5, mapFrameCount: 2 } as unknown as PublishedManifest;
+  expect((await observe(manifest, Date.parse(manifest.cycle) + 25 * HOUR)).findings.join(';')).toContain('exhausted-horizon');
+});
