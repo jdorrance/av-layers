@@ -29,7 +29,8 @@ bounded frame receipts; retained version-1 receipts stay inline.
 `ApiClient` point requests default to the first v5 frame. Select frame pages for
 complete timelines; explicit `all` selections retain the serving budgets.
 `ApiClient.pointSeries(build, point)` shares cached scalar pages between the
-24-hour and full-forecast views. [client-point.ts](src/client-point.ts) bounds
+map and full-forecast views. Its loader's `onProgress` publishes the selected
+hour before the remaining pages. [client-point.ts](src/client-point.ts) bounds
 paging and owns cancellation; the map keeps its rendered frame prefix.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
@@ -52,10 +53,12 @@ encoded coverage to its grid and validates its halo.
 
 ## Configuration
 
-[models.json](config/models.json) owns model identities, source protocols and
-fields, grids, coverage, forecast hours, capabilities and execution settings.
-[products.ts](src/products.ts) validates the registry and resolves worker
-defaults. Run `pnpm docs:generate` after editing it to update workflow schedules
+[forecast-windows.ts](src/forecast-windows.ts) owns each model's output window,
+minimum useful horizon and frames per compute shard. It derives selected hours,
+map end and shard count. [models.json](config/models.json) owns source protocols,
+intervals, grids, coverage, capabilities, schedules and parallelism.
+[products.ts](src/products.ts) validates the registry and resolves defaults.
+Run `pnpm docs:generate` after configuration changes to update workflow schedules
 and the reference. `terrainSubdivisionFactor` configures whole-domain lift grids.
 [layers.ts](src/layers.ts) defines layer units and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
@@ -24,11 +24,19 @@ import { prepareWholeDomainTerrain } from './whole-domain/terrain.js';
 import { buildWholeDomainFrames } from './whole-domain/frames.js';
 import { assertValidatedBuild, sha256, validateBuild, validateSampleGroup, type ValidatedBuild } from './validate.js';
 import { workflowAuthority } from './authority.js';
-import { cleanup, publish, rollback } from './publication.js';
+import { assertUsefulHorizon, cleanup, publish, rollback, type CleanupSummary } from './publication.js';
 import { createLocalFileReader, readLocalFile } from './local-file.js';
 import type { ArchiveTarget } from './render.js';
 import type { ObjectStorage } from './storage.js';
 
+const publicationPolicy = vi.hoisted(() => ({ minHorizonHours: 6 }));
+vi.mock('@av/contracts', async importOriginal => {
+  const actual = await importOriginal<typeof import('@av/contracts')>();
+  return { ...actual, getProduct: (id: string) => {
+    const product = actual.getProduct(id);
+    return product ? { ...product, freshness: { ...product.freshness, minHorizonHours: publicationPolicy.minHorizonHours } } : undefined;
+  } };
+});
 const shardTarget = vi.hoisted(() => ({ bytes: 0 }));
 const resources = vi.hoisted(() => ({ writers: [] as Array<{ surface: string; close: () => Promise<void> }>, renderers: [] as Array<{ renderArchives: (targets: readonly ArchiveTarget[]) => Promise<void> }> }));
 vi.mock('@av/forecast', async importOriginal => {
@@ -475,17 +483,7 @@ describe('whole-domain v5 production', () => {
     for (const id of ['native', 'fine'] as const) {
       const a = await surfaceBytes(serialRoot, serial, id), b = await surfaceBytes(parallelRoot, parallel, id);
       const bytes = a[0]!;
-      const layers = surface(serial, id).layers.length, channels = surface(serial, id).samples.channelCount;
-      expect(b).toHaveLength(plan.groups.length);
-      for (let cell = 0; cell < surface(serial, id).samples.storedCells; cell++) {
-        let frame = 0;
-        for (let group = 0; group < b.length; group++) {
-          const groupChannels = plan.groups[group].length * layers;
-          expect(b[group].subarray(cell * groupChannels * 5, (cell + 1) * groupChannels * 5))
-            .toEqual(bytes.subarray((cell * channels + frame * layers) * 5, (cell * channels + frame * layers + groupChannels) * 5));
-          frame += plan.groups[group].length;
-        }
-      }
+      expect(b).toEqual(a);
       expect(bytes.byteLength).toBe(surface(serial, id).samples.storedCells * surface(serial, id).samples.channelCount * 5);
       let validFlags = 0, positive = 0;
       for (let index = 0; index < bytes.length; index += 5) { if ((bytes[index + 4]! & ~(STATUS_MASK | SUPPORT_MASK)) === 0) validFlags++; if (bytes.readFloatLE(index) > 0) positive++; }
@@ -567,13 +565,31 @@ describe('whole-domain v5 production', () => {
     };
     await Promise.all(Array.from({ length: Math.min(4, plan.groups.length) }, () => runShard()));
     if (receiptsOnly) await rm(join(out, 'terrain'), { recursive: true, force: true });
-    const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store: receiptsOnly ? store : undefined });
+    const hourKeys = new Set<string>();
+    for (let index = 0; index < plan.groups.length; index++) {
+      const receipt = JSON.parse(await readFile(join(out, 'shards', String(index), 'receipt.json'), 'utf8')) as { objects: Array<{ key: string }> };
+      for (const object of receipt.objects) if (object.key.includes('/samples/src-g')) hourKeys.add(object.key);
+    }
+    const hourReads = new Map<string, number>(), readHour = store.get.bind(store);
+    const hourGet = vi.spyOn(store, 'get').mockImplementation(async (key, range) => {
+      if (hourKeys.has(key)) {
+        if (range) throw new Error(`Hour shard was range-read: ${key}`);
+        hourReads.set(key, (hourReads.get(key) ?? 0) + 1);
+      }
+      return readHour(key, range);
+    });
+    let path: string;
+    try { path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store }); }
+    finally { hourGet.mockRestore(); }
+    expect([...hourReads.values()].every(count => count === 1)).toBe(true);
+    expect([...hourReads.keys()].sort()).toEqual(receiptsOnly ? [...hourKeys].sort() : []);
     const manifest = await readV5(path);
     expect(manifest.surfaces.every(surface => surface.samples.format === 'frame-group-block-shards-v1')).toBe(true);
     for (const surface of manifest.surfaces) {
       if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Missing frame groups');
-      expect([...new Set(surface.samples.shards.map(shard => shard.group))]).toEqual(hours.map((_, i) => i));
-      expect(surface.samples.shards.at(-1)).toMatchObject({ group: hours.length - 1, firstFrame: hours.length - 1, frameCount: 1 });
+      const frames = surfaceFrameCount(manifest, surface), groups = Math.ceil(frames / 24);
+      expect([...new Set(surface.samples.shards.map(shard => shard.group))]).toEqual(Array.from({ length: groups }, (_, index) => index));
+      expect(surface.samples.shards.at(-1)).toMatchObject({ group: groups - 1, firstFrame: (groups - 1) * 24, frameCount: frames - (groups - 1) * 24 });
     }
     const manifestBytes = await readFile(path);
     expect(() => parseBoundedJson(manifestBytes, MAX_METADATA_JSON_TOKENS)).not.toThrow();
@@ -585,6 +601,8 @@ describe('whole-domain v5 production', () => {
     expect(privateReceipt.metrics.renderer.fine.tiles).toBe(2);
     store.objects.set(`builds/${manifest.model}/${manifest.buildId}/manifest.json`, { bytes: manifestBytes, etag: 'manifest' });
     await verifySampleServing(store, manifest, configured);
+    const provenanceKey = manifest.source.provenanceKey!, provenanceBytes = await readFile(join(out, provenanceKey));
+    await store.put(provenanceKey, provenanceBytes, { ifNoneMatch: '*' }, 'application/json', undefined, { sha256: sha256(provenanceBytes) });
     const inputs = { product: configured, mask: nativeMask, provider: source.provider };
     const getObject = store.get.bind(store);
     const get = vi.spyOn(store, 'get').mockImplementation(async (key, range) => {
@@ -593,6 +611,35 @@ describe('whole-domain v5 production', () => {
     });
     try { await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0); }
     finally { get.mockRestore(); }
+    const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
+    let sourceCleanup: CleanupSummary | undefined;
+    const locked = vi.spyOn(store, 'delete').mockRejectedValueOnce(new Error('bucket lock is active'));
+    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(0);
+    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: 0, deferred: hourKeys.size });
+    expect([...hourKeys].every(key => store.objects.has(key))).toBe(true);
+    locked.mockRestore();
+    const savedInput = [...hourKeys][0]!, savedBytes = store.objects.get(savedInput)!;
+    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(hourKeys.size);
+    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: hourKeys.size, deferred: 0 });
+    expect([...hourKeys].some(key => store.objects.has(key))).toBe(false);
+    await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0);
+    await verifySampleServing(store, manifest, configured);
+    await expect(rollback(store, 'gfs', manifest.buildId, authority)).resolves.toBeUndefined();
+
+    // An expired/pruned assembled build reclaims inputs before whole-build orphan retention.
+    const aged = { ...manifest, expiresAt: new Date(Date.parse(manifest.createdAt) + 2 * 3600000).toISOString() };
+    const manifestKey = `builds/gfs/${manifest.buildId}/manifest.json`;
+    store.objects.set(manifestKey, { bytes: Buffer.from(JSON.stringify(aged)), etag: 'expired-manifest' });
+    store.objects.set(savedInput, savedBytes);
+    const cleanupAt = Date.parse(manifest.createdAt) + 6 * 3600000 + 1;
+    const newerId = new Date(cleanupAt).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z') + '-12345678-1234-4234-8234-123456789abc';
+    const latest = { buildId: newerId, manifestKey: `builds/gfs/${newerId}/manifest.json`, cycle: new Date(cleanupAt).toISOString(), expiresAt: new Date(cleanupAt + 86400000).toISOString() };
+    store.objects.set('catalog/gfs/latest.json', { bytes: Buffer.from(JSON.stringify({ version: 1, model: 'gfs', latestBuildId: newerId, retained: [latest] })), etag: 'new-pointer' });
+    expect(await cleanup(store, 'gfs', authority, cleanupAt, report => { sourceCleanup = report; })).toBe(1);
+    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: 1, deferred: 0 });
+    expect(store.objects.has(savedInput)).toBe(false);
+    expect(manifest.surfaces.every(surface => surface.samples.shards.every(shard => store.objects.has(shard.key)))).toBe(true);
+    store.objects.set(manifestKey, { bytes: manifestBytes, etag: 'manifest' });
     const forged = structuredClone(manifest);
     forged.artifacts[0].tilesSha256 = '0'.repeat(64);
     await expect(verifyBuildReceipts(out, forged, store, undefined, inputs)).rejects.toThrow('Manifest forecast receipt mismatch');
@@ -601,7 +648,16 @@ describe('whole-domain v5 production', () => {
     await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).rejects.toThrow('Remote object receipt mismatch');
     await expect(validateBuild(out, manifest, nativeMask, undefined, configured, {
       store, objects: (await Promise.all(plan.groups.map(async (_, index) => JSON.parse(await readFile(join(out, 'shards', String(index), 'receipt.json'), 'utf8'))))).flatMap(receipt => receipt.objects)
-    })).rejects.toThrow('Remote object receipt mismatch');
+    })).rejects.toThrow('Remote receipt artifact set mismatch');
+    store.objects.set(savedInput, savedBytes);
+    const deleted = vi.spyOn(store, 'delete');
+    const count = await cleanup(store, 'gfs', authority, Date.parse(manifest.createdAt) + RETENTION_DAYS * 86400000 + 1, report => { sourceCleanup = report; });
+    const keys = deleted.mock.calls.flatMap(([items]) => items);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(count).toBe(keys.length);
+    expect(sourceCleanup?.sourceInputs).toBeUndefined();
+    expect(sourceCleanup?.deleted?.objects).toBe(keys.length);
+    deleted.mockRestore();
   }, 60_000);
 
   it('freezes target zoom and worker ceiling while retaining master coverage identities', async () => {
@@ -1012,13 +1068,14 @@ describe('whole-domain v5 production', () => {
       for (let i = 0; i < count; i++) setBit(bytes, i);
       return bytes;
     };
+    const frames = BUILD_BUDGETS.tiles / 1_000_000;
     const input = { product: { ...product, maxNativeZoom: 9 }, plan, nativeBlocks: nativeSparseMask(nativeMask).coverage.blockIds, nativeActive: cells,
       nativeMask: { maxZoom: 9, tiles: tiles(340_000) }, fine: { ...fine, maxZoom: 9, tiles: tiles(330_000) },
-      nativeMaskBytes: 0, frames: 4, nativeLayers: 1, fineLayers: 2, maxLevels: 3, retainedGeometryFields: 0,
+      nativeMaskBytes: 0, frames, nativeLayers: 1, fineLayers: 2, maxLevels: 3, retainedGeometryFields: 0,
       columns: { byteLength: 1000, workspaceBufferBytes: 1000, workspaceObjectBudgetBytes: 1000, outputBufferBytes: 1000 }, terrainBytes: 0 };
-    expect(admitWholeDomain(input)).toMatchObject({ tiles: 4_000_000, violations: [] });
+    expect(admitWholeDomain(input)).toMatchObject({ tiles: BUILD_BUDGETS.tiles, violations: [] });
     setBit(input.nativeMask.tiles, 340_000);
-    expect(admitWholeDomain(input)).toMatchObject({ tiles: 4_000_004, violations: ['tile budget exceeded'] });
+    expect(admitWholeDomain(input)).toMatchObject({ tiles: BUILD_BUDGETS.tiles + frames, violations: ['tile budget exceeded'] });
   });
 
   it('rejects full-product tile work during planning before opening any forecast shard', async () => {
@@ -1105,6 +1162,11 @@ it('keeps map bytes fixed across skipped hours, source intervals and native-only
   const serial = await readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, ...inputs, wholeDomain: setup }));
   const reference = await readV5(await buildForecast({ out: referenceRoot, cycle: CYCLE, ...inputs, product: { ...configured, frameHours: [24] }, wholeDomain: setup }));
   expect(serial.mapFrameCount).toBe(1);
+  publicationPolicy.minHorizonHours = 48;
+  try {
+    expect(() => assertUsefulHorizon({ ...serial, model: 'gfs' }, Date.parse(serial.cycle))).toThrow('useful forecast horizon');
+    expect(() => assertUsefulHorizon({ ...serial, model: 'gfs', mapFrameCount: 3 }, Date.parse(serial.cycle))).not.toThrow();
+  } finally { publicationPolicy.minHorizonHours = 6; }
   expect(serial.artifacts).toHaveLength(3);
   expect(surface(serial, 'native').samples.channelCount).toBe(90);
   expect(surface(serial, 'fine').samples.channelCount).toBe(2);

@@ -6,7 +6,8 @@ import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
 export type UnitSystem = 'metric' | 'imperial';
 export { pointSeriesSelection } from './client-point.ts';
 
-export function pointSeriesLabel(series: PointSeries): string {
+export function pointSeriesLabel(series: PointSeries, totalFrames = series.frames.length): string {
+  if (series.frames.length < totalFrames) return `${series.frames.length}/${totalFrames} frames · Loading…`;
   const first = series.frames[0], last = series.frames.at(-1);
   return `${series.frames.length} frames${first && last ? ` · ${first.validTime.slice(5, 10)}–${last.validTime.slice(5, 10)} UTC` : ''}`;
 }
@@ -290,7 +291,7 @@ export function viewportTiles(bounds: { west: number; south: number; east: numbe
   return tiles;
 }
 
-/** Plan bounded idle tile warming in forecast-step, layer-toggle, then pan order. */
+/** Plan bounded tile warming in forecast-step, layer-toggle, then pan order. */
 export function planViewportPrefetch(options: {
   build: PinnedBuild;
   activeLayer: LayerId;

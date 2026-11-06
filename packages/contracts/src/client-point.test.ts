@@ -1,16 +1,73 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client-api';
-import { fixturePointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import type { PointSeries } from './client-types';
+import { fixturePointBuild, retainedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
 const point = { lat: 32.9, lon: -117.25 };
 function setup() {
-  const build = fixturePointBuild();
+  const build = retainedPointBuild();
   const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
   return { build, fetchImpl, loader: api.pointSeries(build, point) };
 }
 
 describe('cached point forecast pages', () => {
+  it('publishes the selected hour before the remaining 23-frame page and reuses the complete range', async () => {
+    const { build, fetchImpl, loader } = setup(), selected = build.manifest.frames[19].id;
+    const updates: PointSeries[] = [], totals: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    fetchImpl.mockImplementation(async input => {
+      if (fetchImpl.mock.calls.length === 2) await gate;
+      return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+    });
+    const pending = loader.load('day', undefined, { frameId: selected, onProgress(series, total) { updates.push(series); totals.push(total); } });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    expect(updates).toHaveLength(1);
+    expect(updates[0].frames.map(frame => frame.id)).toEqual([selected]);
+    expect(updates[0].layers).toHaveLength(11);
+    expect(totals).toEqual([24]);
+    const requests = fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(','));
+    expect(requests.map(ids => ids.length)).toEqual([1, 23]);
+    expect(requests[1]).not.toContain(selected);
+    release();
+    expect((await pending).frames).toHaveLength(24);
+    expect(updates[1].frames.map(frame => frame.id)).toEqual(build.manifest.frames.slice(0, 24).map(frame => frame.id));
+    await loader.load('day');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('loads all 40 irregular map frames through three bounded pages with the selected hour first', async () => {
+    const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
+    const build = fixturePointBuild({ frameHours: [...hours, 75, 78], mapFrameCount: 40 });
+    const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const progress = vi.fn(), loader = api.pointSeries(build, point);
+    const series = await loader.load('day', undefined, { frameId: 'f072', onProgress: progress });
+    expect(series.frames.map(frame => frame.id)).toEqual(hours.map(hour => `f${String(hour).padStart(3, '0')}`));
+    expect(progress.mock.calls.map(([view, total]) => [view.frames.length, total])).toEqual([[1, 40], [24, 40], [40, 40]]);
+    const frames = fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(','));
+    expect(frames.map(page => page.length)).toEqual([1, 23, 16]);
+    expect(frames[0]).toEqual(['f072']);
+    expect(frames.flat()).toHaveLength(new Set(frames.flat()).size);
+    for (const page of frames) expect(page.length * 11).toBeLessThanOrEqual(256);
+    expect((await loader.load('forecast')).frames).toHaveLength(42);
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+    await loader.load('day');
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+  });
+
+  it('prioritizes a late native hour and stops further progress after close', async () => {
+    const { fetchImpl, loader } = setup(), onProgress = vi.fn((_series: PointSeries, _total: number) => loader.dispose());
+    await expect(loader.load('forecast', undefined, { frameId: 'f384', onProgress })).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(onProgress).toHaveBeenCalledOnce();
+    const frame = onProgress.mock.calls[0]?.[0] as PointSeries | undefined;
+    expect(frame?.frames.map(value => value.id)).toEqual(['f384']);
+    expect(frame?.frames[0].layers['usable-lift-msl']).toMatchObject({ value: null, status: 'unavailable' });
+    expect(frame?.frames[0].layers['thermal-top-msl']).toMatchObject({ value: 2500, status: 'valid' });
+  });
+
   it('reaches the complete native horizon through validated bounded scalar pages and reuses both ranges', async () => {
     const { build, fetchImpl, loader } = setup();
     const day = await loader.load('day'), full = await loader.load('forecast');

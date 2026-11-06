@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, renderedFrames, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -52,9 +52,9 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
   const product = getProduct(manifest.model);
   if (!product) throw new Error('No trusted publication recipe');
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
-  const horizonHours = (Math.max(...manifest.frames.map(frame => Date.parse(frame.validTime))) - now) / 3600000;
+  const horizonHours = (Math.max(...renderedFrames(manifest).map(frame => Date.parse(frame.validTime))) - now) / 3600000;
   const daylightFiltered = product.capabilities.daylightFrames === 'regional-daylight';
-  const coverageHours = daylightFiltered ? product.frameHours.at(-1)! - cycleAgeHours : horizonHours;
+  const coverageHours = daylightFiltered ? (product.mapEndHour ?? product.frameHours.at(-1)!) - cycleAgeHours : horizonHours;
   if (cycleAgeHours < 0 || cycleAgeHours > product.freshness.maxCycleAgeHours || coverageHours < product.freshness.minHorizonHours || horizonHours <= 0) {
     throw new Error('Build lacks the required useful forecast horizon');
   }
@@ -315,12 +315,36 @@ export interface CleanupSummary {
   version: 1; prefix: string; observedAt: string; status: 'complete' | 'failed';
   listed: CleanupObjects | null; protected: CleanupObjects | null; unreferenced: CleanupObjects | null;
   eligible: CleanupObjects | null; deleted: CleanupObjects | null;
+  sourceInputs?: { deleted: number; deferred: number; reason?: string };
 }
 const emptyCleanupObjects = (): CleanupObjects => ({ objects: 0, knownBytes: 0, unknownSizeObjects: 0 });
 function countCleanupObject(total: CleanupObjects, object: { size?: number }): void {
   total.objects++;
   if (Number.isSafeInteger(object.size) && object.size! >= 0 && Number.isSafeInteger(total.knownBytes + object.size!)) total.knownBytes += object.size!;
   else total.unknownSizeObjects++;
+}
+
+/** A committed build or an assembled build past publication lifetime needs only advertised data. */
+async function cleanupSourceInputs(store: ObjectStorage, model: ModelId, id: string, keys: string[], retained: ModelPointer['retained'][number] | undefined, signal?: AbortSignal): Promise<NonNullable<CleanupSummary['sourceInputs']> | null> {
+  let manifest: PublishedManifest;
+  try {
+    const object = await store.get(manifestKey(model, id), undefined, MAX_MANIFEST_BYTES, signal);
+    if (!object) throw new Error('Source cleanup manifest is missing');
+    manifest = publishedManifestSchema.parse(decode(object.bytes, MAX_MANIFEST_JSON_TOKENS));
+    if (manifest.model !== model || manifest.buildId !== id || (retained && (manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt || retained.manifestKey !== manifestKey(model, id)))) throw new Error('Source cleanup manifest identity mismatch');
+  } catch (error) {
+    signal?.throwIfAborted();
+    if (retained) throw error;
+    return null;
+  }
+  const advertised = new Set((manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest)).map(item => item.key));
+  const disposable = keys.filter(key => !advertised.has(key));
+  if (!disposable.length) return null;
+  try {
+    signal?.throwIfAborted();
+    await store.delete(disposable, signal);
+    return { deleted: disposable.length, deferred: 0 };
+  } catch (error) { return { deleted: 0, deferred: disposable.length, reason: String(error) }; }
 }
 
 /** Report only the listed build prefix. Missing sizes and partial deletion failures stay explicit. */
@@ -356,8 +380,20 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
     }
     const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
     for (const [id, group] of groups) {
-      if (protectedIds.has(id) || buildIdTime(id) > cutoff || group.some(object => object.lastModified.getTime() > cutoff)) continue;
-      for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
+      const retained = current.pointer.retained.find(item => item.buildId === id);
+      if (!retained && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
+        for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
+        continue;
+      }
+      const source = group.filter(object => /^surfaces\/(native|fine)\/samples\/src-g\d+-b\d+\.bin$/.test(object.key.slice(`${prefix}${id}/`.length)));
+      if (source.length && (retained || buildIdTime(id) + MAX_BUILD_LIFETIME_MS <= now)) {
+        const state = await cleanupSourceInputs(store, model, id, source.map(item => item.key), retained, signal);
+        if (state) {
+          const inputs = summary.sourceInputs ??= { deleted: 0, deferred: 0 };
+          inputs.deleted += state.deleted; inputs.deferred += state.deferred;
+          if (state.reason) inputs.reason = state.reason;
+        }
+      }
     }
     summary.eligible = eligible;
     signal?.throwIfAborted();
@@ -367,6 +403,6 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       summary.deleted = { ...eligible };
     }
     summary.status = 'complete';
-    return deletes.length;
+    return deletes.length + (summary.sourceInputs?.deleted ?? 0);
   } finally { onReport?.(summary); }
 }

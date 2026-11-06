@@ -8,8 +8,7 @@ const fields: readonly LayerId[] = ['usable-lift-msl', 'usable-lift-agl', 'preci
 
 export function pointSeriesSelection(build: PinnedBuild, horizon: PointHorizon = 'day') {
   const layers = fields.filter(layer => build.manifest.layers.includes(layer));
-  const frames = horizon === 'forecast' ? build.manifest.frames : renderedFrames(build.manifest).filter(frame =>
-    Date.parse(frame.validTime) < Date.parse(build.manifest.frames[0].validTime) + 24 * 3600000);
+  const frames = horizon === 'forecast' ? build.manifest.frames : renderedFrames(build.manifest);
   return { layers, frames: layers.length ? frames.map(frame => frame.id) : [] };
 }
 
@@ -21,7 +20,7 @@ export function createPointSeriesLoader(
   const m = build.manifest, cache = new Map<string, FrameSample>();
   let pending: Promise<unknown> = Promise.resolve(), active: AbortController | null = null, disposed = false;
   return {
-    load(horizon, signal) {
+    load(horizon, signal, options) {
       active?.abort();
       const controller = new AbortController(); active = controller;
       const abort = () => controller.abort(signal?.reason);
@@ -37,15 +36,29 @@ export function createPointSeriesLoader(
         const pageSize = Math.floor(m.descriptors.maxSampleValues / layers.length);
         if (!frames.length || pageSize < 1) throw new Error('Point fields are unavailable');
         const missing = frames.filter(id => !cache.has(id));
-        if (Math.ceil(missing.length / pageSize) > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
-        for (let offset = 0; offset < missing.length; offset += pageSize) {
-          const page = await read(missing.slice(offset, offset + pageSize), layers, controller.signal);
+        const first = frames.find(id => id === options?.frameId) ?? frames[0];
+        const priority = cache.has(first) ? [] : [first], rest = missing.filter(id => id !== first);
+        if (priority.length + Math.ceil(rest.length / pageSize) > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
+        const view = () => ({ layers, frames: frames.flatMap(id => cache.has(id) ? [cache.get(id)!] : []) });
+        const progress = () => {
+          controller.signal.throwIfAborted();
+          assertLive();
+          options?.onProgress?.(view(), frames.length);
+          controller.signal.throwIfAborted();
+          assertLive();
+        };
+        if (!priority.length) progress();
+        const pages = priority.length ? [priority] : [];
+        for (let offset = 0; offset < rest.length; offset += pageSize) pages.push(rest.slice(offset, offset + pageSize));
+        for (const ids of pages) {
+          const page = await read(ids, layers, controller.signal);
           controller.signal.throwIfAborted();
           assertLive();
           for (const frame of page.frames) cache.set(frame.id, frame);
+          progress();
         }
         assertLive();
-        return { layers, frames: frames.map(id => cache.get(id)!) };
+        return view();
       })();
       pending = work;
       return work.finally(() => {

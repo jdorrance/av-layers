@@ -4,6 +4,11 @@ Extend GFS, ICON-EU and RRFS point horizons across every covered native cell.
 Terrain sunlight is deferred; this cutover retains the existing DEM inputs for
 fine lift.
 
+The rolling-window follow-on keeps each model's window in
+[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts); selected
+hours, map end and shard counts derive from that entry. Earlier cutover measurements below record the retained
+384/48-hour publications.
+
 ```sh
 pnpm test
 pnpm verify
@@ -19,7 +24,7 @@ every selected level throughout the published horizon.
 ## Milestone 1: Separate map and point timelines
 
 - Publish optional `mapFrameCount` for the ordered map prefix; existing manifests
-  default to every frame. Configure `forecast.mapEndHour: 24` and select by
+  default to every frame. Configure the map window in the registry and select by
   forecast hour. Native samples/profiles retain the complete frame axis; fine
   samples and every tile layer use the prefix.
 - Nest profile shards by frame group, retaining full block/byte/digest metadata.
@@ -40,8 +45,8 @@ every selected level throughout the published horizon.
   cell throughout the point timeline. Native thermal tops retain model terrain;
   fine lift keeps its declared terrain reference and map-window availability.
 - Select interval support through `sourceIntervalHours`, source metadata and the
-  optional `forecast.intervalChange` transition. GFS changes at hour 123 to
-  three-hour support; hour 27 retains its hour-26 companion.
+  optional `forecast.intervalChange` transition. The rolling window uses
+  one-hour support; hour 27 retains its hour 26 companion.
   Output schedule gaps and shard boundaries preserve that support. Acquire
   cumulative companions from the same run, field and reset window.
 - Bound frame-group channels, profile record sizes, artifacts, request selections,

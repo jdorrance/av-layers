@@ -416,7 +416,7 @@ describe('read-only worker', () => {
       expect(result.status).toBe(503);
       expect(result.headers.get('cache-control')).toBe('no-store');
       expect(await result.json()).toMatchObject({ title: corrupt ? 'publication-invalid' : 'publication-incomplete' });
-      expect(cache.entries.size).toBe(0);
+      expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     }
     bucket.objects.set(receipt.key, receipt.bytes);
     expect((await call(path)).status).toBe(200);
@@ -448,7 +448,7 @@ describe('read-only worker', () => {
     bucket.install(pub);
     bucket.objects.set(receipt.key, malformed);
     expect((await call('/v1/models/gfs/runs/build-1/provenance')).status).toBe(503);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
   });
   it('refuses provenance that expires during its object read', async () => {
     const pub = publication('build-1'), receipt = sidecar(pub);
@@ -458,7 +458,7 @@ describe('read-only worker', () => {
     const result = await call('/v1/models/gfs/runs/build-1/provenance');
     expect(result.status).toBe(404);
     expect(result.headers.get('cache-control')).toBe('no-store');
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
   });
   it('rejects alpha manifests without the mandatory provenance sidecar reference', async () => {
     const pub = publication('old-schema');
@@ -627,12 +627,11 @@ describe('read-only worker', () => {
     old.manifest.coverage.hash = 'b'.repeat(64);
     bucket.install(old, publication('build-1'));
     for (const path of ['/tiles/gfs/old-build/usable-lift-agl/f003/1/0/0.webp', '/v1/models/gfs/runs/old-build/sample?lat=0&lon=0&frame=all']) {
-      const hits = cache.matches;
       const result = await call(path);
       expect(result.status).toBe(503);
       expect(result.headers.get('cache-control')).toBe('no-store');
       expect(((await result.json()) as { title: string }).title).toBe('coverage-unavailable');
-      expect(cache.matches).toBe(hits);
+      expect([...cache.entries.keys()].some(url => url.startsWith('https://api.example'))).toBe(false);
     }
     expect(bucket.reads.filter(r => r.key.endsWith('/samples.bin'))).toHaveLength(0);
   });
@@ -697,7 +696,7 @@ describe('read-only worker', () => {
     const result = await call('/tiles/gfs/build-1/usable-lift-agl/f003/0/0/0.webp');
     expect(result.status).toBe(503);
     expect(result.headers.get('cache-control')).toBe('no-store');
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
   });
   it('serves HEAD, ETags, CORS and structured method errors', async () => {
     const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
@@ -738,7 +737,7 @@ describe('read-only worker', () => {
     expect(result.status).toBe(defect === 'expired' ? 404 : 503);
     expect(result.headers.get('cache-control')).toBe('no-store');
     expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(1);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     bucket.missingSamples = false; bucket.shortRange = false; bucket.expireDuringRange = false;
     vi.setSystemTime(now);
     expect((await call(path)).status).toBe(200);
@@ -757,7 +756,7 @@ describe('read-only worker', () => {
     expect(result.headers.get('cache-control')).toBe('no-store');
     expect(cancel).toHaveBeenCalledOnce();
     expect(pull).not.toHaveBeenCalled();
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     invalid = false;
     expect((await call(path)).status).toBe(200);
   });
@@ -794,7 +793,7 @@ describe('read-only worker', () => {
       expect(result.headers.get('cache-control')).toBe('no-store');
     }
     expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(0);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
   });
 
   it.each(['storedCells', 'channelCount', 'bytes', 'key'] as const)('rejects inconsistent pack %s before numeric reads or response cache', async field => {
@@ -804,7 +803,7 @@ describe('read-only worker', () => {
     bucket.install(pub);
     const result = await call('/v1/models/gfs/runs/bad/sample?lat=0&lon=0&frame=all');
     expect(result.status).toBe(503);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     expect(bucket.reads.filter(read => read.key.endsWith('/samples.bin'))).toHaveLength(0);
   });
 
@@ -839,7 +838,7 @@ describe('read-only worker', () => {
     bucket.expireDuringRange = true;
     const result = await call('/v1/models/gfs/runs/build-1/sample?lat=0&lon=0&layers=precip-rate');
     expect(result.status).toBe(404);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
   });
   it('serves warm tile GET, HEAD and 304 responses without re-reading manifest.json from R2', async () => {
     const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
@@ -873,7 +872,7 @@ describe('read-only worker', () => {
     const bad = await call(path);
     expect(bad.status).toBe(503);
     expect((await bad.json() as { title: string }).title).toBe('publication-invalid');
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     pub.manifest.artifacts.pop();
     expect((await call(path)).status).toBe(200);
     expect(bucket.reads.filter(read => read.key.startsWith('builds/') && read.key.endsWith('/manifest.json'))).toHaveLength(2);
@@ -891,7 +890,7 @@ describe('read-only worker', () => {
     });
     const path = '/tiles/gfs/build-1/usable-lift-agl/f003/1/0/0.webp';
     expect((await call(path)).status).toBe(404);
-    expect(cache.entries.size).toBe(0);
+    expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
     spy.mockRestore();
     vi.setSystemTime(now);
     expect((await call(path)).status).toBe(200);

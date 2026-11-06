@@ -27,7 +27,10 @@ export interface PointSeries {
 
 /** Create per build/location; later loads supersede pending work, and close calls dispose. */
 export interface PointSeriesLoader {
-  load(horizon: PointHorizon, signal?: AbortSignal): Promise<PointSeries>;
+  load(horizon: PointHorizon, signal?: AbortSignal, options?: {
+    frameId?: string | null;
+    onProgress?(series: PointSeries, totalFrames: number): void;
+  }): Promise<PointSeries>;
   dispose(): void;
 }
 

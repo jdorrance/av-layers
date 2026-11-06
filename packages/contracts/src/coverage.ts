@@ -68,15 +68,14 @@ export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
   const blockIndex = new Int32Array(columns * blockRows);
   blockIndex.fill(-1);
   for (let block = 0; block < blockIds.length; block++) blockIndex[blockIds[block]!] = block;
-  const cell = (x: number, y: number): { output: boolean } | null => {
-    if (y < 0 || y >= height) return null;
+  const outputAt = (x: number, y: number): boolean => {
+    if (y < 0 || y >= height) return false;
     if (wrapLongitude) x = ((x % width) + width) % width;
-    else if (x < 0 || x >= width) return null;
+    else if (x < 0 || x >= width) return false;
     const block = blockIndex[Math.floor(y / size) * columns + Math.floor(x / size)]!;
-    if (block < 0) return null;
+    if (block < 0) return false;
     const local = (y % size) * size + (x % size), byte = block * 32 + (local >> 3), bit = 1 << (local & 7);
-    const present = ((output[byte]! | halo[byte]!) & bit) !== 0;
-    return present ? { output: (output[byte]! & bit) !== 0 } : null;
+    return (output[byte]! & bit) !== 0;
   };
   const rowBits = (column: number, row: number): number => {
     if (row < 0 || row >= height) return 0;
@@ -85,31 +84,44 @@ export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
     const index = block * 32 + (row % size) * 2;
     return output[index]! | (output[index + 1]! << 8);
   };
+  const requireBlock = (column: number, row: number): void => {
+    if (row < 0 || row >= blockRows) return;
+    if (wrapLongitude) column = ((column % columns) + columns) % columns;
+    else if (column < 0 || column >= columns) return;
+    if (blockIndex[row * columns + column]! < 0) throw new Error('Sparse coverage halo mismatch');
+  };
   for (let block = 0; block < blockIds.length; block++) {
-    const column = blockIds[block]! % columns, x0 = column * size, y0 = Math.floor(blockIds[block]! / columns) * size;
+    const column = blockIds[block]! % columns, blockRow = Math.floor(blockIds[block]! / columns), x0 = column * size, y0 = blockRow * size;
     const blockWidth = Math.min(size, width - x0), blockHeight = Math.min(size, height - y0), valid = (1 << blockWidth) - 1;
+    let left = false, right = false;
     for (let row = 0; row < blockHeight; row++) {
       const y = y0 + row, index = block * 32 + row * 2, own = output[index]! | (output[index + 1]! << 8);
+      left ||= (own & 1) !== 0;
+      right ||= (own & (1 << (blockWidth - 1))) !== 0;
       let expanded = 0;
       for (let dy = -1; dy <= 1; dy++) {
         const bits = rowBits(column, y + dy);
         expanded |= bits | (bits << 1) | (bits >>> 1);
-        if (cell(x0 - 1, y + dy)?.output) expanded |= 1;
-        if (cell(x0 + blockWidth, y + dy)?.output) expanded |= 1 << (blockWidth - 1);
+        if (outputAt(x0 - 1, y + dy)) expanded |= 1;
+        if (outputAt(x0 + blockWidth, y + dy)) expanded |= 1 << (blockWidth - 1);
       }
       const actual = halo[index]! | (halo[index + 1]! << 8);
       if (((expanded & valid) & ~own) !== actual) throw new Error('Sparse coverage halo mismatch');
-      if (row === 0 || row === blockHeight - 1 || (own & 1) || (own & (1 << (blockWidth - 1)))) {
-        for (let x = 0; x < blockWidth; x++) {
-          if (!(own & (1 << x)) || (row !== 0 && row !== blockHeight - 1 && x !== 0 && x !== blockWidth - 1)) continue;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            const nx = x0 + x + dx, ny = y + dy;
-            if (ny < 0 || ny >= height || (!wrapLongitude && (nx < 0 || nx >= width))) continue;
-            const wrapped = ((nx % width) + width) % width;
-            if ((Math.floor(wrapped / size) !== column || Math.floor(ny / size) !== Math.floor(y0 / size)) && !cell(nx, ny)) throw new Error('Sparse coverage halo mismatch');
-          }
-        }
-      }
+    }
+    // Edge output requires adjacent blocks; the row checks verify their halo cells.
+    if (left) requireBlock(column - 1, blockRow);
+    if (right) requireBlock(column + 1, blockRow);
+    const top = output[block * 32]! | (output[block * 32 + 1]! << 8);
+    const bottomIndex = block * 32 + (blockHeight - 1) * 2, bottom = output[bottomIndex]! | (output[bottomIndex + 1]! << 8);
+    if (top) {
+      requireBlock(column, blockRow - 1);
+      if (top & 1) requireBlock(column - 1, blockRow - 1);
+      if (top & (1 << (blockWidth - 1))) requireBlock(column + 1, blockRow - 1);
+    }
+    if (bottom) {
+      requireBlock(column, blockRow + 1);
+      if (bottom & 1) requireBlock(column - 1, blockRow + 1);
+      if (bottom & (1 << (blockWidth - 1))) requireBlock(column + 1, blockRow + 1);
     }
   }
 }

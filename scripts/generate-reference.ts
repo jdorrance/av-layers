@@ -57,7 +57,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   lines.push('', '## Refinement grids', '',
     'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.', '',
+  lines.push('', '## Configured models', '', 'Sources: [model settings](../packages/contracts/config/models.json) and [forecast windows](../packages/contracts/src/forecast-windows.ts). See [deployments](status.md) for live applications and runs.', '',
     `Forecast trigger budget: ${contracts.FORECAST_PARALLELISM.jobs} shard jobs; default workers ${contracts.FORECAST_PARALLELISM.workers}.`, '');
   for (const model of [...contracts.MODEL_IDS].sort()) {
     const product = contracts.getProduct(model);

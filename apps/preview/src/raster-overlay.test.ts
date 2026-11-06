@@ -32,8 +32,40 @@ function fixture() {
   const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); await Promise.resolve(); };
   return { overlay, emit, complete, stage, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z')); });
+beforeEach(() => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(Uint8Array.of(82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80), {
+    headers: { 'content-type': 'image/webp', 'content-length': '12', 'cache-control': 'public, max-age=3600' }
+  })));
+});
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it('warms the next frame after commit without waiting for map idle', async () => {
+  const f = fixture(), b = build();
+  try {
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(fetch).not.toHaveBeenCalled();
+    await f.complete();
+    expect(fetch).toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes(`/${b.manifest.frames[1].id}/`))).toBe(true);
+  } finally { f.overlay.destroy(); }
+});
+
+it.each(['supersede', 'move', 'clear', 'destroy', 'expire'] as const)('skips queued commit prefetch after %s', async action => {
+  const f = fixture(), b = build();
+  try {
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    const sourceId = f.stage(); f.markLoaded(sourceId);
+    f.emit('sourcedata', { sourceId, tile: {} }); f.emit('render');
+    if (action === 'supersede') f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
+    else if (action === 'move') f.emit('movestart');
+    else if (action === 'clear') f.overlay.clear();
+    else if (action === 'destroy') f.overlay.destroy();
+    else vi.setSystemTime(b.expiresAtMs + 1);
+    await Promise.resolve();
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { f.overlay.destroy(); }
+});
 
 it('waits beyond 150 ms and retains the committed frame until successful replacement rendering', async () => {
   const f = fixture(), b = build();

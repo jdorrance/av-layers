@@ -1,17 +1,35 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ tile: undefined as ArrayBuffer | undefined, compression: 1 }));
+const state = vi.hoisted(() => ({ tile: undefined as ArrayBuffer | undefined, compression: 1, load: undefined as (() => Promise<ArrayBuffer>) | undefined }));
 vi.mock('pmtiles', async importOriginal => {
   const actual = await importOriginal<typeof import('pmtiles')>();
   return { ...actual, PMTiles: class {
     async getHeader() { return { tileType: actual.TileType.Webp, tileCompression: actual.Compression.None, internalCompression: state.compression }; }
-    async getZxy() { return state.tile ? { data: state.tile } : undefined; }
+    async getZxy() { const tile = state.load ? await state.load() : state.tile; return tile ? { data: tile } : undefined; }
   } };
 });
 
 import { readTile } from '../src/pmtiles';
+afterEach(() => { state.load = undefined; });
 
 describe('PMTiles tile admission', () => {
+  it.each([false, true])('drains three viewport bursts inside eight reads, including owner failure=%s', async fail => {
+    state.compression = 1;
+    let active = 0, peak = 0, started = 0, finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    state.load = async () => {
+      const index = started++; active++; peak = Math.max(peak, active);
+      try { await gate; if (fail && index === 5) throw new Error('tile unavailable'); return Uint8Array.of(index).buffer; }
+      finally { active--; }
+    };
+    const bucket = {} as R2Bucket, pending = Promise.allSettled(Array.from({ length: 48 }, (_, index) => readTile(bucket, 'archive', 6, index, 0)));
+    try { await vi.waitFor(() => expect(active).toBe(8)); }
+    finally { finish(); }
+    const outcomes = await pending;
+    expect(outcomes.filter(result => result.status === 'fulfilled')).toHaveLength(fail ? 47 : 48);
+    expect(started).toBe(48); expect(peak).toBe(8); expect(active).toBe(0);
+    if (fail) await expect(readTile(bucket, 'archive', 6, 5, 0)).resolves.toBeInstanceOf(ArrayBuffer);
+  });
   it('rejects a missing tile in an otherwise readable archive', async () => {
     state.tile = undefined; state.compression = 1;
     await expect(readTile({} as R2Bucket, 'archive', 0, 0, 0)).rejects.toThrow('Expected tile missing');
@@ -39,6 +57,41 @@ it('bounds archive reads, decompression and retained directory bytes', async () 
   cache.prune(); expect([...cache.cache.keys()]).toEqual(['new']);
   cache.cache.set('oversized', { lastUsed: 3, data: new ArrayBuffer(2000) });
   cache.prune(); expect(cache.cache.size).toBe(0);
+});
+
+it.each([4, 20])('keeps maximum-sized archive reads inside the shared pool with %s MiB already held', async heldMiB => {
+  const { R2Source } = await import('../src/pmtiles');
+  const { reserveAllocation, inFlightAllocationBytes } = await import('../src/resources');
+  const size = 1024 * 1024, release = reserveAllocation(heldMiB * size);
+  let finish!: () => void, active = 0, peak = 0, peakBytes = 0;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const get = vi.fn(async (_key: string, options: { range: { offset: number; length: number } }) => {
+    active++; peak = Math.max(peak, active);
+    let closed = false;
+    const close = () => { if (!closed) { closed = true; active--; } };
+    return { size: 24 * size, etag: 'archive-etag', body: new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        peakBytes = Math.max(peakBytes, inFlightAllocationBytes());
+        await gate;
+        controller.enqueue(new Uint8Array(size).fill(options.range.offset / size)); controller.close(); close();
+      }, cancel: close
+    }, { highWaterMark: 0 }) };
+  });
+  const source = new R2Source({ get } as unknown as R2Bucket, 'archive');
+  const pending = Promise.allSettled(Array.from({ length: 24 }, (_, index) => source.getBytes(index * size, size)));
+  let outcomes: Awaited<typeof pending>;
+  try {
+    try { await vi.waitFor(() => expect(inFlightAllocationBytes()).toBe((heldMiB === 4 ? 20 : 32) * size)); }
+    finally { finish(); }
+    outcomes = await pending;
+    expect(peak).toBe(8); expect(active).toBe(0); expect(peakBytes).toBeLessThanOrEqual(32 * size);
+    if (heldMiB === 4) expect(outcomes.every(result => result.status === 'fulfilled')).toBe(true);
+    else expect(outcomes.some(result => result.status === 'rejected' && String(result.reason).includes('byte budget'))).toBe(true);
+    expect(inFlightAllocationBytes()).toBe(heldMiB * size);
+  } finally { release(); }
+  const failed = outcomes!.findIndex(result => result.status === 'rejected');
+  if (failed >= 0) expect((await source.getBytes(failed * size, size)).data.byteLength).toBe(size);
+  expect(inFlightAllocationBytes()).toBe(0);
 });
 
 it('shares archive ranges without binding their lifetime to the initiating waiter', async () => {

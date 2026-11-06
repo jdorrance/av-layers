@@ -170,7 +170,7 @@ it('writes surface-namespaced frame-group shard keys', async () => {
     const writer = createShardedSamplePackWriter(layout, coverage, { ...target(root), group: 2 });
     await writer.writeChannel(0, { values: Float32Array.of(3, 7), flags: Uint8Array.of(0, 0), coverage } as GridField);
     const shards = await writer.finish();
-    expect(shards.map(shard => shard.key)).toEqual(shards.map((_, i) => `builds/gfs/20261104T000000Z/surfaces/fine/samples/g2-b${i}.bin`));
+    expect(shards.map(shard => shard.key)).toEqual(shards.map((_, i) => `builds/gfs/20261104T000000Z/surfaces/fine/samples/src-g2-b${i}.bin`));
     expect(() => sampleShardKey('gfs', 'build', 'fine', 0, -1)).toThrow('frame group');
   } finally { await rm(root, { recursive: true, force: true }); }
 });

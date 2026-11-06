@@ -7,8 +7,8 @@ function source(protocol: keyof typeof models) {
   const { auxSurface: _auxSurface, auxLevels: _auxLevels, ...upstream } = product.upstream;
   const layers = renderedLayers(product.layers).filter(layer => protocol === 'indexed-grib2' || layer !== 'precip-rate');
   const capabilities = { ...product.capabilities, daylightFrames: protocol === 'split-grib2' ? 'regional-daylight' as const : 'all-hours' as const };
-  const frameHours = product.frameHours.filter(hour => hour <= 24);
-  return { ...product, layers, upstream, capabilities, frameHours, mapEndHour: undefined, intervalChange: undefined,
+  const frameHours = Array.from({ length: 24 }, (_, index) => index + 1);
+  return { ...product, layers, upstream, capabilities, frameHours, freshness: { ...product.freshness, minHorizonHours: 6 }, mapEndHour: undefined, intervalChange: undefined,
     forecast: { ...product.forecast, hours: frameHours, mapEndHour: undefined, intervalChange: undefined } };
 }
 

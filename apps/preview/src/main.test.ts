@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, retainedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 import { type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
@@ -201,7 +201,10 @@ beforeEach(() => {
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
   vi.stubGlobal('document', doc); vi.stubGlobal('window', win);
-  vi.stubGlobal('Option', OptionElement); vi.stubGlobal('fetch', fetchMock);
+  vi.stubGlobal('Option', OptionElement);
+  vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) => String(input).includes('/tiles/')
+    ? Promise.resolve(new Response(Uint8Array.of(82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80), { headers: { 'content-type': 'image/webp', 'content-length': '12' } }))
+    : fetchMock(input, init));
 });
 afterEach(() => {
   page('pagehide', false);
@@ -336,10 +339,10 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
 it('makes point values keyboard-scrollable only while the card is open', async () => {
   await start();
   expect(ui('point-body').tabIndex).toBe(-1);
-  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
     model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
     method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
-    frames: manifest.frames.map(frame => ({
+    frames: manifest.frames.filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id)).map(frame => ({
       ...frame,
       layers: Object.fromEntries(manifest.layers.map(layer => [layer, { value: 1, status: 'valid', support: 0, interpolated: false }]))
     }))
@@ -468,11 +471,11 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   await Promise.resolve();
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
 
-  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
     version: 5, model: published.model, buildId: published.buildId, lat: 32.9, lon: -117.25,
     method: published.method, source: published.source, expiresAt: published.expiresAt,
     surfaces: published.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
-    frames: published.frames.map(frame => ({
+    frames: published.frames.filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id)).map(frame => ({
       ...frame,
       layers: Object.fromEntries(published.layers.map(layer => {
         const surface = published.surfaces.find(item => item.layers.includes(layer))!;
@@ -517,13 +520,13 @@ it('uses Google terrain, remembers the view in the query string, and restores it
 
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {
   await start();
-  fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
     model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
     method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
     frames: manifest.frames.map((frame, i) => ({ ...frame, layers: Object.fromEntries(manifest.layers.map(layer => [layer, {
       value: layer === 'usable-lift-msl' ? 1000 + 100 * i : layer === 'usable-lift-agl' ? 300 : 0,
       status: 'valid', support: 0, interpolated: false
-    }])) }))
+    }])) })).filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id))
   })));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
@@ -544,21 +547,22 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   expect(doc.activeElement).toBe(chart.children[1]);
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
   expect(ui('point-body').children[0]).toBe(series);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock).toHaveBeenCalledTimes(3);
 });
 
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
-  const pointBuild = fixturePointBuild(), published = pointBuild.manifest;
+  const pointBuild = retainedPointBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
   fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
     ? v5Latest(published) : fixturePointSample(pointBuild, String(input)))));
   await start();
+  expect(ui('point-horizon-label').hidden).toBe(false);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   const mapUrl = raster(), mapTime = ui('time').value;
   ui('point-horizon').value = 'forecast'; ui('point-horizon').dispatchEvent(new Event('change'));
-  await vi.waitFor(() => expect(ui('point-status').textContent).toContain(`${published.frames.length} frames`));
+  await vi.waitFor(() => expect(ui('point-status').textContent.startsWith(`${published.frames.length} frames`)).toBe(true));
   const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
   expect(chart.children).toHaveLength(published.frames.length);
   chart.children.at(-1)!.dispatchEvent(new Event('click'));
@@ -577,6 +581,59 @@ it('pages the full native point forecast while later point times keep the raster
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')!.children).toHaveLength(published.mapFrameCount!));
   expect(fetchMock).toHaveBeenCalledTimes(requests);
+});
+
+it.each([false, true])('keeps the selected hour and last-good map through 40-frame progress (late page fails=%s)', async fail => {
+  const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
+  const build = fixturePointBuild({ frameHours: hours, mapFrameCount: 40 }), published = build.manifest;
+  if (published.version !== 5) throw new Error('Expected v5');
+  const requests: string[][] = [];
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  fetchMock.mockImplementation(async input => {
+    if (String(input).includes('/latest?')) return new Response(JSON.stringify(v5Latest(published)));
+    requests.push(new URL(String(input)).searchParams.get('frame')!.split(','));
+    if (requests.length === (fail ? 3 : 2)) await gate;
+    if (fail && requests.length === 3) throw new Error('Late page failed');
+    return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+  });
+  autoLoadRaster = false;
+  await start();
+  expect(ui('point-horizon-label').hidden).toBe(true);
+  await selectFrame(0);
+  const first = sourceId();
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render');
+  await selectFrame(39);
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  try {
+    await vi.waitFor(() => expect(ui('point-status').textContent).toBe(`${fail ? 24 : 1}/40 frames · Loading…`));
+    expect(requests.map(page => page.length)).toEqual(fail ? [1, 23, 16] : [1, 23]);
+    expect(requests[0]).toEqual(['f072']);
+    const series = ui('point-body').children[0];
+    expect(series.children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(fail ? 24 : 1);
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 2500 m');
+    const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
+    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(39)} UTC · Map: ${stamp(0)} UTC`);
+    await selectFrame(38);
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Loading selected point hour…');
+    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
+  } finally { release(); }
+  if (fail) {
+    await vi.waitFor(() => expect(ui('point-status').textContent).toContain('Series failed: Late page failed'));
+    const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
+    expect(chart.children).toHaveLength(24);
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Selected point hour unavailable.');
+    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
+    ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Selected point hour unavailable.');
+    chart.children.find(child => child.value === 'f072')!.dispatchEvent(new Event('click'));
+    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 8202 ft');
+    return;
+  }
+  await vi.waitFor(() => expect(ui('point-status').textContent.startsWith('40 frames ·')).toBe(true));
+  expect(requests.map(page => page.length)).toEqual([1, 23, 16]);
+  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(40);
+  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
 });
 
 it('labels the displayed raster through pending, failed and successful point-time replacements', async () => {

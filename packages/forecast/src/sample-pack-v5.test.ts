@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, type RegularLatLonGrid } from '@av/contracts';
+import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, getProduct, layerSurface, type LayerId, type RegularLatLonGrid } from '@av/contracts';
 import { planSample, type SamplePlan } from './sampler.js';
 import { packedCellsFromRange, packedRecordsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout, SAMPLE_SHARD_TARGET_BYTES } from './sample-pack.js';
 
@@ -195,4 +195,29 @@ it.each([5, 36])('reads declared partitions independently of the cached %i-byte 
       expect(() => planShardedPackedSample(layout, sample, [0], invalid)).toThrow(/declared/i);
     }
   }
+});
+
+it('keeps a 23-frame page of 24-frame serving groups inside two sample ranges', () => {
+  const product = getProduct('gfs');
+  if (!product) throw new Error('Missing GFS product');
+  const page: readonly LayerId[] = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
+  const nativeOrder = product.layers.filter(layer => layerSurface(layer) === 'native');
+  const fineOrder = product.layers.filter(layer => layerSurface(layer) === 'fine');
+  const selected = 23, frames = 24;
+  const channels = (order: readonly LayerId[], chosen: readonly LayerId[]) => {
+    const indexes = chosen.map(id => order.indexOf(id));
+    expect(indexes.every(index => index >= 0)).toBe(true);
+    const result: number[] = [];
+    for (let frame = 0; frame < selected; frame++) for (const index of indexes) result.push(frame * order.length + index);
+    return result;
+  };
+  const g = grid(32, 18, false), sample = planSample(g, 16.5, 0.5);
+  expect(sample?.contributors).toHaveLength(4);
+  const native = planShardedPackedSample(prepareShardedSamplePackLayout(g, Uint32Array.of(0), frames * nativeOrder.length), sample!, channels(nativeOrder, page.filter(layer => nativeOrder.includes(layer))));
+  const fine = planShardedPackedSample(prepareShardedSamplePackLayout(g, Uint32Array.of(0), frames * fineOrder.length), sample!, channels(fineOrder, page.filter(layer => fineOrder.includes(layer))));
+  const ranges = [native.byteRange, fine.byteRange];
+  expect(ranges).toHaveLength(2);
+  expect(native.byteRange.length).toBeGreaterThan(CELL_BYTES);
+  expect(fine.byteRange.length).toBeGreaterThan(CELL_BYTES);
+  expect(ranges.reduce((total, range) => total + range.length, 0)).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
 });

@@ -61,10 +61,12 @@ owns their evaluation tooling.
 - `createdAt` / `ageSeconds`: build creation timestamp and elapsed seconds since
   the build started.
 
-[Model settings](../packages/contracts/config/models.json) select hours and source
-intervals. Current products emit native weather and profiles through the complete
+[Forecast windows](../packages/contracts/src/forecast-windows.ts) select hours;
+[model settings](../packages/contracts/config/models.json) own source intervals.
+Current products emit native weather and profiles through the complete
 selected horizon, including night. Precipitation retains its trailing interval
-at night. `mapFrameCount` limits tiles and fine lift to the first 24 hours.
+at night. `mapFrameCount` selects the tiles and fine-lift
+prefix; retained builds may expose later native samples and profiles.
 Retained `regional-daylight` builds omit fully dark frames according to their
 declared method.
 

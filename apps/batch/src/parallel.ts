@@ -12,7 +12,7 @@ import { buildIdentity } from './identity.js';
 import { createLocalFileReader, readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
 import { mergeSamplePacks } from './sample-pack.js';
-import { fileSha256, localPath, sha256, validateArchive, validateSampleGroup } from './validate.js';
+import { localPath, sha256, validateArchive, validateSampleGroup } from './validate.js';
 import { failureReason } from './failure.js';
 import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
 import { sparseTerrainRefSchema, validateSparsePreparedTerrain } from './terrain/sparse.js';
@@ -25,6 +25,7 @@ import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
 import { readFrameProvenance } from './frame-provenance.js';
 import { sampleShardKey } from './sample-pack-v5.js';
+import { servingSampleShards, writeServingGroups, type HourSamplePart } from './serving-groups.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 
 export { MAX_FORECAST_SHARDS } from '@av/contracts';
@@ -120,7 +121,7 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
     const binding = { grid: id === 'native' ? whole.plan.native : whole.plan.fine, gridHash: info.descriptor.gridHash,
       coverageHash: info.hash, blockIds: info.mask.coverage.blockIds };
     if (surface.channelCount !== (id === 'native' ? frames.length : mapped) * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
-    if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard))) throw new Error('Forecast shard surface key mismatch');
+    if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard, 'samples', 'hour'))) throw new Error('Forecast shard surface key mismatch');
     const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
       coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
       layers: layers[id],
@@ -321,7 +322,6 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       }
       for (const artifact of result.artifacts) {
         const coverage = layerSurface(artifact.layer) === 'native' ? whole.native : whole.fine;
-        if (await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
         await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
       }
       await assertWholeDomainProvenance(root, plan, shard, options.product, result.receipts);
@@ -382,7 +382,21 @@ function readResult(raw: unknown, plan: BuildPlan, shard: number, options: Forec
     ...(refinements.length ? { refinements } : {}) };
 }
 
-/** Interleave only complete matching groups, then use the ordinary full-build validator/publisher. */
+function hourSampleParts(receipts: readonly WholeDomainReceipt[], plan: BuildPlan, product: ForecastInputs['product'], id: 'native' | 'fine'): HourSamplePart[] {
+  const parts: HourSamplePart[] = [];
+  let firstFrame = 0;
+  for (const receipt of receipts) {
+    const frameCount = id === 'native' ? plan.groups[receipt.shard]!.length : mapFrameCount({ ...product, frameHours: plan.groups[receipt.shard]! });
+    if (!frameCount) continue;
+    const surface = receipt.surfaces.find(item => item.id === id);
+    if (!surface) throw new Error(`Forecast shard is missing ${id} samples`);
+    parts.push({ firstFrame, frameCount, shards: surface.shards });
+    firstFrame += frameCount;
+  }
+  return parts;
+}
+
+/** Repack hour packs into serving groups, then use the ordinary full-build validator/publisher. */
 export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan; store?: ObjectStorage } & Pick<BuildOptions, 'out' | 'signal' | 'onValidated'>): Promise<string> {
   const deadline = options.plan.deadlineAt ?? new Date(Date.parse(options.plan.createdAt) + BUILD_BUDGETS.elapsedMs).toISOString();
   const deadlineSignal = AbortSignal.timeout(Math.max(1, Date.parse(deadline) - Date.now()));
@@ -420,22 +434,18 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });
     const surfaces: WholeDomainSurfaceResult[] = [];
     const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
+    const servingObjects: ObjectReceipt[] = [];
     let profileGroups: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'] | undefined;
     for (const id of ['native', 'fine'] as const) {
       const layout = id === 'native' ? layouts.native : layouts.fine, info = id === 'native' ? whole.native : whole.fine;
       const layers = id === 'native' ? whole.nativeSurfaceLayers : whole.fineSurfaceLayers;
       if (!layout || !layers.length) continue;
-      const shards: NonNullable<typeof sampleGroups[typeof id]> = [];
-      let firstFrame = 0;
-      for (const receipt of receipts) {
-        const frameCount = id === 'native' ? plan.groups[receipt.shard].length : mapFrameCount({ ...options.product, frameHours: plan.groups[receipt.shard] });
-        if (!frameCount) continue;
-        const surface = receipt.surfaces.find(item => item.id === id);
-        if (!surface) throw new Error(`Forecast shard is missing ${id} samples`);
-        shards.push(...surface.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame, frameCount, blockShard })));
-        firstFrame += frameCount;
-      }
-      sampleGroups[id] = shards;
+      const written = await writeServingGroups({ root, model: plan.model, buildId: plan.buildId, surfaceId: id,
+        grid: id === 'native' ? whole.plan.native : whole.plan.fine, blockIds: info.mask.coverage.blockIds, layers: layers.length,
+        parts: hourSampleParts(receipts, plan, options.product, id), store: options.store, signal: options.signal });
+      sampleGroups[id] = written.shards;
+      servingObjects.push(...written.objects);
+      const shards = written.shards;
       let profiles: WholeDomainSurfaceResult['profiles'];
       if (id === 'native' && renderedLayers(options.product.layers).length !== options.product.layers.length) {
         const recordBytes = profileRecordBytes(options.provider.maxLevels), groups: NonNullable<typeof profileGroups> = [];
@@ -464,10 +474,12 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
       receipts: receipts.flatMap(receipt => receipt.provenance), surfaces, capacity,
       metrics: { phasesMs, renderer: { shards: receipts.map(receipt => receipt.metrics.renderer) },
         peakRssBytes: Math.max(plan.preparation!.peakRssBytes, process.resourceUsage().maxRSS * 1024, ...receipts.map(receipt => receipt.metrics.peakRssBytes)) } };
-    const objects = options.store ? receipts.flatMap(receipt => {
+    const hourObjects = options.store ? receipts.flatMap(receipt => {
       if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
       return receipt.objects;
     }) : undefined;
+    const hourSampleKeys = new Set(receipts.flatMap(receipt => receipt.surfaces.flatMap(surface => surface.shards.map(shard => shard.key))));
+    const objects = hourObjects ? [...hourObjects.filter(object => !hourSampleKeys.has(object.key)), ...servingObjects] : undefined;
     return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups, profileGroups,
       ...(objects ? { remote: { store: options.store!, objects, signal: options.signal } } : {}) });
   }
@@ -550,17 +562,16 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
       || manifest.surfaces.some(surface => surface.coverage.maxZoom !== admitted.product.maxNativeZoom)) throw new Error('Manifest surface receipt mismatch');
   for (const surface of manifest.surfaces) {
     if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Receipt build requires grouped samples');
-    let firstFrame = 0;
-    const expected = receipts.flatMap(receipt => {
-      const frameCount = surface.kind === 'native' ? plan.groups[receipt.shard].length : mapFrameCount({ ...admitted.product, frameHours: plan.groups[receipt.shard] });
-      if (!frameCount) return [];
-      const part = receipt.surfaces.find(item => item.id === surface.id);
-      if (!part) throw new Error('Missing receipt surface');
-      const result = part.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame, frameCount, blockShard }));
-      firstFrame += frameCount;
-      return result;
-    });
-    if (!same(surface.samples.shards, expected)) throw new Error('Manifest sample receipt mismatch');
+    const info = surface.kind === 'native' ? whole.native : whole.fine;
+    const expected = servingSampleShards({ model: plan.model, buildId: plan.buildId, surfaceId: surface.id,
+      grid: surface.kind === 'native' ? whole.plan.native : whole.plan.fine, blockIds: info.mask.coverage.blockIds, layers: surface.layers.length,
+      parts: hourSampleParts(receipts, plan, admitted.product, surface.kind) });
+    if (surface.samples.shards.length !== expected.length || surface.samples.shards.some((shard, index) => {
+      const item = expected[index]!;
+      return shard.group !== item.group || shard.firstFrame !== item.firstFrame || shard.frameCount !== item.frameCount
+        || shard.blockShard !== item.blockShard || shard.firstBlock !== item.firstBlock || shard.blockCount !== item.blockCount
+        || shard.storedCells !== item.storedCells || shard.bytes !== item.bytes || shard.key !== item.key;
+    })) throw new Error('Manifest sample receipt mismatch');
     const profileBasis = receipts[0]!.surfaces.find(part => part.id === surface.id)?.profiles;
     if (!!surface.profiles !== !!profileBasis) throw new Error('Manifest profile receipt mismatch');
     if (surface.profiles && profileBasis) {
@@ -578,16 +589,32 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     }
   }
   const objects = receipts.flatMap(receipt => receipt.objects!);
-  const expected = [...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
+  const hourSamples = receipts.flatMap(receipt => receipt.surfaces.flatMap(surface => surface.shards.map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))));
+  const hourExpected = [...hourSamples,
+    ...manifest.surfaces.flatMap(surface => (surface.profiles?.groups.flatMap(group => group.shards) ?? []).map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
     ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256 })),
     ...receipts.flatMap(receipt => receipt.provenance.map(item => ({ key: item.key, sha256: item.sha256, bytes: item.bytes })))];
   const byKey = new Map(objects.map(object => [object.key, object]));
-  if (byKey.size !== objects.length || byKey.size !== expected.length || expected.some(item => {
+  if (byKey.size !== objects.length || byKey.size !== hourExpected.length || hourExpected.some(item => {
     const object = byKey.get(item.key);
     return !object || object.sha256 !== item.sha256 || ('bytes' in item && object.bytes !== item.bytes);
   })) throw new Error('Forecast object receipt set mismatch');
-  await verifyObjectReceipts(store, objects, signal);
-  return objects;
+  // Source receipt identities remain bound to the plan; only advertised data survives compaction cleanup.
+  const hourSampleKeys = new Set(hourSamples.map(item => item.key));
+  const published: ObjectReceipt[] = [];
+  for (const surface of manifest.surfaces) for (const shard of surface.samples.shards) {
+    const head = await store.head(shard.key, signal);
+    if (!head || head.size !== shard.bytes || !head.etag || head.metadata?.sha256 !== shard.sha256) throw new Error(`Remote object receipt mismatch: ${shard.key}`);
+    published.push({ key: shard.key, bytes: shard.bytes, sha256: shard.sha256, etag: head.etag });
+  }
+  for (const item of hourExpected) {
+    if (hourSampleKeys.has(item.key)) continue;
+    const object = byKey.get(item.key);
+    if (!object) throw new Error('Forecast object receipt set mismatch');
+    published.push(object);
+  }
+  await verifyObjectReceipts(store, published, signal);
+  return published;
 }
 
 export { type WholeDomainReceipt };

@@ -11,6 +11,15 @@ import { BUILD_BUDGETS } from './capacity.js';
 import { writeCoverage } from './coverage.js';
 import type { ObjectStorage } from './storage.js';
 
+const publicationPolicy = vi.hoisted(() => ({ minHorizonHours: 6 }));
+vi.mock('@av/contracts', async importOriginal => {
+  const actual = await importOriginal<typeof import('@av/contracts')>();
+  return { ...actual, getProduct: (id: string) => {
+    const product = actual.getProduct(id);
+    return product ? { ...product, freshness: { ...product.freshness, minHorizonHours: publicationPolicy.minHorizonHours } } : undefined;
+  } };
+});
+
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, readFile: vi.fn(actual.readFile) };

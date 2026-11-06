@@ -9,9 +9,9 @@ pnpm --filter @av/windy-plugin serve
 
 `AV_API_BASE` is embedded at build time and defaults to `http://localhost:8787`. Open `https://127.0.0.1:9999/plugin.js`, accept the certificate, then load that URL from [Windy's developer loader](https://www.windy.com/developer-mode).
 
-Click the map for a point chart and choose 24 hours or Full forecast. Cached
-scalar pages retain the native horizon; later point times keep the map frame
-and label both UTC times. Native thermal-top markers use MSL; fine lift and
+Click the map for a point chart and choose Map forecast or Full forecast. The
+selected hour appears first while cached scalar pages fill the chart; later
+point times keep the map frame and label both UTC times. Native thermal-top markers use MSL; fine lift and
 terrain stay unknown when unavailable. Units include metres/m/s or feet/knots,
 with vertical lift in ft/min for imperial displays. Closing the pane ends point
 requests and leaves the overlay until build expiry. For a map without Windy,

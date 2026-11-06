@@ -24,13 +24,17 @@ apply to the combined work across all grids selected by a request.
 - **Coverage cache:** 16 entries, 24 MiB max; 2 concurrent cold loads. Verifies
   descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
   and compact sample layouts. Tile requests load only descriptors and tile masks.
+  Verified descriptor, sparse, tile, and legacy mask bytes also stay in the Cache
+  API under their SHA-256. A new isolate reads those blobs before R2. The
+  in-memory cache remains the hot path. Blob reads and background writes use the
+  shared allocation pool; write permits last until Cache API settlement.
   Request-held sparse objects reserve shared allocation bytes until their last
   lease ends, including after cache eviction.
 - **PMTiles directory cache:** 256 entries, 4 MiB max (96 B/entry, max 16,384
-  entries/directory); 4 concurrent tile reads. Identical archive ranges share
-  materialized bytes, with 4 active ranges and the default queue, waiter and
-  deadline limits in `MaterializedReads`. Cancelling one waiter preserves the
-  read for remaining consumers.
+  entries/directory); 8 concurrent tile reads. Identical archive ranges share
+  materialized bytes, with 8 active ranges, 128 waiters and the default queue
+  and deadline limits in `MaterializedReads`. Cancelling one waiter preserves
+  the read for remaining consumers.
 - **Binary sample & provenance reads:** 8 concurrent loads; identical range
   reads coalesce and share materialized `Uint8Array` bytes. Up to 64 distinct
   reads wait FIFO and 96 callers may wait in total; each sample request starts
@@ -53,9 +57,10 @@ JSON structural token caps: 16,384 for manifests, 8,192 for other metadata,
 262,144 for provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
 at 16 KiB.
 
-Point requests group layers by surface and frame group. GFS precipitation and
-fine lift use separate ranges within the combined sample budget. Retained
-regional patches load their coverage lazily.
+Publication compacts scalar hours into serving groups in
+[serving-groups.ts](../apps/batch/src/serving-groups.ts). Point requests choose
+cell spans or row spans, then fall back to selected records to fit the combined
+byte budget. Retained regional patches load their coverage lazily.
 
 ## Memory envelope
 

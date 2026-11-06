@@ -132,6 +132,20 @@ it('returns independent cached buffers and expires entries at the pinned build d
   await expect(protocol.load({ url: protocol.url(tile()) }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
+it.each([true, false])('preserves cached bytes after the map transfers a delivered tile buffer (length header=%s)', async lengthHeader => {
+  const fetchImpl = vi.fn<typeof fetch>(async () => {
+    const response = webp();
+    if (lengthHeader) response.headers.set('content-length', '12');
+    return response;
+  }), protocol = setup({ fetchImpl });
+  const first = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+  const transferred = structuredClone(first.data, { transfer: [first.data] });
+  expect(first.data.byteLength).toBe(0);
+  expect(transferred.byteLength).toBe(12);
+  const cached = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+  expect(new Uint8Array(cached.data)).toEqual(new Uint8Array(transferred));
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
 it('coalesces prefetch and interactive consumers while cancelling them independently', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
   const background = new AbortController();

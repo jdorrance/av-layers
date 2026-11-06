@@ -72,8 +72,11 @@ export function renderSampleTable(container: HTMLElement, payload: Pick<PointSer
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(
   container: HTMLElement, payload: Pick<PointSeries, 'frames'>, build: PinnedBuild,
-  options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; onFrame(id: string): void }
-): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null) => void {
+  options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; loading?: boolean; onFrame(id: string): void }
+): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void {
+  const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
+  const focused = previous?.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
+  const wasOpen = container.querySelector?.<HTMLDetailsElement>('details')?.open ?? false;
   const section = node('section'), summary = node('p'), time = node('p'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
   section.className = 'av-point-series'; summary.className = 'av-point-values'; chart.className = 'av-point-chart';
   chart.role = 'group'; chart.ariaLabel = 'Point forecast times in UTC; heights MSL';
@@ -135,18 +138,23 @@ export function renderPointSeries(
     chart.append(button); return button;
   });
   section.append(time, summary, chart, legend, details); container.replaceChildren(section);
+  chart.scrollLeft = previous?.scrollLeft ?? 0;
+  details.open = wasOpen;
   let units = options.unitSystem;
+  let loading = options.loading ?? false;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
-  const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId) => {
+  const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
     units = nextUnits;
+    loading = nextLoading;
     mapFrameId = nextMapFrameId;
     const frame = payload.frames.find(frame => frame.id === frameId);
+    const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
     const utc = (value: string) => `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
-    time.textContent = frame && frame.id !== mapFrameId ? `Point: ${utc(frame.validTime)} · Map: ${mapFrame ? utc(mapFrame.validTime) : 'unavailable'}`
-      : frame ? `Point and map: ${utc(frame.validTime)}` : 'Point time unavailable';
+    time.textContent = pointFrame && pointFrame.id !== mapFrameId ? `Point: ${utc(pointFrame.validTime)} · Map: ${mapFrame ? utc(mapFrame.validTime) : 'unavailable'}`
+      : pointFrame ? `Point and map: ${utc(pointFrame.validTime)}` : 'Point time unavailable';
     const hasSelection = frame !== undefined;
-    summary.textContent = frame ? pointFrameView(frame, build, units).summary : 'Selected frame is outside this point series.';
+    summary.textContent = frame ? pointFrameView(frame, build, units).summary : loading ? 'Loading selected point hour…' : 'Selected point hour unavailable.';
     bars.forEach((bar, index) => {
       const frame = payload.frames[index], selected = frame.id === frameId;
       bar.ariaPressed = String(selected); bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
@@ -155,5 +163,7 @@ export function renderPointSeries(
       bar.title = bar.ariaLabel;
     });
   };
-  update(options.frameId); return update;
+  update(options.frameId);
+  if (focused) bars.find(bar => bar.value === focused.value)?.focus({ preventScroll: true });
+  return update;
 }

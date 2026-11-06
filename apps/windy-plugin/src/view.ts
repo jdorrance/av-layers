@@ -1,4 +1,5 @@
 import { DEFAULT_OPACITY, populateModelOptions, pointSeriesLabel, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
+import { renderedFrames } from '@av/contracts';
 import { renderPointSeries } from '@av/contracts/client/dom';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
@@ -57,6 +58,7 @@ export class PluginPanel {
   private readonly pointBody = node('div');
   private readonly units = node('select');
   private readonly pointHorizon = node('select');
+  private readonly pointHorizonLabel = node('label', undefined, 'Point horizon');
   private unitSystem: UnitSystem = 'metric';
   private pointFrameId: string | null = null;
   private selectedFrameId: string | null = null;
@@ -111,14 +113,14 @@ export class PluginPanel {
       this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
     });
     this.pointHorizon.id = 'av-point-horizon';
-    this.pointHorizon.add(new Option('24 hours', 'day')); this.pointHorizon.add(new Option('Full forecast', 'forecast'));
+    this.pointHorizon.add(new Option('Map forecast', 'day')); this.pointHorizon.add(new Option('Full forecast', 'forecast'));
     this.pointHorizon.value = 'day';
-    const pointHorizonLabel = node('label', undefined, 'Point horizon'); pointHorizonLabel.htmlFor = this.pointHorizon.id;
+    this.pointHorizonLabel.htmlFor = this.pointHorizon.id;
     this.pointHorizon.addEventListener('change', () => callbacks.onPointHorizon(this.pointHorizon.value === 'forecast' ? 'forecast' : 'day'));
     this.point.hidden = true;
     this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
     this.pointStatus.role = 'status';
-    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, pointHorizonLabel, this.pointHorizon, this.pointBody);
+    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon, this.pointBody);
     this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
 
@@ -146,6 +148,7 @@ export class PluginPanel {
     if (this.renderedBuildId === key) return;
     this.renderedBuildId = key;
     this.modelSelect.value = build.manifest.model;
+    this.pointHorizonLabel.hidden = this.pointHorizon.hidden = renderedFrames(build.manifest).length === build.manifest.frames.length;
   }
 
   renderState(state: ControllerState): void {
@@ -178,19 +181,24 @@ export class PluginPanel {
     this.pointStatus.textContent = 'Loading point…';
   }
 
-  pointLoading(): void { this.pointStatus.textContent = 'Loading point forecast…'; }
+  pointLoading(frameId: string | null): void { this.pointFrameId = frameId; this.pointStatus.textContent = 'Loading point forecast…'; }
 
-  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void): void {
-    if (!payload.frames.some(frame => frame.id === this.pointFrameId)) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
-    this.pointStatus.textContent = pointSeriesLabel(payload);
-    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, onFrame: id => {
+  get pointFrame(): string | null { return this.pointFrameId; }
+
+  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void, totalFrames = payload.frames.length): void {
+    if (this.pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === this.pointFrameId))) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
+    this.pointStatus.textContent = pointSeriesLabel(payload, totalFrames);
+    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, loading: payload.frames.length < totalFrames, onFrame: id => {
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
       onFrame(id);
     } });
   }
 
-  pointError(message: string): void { this.pointStatus.textContent = message; }
+  pointError(message: string): void {
+    this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, false);
+    this.pointStatus.textContent = message;
+  }
 
   clearPoint(): void {
     this.updatePoint = null; this.pointFrameId = null; this.point.hidden = true;

@@ -1,7 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ByteCache, MaterializedReads, readBoundedStream } from '../src/resources';
+import { ByteCache, MaterializedReads, readBoundedStream, binaryRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
 
 describe('serving resource bounds', () => {
+  it('admits three distinct point pages while bounding their combined reads', async () => {
+    const bucket = {} as R2Bucket;
+    let release!: () => void, active = 0, peak = 0, completed = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const page = async (id: number) => {
+      let next = 0;
+      const worker = async () => {
+        while (next < 46) {
+          await binaryRead(bucket, `${id}/${next++}`, async () => {
+            active++; peak = Math.max(peak, active);
+            try { await gate; completed++; return Uint8Array.of(1); }
+            finally { active--; }
+          }, { waitUntil() {} });
+        }
+      };
+      await Promise.all(Array.from({ length: MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST }, worker));
+    };
+    const pending = Promise.all([page(0), page(1), page(2)]);
+    try { await vi.waitFor(() => expect(active).toBe(8)); }
+    finally { release(); }
+    await pending;
+    expect(peak).toBe(8); expect(active).toBe(0); expect(completed).toBe(138);
+  });
   it('evicts by bytes and recency, expires entries and refuses oversized entries', () => {
     const cache = new ByteCache<string, number>(3, 10);
     cache.set('a', 1, 4); cache.set('b', 2, 4);

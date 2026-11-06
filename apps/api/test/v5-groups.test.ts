@@ -86,6 +86,7 @@ describe('frame-group v5 serving', () => {
 
   it.each(cases)('limits an all-frame $product.modelId request to four reads and the combined byte budget', async options => {
     const fixture = createGroupedV5Fixture(options), original = fixture.get.getMockImplementation()!;
+    const reads = options.groups.length * fixture.manifest.surfaces.length;
     let active = 0, peak = 0, release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     fixture.get.mockImplementation(async (key, options) => {
@@ -98,7 +99,7 @@ describe('frame-group v5 serving', () => {
     const body = await sampleBody(await pending);
     expectFrames(body, fixture.manifest, fixture.manifest.frames.map((_, index) => index));
     const ranges = fixture.get.mock.calls.flatMap(([, options]) => options?.range ? [options.range] : []);
-    expect(ranges).toHaveLength(options.groups.length * fixture.manifest.surfaces.length);
+    expect(ranges).toHaveLength(reads);
     const bytes = ranges.reduce((total, range) => total + range.length, 0);
     expect(bytes).toBe(fixture.manifest.frames.length * fixture.manifest.layers.length * CELL_BYTES);
     expect(bytes).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);

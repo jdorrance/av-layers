@@ -1,10 +1,80 @@
 import { describe, expect, it, vi } from 'vitest';
 import configuration from '../config/models.json' with { type: 'json' };
+import windowSettings from './forecast-windows.js';
 import { DEFAULT_MODEL, DEFAULT_PRODUCT, MAX_MODEL_WORKERS, defineProduct, getProduct, mapFrameCount, sourceIntervalHours } from './products.js';
 
-const raw = configuration.models[0];
+const configured = configuration.models[0];
+const base = getProduct(configured.modelId)!;
+const raw = { ...configured, forecast: base.forecast, freshness: base.freshness,
+  execution: { ...configured.execution, shards: base.execution.shards } };
+
+async function withWindow(window: unknown, check: (products: typeof import('./products.js')) => void): Promise<void> {
+  vi.resetModules();
+  vi.doMock('./forecast-windows.js', () => ({ default: { ...windowSettings, gfs: window } }));
+  try { check(await import('./products.js')); }
+  finally { vi.doUnmock('./forecast-windows.js'); vi.resetModules(); }
+}
 
 describe('model configuration', () => {
+  it('resolves each model window once for consumers and source adapters', () => {
+    for (const settings of configuration.models) {
+      const product = getProduct(settings.modelId)!, window = windowSettings[settings.modelId as keyof typeof windowSettings];
+      expect(product.frameHours).toBe(product.forecast.hours);
+      expect(product.frameHours.every((hour, index, hours) => Number.isSafeInteger(hour) && hour > 0 && (!index || hour > hours[index - 1]))).toBe(true);
+      expect(product.mapEndHour).toBe(product.frameHours.at(-1));
+      expect(product.forecast.mapEndHour).toBe(product.mapEndHour);
+      expect(mapFrameCount(product)).toBe(product.frameHours.length);
+      expect(product.execution.shards).toBe(Math.ceil(product.frameHours.length / window.framesPerShard));
+      expect(product.freshness.minHorizonHours).toBe(window.minHorizonHours);
+      expect(product.frameHours.at(-1)).toBeLessThanOrEqual(window.endHour);
+      expect(product.frameHours.at(-1)! + window.tailStepHours).toBeGreaterThan(window.endHour);
+    }
+  });
+
+  it.each([
+    { window: { hourlyThrough: 2, endHour: 11, tailStepHours: 3, minHorizonHours: 7, framesPerShard: 2 }, hours: [1, 2, 5, 8, 11], shards: 3 },
+    { window: { hourlyThrough: 4, endHour: 14, tailStepHours: 4, minHorizonHours: 6, framesPerShard: 1 }, hours: [1, 2, 3, 4, 8, 12], shards: 6 },
+    { window: { hourlyThrough: 6, endHour: 6, tailStepHours: 3, minHorizonHours: 0, framesPerShard: 3 }, hours: [1, 2, 3, 4, 5, 6], shards: 2 }
+  ])('propagates one tuned window through hours, maps, freshness and compute groups: $window', async ({ window, hours, shards }) => {
+    await withWindow(window, products => {
+      const product = products.getProduct('gfs')!;
+      expect(product.frameHours).toEqual(hours);
+      expect(product.forecast.hours).toBe(product.frameHours);
+      expect(product.mapEndHour).toBe(hours.at(-1));
+      expect(product.forecast.mapEndHour).toBe(product.mapEndHour);
+      expect(products.mapFrameCount(product)).toBe(hours.length);
+      expect(product.execution.shards).toBe(shards);
+      expect(product.freshness.minHorizonHours).toBe(window.minHorizonHours);
+      expect(product.execution.parallelism).toBe(getProduct('gfs')!.execution.parallelism);
+      expect(product.execution.schedule).toEqual(getProduct('gfs')!.execution.schedule);
+      expect([27, 123].map(hour => products.sourceIntervalHours(product, hour))).toEqual([1, 3]);
+      for (const model of ['icon-eu', 'rrfs']) expect(products.getProduct(model)).toEqual(getProduct(model));
+    });
+  });
+
+  it.each([
+    { hourlyThrough: 0 }, { hourlyThrough: 257 }, { hourlyThrough: 2.5 },
+    { endHour: windowSettings.gfs.hourlyThrough - 1 }, { endHour: Infinity }, { endHour: Number.MAX_SAFE_INTEGER + 1 },
+    { endHour: 1_000, tailStepHours: 1 }, { tailStepHours: 0 }, { tailStepHours: NaN },
+    { minHorizonHours: -1 }, { minHorizonHours: Number.MAX_SAFE_INTEGER }, { minHorizonHours: windowSettings.gfs.endHour },
+    { hourlyThrough: 4, endHour: 14, tailStepHours: 4, minHorizonHours: 12 },
+    { framesPerShard: 0 }, { framesPerShard: 257 }, { typo: 1 }
+  ])('rejects an invalid or unbounded window before generating hours: %j', async invalid => {
+    await expect(withWindow({ ...windowSettings.gfs, ...invalid }, () => {})).rejects.toThrow();
+  });
+
+  it.each([
+    { forecast: { ...configured.forecast, hours: [1] } },
+    { forecast: { ...configured.forecast, mapEndHour: 1 } },
+    { execution: { ...configured.execution, shards: 1 } },
+    { freshness: { ...configured.freshness, minHorizonHours: 0 } }
+  ])('rejects a second configured owner for a derived window field: %j', async duplicate => {
+    vi.resetModules();
+    vi.doMock('../config/models.json', () => ({ default: { ...configuration,
+      models: [{ ...configured, ...duplicate }, ...configuration.models.slice(1)] } }));
+    try { await expect(import('./products.js')).rejects.toThrow('Forecast window owns'); }
+    finally { vi.doUnmock('../config/models.json'); vi.resetModules(); }
+  });
   it('keeps the map prefix and source intervals independent of sparse output hours', () => {
     const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 120 }, (_, i) => 27 + i * 3)];
     const product = defineProduct({ ...raw, forecast: { ...raw.forecast, hours, mapEndHour: 24, intervalHours: 1, intervalChange: { fromHour: 123, hours: 3 } } });

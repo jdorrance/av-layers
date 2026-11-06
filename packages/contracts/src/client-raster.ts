@@ -153,7 +153,7 @@ export function createRasterTileProtocol(baseUrl: string, options: {
         buffer.set(result.value, used); used += result.value.length;
       }
       if (used < 12 || (length !== null && used !== Number(length)) || buffer[0] !== 82 || buffer[1] !== 73 || buffer[2] !== 70 || buffer[3] !== 70 || buffer[8] !== 87 || buffer[9] !== 69 || buffer[10] !== 66 || buffer[11] !== 80) throw new Error('Invalid WebP tile');
-      return buffer.slice(0, used).buffer;
+      return used === buffer.byteLength ? buffer.buffer : buffer.slice(0, used).buffer;
     } finally {
       signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); reader.releaseLock();
     }

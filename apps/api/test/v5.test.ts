@@ -283,13 +283,13 @@ describe('API v5 sampling', () => {
   it('plans varying frame groups locally for single and all frames with four reads per request', async () => {
     const fixture = groupedFixture(), original = fixture.get.getMockImplementation()!;
     let active = 0, peak = 0, started!: () => void, release!: () => void;
-    const four = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    const opened = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
     fixture.get.mockImplementation(async (key, options) => {
       if (options?.range) { active++; peak = Math.max(peak, active); if (active === 4) started(); await gate; active--; }
       return original(key, options);
     });
     const all = fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=all');
-    await four; expect(peak).toBe(4); release();
+    await opened; expect(peak).toBe(4); release();
     const response = await all;
     expect(response.status, await response.clone().text()).toBe(200);
     const body = await response.json() as V5Body;

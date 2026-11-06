@@ -18,6 +18,8 @@ import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './wh
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import type { ObjectStorage } from './storage.js';
+import { runConcurrent } from './concurrent.js';
+export { runConcurrent } from './concurrent.js';
 
 export const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
 
@@ -67,20 +69,6 @@ export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINI
     hash.update(chunk);
   }
   return hash.digest('hex');
-}
-
-export async function runConcurrent<T>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
-  const iterator = items.values();
-  let failed = false, failure: unknown;
-  const worker = async (): Promise<void> => {
-    for (const item of iterator) {
-      if (failed) return;
-      try { await fn(item); }
-      catch (error) { if (!failed) { failed = true; failure = error; } return; }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  if (failed) throw failure;
 }
 
 /** Bound digest identities; share pending decodes as well as successfully verified content. */

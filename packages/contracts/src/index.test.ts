@@ -75,6 +75,17 @@ describe('contracts', () => {
     expect(freshness.horizonRemainingSeconds).toBe(0);
     expect(freshness.latestValidTime).toBe('2026-10-31T00:00:00.000Z');
   });
+  it('reports the map prefix as the public horizon while retaining later native frames', () => {
+    const cycle = '2026-11-06T00:00:00.000Z';
+    const frames = [1, 24, 72, 384].map(hour => ({ id: `f${hour}`, validTime: new Date(Date.parse(cycle) + hour * 3600000).toISOString(),
+      intervalStart: new Date(Date.parse(cycle) + (hour - 1) * 3600000).toISOString(), intervalEnd: new Date(Date.parse(cycle) + hour * 3600000).toISOString() }));
+    const build = { cycle, createdAt: cycle, expiresAt: '2026-11-13T00:00:00.000Z', frames };
+    const now = Date.parse(cycle) + 25 * 3600000;
+    expect(computeFreshness({ ...build, version: 5, mapFrameCount: 2 }, now)).toMatchObject({
+      latestValidTime: frames[1]!.validTime, horizonRemainingSeconds: 0, horizonExhausted: true
+    });
+    expect(computeFreshness(build, now)).toMatchObject({ latestValidTime: frames[3]!.validTime, horizonExhausted: false });
+  });
   it('validates artifact records dynamically against declared frames × layers', () => {
     const hash = 'a'.repeat(64);
     const twoFrameManifest = {

@@ -7,7 +7,7 @@ import { pause } from './pause.js';
 
 const R2_BODY_TIMEOUT_MS = 30_000;
 const R2_MAX_ATTEMPTS = 3;
-const MAX_SHARD_TTL_SECONDS = 3600;
+const MAX_SHARD_TTL_SECONDS = Math.ceil(BUILD_BUDGETS.elapsedMs / 1000);
 
 /** SDK retries stop at response headers; a fresh GET must replace an interrupted body. */
 function retryableBodyError(error: unknown): boolean {
