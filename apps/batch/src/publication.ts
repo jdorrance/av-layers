@@ -62,7 +62,8 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
   const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
-  if (options.validated) assertValidatedBuild(root, manifest, options.validated);
+  if (options.receiptsOnly && manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+  if (options.validated) assertValidatedBuild(root, manifest, options.validated, options.receiptsOnly ? store : undefined);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   const captured = await readPointer(store, manifest.model, options.signal);
@@ -80,8 +81,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (options.receiptsOnly) {
-    if (manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+  if (manifest.version === 5 && options.receiptsOnly && !options.validated) {
     const { verifyBuildReceipts } = await import('./parallel.js');
     const objects = await verifyBuildReceipts(root, manifest, store, options.signal);
     const product = getProduct(manifest.model);
@@ -315,36 +315,12 @@ export interface CleanupSummary {
   version: 1; prefix: string; observedAt: string; status: 'complete' | 'failed';
   listed: CleanupObjects | null; protected: CleanupObjects | null; unreferenced: CleanupObjects | null;
   eligible: CleanupObjects | null; deleted: CleanupObjects | null;
-  sourceInputs?: { deleted: number | null; deferred: number | null; reason?: string };
 }
 const emptyCleanupObjects = (): CleanupObjects => ({ objects: 0, knownBytes: 0, unknownSizeObjects: 0 });
 function countCleanupObject(total: CleanupObjects, object: { size?: number }): void {
   total.objects++;
   if (Number.isSafeInteger(object.size) && object.size! >= 0 && Number.isSafeInteger(total.knownBytes + object.size!)) total.knownBytes += object.size!;
   else total.unknownSizeObjects++;
-}
-
-/** A committed build or an assembled build past publication lifetime needs only advertised data. */
-async function cleanupSourceInputs(store: ObjectStorage, model: ModelId, id: string, keys: string[], retained: ModelPointer['retained'][number] | undefined, signal?: AbortSignal): Promise<NonNullable<CleanupSummary['sourceInputs']> | null> {
-  let manifest: PublishedManifest;
-  try {
-    const object = await store.get(manifestKey(model, id), undefined, MAX_MANIFEST_BYTES, signal);
-    if (!object) throw new Error('Source cleanup manifest is missing');
-    manifest = publishedManifestSchema.parse(decode(object.bytes, MAX_MANIFEST_JSON_TOKENS));
-    if (manifest.model !== model || manifest.buildId !== id || (retained && (manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt || retained.manifestKey !== manifestKey(model, id)))) throw new Error('Source cleanup manifest identity mismatch');
-  } catch (error) {
-    signal?.throwIfAborted();
-    if (retained) throw error;
-    return null;
-  }
-  const advertised = new Set((manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest)).map(item => item.key));
-  const disposable = keys.filter(key => !advertised.has(key));
-  if (!disposable.length) return null;
-  try {
-    signal?.throwIfAborted();
-    await store.delete(disposable, signal);
-    return { deleted: disposable.length, deferred: 0 };
-  } catch (error) { return { deleted: null, deferred: null, reason: String(error) }; }
 }
 
 /** Report only the listed build prefix. Missing sizes and partial deletion failures stay explicit. */
@@ -379,23 +355,11 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       const group = groups.get(id) ?? []; group.push(object); groups.set(id, group);
     }
     const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
-    let confirmedSourceDeletes = 0;
     for (const [id, group] of groups) {
       const retained = current.pointer.retained.find(item => item.buildId === id);
       if (!retained && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
         for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
         continue;
-      }
-      const source = group.filter(object => /^surfaces\/(native|fine)\/samples\/src-g\d+-b\d+\.bin$/.test(object.key.slice(`${prefix}${id}/`.length)));
-      if (source.length && (retained || buildIdTime(id) + MAX_BUILD_LIFETIME_MS <= now)) {
-        const state = await cleanupSourceInputs(store, model, id, source.map(item => item.key), retained, signal);
-        if (state) {
-          confirmedSourceDeletes += state.deleted ?? 0;
-          const inputs = summary.sourceInputs ??= { deleted: 0, deferred: 0 };
-          inputs.deleted = inputs.deleted === null || state.deleted === null ? null : inputs.deleted + state.deleted;
-          inputs.deferred = inputs.deferred === null || state.deferred === null ? null : inputs.deferred + state.deferred;
-          if (state.reason) inputs.reason = state.reason;
-        }
       }
     }
     summary.eligible = eligible;
@@ -406,6 +370,6 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
       summary.deleted = { ...eligible };
     }
     summary.status = 'complete';
-    return deletes.length + confirmedSourceDeletes;
+    return deletes.length;
   } finally { onReport?.(summary); }
 }

@@ -78,6 +78,9 @@ it.each(['ready', 'supersede', 'move', 'freeze', 'remove', 'expire'] as const)('
     if (action === 'ready') {
       expect(fetchImpl).toHaveBeenCalled();
       expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/f006/'))).toBe(true);
+      const started = fetchImpl.mock.calls.length;
+      f.emit('idle'); f.emit('idle');
+      expect(fetchImpl).toHaveBeenCalledTimes(started);
     } else expect(fetchImpl).not.toHaveBeenCalled();
   } finally { f.layer.remove(); }
 });

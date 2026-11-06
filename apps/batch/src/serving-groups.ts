@@ -167,10 +167,7 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
     const destination = localPath(staging, hour.key);
     await mkdir(dirname(destination), { recursive: true });
     if (localInputs.has(hour.key)) {
-      await read(localPath(input.root, hour.key), hour.bytes, async bytes => {
-        if (digest(bytes) !== hour.sha256) throw new Error(`Sample hour shard hash mismatch: ${hour.key}`);
-        await link(localPath(input.root, hour.key), destination);
-      }, input.signal);
+      await link(localPath(input.root, hour.key), destination);
       return;
     }
     if (!input.store) throw new Error(`Missing sample hour shard ${hour.key}`);
@@ -196,8 +193,7 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
         input.signal?.throwIfAborted();
         shards.push({ ...group.shards[index]!, sha256: shard.sha256 });
         if (input.store) await read(localPath(input.root, shard.key), shard.bytes, async bytes => {
-          if (digest(bytes) !== shard.sha256) throw new Error(`Sample serving shard hash mismatch: ${shard.key}`);
-          objects.push(await putImmutableReceipt(input.store!, shard.key, bytes, 'application/octet-stream', input.signal));
+          objects.push(await putImmutableReceipt(input.store!, shard.key, bytes, 'application/octet-stream', input.signal, shard.sha256));
         }, input.signal);
       }
       for (const index of staged) if (lastUse[index] === group.group) {

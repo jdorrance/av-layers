@@ -526,6 +526,25 @@ it('resumes frame-group receipts without local sample payloads after remote veri
   expect(fake.publish).not.toHaveBeenCalled();
 });
 
+it('rejects a prebranch grouped artifact at the recipe guard before receipt or numeric reads', async () => {
+  const { manifest, plan, files } = v5ResumeFixture();
+  for (const surface of manifest.surfaces) {
+    const shard = surface.samples.shards[0]!;
+    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards: [{ ...shard,
+      key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g0-b0.bin`,
+      group: 0, firstFrame: 0, frameCount: manifest.frames.length, blockShard: 0 }] };
+  }
+  files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
+  fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
+  fake.readPlan.mockResolvedValue(plan);
+  fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
+  fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
+  await expect(resumePublication(revision)).rejects.toThrow('Resume recipe differs from current code/configuration');
+  expect(fake.verifyReceipts).not.toHaveBeenCalled();
+  expect(fake.publish).not.toHaveBeenCalled();
+  expect(fake.readLocal.mock.calls.some(args => args.length > 1 && args[0].includes('/samples/'))).toBe(false);
+});
+
 it('resumes frame-group local payloads without remote shard receipts', async () => {
   const { manifest, plan, files } = v5ResumeFixture();
   plan.groups = [plan.groups[0].slice(0, 3), plan.groups[0].slice(3)];

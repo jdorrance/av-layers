@@ -24,9 +24,11 @@ export async function putImmutable(store: Pick<ObjectStorage, 'get' | 'head' | '
   await writeImmutable(store, key, bytes, contentType, signal, requireDigestMetadata);
 }
 
-async function writeImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal: AbortSignal | undefined, requireDigestMetadata: boolean): Promise<ObjectReceipt> {
+async function writeImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal: AbortSignal | undefined, requireDigestMetadata: boolean, expectedSha256?: string): Promise<ObjectReceipt> {
   signal?.throwIfAborted();
-  const md5 = createHash('md5').update(bytes).digest(), sha = createHash('sha256').update(bytes).digest('hex');
+  const sha = createHash('sha256').update(bytes).digest('hex');
+  if (expectedSha256 !== undefined && sha !== expectedSha256) throw new Error(`Local hash mismatch: ${key}`);
+  const md5 = createHash('md5').update(bytes).digest();
   const proveExisting = async (): Promise<ObjectReceipt | null> => {
     signal?.throwIfAborted();
     const head = await store.head(key, signal);
@@ -63,8 +65,8 @@ async function writeImmutable(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>
   return { key, bytes: head.size, sha256: sha, etag: head.etag };
 }
 
-export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal): Promise<ObjectReceipt> {
-  return writeImmutable(store, key, bytes, contentType, signal, true);
+export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'head' | 'put'>, key: string, bytes: Uint8Array, contentType: string, signal?: AbortSignal, expectedSha256?: string): Promise<ObjectReceipt> {
+  return writeImmutable(store, key, bytes, contentType, signal, true, expectedSha256);
 }
 
 /** Reservations include the file and an SDK/transport copy; stop admission and drain on failure. */

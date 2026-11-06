@@ -8,7 +8,14 @@ const fields: readonly LayerId[] = ['usable-lift-msl', 'usable-lift-agl', 'preci
 
 export function pointSeriesSelection(build: PinnedBuild, horizon: PointHorizon = 'day') {
   const layers = fields.filter(layer => build.manifest.layers.includes(layer));
-  const frames = horizon === 'forecast' ? build.manifest.frames : renderedFrames(build.manifest);
+  let frames = build.manifest.frames;
+  if (horizon !== 'forecast') {
+    if (build.manifest.version === 5) frames = renderedFrames(build.manifest);
+    else {
+      const until = Date.parse(frames[0].validTime) + 24 * 3600000;
+      frames = frames.filter(frame => Date.parse(frame.validTime) < until);
+    }
+  }
   return { layers, frames: layers.length ? frames.map(frame => frame.id) : [] };
 }
 

@@ -237,7 +237,6 @@ jobs:
             output/builds/*/*/performance.json
             output/builds/*/*/publication.json
             output/builds/*/*/maintenance.json
-            output/builds/*/*/source-cleanup.json
             output/builds/*/*/serving.json
             output/failure.json
             output/builds/*/*/progress.json

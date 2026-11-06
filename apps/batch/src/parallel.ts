@@ -121,7 +121,12 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
     const binding = { grid: id === 'native' ? whole.plan.native : whole.plan.fine, gridHash: info.descriptor.gridHash,
       coverageHash: info.hash, blockIds: info.mask.coverage.blockIds };
     if (surface.channelCount !== (id === 'native' ? frames.length : mapped) * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
-    if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard, 'samples', 'hour'))) throw new Error('Forecast shard surface key mismatch');
+    if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard, 'samples', 'hour'))) {
+      if (surface.shards.every((item, index) => item.key === sampleShardKey(plan.model, plan.buildId, id, index, shard))) {
+        throw new Error('Legacy forecast sample receipts require their original producer; start a fresh forecast');
+      }
+      throw new Error('Forecast shard surface key mismatch');
+    }
     const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
       coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
       layers: layers[id],
@@ -282,12 +287,12 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
     if (plan.coverageHash !== prepared.native.hash) throw new Error('Forecast plan coverage changed');
     const identity = await buildIdentity(product, plan.coverageHash, undefined, [], undefined,
       { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain });
-    if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
+    if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
     return { plan, prepared, identity, product };
   }
   if (plan.coverageHash !== describeCoverage(mask, product).hash) throw new Error('Forecast plan coverage changed');
   const identity = await buildIdentity(product, plan.coverageHash, plan.terrain, plan.refinements);
-  if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed');
+  if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
   const refinements = plan.refinements ? await loadRefinements({ inputs: plan.refinements, out: resolve(inputs.out), baseMask: mask, signal: inputs.signal }) : [];
   const prepared = prepareBuild(mask, product, { ...provider, terrainBytes: plan.terrain?.arrayBytes, refinements });
   return { plan, prepared, identity, product };
@@ -599,22 +604,24 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     const object = byKey.get(item.key);
     return !object || object.sha256 !== item.sha256 || ('bytes' in item && object.bytes !== item.bytes);
   })) throw new Error('Forecast object receipt set mismatch');
-  // Source receipt identities remain bound to the plan; only advertised data survives compaction cleanup.
   const hourSampleKeys = new Set(hourSamples.map(item => item.key));
   const published: ObjectReceipt[] = [];
   for (const surface of manifest.surfaces) for (const shard of surface.samples.shards) {
+    signal?.throwIfAborted();
     const head = await store.head(shard.key, signal);
+    signal?.throwIfAborted();
     if (!head || head.size !== shard.bytes || !head.etag || head.metadata?.sha256 !== shard.sha256) throw new Error(`Remote object receipt mismatch: ${shard.key}`);
     published.push({ key: shard.key, bytes: shard.bytes, sha256: shard.sha256, etag: head.etag });
   }
+  const workerObjects: ObjectReceipt[] = [];
   for (const item of hourExpected) {
     if (hourSampleKeys.has(item.key)) continue;
     const object = byKey.get(item.key);
     if (!object) throw new Error('Forecast object receipt set mismatch');
-    published.push(object);
+    workerObjects.push(object);
   }
-  await verifyObjectReceipts(store, published, signal);
-  return published;
+  await verifyObjectReceipts(store, workerObjects, signal);
+  return [...published, ...workerObjects];
 }
 
 export { type WholeDomainReceipt };

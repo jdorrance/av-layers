@@ -118,6 +118,16 @@ it('fails if a local input disappears after admission instead of downloading unr
   expect(input.store.gets).toEqual([]);
   expect((await readdir(input.root)).filter(name => name.startsWith('.serving-'))).toEqual([]);
 });
+
+it('lets the merger reject corrupted linked inputs before publishing serving objects', async () => {
+  const input = await fixture(); await localInputs(input);
+  const key = input.parts[0]!.shards[0]!.key, path = join(input.root, key), bytes = await readFile(path);
+  bytes[bytes.length - 1] ^= 1; await writeFile(path, bytes);
+  await expect(writeServingGroups(input)).rejects.toThrow('Sample shard hash mismatch');
+  expect(vi.mocked(link).mock.calls.some(([, destination]) => String(destination).includes('/.serving-'))).toBe(true);
+  expect(input.store.buffers).toEqual([]);
+  expect((await readdir(input.root)).filter(name => name.startsWith('.serving-'))).toEqual([]);
+});
 it('streams40 frames across a source-part boundary with exact values/flags and one GET per input', async () => {
   const input = await fixture(), result = await writeServingGroups(input);
   expect(result.shards.map(shard => [shard.firstFrame, shard.frameCount])).toEqual([[0, 24], [24, 16]]);

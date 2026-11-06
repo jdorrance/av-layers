@@ -11,6 +11,19 @@ hours, map end, minimum useful horizon and shard counts derive from that entry.
 the target count. Earlier cutover measurements below record the retained
 384/48-hour publications and their execution settings.
 
+The 2026-11-06 forty-frame admission measured 4,594,880 GFS raster tiles, within
+the updated [tile budget](../apps/batch/src/capacity.ts). Full-size scalar
+compaction preserved every byte and flag in 73–79 seconds per model locally.
+Peak additional disk, including retained native output, was 11.00/8.44/9.27 GB
+for GFS/ICON/RRFS; admission checks actual free space before allocation.
+An alternating effort-4/effort-2 trial on 48 decoded production WebP tiles used
+16% less encoding CPU with 1.6% more bytes at effort 2; every decoded RGBA byte
+matched. Full archive decoding remains part of publication validation.
+Real f051/f072 probes on the same date passed normal acquisition and normalized
+frame validation for all 30 ICON and 25 RRFS profile levels, surface fields and
+one-hour intervals. Inventories cover every selected tail hour and required
+companions through f072.
+
 ```sh
 pnpm test
 pnpm verify

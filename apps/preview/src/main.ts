@@ -528,7 +528,8 @@ function startPreview(): void {
       const next = await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
-      pointHorizonLabel.hidden = renderedFrames(next.manifest).length === next.manifest.frames.length;
+      pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
+      pointHorizonSelect.children[0].textContent = next.manifest.version === 5 ? 'Map forecast' : '24 hours';
       chooseFrame(next);
       updateOverlay();
       updateFreshness();
@@ -566,7 +567,7 @@ function startPreview(): void {
     if (build) {
       const requestedBuild = build;
       if (pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === pointFrameId))) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
-      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, loading: payload.frames.length < totalFrames, onFrame(id) {
+      updatePointSeries = renderPointSeries(pointBody, payload, build, { frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, onFrame(id) {
         if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
         pointFrameId = id;
         updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());

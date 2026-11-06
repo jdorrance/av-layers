@@ -1,6 +1,6 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +9,7 @@ import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSampl
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
 import { describeSparseCoverage } from './coverage.js';
-import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
+import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan, type WholeDomainReceipt } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
 import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
@@ -307,6 +307,7 @@ describe('whole-domain v5 production', () => {
     if (!sealed) throw new Error('Missing validation result');
     const proof = sealed;
     expect(() => assertValidatedBuild(out, proof.manifest, { ...proof })).toThrow('missing or changed');
+    await expect(publish(store, out, proof.manifest, { authority, validated: proof, receiptsOnly: true })).rejects.toThrow('does not cover this remote store');
     const manifest = await readV5(path), pointerKey = 'catalog/gfs/latest.json', pointer = store.objects.get(pointerKey)!.bytes.slice();
     await verifySampleServing(store, manifest, publishedProduct);
     await rollback(store, 'gfs', manifest.buildId, authority);
@@ -500,6 +501,55 @@ describe('whole-domain v5 production', () => {
     expect(plan.wholeDomain).toBeDefined();
   }, 60_000);
 
+  it('rejects prebranch g-key receipts before compaction mutates their local or remote payloads', async () => {
+    const setup = await fixture(), out = await root('wd-legacy-receipts'), store = new PublicationStore(), source = fixtureProvider();
+    const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], layers: [...product.layers, 'sfc-temp-c'] };
+    const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
+    const originals = new Map<string, Uint8Array>();
+    for (let shard = 0; shard < plan.groups.length; shard++) {
+      const path = await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+      const receipt = JSON.parse(await readFile(path, 'utf8')) as WholeDomainReceipt;
+      for (const surface of receipt.surfaces) for (const item of surface.shards) {
+        const previous = item.key, legacy = previous.replace('/samples/src-g', '/samples/g'), object = store.objects.get(previous)!;
+        await rename(join(out, previous), join(out, legacy)); store.objects.delete(previous); store.objects.set(legacy, object);
+        originals.set(legacy, object.bytes.slice());
+        item.key = legacy;
+        receipt.objects!.find(object => object.key === previous)!.key = legacy;
+      }
+      await writeFile(path, JSON.stringify(receipt));
+    }
+    const put = vi.spyOn(store, 'put');
+    const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
+    const stale = { ...plan, recipe: { ...plan.recipe, hash: '0'.repeat(64), sourceRevision: '93e69f6d8ba9a1a8368d1e8d48d7adecff56a2de', sourceDirty: false } };
+    await expect(finalizeBuild({ ...inputs, plan: stale })).rejects.toThrow('recipe or source revision changed; start a fresh forecast');
+    await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('Legacy forecast sample receipts');
+    expect(put).not.toHaveBeenCalled();
+    for (const [key, bytes] of originals) {
+      expect(await readFile(join(out, key))).toEqual(Buffer.from(bytes));
+      expect(store.objects.get(key)!.bytes).toEqual(bytes);
+    }
+  }, 60_000);
+
+  it('reuses a finalized remote seal only for its validated store without repeating object HEADs', async () => {
+    const setup = await fixture(), out = await root('wd-remote-seal'), store = new PublicationStore(), source = fixtureProvider();
+    const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], layers: [...product.layers, 'sfc-temp-c'] };
+    const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
+    const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
+    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+    let sealed: ValidatedBuild | undefined;
+    const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store, onValidated: async result => { sealed = result; } });
+    if (!sealed) throw new Error('Missing remote validation seal');
+    const manifest = await readV5(path), authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
+    const other = new PublicationStore(), foreignRead = vi.spyOn(other, 'get');
+    await expect(publish(other, out, manifest, { authority, validated: sealed, receiptsOnly: true })).rejects.toThrow('does not cover this remote store');
+    expect(foreignRead).not.toHaveBeenCalled();
+    const head = vi.spyOn(store, 'head');
+    await publish(store, out, manifest, { authority, validated: sealed, receiptsOnly: true });
+    expect(head.mock.calls.filter(([key]) => key.endsWith('.bin') || key.endsWith('.pmtiles'))).toEqual([]);
+    expect(store.objects.has('catalog/gfs/latest.json')).toBe(true);
+    await verifySampleServing(store, manifest, configured);
+  }, 60_000);
+
   it.each([false, true])('seals the full post-upload shard RSS peak and rejects excess=%s', async excess => {
     const setup = await fixture(), out = await root('wd-upload-rss'), store = new PublicationStore(), source = fixtureProvider();
     const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [2], layers: [...product.layers, 'sfc-temp-c'] };
@@ -609,46 +659,40 @@ describe('whole-domain v5 production', () => {
       if (key.startsWith('builds/')) throw new Error(`Receipt verification read forecast payload ${key}`);
       return getObject(key, range);
     });
-    try { await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0); }
-    finally { get.mockRestore(); }
+    const head = vi.spyOn(store, 'head');
+    try {
+      await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0);
+      for (const surface of manifest.surfaces) for (const shard of surface.samples.shards) expect(head.mock.calls.filter(([key]) => key === shard.key)).toHaveLength(1);
+    } finally { get.mockRestore(); head.mockRestore(); }
     const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
-    let sourceCleanup: CleanupSummary | undefined;
-    const locked = vi.spyOn(store, 'delete').mockRejectedValueOnce(new Error('bucket lock is active'));
-    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(0);
-    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: null, deferred: null });
+    let maintenance: CleanupSummary | undefined;
+    const manifestKey = `builds/gfs/${manifest.buildId}/manifest.json`, manifestObject = store.objects.get(manifestKey)!;
+    const deletes = vi.spyOn(store, 'delete'), maintenanceReads = vi.spyOn(store, 'get');
+    store.objects.delete(manifestKey);
+    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { maintenance = report; })).toBe(0);
+    expect(maintenance?.status).toBe('complete');
+    expect(deletes).not.toHaveBeenCalled();
+    expect(maintenanceReads.mock.calls.every(([key]) => key === 'catalog/gfs/latest.json')).toBe(true);
     expect([...hourKeys].every(key => store.objects.has(key))).toBe(true);
-    locked.mockRestore();
-    const partialKey = [...hourKeys][1]!, deleteObjects = store.delete.bind(store);
-    const partial = vi.spyOn(store, 'delete').mockImplementationOnce(async () => {
-      await deleteObjects([partialKey]);
-      throw new Error('partial source deletion');
-    });
-    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(0);
-    expect(sourceCleanup?.sourceInputs).toMatchObject({ deleted: null, deferred: null, reason: 'Error: partial source deletion' });
-    expect(store.objects.has(partialKey)).toBe(false);
-    expect([...hourKeys].filter(key => store.objects.has(key))).toHaveLength(hourKeys.size - 1);
-    expect(manifest.surfaces.every(surface => surface.samples.shards.every(shard => store.objects.has(shard.key)))).toBe(true);
-    partial.mockRestore();
+    store.objects.set(manifestKey, manifestObject);
+    deletes.mockRestore(); maintenanceReads.mockRestore();
     const savedInput = [...hourKeys][0]!, savedBytes = store.objects.get(savedInput)!;
-    expect(await cleanup(store, 'gfs', authority, Date.now(), report => { sourceCleanup = report; })).toBe(hourKeys.size - 1);
-    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: hourKeys.size - 1, deferred: 0 });
+    await store.delete([...hourKeys]);
     expect([...hourKeys].some(key => store.objects.has(key))).toBe(false);
     await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).resolves.not.toHaveLength(0);
     await verifySampleServing(store, manifest, configured);
     await expect(rollback(store, 'gfs', manifest.buildId, authority)).resolves.toBeUndefined();
 
-    // An expired/pruned assembled build reclaims inputs before whole-build orphan retention.
+    // Expired build inputs share the ordinary whole-build retention.
     const aged = { ...manifest, expiresAt: new Date(Date.parse(manifest.createdAt) + 2 * 3600000).toISOString() };
-    const manifestKey = `builds/gfs/${manifest.buildId}/manifest.json`;
     store.objects.set(manifestKey, { bytes: Buffer.from(JSON.stringify(aged)), etag: 'expired-manifest' });
     store.objects.set(savedInput, savedBytes);
     const cleanupAt = Date.parse(manifest.createdAt) + 6 * 3600000 + 1;
     const newerId = new Date(cleanupAt).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z') + '-12345678-1234-4234-8234-123456789abc';
     const latest = { buildId: newerId, manifestKey: `builds/gfs/${newerId}/manifest.json`, cycle: new Date(cleanupAt).toISOString(), expiresAt: new Date(cleanupAt + 86400000).toISOString() };
     store.objects.set('catalog/gfs/latest.json', { bytes: Buffer.from(JSON.stringify({ version: 1, model: 'gfs', latestBuildId: newerId, retained: [latest] })), etag: 'new-pointer' });
-    expect(await cleanup(store, 'gfs', authority, cleanupAt, report => { sourceCleanup = report; })).toBe(1);
-    expect(sourceCleanup?.sourceInputs).toEqual({ deleted: 1, deferred: 0 });
-    expect(store.objects.has(savedInput)).toBe(false);
+    expect(await cleanup(store, 'gfs', authority, cleanupAt, report => { maintenance = report; })).toBe(0);
+    expect(store.objects.has(savedInput)).toBe(true);
     expect(manifest.surfaces.every(surface => surface.samples.shards.every(shard => store.objects.has(shard.key)))).toBe(true);
     store.objects.set(manifestKey, { bytes: manifestBytes, etag: 'manifest' });
     const forged = structuredClone(manifest);
@@ -662,12 +706,11 @@ describe('whole-domain v5 production', () => {
     })).rejects.toThrow('Remote receipt artifact set mismatch');
     store.objects.set(savedInput, savedBytes);
     const deleted = vi.spyOn(store, 'delete');
-    const count = await cleanup(store, 'gfs', authority, Date.parse(manifest.createdAt) + RETENTION_DAYS * 86400000 + 1, report => { sourceCleanup = report; });
+    const count = await cleanup(store, 'gfs', authority, Date.parse(manifest.createdAt) + RETENTION_DAYS * 86400000 + 1, report => { maintenance = report; });
     const keys = deleted.mock.calls.flatMap(([items]) => items);
     expect(new Set(keys).size).toBe(keys.length);
     expect(count).toBe(keys.length);
-    expect(sourceCleanup?.sourceInputs).toBeUndefined();
-    expect(sourceCleanup?.deleted?.objects).toBe(keys.length);
+    expect(maintenance?.deleted?.objects).toBe(keys.length);
     deleted.mockRestore();
   }, 60_000);
 

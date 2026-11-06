@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, retainedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { renderPointSeries } from '@av/contracts/client/dom';
 import { ApiClient } from '@av/contracts/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
@@ -101,11 +102,12 @@ it('associates visible labels with the model and opacity controls', () => {
 it('offers a horizon choice only when a pinned build has additional point frames', () => {
   installDom();
   const matching = fixturePointBuild({ frameHours: [1, 2, 3], mapFrameCount: 3 });
-  for (const [build, hidden] of [[matching, true], [retainedPointBuild(), false]] as const) {
+  for (const [build, hidden] of [[matching, true], [retainedPointBuild(), false], [retainedLegacyPointBuild(), false]] as const) {
     const panel = new PluginPanel(callbacks());
     panel.renderBuild(build);
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.find(node => node.id === 'av-point-horizon')?.hidden).toBe(hidden);
+    expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe(build.manifest.version === 5 ? 'Map forecast' : '24 hours');
     expect(nodes.find(node => node.htmlFor === 'av-point-horizon')?.hidden).toBe(hidden);
   }
 });
@@ -255,6 +257,23 @@ it('labels irregular elapsed time while keeping one keyboard target per shown fo
   expect(doc.activeElement).toBe(chart.children[0]); expect(chooseFrame).toHaveBeenLastCalledWith('f001');
 });
 
+it('keeps missing pages distinct from forecast gaps and records partial data independently of loading', async () => {
+  installDom();
+  const build = fixturePointBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
+  const payload = await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day');
+  const container = new FakeElement('div'), partial = { frames: [payload.frames[0], payload.frames[2], payload.frames[3], payload.frames[4]] };
+  const update = renderPointSeries(container as unknown as HTMLElement, partial, build, { frameId: 'f001', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame: vi.fn() });
+  const nodes = visit(container), chart = nodes.find(node => node.className === 'av-point-chart')!;
+  expect(chart.children.map(button => button.children.find(node => node.className === 'av-point-gap')?.textContent ?? '')).toEqual(['', '', '+3 h', '+6 h']);
+  expect(chart.children[1].ariaLabel).not.toContain('after previous shown time');
+  const notice = nodes.find(node => node.className === 'av-point-incomplete')!;
+  expect(notice.hidden).toBe(false);
+  update('f013', 'imperial');
+  expect(notice.hidden).toBe(false);
+  expect(nodes.find(node => node.className === 'av-point-values')?.textContent).toContain('Native top 8202 ft');
+});
+
 it.each([[false, false], [true, false], [true, true]])('preserves Windy progress and terminal failure (fails=%s, selected hour loaded=%s)', async (fail, keepKnown) => {
   installDom();
   const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
@@ -279,6 +298,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.some(node => node.textContent === `${fail ? 24 : 1}/40 frames · Loading…`)).toBe(true);
     expect(nodes.find(node => node.className === 'av-point-chart')?.children).toHaveLength(fail ? 24 : 1);
+    expect(nodes.find(node => node.className === 'av-point-chart')?.children.at(-1)?.children.find(node => node.className === 'av-point-gap')).toBeUndefined();
     expect(nodes.find(node => node.className === 'av-point-values')?.textContent).toContain('Native top 2500 m');
     expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
     expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(' · Map: ');
@@ -304,7 +324,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     expect(summary.textContent).toContain(keepKnown ? 'Native top 8202 ft' : 'Selected point hour unavailable.');
     const chart = nodes.find(node => node.className === 'av-point-chart')!;
     expect(chart.children).toHaveLength(24);
-    expect(chart.children.at(-1)?.children.find(node => node.className === 'av-point-gap')?.textContent).toBe('+49 h');
+    expect(chart.children.at(-1)?.children.find(node => node.className === 'av-point-gap')).toBeUndefined();
     chart.children.find(node => node.value === 'f072')!.dispatchEvent(new Event('click'));
     expect(summary.textContent).toContain('Native top 8202 ft');
     expect(incomplete.hidden).toBe(false);

@@ -1,7 +1,7 @@
 import { CELL_BYTES, createRecipeIdentity, createWholeDomainDescriptors, getProduct, layerSurface, mapFrameCount,
   manifestV5Schema, publishedSampleResponseSchema, renderedLayers, sourceIntervalHours, type LayerId } from '@av/contracts';
 import type { PinnedBuild, SamplePayload } from '@av/contracts/client';
-import { fixtureManifest } from './forecast-fixture';
+import { fixtureBuild, fixtureManifest, fixturePatch } from './forecast-fixture';
 
 /** GFS fields on a tiny two-surface grid with selectable frame axes. */
 export function fixturePointBuild(options: { frameHours?: readonly number[]; mapFrameCount?: number } = {}): PinnedBuild {
@@ -40,6 +40,12 @@ export function fixturePointBuild(options: { frameHours?: readonly number[]; map
 export function retainedPointBuild(): PinnedBuild {
   return fixturePointBuild({ frameHours: [...Array.from({ length: 24 }, (_, i) => i + 1),
     ...Array.from({ length: 120 }, (_, i) => 27 + i * 3)], mapFrameCount: 24 });
+}
+
+/** Retained single-surface reader with the same long forecast axis. */
+export function retainedLegacyPointBuild(version: 3 | 4 = 4): PinnedBuild {
+  const base = fixtureManifest({ layers: ['usable-lift-agl'], frames: retainedPointBuild().manifest.frames });
+  return fixtureBuild({ ...base, version, ...(version === 4 ? { patches: [fixturePatch(base)] } : {}) });
 }
 
 /** Reply only with requested cells; fine fields become unavailable outside the map prefix. */

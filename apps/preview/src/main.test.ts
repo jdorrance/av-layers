@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, retainedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 import { type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
@@ -36,6 +36,9 @@ class Document extends EventTarget {
     super();
     const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
     for (const [, tag, id] of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) this.elements.set(id!, new Element(tag!));
+    for (const [, id, options] of html.matchAll(/<select[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
+      for (const [, value, text] of options.matchAll(/<option\s+value="([^"]+)"[^>]*>([^<]*)<\/option>/g)) this.elements.get(id)!.add(new OptionElement(text, value));
+    }
   }
   getElementById(id: string): Element | null { return this.elements.get(id) ?? null; }
   createElement(tag: string): Element { return new Element(tag); }
@@ -548,6 +551,15 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
   expect(ui('point-body').children[0]).toBe(series);
   expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
+it('keeps the full-forecast choice visible for legacy maps with a bounded 24-hour point selection', async () => {
+  const build = retainedLegacyPointBuild(), legacy = build.manifest;
+  if (legacy.version === 5) throw new Error('Expected legacy manifest');
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify(fixtureLatest(legacy, 'https://api.test'))));
+  await start();
+  expect(ui('point-horizon-label').hidden).toBe(false);
+  expect(ui('point-horizon').children[0].textContent).toBe('24 hours');
 });
 
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {

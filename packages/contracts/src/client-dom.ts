@@ -72,7 +72,7 @@ export function renderSampleTable(container: HTMLElement, payload: Pick<PointSer
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(
   container: HTMLElement, payload: Pick<PointSeries, 'frames'>, build: PinnedBuild,
-  options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; loading?: boolean; onFrame(id: string): void }
+  options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; totalFrames?: number; loading?: boolean; onFrame(id: string): void }
 ): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void {
   const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
   const focused = previous?.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
@@ -101,7 +101,9 @@ export function renderPointSeries(
   const heightValues = views.flatMap(view => [view.terrainM, view.mslM, view.lclM, view.thermalTopM].filter((value): value is number => value !== null));
   const minimum = Math.min(0, ...heightValues), span = Math.max(1, ...heightValues) - minimum;
   const percent = (meters: number) => Math.min(100, Math.max(0, (meters - minimum) / span * 100));
-  const elapsed = payload.frames.map((frame, index) => index ? (Date.parse(frame.validTime) - Date.parse(payload.frames[index - 1].validTime)) / 3600000 : 0);
+  const positions = new Map(build.manifest.frames.map((frame, index) => [frame.id, index]));
+  const elapsed = payload.frames.map((frame, index) => index && positions.get(frame.id) === positions.get(payload.frames[index - 1].id)! + 1
+    ? (Date.parse(frame.validTime) - Date.parse(payload.frames[index - 1].validTime)) / 3600000 : 0);
   const bars = payload.frames.map((frame, index) => {
     const date = frame.validTime.slice(0, 10), firstOfDay = index === 0 || date !== payload.frames[index - 1].validTime.slice(0, 10);
     const width = firstOfDay ? 54 : 20;
@@ -150,12 +152,13 @@ export function renderPointSeries(
   chart.scrollLeft = previous?.scrollLeft ?? 0;
   details.open = wasOpen;
   let units = options.unitSystem;
-  let loading = options.loading ?? false;
+  const partial = options.totalFrames === undefined ? options.loading === true : payload.frames.length < options.totalFrames;
+  let loading = options.loading ?? partial;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
   const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
     units = nextUnits;
     loading = nextLoading;
-    incomplete.hidden = !options.loading || loading;
+    incomplete.hidden = !partial || loading;
     mapFrameId = nextMapFrameId;
     const frame = payload.frames.find(frame => frame.id === frameId);
     const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);

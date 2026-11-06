@@ -1,5 +1,4 @@
-import { DEFAULT_OPACITY, populateModelOptions, pointSeriesLabel, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
-import { renderedFrames } from '@av/contracts';
+import { DEFAULT_OPACITY, populateModelOptions, pointSeriesLabel, pointSeriesSelection, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
 import { renderPointSeries } from '@av/contracts/client/dom';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
@@ -148,7 +147,8 @@ export class PluginPanel {
     if (this.renderedBuildId === key) return;
     this.renderedBuildId = key;
     this.modelSelect.value = build.manifest.model;
-    this.pointHorizonLabel.hidden = this.pointHorizon.hidden = renderedFrames(build.manifest).length === build.manifest.frames.length;
+    this.pointHorizonLabel.hidden = this.pointHorizon.hidden = pointSeriesSelection(build).frames.length === build.manifest.frames.length;
+    this.pointHorizon.children[0].textContent = build.manifest.version === 5 ? 'Map forecast' : '24 hours';
   }
 
   renderState(state: ControllerState): void {
@@ -188,7 +188,7 @@ export class PluginPanel {
   renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void, totalFrames = payload.frames.length): void {
     if (this.pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === this.pointFrameId))) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
     this.pointStatus.textContent = pointSeriesLabel(payload, totalFrames);
-    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, loading: payload.frames.length < totalFrames, onFrame: id => {
+    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, onFrame: id => {
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
       onFrame(id);

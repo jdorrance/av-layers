@@ -48,6 +48,9 @@ it('warms the next frame after commit without waiting for map idle', async () =>
     await f.complete();
     expect(fetch).toHaveBeenCalled();
     expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes(`/${b.manifest.frames[1].id}/`))).toBe(true);
+    const started = vi.mocked(fetch).mock.calls.length;
+    f.emit('idle'); f.emit('idle');
+    expect(fetch).toHaveBeenCalledTimes(started);
   } finally { f.overlay.destroy(); }
 });
 

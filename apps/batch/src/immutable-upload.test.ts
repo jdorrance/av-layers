@@ -11,14 +11,28 @@ it('returns the upload proof without another HEAD or body read, including on res
     put: vi.fn(async () => { exists = true; }),
     get: vi.fn(async () => ({ bytes, etag: receipt.etag }))
   };
-  expect(await putImmutableReceipt(store, 'data', bytes, 'application/octet-stream')).toEqual(receipt);
+  expect(await putImmutableReceipt(store, 'data', bytes, 'application/octet-stream', undefined, sha256)).toEqual(receipt);
   expect(store.head).toHaveBeenCalledTimes(2);
   expect(store.get).toHaveBeenCalledOnce();
   store.head.mockClear(); store.get.mockClear(); store.put.mockClear();
-  expect(await putImmutableReceipt(store, 'data', bytes, 'application/octet-stream')).toEqual(receipt);
+  expect(await putImmutableReceipt(store, 'data', bytes, 'application/octet-stream', undefined, sha256)).toEqual(receipt);
   expect(store.head).toHaveBeenCalledOnce();
   expect(store.get).toHaveBeenCalledExactlyOnceWith('data', { offset: 0, length: bytes.length }, bytes.length, undefined);
   expect(store.put).not.toHaveBeenCalled();
+});
+
+it('checks the expected byte digest before any remote operation', async () => {
+  const bytes = Buffer.from('changed local serving data'), store = { head: vi.fn(), get: vi.fn(), put: vi.fn() };
+  await expect(putImmutableReceipt(store, 'data', bytes, 'application/octet-stream', undefined, 'a'.repeat(64))).rejects.toThrow('Local hash mismatch');
+  expect(store.head).not.toHaveBeenCalled(); expect(store.get).not.toHaveBeenCalled(); expect(store.put).not.toHaveBeenCalled();
+});
+
+it('still proves every existing remote byte when the expected local digest matches', async () => {
+  const bytes = Buffer.from('known local data'), sha256 = createHash('sha256').update(bytes).digest('hex');
+  const store = { head: vi.fn(async () => ({ size: bytes.length, etag: 'existing', metadata: { sha256 } })),
+    get: vi.fn(async () => ({ bytes: Buffer.alloc(bytes.length), etag: 'existing' })), put: vi.fn() };
+  await expect(putImmutableReceipt(store, 'data', bytes, 'application/octet-stream', undefined, sha256)).rejects.toThrow('Immutable object hash mismatch');
+  expect(store.get).toHaveBeenCalledOnce(); expect(store.put).not.toHaveBeenCalled();
 });
 
 const receipts: ObjectReceipt[] = Array.from({ length: 12 }, (_, index) => ({ key: String(index), bytes: 10, sha256: 'a'.repeat(64), etag: 'etag' }));

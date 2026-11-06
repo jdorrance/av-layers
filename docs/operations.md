@@ -137,13 +137,8 @@ age, useful rendered-map horizon and build lifetime. Source age comes from
 from [forecast-windows.ts](../packages/contracts/src/forecast-windows.ts).
 Published builds are retained for 7 days.
 Cleanup waits until every object in an unreferenced build has aged seven days,
-matching the `builds/` bucket lock. Post-commit maintenance also attempts to
-remove unadvertised `src-g` scalar inputs from committed builds and assembled
-builds past publication lifetime. Advertised serving packs, profiles and archives
-remain protected. Bucket locks defer input deletion until a later cleanup;
-`source-cleanup.json` records deletion and deferral counts; null counts mark an
-unconfirmed provider outcome. The seven-day
-setup lock retains those inputs until it expires.
+matching the `builds/` bucket lock. Scalar source inputs share that retention;
+the build cleanup and lifecycle remove them with the other build objects.
 
 R2 independently expires `builds/` objects eight days after upload and
 `terrain/checkpoints/` after seven days, including when workflows stop.

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client-api';
+import { pointSeriesSelection } from './client-point';
 import type { PointSeries } from './client-types';
-import { fixturePointBuild, retainedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
 const point = { lat: 32.9, lon: -117.25 };
 function setup() {
@@ -12,6 +13,30 @@ function setup() {
 }
 
 describe('cached point forecast pages', () => {
+  it.each([3, 4] as const)('keeps the v%s day selection within 24 hours while preserving its full forecast', async version => {
+    const build = retainedLegacyPointBuild(version), m = build.manifest;
+    if (m.version === 5) throw new Error('Expected legacy manifest');
+    expect(pointSeriesSelection(build).frames).toEqual(m.frames.slice(0, 24).map(frame => frame.id));
+    expect(pointSeriesSelection(build, 'forecast').frames.at(-1)).toBe('f384');
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input)), ids = url.searchParams.get('frame')!.split(','), layers = url.searchParams.get('layers')!.split(',');
+      return new Response(JSON.stringify({ model: m.model, buildId: m.buildId, ...point, method: m.method, source: m.source,
+        expiresAt: m.expiresAt, coverage: m.coverage, frames: m.frames.filter(frame => ids.includes(frame.id)).map(frame => ({
+          ...frame, layers: Object.fromEntries(layers.map(layer => [layer, { value: 500, status: 'valid', support: 0, interpolated: false }]))
+        })) }));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
+    expect((await api.pointSeries(build, point).load('day')).frames).toHaveLength(24);
+    expect(fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(',').length)).toEqual([1, 23]);
+  });
+
+  it('uses the full v5 map axis when its optional prefix count is absent', () => {
+    const build = fixturePointBuild({ frameHours: [1, 2, 24, 27, 72], mapFrameCount: 5 });
+    if (build.manifest.version !== 5) throw new Error('Expected v5');
+    delete build.manifest.mapFrameCount;
+    expect(pointSeriesSelection(build).frames).toEqual(['f001', 'f002', 'f024', 'f027', 'f072']);
+  });
+
   it('publishes the selected hour before the remaining 23-frame page and reuses the complete range', async () => {
     const { build, fetchImpl, loader } = setup(), selected = build.manifest.frames[19].id;
     const updates: PointSeries[] = [], totals: number[] = [];
