@@ -441,7 +441,7 @@ For any selected production method:
 
 For local candidate integration, update the real callers together: `methods.ts`, `publication.ts`, `frame-build.ts`, `build.ts`, `parallel.ts`, `identity.ts`, `capacity.ts`, their tests and generated references. Preserve the existing default while the experimental path is measured.
 
-Admission must include mapping, donor cache, union scratch, daylight, optional normals, palette lookups, both legacy/fine fields and native diagnostics when fallback remains live. Keep the current 2 GiB/50-minute and tile/sample/range budgets. Charge actual per-zone donor counts and all concurrent render workers. Run full-timeline builds through the locally integrated candidate before production-default promotion; kernel-only or old-physics builds do not prove a new combined pipeline fits.
+Admission must include mapping, donor cache, union scratch, daylight, optional normals, palette lookups, both legacy/fine fields and native diagnostics when fallback remains live. Apply the [build](../apps/batch/src/capacity.ts) and [serving](serving-budgets.md) budgets. Charge actual per-zone donor counts and all concurrent render workers. Run full-timeline builds through the locally integrated candidate before production-default promotion; kernel-only or old-physics builds do not prove a new combined pipeline fits.
 
 ## 13 Commands and final handoff
 
