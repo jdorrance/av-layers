@@ -215,6 +215,7 @@ export class ApiClient {
     const methodId = pinned.method.id, methodHash = pinned.method.hash;
     return createPointSeriesLoader(build,
       (frames, layers, signal) => this.sample(build, { ...location, frames, layers, signal }),
+      (frames, layers, signal) => this.profile(build, { ...location, frames, layers, signal }),
       () => {
         if (build.manifest !== pinned || pinned.model !== model || pinned.buildId !== buildId || pinned.cycle !== cycle || pinned.expiresAt !== expiresAt
           || pinned.method.id !== methodId || pinned.method.hash !== methodHash) throw new InvalidApiResponseError('Point series pinned build changed');

@@ -46,6 +46,7 @@ pnpm installs the Node version declared in `package.json`.
 - [packages/solar](packages/solar/README.md): solar position, sunrise/sunset, and grid daylight checks.
 - [packages/thermodynamics](packages/thermodynamics/README.md): dry-air thermodynamics and parcel equations.
 - [packages/soaring](packages/soaring/README.md): thermal lift depth and updraft calculations.
+- [packages/windgram](packages/windgram/README.md): point windgram chart, scene, and height inspector.
 
 ## More information
 

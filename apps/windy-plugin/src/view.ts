@@ -1,5 +1,5 @@
-import { DEFAULT_OPACITY, populateModelOptions, pointSeriesLabel, pointSeriesSelection, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
-import { renderPointSeries } from '@av/contracts/client/dom';
+import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
+import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
 
@@ -25,6 +25,10 @@ const CSS = `
 .av-notice{margin:6px 0;padding:6px 8px;background:#14202a;border:1px solid #2f4a5c;color:#d5e7ef;border-radius:4px;font-size:11px}
 .av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
 .av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
+.av-point-settings{margin-top:5px;font-size:11px}
+.av-point-settings summary{cursor:pointer}
+.av-point-settings label{display:inline-block;margin:5px 5px 0 0}
+.av-point-settings select{margin:5px 9px 0 0}
 `;
 
 function ensureStyles(): void {
@@ -52,7 +56,7 @@ export class PluginPanel {
   private readonly error = node('p', 'av-error');
   private readonly horizonNotice = node('p', 'av-warning');
   private readonly point = node('section', 'av-point');
-  private readonly pointTitle = node('p', 'av-muted');
+  private readonly pointSettings = node('details', 'av-point-settings');
   private readonly pointStatus = node('p', 'av-muted');
   private readonly pointBody = node('div');
   private readonly units = node('select');
@@ -62,7 +66,8 @@ export class PluginPanel {
   private pointFrameId: string | null = null;
   private selectedFrameId: string | null = null;
   private mapFrameId: string | null = null;
-  private updatePoint: ReturnType<typeof renderPointSeries> | null = null;
+  private pointLocation: GeoPoint | undefined;
+  private updatePoint: ReturnType<typeof renderPointWindgram> | null = null;
   private renderedBuildId: string | null = null;
 
   constructor(callbacks: PanelCallbacks) {
@@ -117,9 +122,11 @@ export class PluginPanel {
     this.pointHorizonLabel.htmlFor = this.pointHorizon.id;
     this.pointHorizon.addEventListener('change', () => callbacks.onPointHorizon(this.pointHorizon.value === 'forecast' ? 'forecast' : 'day'));
     this.point.hidden = true;
+    this.point.ariaLabel = 'Point forecast';
     this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
     this.pointStatus.role = 'status';
-    this.point.append(this.pointTitle, this.pointStatus, unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon, this.pointBody);
+    this.pointSettings.append(node('summary', undefined, 'Settings'), unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon);
+    this.point.append(this.pointBody, this.pointStatus, this.pointSettings);
     this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
 
@@ -176,19 +183,25 @@ export class PluginPanel {
   }
 
   loadPoint(point: GeoPoint): void {
-    this.clearPoint(); this.point.hidden = false;
-    this.pointTitle.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
-    this.pointStatus.textContent = 'Loading point…';
+    this.clearPoint(); this.pointLocation = point; this.point.hidden = false;
+    this.point.ariaBusy = 'true';
+    this.setPointStatus('Loading forecast…');
   }
 
-  pointLoading(frameId: string | null): void { this.pointFrameId = frameId; this.pointStatus.textContent = 'Loading point forecast…'; }
+  pointLoading(frameId: string | null): void {
+    this.pointFrameId = frameId;
+    this.point.ariaBusy = 'true';
+    this.setPointStatus(this.pointBody.children.length ? '' : 'Loading forecast…');
+  }
 
   get pointFrame(): string | null { return this.pointFrameId; }
 
-  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void, totalFrames = payload.frames.length): void {
+  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void, totalFrames = payload.frames.length, loading = payload.frames.length < totalFrames): void {
+    if (!this.pointLocation) return;
     if (this.pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === this.pointFrameId))) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
-    this.pointStatus.textContent = pointSeriesLabel(payload, totalFrames);
-    this.updatePoint = renderPointSeries(this.pointBody, payload, build, { frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, onFrame: id => {
+    this.point.ariaBusy = String(loading);
+    this.setPointStatus();
+    this.updatePoint = renderPointWindgram(this.pointBody, payload, build, { point: this.pointLocation, frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading, onFrame: id => {
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
       onFrame(id);
@@ -197,12 +210,21 @@ export class PluginPanel {
 
   pointError(message: string): void {
     this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, false);
+    this.point.ariaBusy = 'false';
+    if (!this.pointBody.children.length) this.setPointStatus(message);
+  }
+
+  private setPointStatus(message = ''): void {
     this.pointStatus.textContent = message;
+    this.pointStatus.hidden = !message;
   }
 
   clearPoint(): void {
-    this.updatePoint = null; this.pointFrameId = null; this.point.hidden = true;
-    this.pointBody.replaceChildren(); this.pointStatus.textContent = '';
+    disposePointWindgram(this.pointBody);
+    this.updatePoint = null; this.pointFrameId = null; this.pointLocation = undefined; this.point.hidden = true;
+    this.pointSettings.open = false;
+    this.point.ariaBusy = 'false';
+    this.pointBody.replaceChildren(); this.setPointStatus();
   }
 }
 

@@ -35,14 +35,21 @@
       <p id="tile-error" class="toast error" role="alert" hidden></p>
       <p id="error" class="toast error" role="alert" hidden></p>
       <p id="freshness" class="sr-only">Loading latest immutable build…</p>
-      <div id="point-card" hidden>
-        <p id="point-summary"></p>
-        <p id="point-status"></p>
-        <label class="point-units">Units <select id="point-units"><option value="metric">m · m/s</option><option value="imperial">ft · kt</option></select></label>
-        <label id="point-horizon-label" class="point-units">Point horizon <select id="point-horizon"><option value="day">Map forecast</option><option value="forecast">Full forecast</option></select></label>
+      <section id="point-card" aria-label="Point forecast" hidden>
+        <div class="point-actions">
+          <details id="point-settings">
+            <summary aria-label="Forecast settings" title="Forecast settings">⚙︎</summary>
+            <div class="point-settings-body">
+              <label class="point-units">Units <select id="point-units"><option value="metric">m · m/s</option><option value="imperial">ft · kt</option></select></label>
+              <label id="point-horizon-label" class="point-units">Horizon <select id="point-horizon"><option value="day">Map forecast</option><option value="forecast">Full forecast</option></select></label>
+              <details id="point-build-details"><summary>Build details</summary><dl id="meta"></dl></details>
+            </div>
+          </details>
+          <button id="point-close" type="button" aria-label="Close point forecast">×</button>
+        </div>
         <div id="point-body" tabindex="-1"></div>
-        <details><summary>Build details</summary><dl id="meta"></dl></details>
-      </div>
+        <p id="point-status" role="status" hidden></p>
+      </section>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

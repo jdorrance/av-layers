@@ -1,7 +1,7 @@
 /** Native-column diagnostics use model terrain, ascending levels and Earth-relative wind. */
 import {
   boltonLclHeightMetersAgl, dewPointFromMixingRatioC, mixingRatioFromDewPointKgKg,
-  saturationVaporPressureHpa, THERMODYNAMIC_CONSTANTS as C
+  relativeHumidityFromTempAndDewpointPercent, THERMODYNAMIC_CONSTANTS as C
 } from '@av/thermodynamics';
 import { NATIVE_DIAGNOSTIC_PARAMETERS as P } from './parameters.js';
 import { deriveCloudRegime } from './views.js';
@@ -219,7 +219,7 @@ export function nativeColumnHumidityAtHeight(input: NativeDiagnosticInput, heigh
 function topHumidity(input: NativeDiagnosticInput, count: number, top: number | null): number | null {
   if (!finite(top)) return null;
   let height = input.terrainM, t = input.surfaceTemperatureC, td = input.surfaceDewPointC;
-  const rh = (temp: number, dew: number) => value(Math.max(0, Math.min(100, 100 * saturationVaporPressureHpa(dew) / saturationVaporPressureHpa(temp))));
+  const rh = (temp: number, dew: number) => value(relativeHumidityFromTempAndDewpointPercent(temp, dew));
   if (top === height) return finite(t) && finite(td) ? rh(t, td) : null;
   for (let i = 0; i < count; i++) {
     const level = input.levels[i];

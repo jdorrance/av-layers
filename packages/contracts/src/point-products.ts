@@ -7,12 +7,25 @@ import { frameSchema, modelIdSchema, sampleResponseV5Schema } from './publicatio
 export const MAX_SAMPLE_POINTS = 64;
 export const MAX_POINT_RESPONSE_BYTES = 1024 * 1024;
 
+const PROFILE_RESPONSE_HEADER_BYTES = 2048;
+
+/** Conservative admission for one frame: quantized levels, scalar cells and frame metadata. */
+function profileFrameBytes(levelCount: number, layerCount: number): number {
+  if (![levelCount, layerCount].every(value => Number.isSafeInteger(value) && value > 0)) throw new RangeError('Invalid profile response dimensions');
+  return levelCount * 180 + layerCount * 400 + PROFILE_RESPONSE_HEADER_BYTES;
+}
+
 /** Conservative JSON admission for quantized profile levels, scalar cells and frame metadata. */
 export function estimateProfileResponseBytes(frameCount: number, levelCount: number, layerCount: number): number {
-  if (![frameCount, levelCount, layerCount].every(value => Number.isSafeInteger(value) && value > 0)) throw new RangeError('Invalid profile response dimensions');
-  const bytes = 2048 + frameCount * (levelCount * 180 + layerCount * 400 + 2048);
+  if (!Number.isSafeInteger(frameCount) || frameCount < 1) throw new RangeError('Invalid profile response dimensions');
+  const bytes = PROFILE_RESPONSE_HEADER_BYTES + frameCount * profileFrameBytes(levelCount, layerCount);
   if (!Number.isSafeInteger(bytes)) throw new RangeError('Profile response size overflow');
   return bytes;
+}
+
+/** Largest frame count one profile response may carry, derived from the same admission estimate. */
+export function maxProfileFrames(levelCount: number, layerCount: number): number {
+  return Math.floor((MAX_POINT_RESPONSE_BYTES - PROFILE_RESPONSE_HEADER_BYTES) / profileFrameBytes(levelCount, layerCount));
 }
 export const multiPointSampleResponseSchema = z.strictObject({
   version: z.literal(1), model: modelIdSchema, buildId: z.string(), expiresAt: z.iso.datetime(),

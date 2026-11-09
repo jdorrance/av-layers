@@ -22,16 +22,14 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
-Click the map for a point chart; a horizon choice appears when additional point
-times are available. The
-selected hour appears first while cached scalar pages fill the chart. Chart
-times within the map horizon select raster frames; later point times retain
-the map frame and show both UTC times. Legacy builds offer a 24-hour point view.
-Elapsed-time markers follow gaps in the published axis. Failed pages leave an
-incomplete notice beside retained values.
-Heights use MSL. Native thermal tops have separate markers from usable lift;
-missing fine lift and terrain stay unknown. Units include metres/m/s or
-feet/knots, with vertical lift in ft/min for imperial displays.
+Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
+chart loads and in its selected hour readout. Open forecast settings to change
+units or horizon, or open Chart details for height inspection and the legend.
+A failed profile page leaves available lift visible.
+
+Chart times within the map horizon select raster frames. Later point times keep
+the map frame and show both UTC times. The scalar chart covers builds that
+publish no native profiles. Legacy builds offer a 24-hour point view.
 
 ## Source layout
 

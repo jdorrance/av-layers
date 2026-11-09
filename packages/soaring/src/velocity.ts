@@ -9,6 +9,7 @@ const {
 
 /** Conversion factor from feet per minute (ft/min) to meters per second (m/s). */
 export const FEET_PER_MINUTE_TO_MPS = 0.00508;
+export const KNOTS_PER_MPS = 3600 / 1852;
 
 /** Classic wxtofly / RASP minimum sink rate in feet per minute (225 ft/min). */
 export const WXTOFLY_SINK_FPM = 225;
