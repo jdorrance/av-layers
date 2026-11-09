@@ -56,19 +56,18 @@ wind on demand from each profile and its emitted thermal top; use shared pure
 helpers and preserve the model-PBL fallback for stable columns. These values
 remain available through the profile API without additional scalar channels.
 
-On click, fetch the configured map selection containing lift MSL/AGL,
-precipitation, thermal velocity, LCL, 10 m and boundary-layer wind components,
-and cloud cover. Render the selected frame summary and a keyboard-accessible
-chart: known terrain floor, usable-lift bar and LCL marker. Load the selected
-hour first, then the remaining bounded pages; reuse completed frames. Mark
-elapsed gaps between adjacent published times and identify incomplete series
-after failed pages. Legacy readers retain their 24-hour initial point view.
-Unknown floors use ceiling markers and an explicit unknown label. Selecting a chart frame
-updates the map from the cached series. Offer the full native point horizon
-through bounded frame pages. Keep point time and displayed map time explicit
-when a selected native frame falls beyond the map prefix. Preserve missing
-values and diagnostic support in labels; absence of cloud flags alone cannot
-establish a blue regime.
+On click, load the selected hour first. The point loader requests map lift and
+available native profiles independently, then pages through the remaining
+hours and reuses completed frames. See
+[`client-point.ts`](../packages/contracts/src/client-point.ts) for field selection.
+The [Windgram panel](../packages/windgram/README.md) shows the native chart when
+profiles are available and a scalar chart otherwise. Mark elapsed gaps between
+adjacent published times and identify incomplete series after failed pages.
+Legacy readers retain their 24-hour initial point view. Unknown floors use
+ceiling markers and an explicit unknown label. Selecting a chart frame updates
+the map from the cached series. Offer the full native point horizon through
+bounded frame pages. Show the point and map times when they differ. Preserve
+missing values and diagnostic support in labels.
 
 Use the shared soaring view function for scalar wind and sink-threshold
 calculations. Add terse labels for cumulus, overdevelopment and cloud capping.
@@ -119,9 +118,7 @@ publication requires the production checks above. Windy controller/bundle checks
 pass; its production developer loader requires
 an authenticated host session.
 
-## Deferred consumer cutover
+## Separate Windgrams consumer
 
-Windgrams adapters, offline snapshots, activation and retirement of its duplicated
-weather acquisitions are deferred. Its terrain and observation producers remain
-unchanged. The separate [consumer PR](https://github.com/jdorrance/windgrams/pull/15)
-stays draft for that later work.
+Adapters, offline snapshots, and activation in the separate Windgrams consumer
+remain deferred. See the [consumer PR](https://github.com/jdorrance/windgrams/pull/15).

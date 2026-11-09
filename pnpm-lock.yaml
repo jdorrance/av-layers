@@ -150,6 +150,9 @@ importers:
       '@av/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@av/windgram':
+        specifier: workspace:*
+        version: link:../../packages/windgram
       maplibre-gl:
         specifier: 6.16.0
         version: 6.16.0
@@ -166,6 +169,9 @@ importers:
       '@av/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@av/windgram':
+        specifier: workspace:*
+        version: link:../../packages/windgram
     devDependencies:
       vite:
         specifier: 'catalog:'
@@ -210,6 +216,21 @@ importers:
   packages/solar: {}
 
   packages/thermodynamics: {}
+
+  packages/windgram:
+    dependencies:
+      '@av/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      '@av/soaring':
+        specifier: workspace:*
+        version: link:../soaring
+      '@av/solar':
+        specifier: workspace:*
+        version: link:../solar
+      '@av/thermodynamics':
+        specifier: workspace:*
+        version: link:../thermodynamics
 
 packages:
 

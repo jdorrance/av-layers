@@ -182,31 +182,66 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 
 #point-card {
+  --av-chart-max-height: min(510px, max(120px, calc(100dvh - 232px)));
   position: absolute;
   z-index: 4;
   top: 64px;
   left: 12px;
-  width: min(440px, calc(100% - 24px));
-  max-height: min(70vh, 640px);
+  width: min(650px, calc(100% - 24px));
+  max-height: calc(100dvh - 150px);
   overflow: auto;
-  border-radius: 16px;
-  padding: 14px 14px 10px;
+  border-radius: 12px;
+  padding: 7px 9px 8px;
 }
 
-#point-summary {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 680;
-  letter-spacing: -0.02em;
+.point-actions {
+  position: absolute;
+  z-index: 1;
+  top: 7px;
+  right: 9px;
+  display: flex;
+  gap: 3px;
 }
 
-#point-status { margin: 6px 0 0; color: #526170; font-size: 12px; }
+#point-close, #point-settings > summary {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: #f1f4f6;
+  color: inherit;
+  font-size: 17px;
+  cursor: pointer;
+}
 
-#point-body { overflow-x: auto; margin-top: 8px; }
-.point-units { display: flex; gap: 8px; align-items: center; margin-top: 10px; font-size: 12px; color: #526170; }
+#point-settings > summary::-webkit-details-marker { display: none; }
+.point-settings-body {
+  position: absolute;
+  top: 35px;
+  right: 0;
+  width: 245px;
+  max-height: min(350px, 45dvh);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #d9e2e7;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 4px 16px #0b1b2826;
+  font-size: 12px;
+}
+.point-settings-body > details > summary { cursor: pointer; }
+
+#point-status { margin: 0; color: #526170; font-size: 12px; line-height: 30px; padding-right: 68px; }
+#point-card .av-windgram-controls { min-height: 30px; padding-inline-end: 67px; }
+#point-card .av-windgram-controls[hidden] { display: block; visibility: hidden; }
+#point-body { min-width: 0; }
+#point-body > .av-point-series:not(.av-windgram-panel) { padding-top: 34px; }
+
+.point-units { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; color: #526170; }
 .point-units[hidden] { display: none; }
 .point-units select { font: inherit; border: 1px solid #c4cfd8; border-radius: 4px; padding: 3px 6px; background: #fff; color: #1c2430; }
-#point-card > details { margin-top: 12px; font-size: 11px; }
 
 #meta {
   display: grid;

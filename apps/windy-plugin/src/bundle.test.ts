@@ -9,9 +9,10 @@ import { fixtureLatest, fixtureManifest } from '../../../tests/forecast-fixture.
 class FakeElement {
   children: FakeElement[] = [];
   parent?: FakeElement;
-  listeners = new Map<string, () => void>();
+  listeners = new Map<string, (event?: unknown) => void>();
   style: Record<string, string> = {};
   textContent = '';
+  innerHTML = '';
   className = '';
   id = '';
   hidden = false;
@@ -35,12 +36,13 @@ class FakeElement {
     this.append(...children);
     this.selected = '';
   }
-  addEventListener(name: string, listener: () => void): void { this.listeners.set(name, listener); }
+  addEventListener(name: string, listener: (event?: unknown) => void): void { this.listeners.set(name, listener); }
+  focus(): void {}
   remove(): void {
     if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
     this.parent = undefined;
   }
-  dispatch(name: string): void { this.listeners.get(name)?.(); }
+  dispatch(name: string, event?: unknown): void { this.listeners.get(name)?.(event); }
 }
 
 afterEach(() => {
@@ -246,15 +248,15 @@ it.each([
 
   // The open pane owns point clicks; frame inspection reuses its pinned series.
   click({ lat: point.lat, lon: point.lon });
-  await vi.waitFor(() => expect(elements.findLast(element => element.className === 'av-point-chart')?.children).toHaveLength(2));
+  await vi.waitFor(() => expect(elements.findLast(element => element.className === 'av-point-chart')).toBeTruthy());
   expect(openWeatherPicker).not.toHaveBeenCalled();
   expect(fetchImpl).toHaveBeenCalledTimes(3);
   const chart = elements.findLast(element => element.className === 'av-point-chart')!;
-  chart.children[0].dispatch('click');
+  chart.children[0].dispatch('keydown', { key: 'Home', preventDefault() {} });
   selects[1].value = 'imperial'; selects[1].dispatch('change');
   expect(fetchImpl).toHaveBeenCalledTimes(3);
   expect(layer.url).toContain('/f003/');
-  expect(elements.findLast(element => element.className === 'av-point-values')?.textContent).toContain('3937 ft');
+  expect(elements.findLast(element => element.className === 'av-point-values')?.textContent).toContain('MSL 3937 ft');
   let pointSignal: AbortSignal | null | undefined;
   fetchImpl.mockImplementationOnce((_url, init) => {
     pointSignal = init?.signal;

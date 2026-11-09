@@ -3,16 +3,19 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { type RasterTileProtocol } from '@av/contracts/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
   style: Record<string, string> = {};
   textContent = '';
+  innerHTML = '';
   className = '';
   href = '';
   hidden = false;
+  ariaBusy = '';
+  open = false;
   disabled = false;
   tabIndex = -1;
   max = '';
@@ -23,6 +26,7 @@ class Element extends EventTarget {
   set value(value: string) { this.selected = value; }
   append(...children: Element[]): void { this.children.push(...children); }
   focus(): void { doc.activeElement = this; }
+  contains(node: Element): boolean { return visit(this).includes(node); }
   add(child: Element): void { this.append(child); }
   replaceChildren(...children: Element[]): void { this.children = children; this.selected = ''; }
 }
@@ -130,6 +134,9 @@ function modelButton(id: string): Element {
   const button = ui('models').children.find(child => child.value === id);
   if (!button) throw new Error(`Missing model button ${id}`);
   return button;
+}
+function visit(element: Element): Element[] {
+  return [element, ...element.children.flatMap(visit)];
 }
 async function selectFrame(index: number): Promise<void> {
   ui('time').value = String(index);
@@ -297,6 +304,9 @@ it('preserves a loaded build across BFCache restoration and renews its raster ge
   manifest.source.provenanceUrl = 'https://api.test/v1/models/gfs/runs/build/provenance';
   await start();
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  expect(ui('meta').children).toHaveLength(0);
+  ui('point-build-details').open = true;
+  ui('point-build-details').dispatchEvent(new Event('toggle'));
   const links = ui('meta').children.flatMap(child => child.children);
   expect(links.some(link => link.href === manifest.source.provenanceUrl)).toBe(true);
   const currentSource = sourceId();
@@ -355,7 +365,7 @@ it('makes point values keyboard-scrollable only while the card is open', async (
   expect(ui('point-body').tabIndex).toBe(0);
   expect(ui('point-card').hidden).toBe(false);
 
-  map().emit('click', { lngLat: { lat: 33, lng: -117 } });
+  ui('point-close').dispatchEvent(new Event('click'));
   expect(ui('point-body').children).toHaveLength(0);
   expect(ui('point-body').tabIndex).toBe(-1);
   expect(ui('point-card').hidden).toBe(true);
@@ -458,7 +468,7 @@ it('keeps the selected forecast without background requests on focus or elapsed 
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
-it('selects the v5 surface max zoom for each layer and renders a v5 sample with surface ownership', async () => {
+it('selects the v5 surface max zoom for each layer and renders scalar builds with the series chart', async () => {
   const published = v5Manifest();
   fetchMock.mockImplementation(async () => new Response(JSON.stringify(v5Latest(published))));
   await start();
@@ -488,15 +498,10 @@ it('selects the v5 surface max zoom for each layer and renders a v5 sample with 
   })));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
-  expect(ui('point-status').textContent).toContain(`${published.frames.length} frames`);
-  expect(ui('point-status').textContent).not.toContain(published.method.id);
-  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
-  expect(chart.children).toHaveLength(published.frames.length);
-  expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('MSL 2000 m');
-  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Lift bars blue');
-  const plot = chart.children[0].children[0];
-  expect(plot.children.find(child => child.className === 'av-point-terrain')?.style.cssText).toContain('height:75%');
-  expect(plot.children.find(child => child.className === 'av-point-lift-bar')?.style.cssText).toContain('bottom:75%;width:100%;height:25%');
+  expect(ui('point-status').hidden).toBe(true);
+  const nodes = visit(ui('point-body').children[0]);
+  expect(nodes.find(child => child.className === 'av-point-chart')).toBeTruthy();
+  expect(nodes.some(child => child.className === 'av-windgram-host')).toBe(false);
 });
 
 it('uses Google terrain, remembers the view in the query string, and restores it from the back button', async () => {
@@ -533,24 +538,49 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   })));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
-  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
-  const readout = series.children.find(child => child.className === 'av-point-values')!;
-  chart.children[0].dispatchEvent(new Event('click'));
-  await vi.advanceTimersByTimeAsync(16);
-  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[0].id}/`);
-  expect(readout.textContent).toContain('MSL 1000 m');
-  expect(readout.textContent).toContain('Terrain unknown');
-  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Lift ceiling marks blue');
-  expect(series.children.find(child => child.className === 'av-point-legend')?.textContent).toContain('Terrain unknown');
-  expect(chart.children[0].children[0].children.map(child => child.className)).toEqual(['av-point-ceiling-marker']);
-  ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
-  expect(readout.textContent).toContain('3281 ft');
+  const series = ui('point-body').children[0];
+  const nodes = visit(series);
+  const chart = nodes.find(child => child.className === 'av-point-chart')!;
   chart.children[0].dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));
   await vi.advanceTimersByTimeAsync(16);
-  expect(doc.activeElement).toBe(chart.children[1]);
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
+  ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
+  await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-body').children[0]).toBe(series);
   expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
+it('shows the map lift pair while the selected native profile is pending', async () => {
+  const build = fixtureProfileBuild(), published = build.manifest;
+  if (published.version !== 5) throw new Error('Expected v5');
+  let release!: () => void;
+  const profileGate = new Promise<void>(resolve => { release = resolve; });
+  fetchMock.mockImplementation(async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(v5Latest(published)));
+    if (url.pathname.endsWith('/profile')) await profileGate;
+    return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+  });
+  vi.stubGlobal('Node', Element);
+  await start();
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  const panel = (name: string) => visit(ui('point-body')).find(child => child.className === name);
+  try {
+    await vi.waitFor(() => expect(panel('av-windgram-lift-summary')?.textContent).toBe('MSL 2000 m · AGL 500 m'));
+    expect(panel('av-windgram-profile-status')?.textContent).toBe('Loading native profile…');
+    expect(panel('av-windgram-host')?.hidden).toBe(true);
+    const requests = fetchMock.mock.calls.length;
+    const pointerDown = new Event('pointerdown');
+    Object.defineProperty(pointerDown, 'target', { value: ui('ref-msl') });
+    doc.dispatchEvent(pointerDown);
+    ui('ref-msl').dispatchEvent(new Event('click'));
+    expect(panel('av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
+    expect(fetchMock).toHaveBeenCalledTimes(requests);
+  } finally { release(); }
+  await vi.waitFor(() => expect(panel('av-windgram-host')?.innerHTML).toContain('class="windgram'));
+  expect(panel('av-windgram-profile-status')?.hidden).toBe(true);
+  expect(panel('av-windgram-lift-summary')?.hidden).toBe(true);
+  expect(ui('point-status').hidden).toBe(true);
 });
 
 it('keeps the full-forecast choice visible for legacy maps with a bounded 24-hour point selection', async () => {
@@ -563,10 +593,10 @@ it('keeps the full-forecast choice visible for legacy maps with a bounded 24-hou
 });
 
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
-  const pointBuild = retainedPointBuild(), published = pointBuild.manifest;
+  const pointBuild = retainedProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
   fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
-    ? v5Latest(published) : fixturePointSample(pointBuild, String(input)))));
+    ? v5Latest(published) : fixturePointFetch(pointBuild, String(input)))));
   await start();
   expect(ui('point-horizon-label').hidden).toBe(false);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
@@ -574,24 +604,22 @@ it('pages the full native point forecast while later point times keep the raster
   const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   const mapUrl = raster(), mapTime = ui('time').value;
   ui('point-horizon').value = 'forecast'; ui('point-horizon').dispatchEvent(new Event('change'));
-  await vi.waitFor(() => expect(ui('point-status').textContent.startsWith(`${published.frames.length} frames`)).toBe(true));
-  const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
-  expect(chart.children).toHaveLength(published.frames.length);
-  chart.children.at(-1)!.dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  const series = ui('point-body').children[0], nodes = visit(series);
+  const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
+  expect(dayTabs.children.length).toBeGreaterThan(1);
+  dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
   await vi.advanceTimersByTimeAsync(16);
   expect(raster()).toBe(mapUrl); expect(ui('time').value).toBe(mapTime);
-  const time = series.children.find(child => child.className === 'av-point-time')!.textContent;
-  expect(time).toContain(`Point: ${published.frames.at(-1)!.validTime.slice(0, 10)}`);
+  const time = nodes.find(child => child.className === 'av-point-time')!.textContent;
+  expect(time).toContain('Point: ');
   expect(time).toContain(' · Map: ');
-  const summary = series.children.find(child => child.className === 'av-point-values')!.textContent;
-  expect(summary).toContain('Native top 2500 m'); expect(summary).toContain('MSL —');
-  expect(summary).toContain('Terrain unknown'); expect(summary).toContain('Cloud 0%'); expect(summary).not.toContain('Blue');
-  const lastPlot = chart.children.at(-1)!.children[0];
-  expect(lastPlot.children.some(child => child.className === 'av-point-native-top')).toBe(true);
-  expect(lastPlot.children.some(child => child.className === 'av-point-terrain' || child.className === 'av-point-lift-bar')).toBe(false);
+  const summary = nodes.find(child => child.className === 'av-windgram-lift-summary')!.textContent;
+  expect(summary).toContain('MSL unavailable · AGL unavailable');
+  expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.hidden).toBe(true);
   const requests = fetchMock.mock.calls.length;
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
-  await vi.waitFor(() => expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')!.children).toHaveLength(published.mapFrameCount!));
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
 
@@ -607,17 +635,18 @@ it('labels an unprefixed v5 point day as 24 hours while keeping its full forecas
 
 it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress and last-good map (fails=%s, selected hour loaded=%s)', async (fail, keepKnown) => {
   const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
-  const build = fixturePointBuild({ frameHours: hours, mapFrameCount: 40 }), published = build.manifest;
+  const build = fixtureProfileBuild({ frameHours: hours, mapFrameCount: 40, profileLevels: 200 }), published = build.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
   const requests: string[][] = [];
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   fetchMock.mockImplementation(async input => {
     if (String(input).includes('/latest?')) return new Response(JSON.stringify(v5Latest(published)));
-    requests.push(new URL(String(input)).searchParams.get('frame')!.split(','));
-    if (requests.length === (fail ? 3 : 2)) await gate;
-    if (fail && requests.length === 3) throw new Error('Late page failed');
-    return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+    const profile = new URL(String(input)).pathname.endsWith('/profile');
+    if (profile) requests.push(new URL(String(input)).searchParams.get('frame')!.split(','));
+    if (profile && requests.length === (fail ? 3 : 2)) await gate;
+    if (fail && profile && requests.length === 3) throw new Error('Late page failed');
+    return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
   });
   autoLoadRaster = false;
   await start();
@@ -628,49 +657,53 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
   await selectFrame(39);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   try {
-    await vi.waitFor(() => expect(ui('point-status').textContent).toBe(`${fail ? 24 : 1}/40 frames · Loading…`));
-    expect(requests.map(page => page.length)).toEqual(fail ? [1, 23, 16] : [1, 23]);
+    await vi.waitFor(() => expect(requests).toHaveLength(fail ? 3 : 2));
+    expect(ui('point-card').ariaBusy).toBe('true');
     expect(requests[0]).toEqual(['f072']);
-    const series = ui('point-body').children[0];
-    expect(series.children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(fail ? 24 : 1);
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 2500 m');
-    expect(series.children.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
+    expect(requests.length).toBe(fail ? 3 : 2);
+    const nodes = visit(ui('point-body').children[0]);
+    expect(nodes.find(child => child.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
+    expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
+    expect(nodes.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
     const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
-    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(39)} UTC · Map: ${stamp(0)} UTC`);
+    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(39)} UTC · Map: ${stamp(0)} UTC`);
     if (!keepKnown) {
       await selectFrame(38);
-      expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toBe('Loading selected point hour…');
-      expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
+      expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.textContent).toBe('Loading native profile…');
+      expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
     }
   } finally { release(); }
   if (fail) {
-    await vi.waitFor(() => expect(ui('point-status').textContent).toContain('Series failed: Late page failed'));
-    const series = ui('point-body').children[0], chart = series.children.find(child => child.className === 'av-point-chart')!;
-    expect(chart.children).toHaveLength(24);
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain(keepKnown ? 'Native top 2500 m' : 'Selected point hour unavailable.');
-    const incomplete = series.children.find(child => child.className === 'av-point-incomplete')!;
+    await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+    const nodes = visit(ui('point-body').children[0]);
+    const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
+    expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
+    expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.hidden).toBe(keepKnown);
+    const incomplete = nodes.find(child => child.className === 'av-point-incomplete')!;
     expect(incomplete.hidden).toBe(false); expect((incomplete as unknown as HTMLElement).role).toBe('status');
     expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
-    expect(series.children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
+    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
     ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain(keepKnown ? 'Native top 8202 ft' : 'Selected point hour unavailable.');
-    chart.children.find(child => child.value === 'f072')!.dispatchEvent(new Event('click'));
-    expect(series.children.find(child => child.className === 'av-point-values')?.textContent).toContain('Native top 8202 ft');
+    expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
+    dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+    expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
     expect(incomplete.hidden).toBe(false);
     return;
   }
-  await vi.waitFor(() => expect(ui('point-status').textContent.startsWith('40 frames ·')).toBe(true));
-  expect(requests.map(page => page.length)).toEqual([1, 23, 16]);
-  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-chart')?.children).toHaveLength(40);
-  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
-  expect(ui('point-body').children[0].children.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  expect(requests).toHaveLength(3);
+  expect(requests[0]).toEqual(['f072']);
+  const finalNodes = visit(ui('point-body').children[0]);
+  expect(finalNodes.find(child => child.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
+  expect(finalNodes.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
+  expect(finalNodes.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
 });
 
 it('labels the displayed raster through pending, failed and successful point-time replacements', async () => {
-  const pointBuild = fixturePointBuild(), published = pointBuild.manifest;
+  const pointBuild = fixtureProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
   fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
-    ? v5Latest(published) : fixturePointSample(pointBuild, String(input)))));
+    ? v5Latest(published) : fixturePointFetch(pointBuild, String(input)))));
   autoLoadRaster = false;
   await start();
   await selectFrame(0);

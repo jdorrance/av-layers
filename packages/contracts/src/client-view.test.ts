@@ -4,7 +4,7 @@ import { CELL_BYTES } from './format';
 import { manifestV5Schema } from './publication';
 import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
-import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSeriesSummary, formatSupportFlags, layerMaxZoom, paletteLegend, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
+import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSupportFlags, layerMaxZoom, paletteLegend, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
 import { PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema } from './layers';
 import { TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
 
@@ -126,7 +126,6 @@ it('shows the actual terrain reference for refined point values beside base laye
   expect(table.headings[3]).toContain(manifest.descriptors.layers['precip-rate'].label);
   expect(table.rows[0][4]).toContain(`${patch.id} · terrain-AGL · ${patch.method.id}`);
   expect(table.rows[0][5]).not.toContain(patch.id);
-  expect(formatSeriesSummary(payload, ['usable-lift-agl', 'precip-rate'], { lat: 0, lon: 0 })).toContain(`base method ${manifest.method.id} · refinement ${patch.id}`);
 });
 
 it('uses the layer surface max zoom for v5 and the manifest max zoom for legacy builds', () => {
@@ -265,7 +264,7 @@ it('formats point altitude, wind vectors and regime without inventing missing te
 });
 
 it.each([
-  { fine: 0, native: 0, top: 0, expected: 'Cloud regime unknown' },
+  { fine: 0, native: 0, top: 0, expected: 'Native cloud regime unknown' },
   { fine: 0, native: SUPPORT_CLOUD_CAPPED, top: 0, expected: 'capped' },
   { fine: 0, native: SUPPORT_CUMULUS, top: 0, expected: 'Cu' },
   { fine: SUPPORT_OVERDEVELOPED, native: 0, top: 0, expected: 'OD' },

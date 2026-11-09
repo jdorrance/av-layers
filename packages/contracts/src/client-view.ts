@@ -1,16 +1,10 @@
 import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, paletteBinLabel, renderedLayers, renderedFrames, type LayerId, type Manifest } from './index.ts';
-import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint, PointSeries } from './client-types.ts';
+import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { compilePaletteColor, samplePaletteValueInto } from './palette-color.ts';
-import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
+import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
 
 export type UnitSystem = 'metric' | 'imperial';
 export { pointSeriesSelection } from './client-point.ts';
-
-export function pointSeriesLabel(series: PointSeries, totalFrames = series.frames.length): string {
-  if (series.frames.length < totalFrames) return `${series.frames.length}/${totalFrames} frames · Loading…`;
-  const first = series.frames[0], last = series.frames.at(-1);
-  return `${series.frames.length} frames${first && last ? ` · ${first.validTime.slice(5, 10)}–${last.validTime.slice(5, 10)} UTC` : ''}`;
-}
 
 export function formatAltitude(meters: number | null, unitSystem: UnitSystem): string {
   return meters === null || !Number.isFinite(meters) ? '—' : `${Math.round(unitSystem === 'imperial' ? meters / 0.3048 : meters)} ${unitSystem === 'imperial' ? 'ft' : 'm'}`;
@@ -27,27 +21,62 @@ export function deriveTerrainM(frame: FrameSample, build: PinnedBuild): number |
   return null;
 }
 
+/** Map values retain their own statuses, flags and source surface. */
+export function pointMapLift(frame: FrameSample | undefined, build: PinnedBuild) {
+  const msl: FrameSampleLayer | undefined = frame?.layers['usable-lift-msl'];
+  const agl: FrameSampleLayer | undefined = frame?.layers['usable-lift-agl'];
+  return {
+    msl, agl,
+    mslM: msl?.status === 'valid' ? msl.value : null,
+    aglM: agl?.status === 'valid' ? agl.value : null,
+    terrainM: frame ? deriveTerrainM(frame, build) : null
+  };
+}
+
+export function formatMapLiftCell(cell: FrameSampleLayer | undefined, units: UnitSystem): string {
+  switch (cell?.status) {
+    case 'valid': return formatAltitude(cell.value, units);
+    case 'no-usable-lift': return 'no usable lift';
+    case 'outside-domain': return 'outside coverage';
+    default: return 'unavailable';
+  }
+}
+
+function liftSupport(cell: FrameSampleLayer | undefined): number {
+  return cell?.status === 'valid' || cell?.status === 'no-usable-lift' ? cell.support : 0;
+}
+
+function cloudRegime(support: number): string | null {
+  return support & SUPPORT_OVERDEVELOPED ? 'OD' : support & SUPPORT_CUMULUS ? 'Cu' : null;
+}
+
+export function formatPointMapLift(lift: ReturnType<typeof pointMapLift>, units: UnitSystem): string {
+  const support = liftSupport(lift.agl) | liftSupport(lift.msl);
+  const regime = cloudRegime(support);
+  return [
+    `MSL ${formatMapLiftCell(lift.msl, units)}`, `AGL ${formatMapLiftCell(lift.agl, units)}`,
+    `Terrain ${lift.terrainM === null ? 'unknown' : formatAltitude(lift.terrainM, units)}`,
+    ...(regime ? [`Map ${regime}`] : []), ...(support & SUPPORT_CLOUD_CAPPED ? ['Map cloud capped'] : [])
+  ].join(' · ');
+}
+
 export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: UnitSystem) {
   const read = (layer: LayerId) => frame.layers[layer]?.status === 'valid' ? frame.layers[layer].value : null;
-  const terrainM = deriveTerrainM(frame, build), mslM = read('usable-lift-msl'), aglM = read('usable-lift-agl'), lclM = read('surface-lcl-msl'), thermalTopM = read('thermal-top-msl');
+  const lift = pointMapLift(frame, build), lclM = read('surface-lcl-msl'), thermalTopM = read('thermal-top-msl');
   const wind = deriveSoaringViews({ wind10mU: read('wind-10m-u'), wind10mV: read('wind-10m-v'), blMeanWindU: read('bl-mean-wind-u'), blMeanWindV: read('bl-mean-wind-v') });
-  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(units === 'imperial' ? speed * 3600 / 1852 : speed).toFixed(1)} ${units === 'imperial' ? 'kt' : 'm/s'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
-  const liftText = (layer: LayerId, meters: number | null) => frame.layers[layer]?.status === 'no-usable-lift' ? 'no usable lift' : formatAltitude(meters, units);
+  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(units === 'imperial' ? speed * KNOTS_PER_MPS : speed).toFixed(1)} ${units === 'imperial' ? 'kt' : 'm/s'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
   const thermal = read('thermal-velocity'), cloud = read('cloud-cover-total');
-  const support = (['usable-lift-agl', 'usable-lift-msl', 'thermal-velocity', 'thermal-top-msl'] as const).reduce((flags, layer) => {
-    const value = frame.layers[layer];
-    return flags | (value?.status === 'valid' || value?.status === 'no-usable-lift' ? value.support : 0);
-  }, 0);
-  const regime = support & SUPPORT_OVERDEVELOPED ? 'OD' : support & SUPPORT_CUMULUS ? 'Cu' : 'Cloud regime unknown';
+  const nativeSupport = liftSupport(frame.layers['thermal-velocity']) | liftSupport(frame.layers['thermal-top-msl']);
+  const regime = cloudRegime(nativeSupport);
   const thermalText = thermal === null ? '—' : units === 'imperial' ? `${Math.round(thermal / FEET_PER_MINUTE_TO_MPS)} ft/min` : `${thermal.toFixed(1)} m/s`;
   const summary = [
-    `MSL ${liftText('usable-lift-msl', mslM)}`, `AGL ${liftText('usable-lift-agl', aglM)}`, `Terrain ${terrainM === null ? 'unknown' : formatAltitude(terrainM, units)}`,
+    formatPointMapLift(lift, units),
     `w* ${thermalText}`, `LCL ${formatAltitude(lclM, units)}`,
     `Native top ${formatAltitude(thermalTopM, units)}`, `Cloud ${cloud === null ? 'unknown' : `${Math.round(cloud)}%`}`,
     `10 m ${windText(wind.wind10mSpeedMps, wind.wind10mDirDeg)}`, `BL ${windText(wind.blMeanWindSpeedMps, wind.blMeanWindDirDeg)}`,
-    regime, ...(support & SUPPORT_CLOUD_CAPPED ? ['capped'] : [])
+    regime ? `Native ${regime}` : 'Native cloud regime unknown', ...(nativeSupport & SUPPORT_CLOUD_CAPPED ? ['Native cloud capped'] : [])
   ].join(' · ');
-  return { id: frame.id, validTime: frame.validTime, terrainM, mslM, aglM, lclM, thermalTopM, summary };
+  return { id: frame.id, validTime: frame.validTime, terrainM: lift.terrainM, mslM: lift.mslM, aglM: lift.aglM, lclM, thermalTopM, summary };
 }
 
 export function noLiftLabel(color: string): string {
@@ -161,17 +190,6 @@ export function formatSupportFlags(support: number): string {
   return flags.join('+') || '—';
 }
 
-export function formatSeriesSummary(
-  payload: { frames: readonly FrameSample[]; method: unknown; coverage?: unknown; surfaces?: readonly { id: string }[]; expiresAt: string },
-  layers: readonly string[],
-  point: GeoPoint
-): string {
-  const method = payload.method as { id?: unknown } | null;
-  const coverage = payload.coverage as { id?: unknown } | null;
-  const patches = [...new Set(payload.frames.flatMap(frame => layers.flatMap(layer => { const value = frame.layers[layer]; return value && 'patchId' in value && value.patchId ? [value.patchId] : []; })))];
-  return `${point.lat.toFixed(4)}, ${point.lon.toFixed(4)} · ${payload.frames.length} frames × ${layers.length} layers · ${patches.length ? 'base method' : 'method'} ${String(method?.id ?? 'unknown')}${patches.length ? ` · refinement ${patches.join(', ')}` : ''} · coverage ${payload.surfaces?.map(surface => surface.id).join(', ') ?? String(coverage?.id ?? 'unknown')} · expires ${payload.expiresAt}`;
-}
-
 /** Pure presentation models shared by the two independent host controllers. */
 export function paletteLegend(palette: PaletteSummary): {
   title: string;
@@ -223,10 +241,6 @@ export function seriesTable(payload: { frames: readonly FrameSample[] }, layers:
       return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}${patchId && spec ? ` / ${patchId} · ${spec.verticalReference} · ${spec.methodId}` : ''}${'surfaceId' in value ? ` / ${value.surfaceId}` : ''}`;
     })])
   };
-}
-
-export function sampleRequestText(build: PinnedBuild, point: GeoPoint): string {
-  return `Requesting ${build.manifest.frames.length} frames × ${build.manifest.layers.length} layers at ${point.lat.toFixed(4)}, ${point.lon.toFixed(4)}…`;
 }
 
 export const DEFAULT_OPACITY = 0.5;

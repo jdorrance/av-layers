@@ -55,14 +55,14 @@ async function loadPointRange(): Promise<void> {
   const frameId = selected && frames.includes(selected) ? selected : active.state().frameId;
   panel?.pointLoading(frameId);
   try {
-    await loader.load(pointHorizon, pending.signal, { frameId, onProgress(payload, totalFrames) {
+    await loader.load(pointHorizon, pending.signal, { frameId, onProgress(payload, totalFrames, loading) {
       if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
       panel?.renderPoint(payload, build, active.state().frameId, id => {
         if (paneOpen && controller === active && active.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
-      }, totalFrames);
+      }, totalFrames, loading);
     } });
   } catch (error) {
-    if (pending.signal.aborted || controller !== active || !paneOpen) return;
+    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
     panel?.pointError(error instanceof Error ? error.message : String(error));
   } finally { if (pointAbort === pending) pointAbort = null; }
 }

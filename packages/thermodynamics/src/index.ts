@@ -61,6 +61,11 @@ export const saturationVaporPressureHpa = (tempC: number): number => {
   );
 };
 
+/** Relative humidity (%) over liquid water from temperature and dewpoint (°C). */
+export function relativeHumidityFromTempAndDewpointPercent(temperatureC: number, dewPointC: number): number {
+  return Math.max(0, Math.min(100, 100 * saturationVaporPressureHpa(dewPointC) / saturationVaporPressureHpa(temperatureC)));
+}
+
 /**
  * Saturation mixing ratio w_s (g/kg) from pressure (hPa) and temperature (°C),
  * using `1000 * WATER_DRY_AIR_MOLAR_MASS_RATIO` (622 g/kg).

@@ -62,6 +62,10 @@ Publication compacts scalar hours into serving groups in
 cell spans or row spans, then fall back to selected records to fit the combined
 byte budget. Retained regional patches load their coverage lazily.
 
+Profile responses cap JSON at 1 MiB. The point loader uses `maxProfileFrames`
+to page the selected fields and native levels under the server's response
+estimate. See [point-products.ts](../packages/contracts/src/point-products.ts).
+
 ## Memory envelope
 
 For 20 concurrent requests, the conservative modeled Worker footprint is

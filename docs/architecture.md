@@ -35,6 +35,8 @@ surfaces share each model's cycle, timeline, publication and URLs. See
   thermodynamics and parcel equations.
 - [packages/soaring](../packages/soaring/README.md): convective depth, thermal
   velocity, and usable lift calculations.
+- [packages/windgram](../packages/windgram/README.md): standalone SVG windgram
+  scene builder, renderer, inspector, and `/profile` adapter.
 
 ## Configuration and calculations
 

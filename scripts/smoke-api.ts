@@ -1,4 +1,4 @@
-import { DEFAULT_PROBE_TIMEOUT_MS, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, renderedFrames, renderedLayers, type LayerId, type PublishedManifest } from '@av/contracts';
+import { DEFAULT_PROBE_TIMEOUT_MS, maxProfileFrames, renderedFrames, renderedLayers, type LayerId, type PublishedManifest } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/contracts/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -109,8 +109,7 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
       for (let start = 0; start < available.length; start += pageSize) await sample(point.lat, point.lon, surface.layers, available.slice(start, start + pageSize));
       if (available.length === frames.length && frames.length <= pageSize) await sample(point.lat, point.lon, surface.layers, 'all');
       if (surface.kind === 'native' && surface.profiles) {
-        let profilePage = 1;
-        while (profilePage < frames.length && estimateProfileResponseBytes(profilePage + 1, surface.profiles.levelCount, surface.layers.length) <= MAX_POINT_RESPONSE_BYTES) profilePage++;
+        const profilePage = Math.max(1, maxProfileFrames(surface.profiles.levelCount, surface.layers.length));
         for (let start = 0; start < frames.length; start += profilePage) {
           const payload = await client.profile(build, { ...point, frames: frames.slice(start, start + profilePage), layers: surface.layers, signal });
           invariant(payload.cell !== null && payload.frames.some(frame => frame.profile.status === 'valid' && frame.profile.levels.length > 0), 'Covered native profile probe found no atmospheric levels');

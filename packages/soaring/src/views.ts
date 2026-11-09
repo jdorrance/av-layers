@@ -21,7 +21,7 @@ export interface SoaringViewInput {
 const finite = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
 
 /** Calm vectors have no meteorological direction. */
-function wind(u: number | null | undefined, v: number | null | undefined) {
+export function windFromComponents(u: number | null | undefined, v: number | null | undefined) {
   if (!finite(u) || !finite(v)) return { speedMps: null, directionDeg: null };
   const speedMps = Math.hypot(u, v);
   return { speedMps, directionDeg: speedMps === 0 ? null : (Math.atan2(-u, -v) * 180 / Math.PI + 360) % 360 };
@@ -58,8 +58,8 @@ export function deriveCloudRegime(input: SoaringViewInput) {
 }
 
 export function deriveSoaringViews(input: SoaringViewInput) {
-  const w10 = wind(input.wind10mU, input.wind10mV);
-  const mean = wind(input.blMeanWindU, input.blMeanWindV), top = wind(input.blTopWindU, input.blTopWindV);
+  const w10 = windFromComponents(input.wind10mU, input.wind10mV);
+  const mean = windFromComponents(input.blMeanWindU, input.blMeanWindV), top = windFromComponents(input.blTopWindU, input.blTopWindV);
   const shear = finite(input.blTopWindU) && finite(input.blTopWindV) && finite(input.wind10mU) && finite(input.wind10mV)
     ? Math.hypot(input.blTopWindU - input.wind10mU, input.blTopWindV - input.wind10mV) : null;
   const dryHcritM = ceiling(input, 1, false), usableLiftTopV2M = ceiling(input, 1, true);

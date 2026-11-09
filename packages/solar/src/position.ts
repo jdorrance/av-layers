@@ -246,6 +246,67 @@ export const sunriseSunset = (
 };
 
 /**
+ * Return both horizon crossings within one local day, with one-second precision.
+ */
+export function sunriseSunsetInRange(
+  latDeg: number,
+  lonDeg: number,
+  startMs: number,
+  endMs: number
+): { sunrise: number; sunset: number } | null {
+  if (
+    ![startMs, endMs, latDeg, lonDeg].every(Number.isFinite) ||
+    endMs <= startMs || endMs - startMs > 26 * 60 * MINUTE_MS ||
+    Math.abs(latDeg) > 90 ||
+    !Number.isFinite(new Date(startMs).getTime()) ||
+    !Number.isFinite(new Date(endMs).getTime())
+  ) {
+    return null;
+  }
+  const above = (ms: number) => solarPosition(latDeg, lonDeg, ms).isDaylight;
+  const elevation = (ms: number) => solarPosition(latDeg, lonDeg, ms).elevationDeg;
+  const refine = (a: number, b: number, rising: boolean) => {
+    while (b - a > 1000) {
+      const mid = (a + b) / 2;
+      if (above(mid) === rising) b = mid;
+      else a = mid;
+    }
+    return Math.round((a + b) / 2);
+  };
+  const step = 10 * 60_000;
+  const sample = (time: number) => ({ time, elevation: elevation(time) });
+  const samples = [sample(startMs - step), sample(startMs)];
+  for (let t = startMs + step; t < endMs; t += step) samples.push(sample(t));
+  samples.push(sample(endMs), sample(endMs + step));
+  const sampledCount = samples.length;
+  for (let i = 1; i < sampledCount - 1; i++) {
+    const previous = samples[i - 1]!, current = samples[i]!, next = samples[i + 1]!;
+    const maximum = current.elevation >= previous.elevation && current.elevation > next.elevation;
+    const minimum = current.elevation <= previous.elevation && current.elevation < next.elevation;
+    if (!maximum && !minimum) continue;
+    let a = previous.time, b = next.time;
+    while (b - a > 100) {
+      const left = a + (b - a) / 3, right = b - (b - a) / 3;
+      if ((elevation(left) < elevation(right)) === maximum) a = left;
+      else b = right;
+    }
+    const extremum = (a + b) / 2;
+    if (extremum > startMs && extremum < endMs) samples.push(sample(extremum));
+  }
+  samples.sort((a, b) => a.time - b.time);
+  let sunrise: number | null = null;
+  let sunset: number | null = null;
+  let prev = above(samples[1]!.time);
+  for (let i = 2; i < samples.length - 1; i++) {
+    const now = above(samples[i]!.time);
+    if (now && !prev && sunrise === null) sunrise = refine(samples[i - 1]!.time, samples[i]!.time, true);
+    if (!now && prev) sunset = refine(samples[i - 1]!.time, samples[i]!.time, false);
+    prev = now;
+  }
+  return sunrise !== null && sunset !== null && sunset > sunrise ? { sunrise, sunset } : null;
+}
+
+/**
  * Relative clear-sky top-of-atmosphere horizontal solar flux factor (0..~1.03).
  */
 export const solarFluxFactor = (latDeg: number, lonDeg: number, ms: number): number => {

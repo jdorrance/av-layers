@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client-api';
-import { pointSeriesSelection } from './client-point';
+import { MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from './index';
+import { pointLiftExpectation, pointSeriesSelection } from './client-point';
 import type { PointSeries } from './client-types';
-import { fixturePointBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
 const point = { lat: 32.9, lon: -117.25 };
 function setup() {
@@ -28,6 +29,175 @@ describe('cached point forecast pages', () => {
     const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
     expect((await api.pointSeries(build, point).load('day')).frames).toHaveLength(24);
     expect(fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(',').length)).toEqual([1, 23]);
+  });
+
+  it('pages native profiles within the byte budget and merges fine-surface lift', async () => {
+    const max = maxProfileFrames(30, 24);
+    expect(estimateProfileResponseBytes(max, 30, 24)).toBeLessThanOrEqual(MAX_POINT_RESPONSE_BYTES);
+    expect(estimateProfileResponseBytes(max + 1, 30, 24)).toBeGreaterThan(MAX_POINT_RESPONSE_BYTES);
+    const build = retainedProfileBuild(), m = build.manifest;
+    if (m.version !== 5) throw new Error('Expected v5');
+    const urls: URL[] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      urls.push(new URL(String(input)));
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
+    const series = await api.pointSeries(build, point).load('forecast');
+    const profiles = urls.filter(url => url.pathname.endsWith('/profile'));
+    expect(profiles.length).toBeGreaterThan(1);
+    for (const url of profiles) {
+      const frames = url.searchParams.get('frame')!.split(','), layers = url.searchParams.get('layers')!.split(',');
+      expect(estimateProfileResponseBytes(frames.length, 4, layers.length)).toBeLessThanOrEqual(MAX_POINT_RESPONSE_BYTES);
+      expect(layers).not.toContain('mslp-hpa');
+      expect(layers).not.toContain('sensible-heat-flux');
+      expect(layers).not.toContain('latent-heat-flux');
+    }
+    const fineFrames = urls.filter(url => url.pathname.endsWith('/sample')).flatMap(url => url.searchParams.get('frame')!.split(','));
+    expect(fineFrames).toEqual(m.frames.slice(0, m.mapFrameCount).map(frame => frame.id));
+    expect(series.frames.every(frame => frame.profile?.status === 'valid' && frame.derived !== undefined)).toBe(true);
+    expect(series.frames[0]?.layers['usable-lift-msl']).toMatchObject({ surfaceId: 'gfs-fine' });
+    expect(series.frames.at(-1)?.layers['usable-lift-msl']).toBeUndefined();
+    expect(series.layers).toContain('usable-lift-msl');
+    expect(series.layers).not.toContain('cloud-cover-total');
+    expect(pointSeriesSelection(build, 'forecast').layers).toEqual(series.layers);
+  });
+
+  it.each([{ lift: [] }, { lift: ['usable-lift-agl'] }] as const)('requests only the lift channels a profiled build publishes ($lift)', async ({ lift }) => {
+    const build = fixtureProfileBuild({ layers: ['precip-rate', ...lift], frameHours: [1, 2], mapFrameCount: 1 });
+    manifestV5Schema.parse(build.manifest);
+    const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const series = await api.pointSeries(build, point).load('forecast');
+    const samples = fetchImpl.mock.calls.map(([input]) => new URL(String(input))).filter(url => url.pathname.endsWith('/sample'));
+    expect(pointLiftExpectation(build)).toEqual({ layers: lift, frames: new Set(lift.length ? ['f001'] : []) });
+    expect(samples.map(url => [url.searchParams.get('frame'), url.searchParams.get('layers')])).toEqual(lift.length ? [['f001', lift[0]]] : []);
+    expect(series.layers).toEqual([...lift, 'precip-rate']);
+    expect(series.frames.map(frame => frame.profile?.status)).toEqual(['valid', 'valid']);
+    expect(series.frames[0].layers['usable-lift-agl']?.value).toBe(lift.length ? 500 : undefined);
+    expect(series.frames[1].layers['usable-lift-agl']).toBeUndefined();
+  });
+
+  it('pages the native horizon without counting a cached map prefix against its budget', async () => {
+    const build = fixtureProfileBuild({ frameHours: Array.from({ length: 24 }, (_, i) => i + 1), mapFrameCount: 2 });
+    build.manifest.descriptors.maxSampleValues = 2;
+    const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const loader = api.pointSeries(build, point);
+    await loader.load('day');
+    const before = fetchImpl.mock.calls.length;
+    const series = await loader.load('forecast');
+    const urls = fetchImpl.mock.calls.slice(before).map(([input]) => new URL(String(input)));
+    expect(series.frames).toHaveLength(24);
+    expect(urls.map(url => [url.pathname.split('/').at(-1), url.searchParams.get('frame')?.split(',').length])).toEqual([['profile', 22]]);
+  });
+
+  it('publishes selected and remaining lift samples independently of a pending profile', async () => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 2 });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/profile') && url.searchParams.get('frame') === 'f002') await gate;
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const onProgress = vi.fn<(series: PointSeries, total: number, loading: boolean) => void>();
+    const pending = api.pointSeries(build, point).load('day', undefined, { frameId: 'f002', onProgress });
+    try {
+      await vi.waitFor(() => expect(onProgress).toHaveBeenCalledTimes(2));
+      const requests = fetchImpl.mock.calls.map(([input]) => new URL(String(input)));
+      expect(requests.map(url => [url.pathname.split('/').at(-1), url.searchParams.get('frame')])).toEqual([
+        ['sample', 'f002'], ['profile', 'f002'], ['sample', 'f001']
+      ]);
+      const [early, total, loading] = onProgress.mock.calls[0]!;
+      expect(early.frames.map(frame => frame.id)).toEqual(['f002']);
+      expect(early.frames[0].layers).toEqual(fixturePointSample(build, String(requests[0])).frames[0].layers);
+      expect(early.frames[0].profile).toBeUndefined();
+      expect([total, loading]).toEqual([2, true]);
+      expect(onProgress.mock.calls[1]![0].frames.map(frame => [frame.id, frame.layers['usable-lift-agl'].value, frame.profile])).toEqual([
+        ['f001', 500, undefined], ['f002', 500, undefined]
+      ]);
+    } finally { release(); }
+    const series = await pending;
+    expect(series.frames.map(frame => frame.id)).toEqual(['f001', 'f002']);
+    expect(series.frames[1].layers['usable-lift-agl']).toEqual(onProgress.mock.calls[0]![0].frames[0].layers['usable-lift-agl']);
+    expect(series.frames[1].profile?.status).toBe('valid');
+    expect(onProgress.mock.lastCall).toEqual([series, 2, false]);
+  });
+
+  it.each(['f001', 'f002,f003'])('retains sample pages after a failed profile page (%s) and fetches only missing profiles on reload', async failedFrames => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2, 3], mapFrameCount: 2 });
+    let fail = true;
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (fail && url.pathname.endsWith('/profile') && url.searchParams.get('frame') === failedFrames) {
+        return new Response(null, { status: 429 });
+      }
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const loader = api.pointSeries(build, point), onProgress = vi.fn<(series: PointSeries, total: number, loading: boolean) => void>();
+    await expect(loader.load('forecast', undefined, { onProgress })).rejects.toMatchObject({ status: 429 });
+    const [partial, total, loading] = onProgress.mock.lastCall!;
+    expect(partial.frames.map(frame => frame.id)).toEqual(['f001', 'f002']);
+    expect(partial.frames.map(frame => frame.layers['usable-lift-agl'].value)).toEqual([500, 500]);
+    expect(partial.frames[0].profile?.status).toBe(failedFrames === 'f001' ? undefined : 'valid');
+    expect(partial.frames[1].profile).toBeUndefined();
+    expect([total, loading]).toEqual([3, false]);
+    fail = false;
+    const settled = fetchImpl.mock.calls.length;
+    const recovered = await loader.load('forecast');
+    expect(recovered.frames.map(frame => frame.profile?.status)).toEqual(['valid', 'valid', 'valid']);
+    const retry = fetchImpl.mock.calls.slice(settled).map(([input]) => new URL(String(input)));
+    expect(retry.every(url => url.pathname.endsWith('/profile'))).toBe(true);
+    expect(retry.flatMap(url => url.searchParams.get('frame')!.split(','))).toEqual(failedFrames === 'f001' ? ['f001', 'f002', 'f003'] : ['f002', 'f003']);
+  });
+
+  it('rejects a profile completing after expiry without publishing or reusing it', async () => {
+    const build = fixtureProfileBuild({ frameHours: [1], mapFrameCount: 1 });
+    let now = Date.parse(build.manifest.createdAt), release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (new URL(String(input)).pathname.endsWith('/profile')) await gate;
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => now });
+    const loader = api.pointSeries(build, point), onProgress = vi.fn();
+    const pending = expect(loader.load('day', undefined, { onProgress })).rejects.toThrow('Build expired');
+    await vi.waitFor(() => expect(onProgress).toHaveBeenCalledOnce());
+    now = build.expiresAtMs;
+    release();
+    await pending;
+    expect(onProgress).toHaveBeenCalledOnce();
+    await expect(loader.load('day')).rejects.toThrow('Build expired');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses selected lift while a superseded profile response is discarded', async () => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2, 3], mapFrameCount: 2 });
+    let release!: () => void, firstProfile = true;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (new URL(String(input)).pathname.endsWith('/profile') && firstProfile) {
+        firstProfile = false;
+        await gate;
+      }
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const loader = api.pointSeries(build, point), onProgress = vi.fn();
+    const superseded = expect(loader.load('forecast', undefined, { onProgress })).rejects.toThrow();
+    await vi.waitFor(() => expect(onProgress).toHaveBeenCalledTimes(2));
+    const day = await loader.load('day');
+    await superseded;
+    release();
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(day.frames.map(frame => frame.profile?.status)).toEqual(['valid', 'valid']);
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    const fineFrames = fetchImpl.mock.calls.map(([input]) => new URL(String(input)))
+      .filter(url => url.pathname.endsWith('/sample')).map(url => url.searchParams.get('frame'));
+    expect(fineFrames).toEqual(['f001', 'f002']);
   });
 
   it('keeps unprefixed v5 point days within 24 hours and preserves the full forecast', async () => {
