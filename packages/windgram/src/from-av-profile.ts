@@ -1,12 +1,10 @@
 import type { LayerId } from '@av/contracts';
-import { pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries } from '@av/contracts/client';
+import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries } from '@av/contracts/client';
 import { windFromComponents } from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 
-/** The point panel uses the same whole-hour offset as the map. */
-export function timeZoneForLongitude(lon: number): string {
-  const wrapped = (((lon + 180) % 360) + 360) % 360 - 180;
-  const offsetHours = Math.max(-12, Math.min(14, Math.round(wrapped / 15)));
+function timeZoneForLongitude(lon: number): string {
+  const offsetHours = longitudeOffsetHours(lon);
   if (offsetHours === 0) return 'Etc/UTC';
   const sign = offsetHours > 0 ? '-' : '+';
   return `Etc/GMT${sign}${Math.abs(offsetHours)}`;

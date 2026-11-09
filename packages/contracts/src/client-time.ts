@@ -1,4 +1,5 @@
 import type { Manifest } from './index.ts';
+import { normalizeLon } from './coverage.ts';
 
 export interface FrameLike {
   id: string;
@@ -18,6 +19,11 @@ export interface FrameBadge {
 }
 
 export const HOST_MATCH_TOLERANCE_MS = 1000;
+
+/** Approximate local clock offset from longitude, in whole hours. */
+export function longitudeOffsetHours(lon: number): number {
+  return Math.round(normalizeLon(lon) / 15);
+}
 
 export function frameTime(value: string): number {
   const parsed = Date.parse(value);

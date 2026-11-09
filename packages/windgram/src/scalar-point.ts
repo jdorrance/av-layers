@@ -1,35 +1,22 @@
 import { pointFrameView, seriesTable, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/contracts/client';
 
-function node<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] {
-  const element = document.createElement(tag);
-  if (text !== undefined) element.textContent = text;
-  return element;
-}
-
-function renderSampleTable(container: HTMLElement, payload: Pick<PointSeries, 'frames'>, layers: readonly string[], build: PinnedBuild): void {
-  const model = seriesTable(payload, layers, build.manifest.descriptors.layers, build.manifest.version === 5 ? [] : build.manifest.patches);
-  const table = node('table'), head = node('tr');
-  head.append(...model.headings.map(label => node('th', label)));
-  table.append(head);
-  for (const cells of model.rows) {
-    const row = node('tr');
-    row.append(...cells.map(text => node('td', text)));
-    table.append(row);
-  }
-  container.replaceChildren(table);
-}
-
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(
   container: HTMLElement, payload: Pick<PointSeries, 'frames'>, build: PinnedBuild,
   options: { frameId: string | null; mapFrameId?: string | null; unitSystem: UnitSystem; totalFrames?: number; loading?: boolean; onFrame(id: string): void }
 ): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void {
+  const owner = container.ownerDocument;
+  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
+    const element = owner.createElement(tag);
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
   const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
   const previousScroll = previous?.scrollLeft ?? 0;
   const previousSelected = previous?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
   let followSelection = !previous || previous.clientWidth <= 0 || !previousSelected || previousSelected.value !== options.frameId ||
     (previousSelected.offsetLeft >= previousScroll && previousSelected.offsetLeft + previousSelected.offsetWidth <= previousScroll + previous.clientWidth);
-  const focused = previous?.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : null;
+  const focused = previous?.contains(owner.activeElement) ? owner.activeElement as HTMLButtonElement : null;
   const wasOpen = container.querySelector?.<HTMLDetailsElement>('details')?.open ?? false;
   const section = node('section'), summary = node('p'), time = node('p'), incomplete = node('p', 'Forecast incomplete. Some hours could not be loaded.'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
   section.className = 'av-point-series'; summary.className = 'av-point-values'; chart.className = 'av-point-chart';
@@ -44,7 +31,19 @@ export function renderPointSeries(
   const heading = node('summary', 'Values and source surfaces');
   heading.style.cssText = 'font-size:11px;cursor:pointer;margin:8px 0'; details.append(heading, table);
   details.addEventListener('toggle', () => {
-    if (details.open && !table.children.length) renderSampleTable(table, payload, Object.keys(payload.frames[0]?.layers ?? {}), build);
+    if (!details.open || table.children.length) return;
+    const { manifest } = build;
+    const layers = Object.keys(payload.frames[0]?.layers ?? {});
+    const model = seriesTable(payload, layers, manifest.descriptors.layers, manifest.version === 5 ? [] : manifest.patches);
+    const values = node('table'), head = node('tr');
+    head.append(...model.headings.map(label => node('th', label)));
+    values.append(head);
+    for (const cells of model.rows) {
+      const row = node('tr');
+      row.append(...cells.map(text => node('td', text)));
+      values.append(row);
+    }
+    table.replaceChildren(values);
   });
   const viewsByUnit: Partial<Record<UnitSystem, ReturnType<typeof pointFrameView>[]>> = {};
   const getViews = (units: UnitSystem) => viewsByUnit[units] ??= payload.frames.map(frame => pointFrameView(frame, build, units));

@@ -180,7 +180,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     const left = hourX(view.hours, i - 0.5, columnWidth);
     return { left, width: hourX(view.hours, i + 0.5, columnWidth) - left };
   });
-  const fieldNodes = sampling.map((s) => {
+  const stabilityPixelNodes = sampling.map((s) => {
     if (!s.lapseCPer1000Ft.some((n) => Number.isFinite(n.value))) return [];
     const displayNodes = stabilityDisplayNodes(s.lapseCPer1000Ft);
     const nodes = displayNodes.filter(n => n.altitudeM >= floorM && n.altitudeM <= topM);
@@ -190,10 +190,11 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     if (nodes.length && nodes.at(-1)!.altitudeM < topM && displayNodes.at(-1)!.altitudeM > topM) {
       nodes.push({ altitudeM: topM, value: sampleHeight(displayNodes, topM) ?? NaN });
     }
+    // The stability raster interpolates along the chart's vertical scale in pixels.
     return nodes.map((n) => ({ altitudeM: bottom - y(n.altitudeM), value: n.value }));
   });
-  const fields = fieldNodes.some(nodes => nodes.length) ? buildStabilityFieldPaths({
-    nodesByHour: fieldNodes,
+  const fields = stabilityPixelNodes.some(nodes => nodes.length) ? buildStabilityFieldPaths({
+    nodesByHour: stabilityPixelNodes,
     hours: view.hours,
     columnWidth,
     floorM: 0,
@@ -206,19 +207,19 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     },
   }) : {};
   view.fields = Object.entries(fields).map(([className, path]) => ({ className, path }));
-  fieldNodes.forEach((nodes, i) => {
+  stabilityPixelNodes.forEach((nodes, i) => {
     const rawNodes = sampling[i].lapseCPer1000Ft;
     const { left, width } = bounds[i];
     const validNodes = nodes.filter((n) => Number.isFinite(n.value));
-    const highestValidAlt = validNodes.length ? validNodes[validNodes.length - 1].altitudeM : 0;
+    const highestValidPx = validNodes.at(-1)?.altitudeM ?? 0;
     // Mask any missing internal intervals below the last valid measurement.
     let missingSpan: { baseY: number; topY: number } | null = null;
     for (let k = 0; k + 1 < rawNodes.length; k += 2) {
       const a = rawNodes[k], b = rawNodes[k + 1];
       if (Number.isFinite(a.value) && Number.isFinite(b.value)) continue;
-      const dispTop = bottom - y(b.altitudeM);
-      if (dispTop > highestValidAlt + 0.001) continue;
-      const baseY = y(a.altitudeM), topY = y(b.altitudeM);
+      const topY = y(b.altitudeM);
+      if (bottom - topY > highestValidPx + 0.001) continue;
+      const baseY = y(a.altitudeM);
       if (missingSpan && Math.abs(missingSpan.topY - baseY) < 0.05) missingSpan.topY = topY;
       else {
         if (missingSpan && missingSpan.baseY > missingSpan.topY) {
@@ -237,7 +238,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
       });
     }
     // Mask any truncated top extension above the highest valid node.
-    const missingHeight = validNodes.length ? bottom - highestValidAlt - top : plotHeight;
+    const missingHeight = validNodes.length ? bottom - highestValidPx - top : plotHeight;
     if (missingHeight > 0) {
       view.fields.push({
         className: 'windgram-missing',

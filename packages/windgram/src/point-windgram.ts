@@ -1,4 +1,4 @@
-import { formatMapLiftCell, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/contracts/client';
+import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/contracts/client';
 import { mountWindgram, type WindgramMount } from './dom.ts';
 import { pointSeriesToSiteForecast } from './from-av-profile.ts';
 import { panelStyles } from './panel-styles.ts';
@@ -6,23 +6,16 @@ import { renderPointSeries } from './scalar-point.ts';
 import { localDateKey, type SiteForecast } from './internal-meteo.ts';
 import { buildWindgramView, type WindgramView } from './scene.ts';
 import { renderWindgramKey } from './svg.ts';
+import { daylightForDate } from './windgram-time-axis.ts';
 
 const STYLE_ID = 'av-windgram-document-style';
 
-function ensureDocumentStyles(): void {
-  if (typeof document === 'undefined' || !document.head) return;
-  if (typeof document.getElementById === 'function' && document.getElementById(STYLE_ID)) return;
-  const style = document.createElement('style');
+function ensureDocumentStyles(owner: Document): void {
+  if (!owner.head || owner.getElementById?.(STYLE_ID)) return;
+  const style = owner.createElement('style');
   style.id = STYLE_ID;
   style.textContent = panelStyles;
-  document.head.append(style);
-}
-
-function node<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  if (className) el.className = className;
-  if (text !== undefined) el.textContent = text;
-  return el;
+  owner.head.append(style);
 }
 
 export interface PointWindgramOptions {
@@ -37,6 +30,7 @@ export interface PointWindgramOptions {
 
 type Update = (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void;
 type FrameRef = { readonly id: string; readonly validTime: string };
+type DayHour = { readonly id: string; readonly validAt: string };
 type PointWindgramInput = Pick<PointSeries, 'frames'>;
 
 interface PointWindgramState {
@@ -48,15 +42,33 @@ interface PointWindgramState {
   dispose(): void;
 }
 
-interface Data {
+interface Calendar {
   frames: readonly FrameRef[];
+  frameIdByValidTime: ReadonlyMap<string, string>;
+  days: ReadonlyMap<string, readonly DayHour[]>;
+}
+
+interface Data extends Calendar {
   loaded: ReadonlyMap<string, PointFrame>;
   forecast: SiteForecast;
-  frameIdByValidTime: Map<string, string>;
-  days: Map<string, { validAt: string }[]>;
   hasSounding: boolean;
   hasValues: boolean;
   partial: boolean;
+}
+
+function groupFrames(frames: readonly FrameRef[], timeZone: string): Calendar {
+  const frameIdByValidTime = new Map<string, string>();
+  const days = new Map<string, DayHour[]>();
+  const references = frames.map(({ id, validTime }) => {
+    frameIdByValidTime.set(validTime, id);
+    const key = localDateKey(validTime, timeZone);
+    const hour = { id, validAt: validTime };
+    const hours = days.get(key);
+    if (hours) hours.push(hour);
+    else days.set(key, [hour]);
+    return { id, validTime };
+  });
+  return { frames: references, frameIdByValidTime, days };
 }
 
 const states = new WeakMap<HTMLElement, PointWindgramState>();
@@ -68,22 +80,29 @@ function createPointWindgram(
   build: PinnedBuild,
   options: PointWindgramOptions
 ): PointWindgramState {
-  ensureDocumentStyles();
+  const owner = container.ownerDocument;
+  const browser = owner.defaultView;
+  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
+    const el = owner.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  };
+  ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
+  let grouped: Calendar | undefined;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {
     const frames = nextOptions.totalFrames === undefined ? nextInput.frames : build.manifest.frames.slice(0, nextOptions.totalFrames);
     const forecast = pointSeriesToSiteForecast(nextInput, build, { point: nextOptions.point, expectedFrames: frames.map(frame => frame.id) });
     const loaded = new Map(nextInput.frames.map(frame => [frame.id, frame]));
-    const frameIdByValidTime = new Map<string, string>(), days = new Map<string, { validAt: string }[]>();
-    for (const frame of frames) {
-      frameIdByValidTime.set(frame.validTime, frame.id);
-      const key = localDateKey(frame.validTime, forecast.site.timeZone);
-      const hours = days.get(key);
-      if (hours) hours.push({ validAt: frame.validTime });
-      else days.set(key, [{ validAt: frame.validTime }]);
-    }
+    const previous = grouped;
+    const calendar = previous && previous.frames.length === frames.length && frames.every(({ id, validTime }, i) => {
+      const old = previous.frames[i];
+      return old.id === id && old.validTime === validTime;
+    }) ? previous : groupFrames(frames, forecast.site.timeZone);
+    grouped = calendar;
     return {
-      frames, loaded, forecast, frameIdByValidTime, days,
+      ...calendar, loaded, forecast,
       hasSounding: forecast.hours.some(hour => hour.levels.length > 0),
       hasValues: nextInput.frames.some(frame => Object.values(frame.layers).some(cell => cell.status === 'valid')),
       partial: frames.some(({ id }) => {
@@ -141,19 +160,18 @@ function createPointWindgram(
   let viewCache: { key: string; frames: readonly (PointFrame | undefined)[]; daylight: WindgramView; full?: WindgramView } | null = null;
   let mountedView: WindgramView | null = null;
   let mounted: WindgramMount | null = null;
-  let observer: ResizeObserver | null = null;
   let disposed = false;
   const dayButtons = new Map<string, HTMLButtonElement>();
 
   const dayLabel = new Intl.DateTimeFormat('en-US', { timeZone: data.forecast.site.timeZone, weekday: 'short', day: 'numeric' });
   const chartHeight = () => {
-    const cap = typeof getComputedStyle === 'function' ? parseFloat(getComputedStyle(chartHost).maxHeight) : NaN;
-    return Number.isFinite(cap) ? Math.floor(cap) : undefined;
+    const cap = browser?.getComputedStyle(chartHost).maxHeight;
+    const pixels = cap?.endsWith('px') ? Number(cap.slice(0, -2)) : NaN;
+    return Number.isFinite(pixels) ? Math.floor(pixels) : undefined;
   };
 
-  const dayViews = (dayKey: string, widthPx: number, heightPx: number | undefined) => {
-    const hours = data.days.get(dayKey)!;
-    const frames = hours.map(hour => data.loaded.get(data.frameIdByValidTime.get(hour.validAt)!));
+  const dayViews = (dayKey: string, hours: readonly DayHour[], widthPx: number, heightPx: number | undefined) => {
+    const frames = hours.map(hour => data.loaded.get(hour.id));
     const key = `${dayKey}|${units}|${widthPx}|${heightPx}|${hours.length}`;
     if (viewCache?.key !== key || viewCache.frames.some((frame, i) => frame !== frames[i])) {
       const timeZone = data.forecast.site.timeZone;
@@ -167,11 +185,14 @@ function createPointWindgram(
 
   const selectDay = (dayKey: string) => {
     if (disposed) return;
-    const ids = (data.days.get(dayKey) ?? []).map(hour => data.frameIdByValidTime.get(hour.validAt)!);
-    const view = mounted ? dayViews(dayKey, activeWidth, activeHeight).daylight : null;
-    const visible = view?.hours.find(hour => hour.x >= view.left && hour.x <= view.left + view.plotWidth && data.loaded.has(data.frameIdByValidTime.get(hour.validAt)!));
-    const id = (visible && data.frameIdByValidTime.get(visible.validAt)) ?? ids.find(candidate => data.loaded.has(candidate)) ?? ids[0];
-    if (id) onFrame(id);
+    const hours = data.days.get(dayKey);
+    if (!hours?.length) return;
+    const daylight = mounted ? daylightForDate(data.forecast, dayKey, data.forecast.site.timeZone) : null;
+    const visible = daylight && hours.find(hour => {
+      const time = Date.parse(hour.validAt);
+      return time >= daylight.sunrise && time <= daylight.sunset && data.loaded.has(hour.id);
+    });
+    onFrame((visible || hours.find(hour => data.loaded.has(hour.id)) || hours[0]).id);
   };
 
   const syncDayButtons = () => {
@@ -247,19 +268,19 @@ function createPointWindgram(
       button.ariaPressed = String(isSelected);
       button.className = isSelected ? 'av-windgram-day is-selected' : 'av-windgram-day';
     }
-    const showChart = targetDayKey !== undefined && (data.hasSounding || (!loading && data.hasValues));
+    const dayHours = targetDayKey === undefined ? undefined : data.days.get(targetDayKey);
+    const showChart = dayHours !== undefined && (data.hasSounding || (!loading && data.hasValues));
     chartHost.hidden = details.hidden = !showChart;
     controls.hidden = data.frames.length <= 1;
     liftSummary.hidden = liftLayers.length === 0 || (showChart && lift.mslM !== null);
-    if (!showChart) return;
+    if (!showChart || targetDayKey === undefined) return;
 
     const widthPx = chartHost.clientWidth > 0 ? chartHost.clientWidth : 420;
     const compact = widthPx < 520;
     const heightPx = chartHeight();
     activeWidth = widthPx;
     activeHeight = heightPx;
-    const dayHours = data.days.get(targetDayKey)!;
-    const views = dayViews(targetDayKey, widthPx, heightPx), daylightView = views.daylight;
+    const views = dayViews(targetDayKey, dayHours, widthPx, heightPx), daylightView = views.daylight;
     const visibleDayHours = daylightView.hours.filter(hour => hour.x >= daylightView.left && hour.x <= daylightView.left + daylightView.plotWidth);
     const selectedInDaylight = selectedValidAt === null || visibleDayHours.some(hour => hour.validAt === selectedValidAt);
     const useDaylightCrop = selectedInDaylight && visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
@@ -299,12 +320,9 @@ function createPointWindgram(
     if (disposed || container.children[0] !== section || chartHost.clientWidth <= 0) return;
     if (chartHost.clientWidth !== activeWidth || chartHeight() !== activeHeight) update(selectedFrameId, units, mapFrameId, loading);
   };
-  const window = chartHost.ownerDocument?.defaultView;
-  window?.addEventListener('resize', resize);
-  if (typeof ResizeObserver === 'function') {
-    observer = new ResizeObserver(resize);
-    observer.observe(chartHost);
-  }
+  browser?.addEventListener('resize', resize);
+  const observer = browser?.ResizeObserver ? new browser.ResizeObserver(resize) : null;
+  observer?.observe(chartHost);
 
   const state: PointWindgramState = {
     section,
@@ -315,9 +333,8 @@ function createPointWindgram(
     dispose() {
       if (disposed) return;
       disposed = true;
-      window?.removeEventListener('resize', resize);
+      browser?.removeEventListener('resize', resize);
       observer?.disconnect();
-      observer = null;
       mounted?.dispose();
       mounted = null;
     }
@@ -331,7 +348,7 @@ export function renderPointWindgram(
   build: PinnedBuild,
   options: PointWindgramOptions
 ): Update {
-  if (build.manifest.version !== 5 || !build.manifest.surfaces.some(surface => surface.profiles)) {
+  if (!hasNativeProfiles(build)) {
     disposePointWindgram(container);
     return renderPointSeries(container, { frames: input.frames }, build, options);
   }

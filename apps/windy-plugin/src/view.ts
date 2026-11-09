@@ -27,6 +27,7 @@ const CSS = `
 .av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
 .av-point-settings{margin-top:5px;font-size:11px}
 .av-point-settings summary{cursor:pointer}
+.av-point-location{margin:5px 0 0}
 .av-point-settings label{display:inline-block;margin:5px 5px 0 0}
 .av-point-settings select{margin:5px 9px 0 0}
 `;
@@ -57,6 +58,7 @@ export class PluginPanel {
   private readonly horizonNotice = node('p', 'av-warning');
   private readonly point = node('section', 'av-point');
   private readonly pointSettings = node('details', 'av-point-settings');
+  private readonly pointCoordinates = node('p', 'av-point-location');
   private readonly pointStatus = node('p', 'av-muted');
   private readonly pointBody = node('div');
   private readonly units = node('select');
@@ -125,7 +127,7 @@ export class PluginPanel {
     this.point.ariaLabel = 'Point forecast';
     this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
     this.pointStatus.role = 'status';
-    this.pointSettings.append(node('summary', undefined, 'Settings'), unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon);
+    this.pointSettings.append(node('summary', undefined, 'Settings'), this.pointCoordinates, unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon);
     this.point.append(this.pointBody, this.pointStatus, this.pointSettings);
     this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
@@ -184,6 +186,7 @@ export class PluginPanel {
 
   loadPoint(point: GeoPoint): void {
     this.clearPoint(); this.pointLocation = point; this.point.hidden = false;
+    this.pointCoordinates.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     this.point.ariaBusy = 'true';
     this.setPointStatus('Loading forecast…');
   }
@@ -191,7 +194,7 @@ export class PluginPanel {
   pointLoading(frameId: string | null): void {
     this.pointFrameId = frameId;
     this.point.ariaBusy = 'true';
-    this.setPointStatus(this.pointBody.children.length ? '' : 'Loading forecast…');
+    this.setPointStatus('Loading forecast…');
   }
 
   get pointFrame(): string | null { return this.pointFrameId; }
@@ -200,7 +203,7 @@ export class PluginPanel {
     if (!this.pointLocation) return;
     if (this.pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === this.pointFrameId))) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
     this.point.ariaBusy = String(loading);
-    this.setPointStatus();
+    if (!loading) this.setPointStatus();
     this.updatePoint = renderPointWindgram(this.pointBody, payload, build, { point: this.pointLocation, frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading, onFrame: id => {
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
@@ -211,7 +214,7 @@ export class PluginPanel {
   pointError(message: string): void {
     this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, false);
     this.point.ariaBusy = 'false';
-    if (!this.pointBody.children.length) this.setPointStatus(message);
+    this.setPointStatus(this.pointBody.children.length ? message : `Forecast unavailable. ${message}`);
   }
 
   private setPointStatus(message = ''): void {

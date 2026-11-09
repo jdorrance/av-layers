@@ -28,11 +28,11 @@ bounded frame receipts; retained version-1 receipts stay inline.
 
 `ApiClient` point requests default to the first v5 frame. Select frame pages for
 complete timelines; explicit `all` selections retain the serving budgets.
-`ApiClient.pointSeries(build, point)` caches scalar samples and native profiles
-independently for the pinned point. Its loader publishes the selected map sample
-as soon as it arrives and merges profiles by frame ID. `onProgress` reports
-loading separately from the frame count. [client-point.ts](src/client-point.ts)
-owns paging and cancellation.
+`ApiClient.pointSeries(build, point)` loads and caches scalar samples and native
+profiles independently for the pinned point. When the selected frame has map
+lift, progress starts after its sample request settles. Profiles merge by frame
+ID. `onProgress` reports loading separately from the frame count.
+[client-point.ts](src/client-point.ts) owns paging and cancellation.
 Point day views use an explicit v5 `mapFrameCount`; older builds retain 24 hours.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and

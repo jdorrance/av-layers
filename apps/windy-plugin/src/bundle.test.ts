@@ -23,6 +23,7 @@ class FakeElement {
   step = '';
   private selected = '';
   constructor(readonly tag: string) {}
+  get ownerDocument(): Document { return document; }
   get value(): string { return this.selected || this.children[0]?.value || ''; }
   set value(value: string) { this.selected = value; }
   append(...children: FakeElement[]): void {

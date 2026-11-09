@@ -2,7 +2,7 @@ import { barbGeometry } from './wind-barb.ts';
 import { knotsToMps, type UnitSystem } from './windgram-format.ts';
 import { WINDGRAM_PRESENTATION, type WindgramPresentation } from './windgram-presentation.ts';
 
-export interface GlyphBox { x: number; y: number; width: number; height: number }
+interface GlyphBox { x: number; y: number; width: number; height: number }
 type Point = readonly [number, number];
 export const CALM_RADIUS = WINDGRAM_PRESENTATION.glyphs.calmRadius;
 

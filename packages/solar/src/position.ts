@@ -274,7 +274,10 @@ export function sunriseSunsetInRange(
     return Math.round((a + b) / 2);
   };
   const step = 10 * 60_000;
-  const sample = (time: number) => ({ time, elevation: elevation(time) });
+  const sample = (time: number) => {
+    const { elevationDeg, isDaylight } = solarPosition(latDeg, lonDeg, time);
+    return { time, elevation: elevationDeg, isDaylight };
+  };
   const samples = [sample(startMs - step), sample(startMs)];
   for (let t = startMs + step; t < endMs; t += step) samples.push(sample(t));
   samples.push(sample(endMs), sample(endMs + step));
@@ -296,9 +299,9 @@ export function sunriseSunsetInRange(
   samples.sort((a, b) => a.time - b.time);
   let sunrise: number | null = null;
   let sunset: number | null = null;
-  let prev = above(samples[1]!.time);
+  let prev = samples[1]!.isDaylight;
   for (let i = 2; i < samples.length - 1; i++) {
-    const now = above(samples[i]!.time);
+    const now = samples[i]!.isDaylight;
     if (now && !prev && sunrise === null) sunrise = refine(samples[i - 1]!.time, samples[i]!.time, true);
     if (!now && prev) sunset = refine(samples[i - 1]!.time, samples[i]!.time, false);
     prev = now;

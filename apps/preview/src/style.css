@@ -194,6 +194,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   padding: 7px 9px 8px;
 }
 
+#point-card:not([hidden]) { display: flex; flex-direction: column; }
+
 .point-actions {
   position: absolute;
   z-index: 1;
@@ -233,10 +235,12 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 .point-settings-body > details > summary { cursor: pointer; }
 
-#point-status { margin: 0; color: #526170; font-size: 12px; line-height: 30px; padding-right: 68px; }
+#point-location { margin: 0 0 7px; color: #526170; }
+#point-status { flex: none; margin: 4px 0 0; color: #526170; font-size: 12px; overflow-wrap: anywhere; }
+#point-body:empty + #point-status { margin: 0; line-height: 30px; padding-right: 68px; }
 #point-card .av-windgram-controls { min-height: 30px; padding-inline-end: 67px; }
 #point-card .av-windgram-controls[hidden] { display: block; visibility: hidden; }
-#point-body { min-width: 0; }
+#point-body { min-width: 0; overflow: auto; }
 #point-body > .av-point-series:not(.av-windgram-panel) { padding-top: 34px; }
 
 .point-units { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 7px; font-size: 12px; color: #526170; }

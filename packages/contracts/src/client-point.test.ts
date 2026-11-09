@@ -126,6 +126,59 @@ describe('cached point forecast pages', () => {
     expect(onProgress.mock.lastCall).toEqual([series, 2, false]);
   });
 
+  it.each([200, 429])('waits for the selected lift response (%s) while profile pages continue', async status => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 2 });
+    let releaseLift!: () => void, releaseProfile!: () => void;
+    const liftGate = new Promise<void>(resolve => { releaseLift = resolve; });
+    const profileGate = new Promise<void>(resolve => { releaseProfile = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input)), frame = url.searchParams.get('frame');
+      if (url.pathname.endsWith('/sample') && frame === 'f002') {
+        await liftGate;
+        if (status !== 200) return new Response(null, { status });
+      }
+      if (url.pathname.endsWith('/profile') && frame === 'f001') await profileGate;
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const onProgress = vi.fn<(series: PointSeries, total: number, loading: boolean) => void>();
+    const pending = api.pointSeries(build, point).load('day', undefined, { frameId: 'f002', onProgress });
+    const settled = status === 200 ? expect(pending).resolves.toBeDefined() : expect(pending).rejects.toMatchObject({ status });
+    try {
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+      expect(onProgress).not.toHaveBeenCalled();
+      releaseLift();
+      await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
+      const [early, total, loading] = onProgress.mock.calls[0]!;
+      expect(early.frames.map(frame => frame.id)).toEqual(['f002']);
+      expect(early.frames[0].profile?.status).toBe('valid');
+      expect(early.frames[0].layers['usable-lift-agl']?.value).toBe(status === 200 ? 500 : undefined);
+      expect([total, loading]).toEqual([2, true]);
+    } finally { releaseLift(); releaseProfile(); }
+    await settled;
+  });
+
+  it('publishes the selected point-only profile independently of pending map samples', async () => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 1 });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      if (new URL(String(input)).pathname.endsWith('/sample')) await gate;
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const onProgress = vi.fn<(series: PointSeries, total: number, loading: boolean) => void>();
+    const pending = api.pointSeries(build, point).load('forecast', undefined, { frameId: 'f002', onProgress });
+    try {
+      await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
+      const [early, total, loading] = onProgress.mock.calls[0]!;
+      expect(early.frames.map(frame => frame.id)).toEqual(['f002']);
+      expect(early.frames[0].profile?.status).toBe('valid');
+      expect([total, loading]).toEqual([2, true]);
+    } finally { release(); }
+    await pending;
+  });
+
   it.each(['f001', 'f002,f003'])('retains sample pages after a failed profile page (%s) and fetches only missing profiles on reload', async failedFrames => {
     const build = fixtureProfileBuild({ frameHours: [1, 2, 3], mapFrameCount: 2 });
     let fail = true;

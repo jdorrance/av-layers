@@ -35,6 +35,7 @@ class FakeElement {
   checked = false;
   tabIndex = -1;
   constructor(readonly tag: string) {}
+  get ownerDocument(): Document { return document; }
   append(...children: FakeElement[]): void {
     for (const child of children) child.parent = this;
     this.children.push(...children);
@@ -288,13 +289,18 @@ it('navigates forecast hours via windgram keyboard controls', async () => {
 });
 
 it('refreshes the same chart on a page append and resize, and disposes the observer and inspector', async () => {
-  installDom();
+  const owner = installDom();
   const disconnect = vi.fn();
   let resize!: () => void;
-  vi.stubGlobal('ResizeObserver', class {
-    constructor(callback: () => void) { resize = callback; }
-    observe() { }
-    disconnect = disconnect;
+  Object.assign(owner, {
+    defaultView: Object.assign(new EventTarget(), {
+      getComputedStyle: () => ({ maxHeight: 'none' }),
+      ResizeObserver: class {
+        constructor(callback: () => void) { resize = callback; }
+        observe() { }
+        disconnect = disconnect;
+      }
+    })
   });
   const build = fixtureProfileBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 }), point = { lat: 32.9, lon: -117.25 };
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
@@ -399,6 +405,9 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
   const panel = new PluginPanel(callbacks()), point = { lat: 32.9, lon: -117.25 };
   panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f072', displayedFrameId: m.frames[0].id });
   panel.loadPoint(point);
+  const location = visit(panel.root as unknown as FakeElement).find(node => node.className === 'av-point-location')!;
+  expect(location.parent?.className).toBe('av-point-settings');
+  expect(location.textContent).toBe('32.900°, -117.250°');
   const pending = api.pointSeries(build, point).load('day', undefined, { frameId: 'f072', onProgress(series, total, loading) {
     panel.renderPoint(series, build, 'f072', vi.fn(), total, loading);
   } });
@@ -407,6 +416,10 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     await vi.waitFor(() => expect(pages).toHaveLength(fail ? 3 : 2));
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.find(node => node.className === 'av-point')?.ariaBusy).toBe('true');
+    panel.pointLoading('f072');
+    const status = nodes.find(node => node.className === 'av-muted' && node.parent?.className === 'av-point');
+    expect(status?.hidden).toBe(false);
+    expect(status?.textContent).toBe('Loading forecast…');
     expect(nodes.find(node => node.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
     expect(nodes.find(node => node.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
@@ -422,6 +435,9 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     await rejected;
     panel.pointError('Late page failed');
     const nodes = visit(panel.root as unknown as FakeElement), summary = nodes.find(node => node.className === 'av-windgram-lift-summary')!;
+    const status = nodes.find(node => node.className === 'av-muted' && node.parent?.className === 'av-point');
+    expect(status?.hidden).toBe(false);
+    expect(status?.textContent).toBe('Late page failed');
     expect(panel.pointFrame).toBe(keepKnown ? 'f072' : 'f069');
     expect(summary.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-windgram-profile-status')?.hidden).toBe(keepKnown);

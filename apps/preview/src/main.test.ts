@@ -22,6 +22,7 @@ class Element extends EventTarget {
   min = '';
   private selected = '';
   constructor(readonly tag: string) { super(); }
+  get ownerDocument(): Document { return doc; }
   get value(): string { return this.selected || this.children[0]?.value || ''; }
   set value(value: string) { this.selected = value; }
   append(...children: Element[]): void { this.children.push(...children); }
@@ -364,6 +365,8 @@ it('makes point values keyboard-scrollable only while the card is open', async (
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   expect(ui('point-body').tabIndex).toBe(0);
   expect(ui('point-card').hidden).toBe(false);
+  expect(ui('point-settings').open).toBe(false);
+  expect(ui('point-location').textContent).toBe('32.900°, -117.250°');
 
   ui('point-close').dispatchEvent(new Event('click'));
   expect(ui('point-body').children).toHaveLength(0);
@@ -595,16 +598,35 @@ it('keeps the full-forecast choice visible for legacy maps with a bounded 24-hou
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
   const pointBuild = retainedProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
-  fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
-    ? v5Latest(published) : fixturePointFetch(pointBuild, String(input)))));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let loadingLaterHours = false;
+  const firstPointOnlyFrame = published.frames[24].id;
+  fetchMock.mockImplementation(async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(v5Latest(published)));
+    if (url.pathname.endsWith('/profile') && url.searchParams.get('frame')?.split(',').includes(firstPointOnlyFrame)) {
+      loadingLaterHours = true;
+      await gate;
+    }
+    return new Response(JSON.stringify(fixturePointFetch(pointBuild, String(input))));
+  });
   await start();
   expect(ui('point-horizon-label').hidden).toBe(false);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
-  await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  const chart = ui('point-body').children[0];
   const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   const mapUrl = raster(), mapTime = ui('time').value;
   ui('point-horizon').value = 'forecast'; ui('point-horizon').dispatchEvent(new Event('change'));
+  try {
+    await vi.waitFor(() => expect(loadingLaterHours).toBe(true));
+    expect(ui('point-body').children[0]).toBe(chart);
+    expect(ui('point-status').hidden).toBe(false);
+    expect(ui('point-status').textContent).toBe('Loading forecast…');
+  } finally { release(); }
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  expect(ui('point-status').hidden).toBe(true);
   const series = ui('point-body').children[0], nodes = visit(series);
   const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
   expect(dayTabs.children.length).toBeGreaterThan(1);
@@ -675,6 +697,8 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
   } finally { release(); }
   if (fail) {
     await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+    expect(ui('point-status').hidden).toBe(false);
+    expect(ui('point-status').textContent).toBe('Late page failed');
     const nodes = visit(ui('point-body').children[0]);
     const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');

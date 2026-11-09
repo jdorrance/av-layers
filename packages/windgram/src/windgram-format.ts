@@ -44,12 +44,9 @@ export function convertQuantity(value: number | null | undefined, kind: Quantity
 export function formatQuantity(value: number | null | undefined, kind: QuantityKind, digits: number | undefined, system: UnitSystem): string {
   const converted = convertQuantity(value, kind, system);
   if (converted === null) return '—';
-  return `${fmt(converted, digits ?? defaultQuantityDigits(kind, system))} ${unitLabel(kind, system)}`;
-}
-
-function fmt(value: number | null | undefined, digits = 0): string {
-  if (value == null || Number.isNaN(value)) return '–';
-  return value.toLocaleString('en-US', { maximumFractionDigits: digits, minimumFractionDigits: digits });
+  const precision = digits ?? defaultQuantityDigits(kind, system);
+  const label = converted.toLocaleString('en-US', { maximumFractionDigits: precision, minimumFractionDigits: precision });
+  return `${label} ${unitLabel(kind, system)}`;
 }
 
 /** The gust class a forecast document declares (`semantics.gust`); absence means the document predates the tag. */

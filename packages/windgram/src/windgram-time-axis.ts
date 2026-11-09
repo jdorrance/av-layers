@@ -8,6 +8,8 @@ import type { WindgramHourFilterOptions } from './scene-types.ts';
 import { WINDGRAM_PRESENTATION, type WindgramPresentation } from './windgram-presentation.ts';
 
 type ProfileHour = SiteForecast['hours'][number];
+const DAYLIGHT_CACHE_LIMIT = 16;
+const daylightCache = new Map<string, ReturnType<typeof sunriseSunsetInRange>>();
 
 export interface WindgramTimeTick {
   validAt: string;
@@ -47,11 +49,17 @@ export function visibleWindgramHourIndices(
   return selected;
 }
 
-function daylightForDate(profile: SiteForecast, dateKey: string, timeZone: string) {
+export function daylightForDate(profile: SiteForecast, dateKey: string, timeZone: string) {
   const { latitude, longitude } = profile.site;
   if (!Number.isFinite(latitude) || Math.abs(latitude) > 90 || !Number.isFinite(longitude) || Math.abs(longitude) > 180) return null;
+  const key = `${latitude},${longitude},${dateKey},${timeZone}`;
+  const cached = daylightCache.get(key);
+  if (cached !== undefined) return cached;
   // Resolve both midnights locally: DST days can have 23 or 25 hours.
-  return sunriseSunsetInRange(latitude, longitude, localInstantMs(dateKey, 0, timeZone), localInstantMs(dateKey, 24, timeZone));
+  const daylight = sunriseSunsetInRange(latitude, longitude, localInstantMs(dateKey, 0, timeZone), localInstantMs(dateKey, 24, timeZone));
+  if (daylightCache.size >= DAYLIGHT_CACHE_LIMIT) daylightCache.delete(daylightCache.keys().next().value!);
+  daylightCache.set(key, daylight);
+  return daylight;
 }
 
 function spansLocalDates(hours: readonly ProfileHour[], timeZone: string): boolean {

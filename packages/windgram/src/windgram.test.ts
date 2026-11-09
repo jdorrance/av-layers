@@ -3,7 +3,7 @@ import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
 import { formatPointMapLift, type PointFrame } from '@av/contracts/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
-import { pointSeriesToSiteForecast, timeZoneForLongitude } from './from-av-profile.ts';
+import { pointSeriesToSiteForecast } from './from-av-profile.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
 import { buildWindgramView, readWindgram } from './scene.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
@@ -44,7 +44,7 @@ class FakeElement {
   checked = false;
   tabIndex = -1;
   clientWidth = 420;
-  constructor(readonly tag: string) {}
+  constructor(readonly tag: string, readonly ownerDocument?: Document) {}
   append(...children: FakeElement[]): void {
     for (const child of children) child.parent = this;
     this.children.push(...children);
@@ -91,7 +91,7 @@ describe('Windgram data', () => {
       outside.layers[layer] = { ...outside.layers[layer], value: null, status: 'outside-domain' };
     }
     const result = forecast(frames);
-    expect(result.site.timeZone).toBe(timeZoneForLongitude(point.lon));
+    expect(result.site.timeZone).toBe('Etc/GMT+5');
     const lift = result.hours.map(hour => hour.mapLift);
     expect(formatPointMapLift(lift[0], 'metric')).toBe('MSL 1300 m · AGL 350 m · Terrain unknown · Map Cu');
     expect(lift[0].agl).toMatchObject({ value: 350, interpolated: true, surfaceId: 'gfs-fine' });
@@ -195,29 +195,41 @@ describe('Windgram data', () => {
 
   it('reuses the mounted day chart across later-day progress pages and updates on resize or mode change', () => {
     const head = new FakeElement('head');
-    vi.stubGlobal('document', {
-      head,
-      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
-      createElement: (tag: string) => new FakeElement(tag)
-    });
+    const otherHead = new FakeElement('head');
+    vi.stubGlobal('document', { head: otherHead, createElement: (tag: string) => new FakeElement(tag) });
     let resizeCallback: (() => void) | null = null;
     const disconnected = vi.fn();
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: () => void) { resizeCallback = callback; }
-      observe(): void {}
-      disconnect(): void { disconnected(); }
-    });
-    const { build, sample, profile } = fixture([14, 15, 38, 39]);
+    let maxHeight = '58vh';
+    const owner = {
+      head,
+      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
+      createElement: (tag: string) => new FakeElement(tag, owner as unknown as Document),
+      defaultView: Object.assign(new EventTarget(), {
+        getComputedStyle: () => ({ maxHeight }),
+        ResizeObserver: class {
+          constructor(callback: () => void) { resizeCallback = callback; }
+          observe(): void {}
+          disconnect(): void { disconnected(); }
+        }
+      })
+    };
+    const { build, sample, profile } = fixture([14, 15, 29, 38, 39]);
     const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
-    const container = new FakeElement('div') as unknown as HTMLElement;
+    const root = owner.createElement('div');
+    const container = root as unknown as HTMLElement;
     const onFrame = vi.fn();
 
     renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 4, loading: true, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: true, onFrame
     });
-    const root = container as unknown as FakeElement;
     const host = visit(root).find(el => el.className === 'av-windgram-host')!;
-    expect(host.innerHTML).toContain('viewBox="0 0 420');
+    expect(host.ownerDocument).toBe(owner);
+    expect(head.children).toHaveLength(2);
+    expect(otherHead.children).toHaveLength(0);
+    expect(Number(/viewBox="0 0 420 (\d+)"/.exec(host.innerHTML)?.[1])).toBeGreaterThan(120);
+    maxHeight = '286px';
+    resizeCallback!();
+    expect(host.innerHTML).toContain('viewBox="0 0 420 286"');
     const htmlSpy = vi.fn();
     let currentHtml = host.innerHTML;
     Object.defineProperty(host, 'innerHTML', {
@@ -227,7 +239,7 @@ describe('Windgram data', () => {
 
     // Appending later-day frames keeps Day 1's mounted SVG untouched.
     renderPointWindgram(container, { frames }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 4, loading: false, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
     });
     expect(htmlSpy).not.toHaveBeenCalled();
 
@@ -243,6 +255,15 @@ describe('Windgram data', () => {
     resizeCallback!();
     expect(htmlSpy).toHaveBeenCalledOnce();
     expect(host.innerHTML).toContain('viewBox="0 0 640');
+
+    const laterDay = visit(root).filter(el => el.className === 'av-windgram-day').at(-1)!;
+    laterDay.dispatchEvent(new Event('click'));
+    expect(onFrame).toHaveBeenCalledExactlyOnceWith('f038');
+    renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 2, loading: false, onFrame
+    });
+    laterDay.dispatchEvent(new Event('click'));
+    expect(onFrame).toHaveBeenCalledTimes(1);
 
     disposePointWindgram(container);
     expect(disconnected).toHaveBeenCalledOnce();

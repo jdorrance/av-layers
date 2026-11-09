@@ -11,6 +11,7 @@ import {
   pointSeriesSelection,
   forecastHorizonNotice,
   formatBuildFreshness,
+  longitudeOffsetHours,
   normalizePoint,
   samePoint,
   watchBuildExpiry,
@@ -49,6 +50,7 @@ const pointCard = element<HTMLElement>('point-card');
 const pointClose = element<HTMLButtonElement>('point-close');
 const pointSettings = element<HTMLDetailsElement>('point-settings');
 const pointBuildDetails = element<HTMLDetailsElement>('point-build-details');
+const pointLocation = element<HTMLParagraphElement>('point-location');
 const pointStatus = element<HTMLParagraphElement>('point-status');
 const pointBody = element<HTMLDivElement>('point-body');
 const pointUnits = element<HTMLSelectElement>('point-units');
@@ -102,11 +104,6 @@ opacityInput.value = String(initialOpacity);
 opacityReadout.textContent = `${Math.round(initialOpacity * 100)}%`;
 
 const modelButtons: HTMLButtonElement[] = [];
-
-function zoneOffsetMinutes(lon: number): number {
-  const wrapped = ((lon + 180) % 360 + 360) % 360 - 180;
-  return Math.max(-12, Math.min(14, Math.round(wrapped / 15))) * 60;
-}
 
 function dayKey(utcMs: number, offsetMinutes: number): string {
   return new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
@@ -379,7 +376,7 @@ function startPreview(): void {
       return;
     }
     const frames = renderedFrames(build.manifest);
-    const offset = zoneOffsetMinutes(mapLon());
+    const offset = longitudeOffsetHours(mapLon()) * 60;
     const today = dayKey(Date.now(), offset);
     const selected = frames.find(frame => frame.id === selectedFrame) ?? frames[0];
     const selectedKey = selected ? dayKey(Date.parse(selected.validTime), offset) : '';
@@ -579,7 +576,7 @@ function startPreview(): void {
       } });
       pointBody.tabIndex = 0;
       pointCard.ariaBusy = String(loading);
-      setPointStatus();
+      if (!loading) setPointStatus();
     }
   }
 
@@ -591,6 +588,7 @@ function startPreview(): void {
     clicked = { ...point };
     pointOpen = true; pointCard.hidden = false;
     pointSettings.open = pointBuildDetails.open = false;
+    pointLocation.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     meta.replaceChildren();
     disposePointWindgram(pointBody);
     pointBody.replaceChildren(); updatePointSeries = null; pointBody.tabIndex = -1;
@@ -607,7 +605,7 @@ function startPreview(): void {
     const frames = pointSeriesSelection(requestedBuild, pointHorizon).frames;
     if (!frames.includes(pointFrameId ?? '')) pointFrameId = frames.includes(selectedFrame ?? '') ? selectedFrame : frames[0] ?? null;
     pointCard.ariaBusy = 'true';
-    setPointStatus(pointBody.children.length ? '' : 'Loading forecast…');
+    setPointStatus('Loading forecast…');
     try {
       await requestedLoader.load(pointHorizon, requestAbort.signal, { frameId: pointFrameId ?? selectedFrame, onProgress(payload, totalFrames, loading) {
         if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
@@ -618,7 +616,8 @@ function startPreview(): void {
       if (!ensureLive()) return;
       updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame(), false);
       pointCard.ariaBusy = 'false';
-      if (!pointBody.children.length) setPointStatus(`Forecast unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      setPointStatus(pointBody.children.length ? detail : `Forecast unavailable. ${detail}`);
     } finally {
       if (seriesAbort === requestAbort) seriesAbort = null;
     }

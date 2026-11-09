@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
+import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
 
 afterEach(() => vi.useRealTimers());
+
+it('keeps the clock on its own side of the date line at exact boundaries', () => {
+  expect([179.99, 180, 540, -179.99, -180, -540].map(longitudeOffsetHours)).toEqual([12, 12, 12, -12, -12, -12]);
+});
 
 it('expires at the deadline without waiting for the freshness interval', () => {
   vi.useFakeTimers(); vi.setSystemTime(0);

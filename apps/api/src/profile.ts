@@ -125,7 +125,6 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           };
           const native = { terrainM: column.modelTerrainM ?? NaN, surfacePressureHpa: column.surfacePressureHpa, surfaceTemperatureC: value('sfc-temp-c') ?? NaN,
             surfaceDewPointC: value('sfc-dewpoint-c'), pblHeightM: value('pbl-height-agl'),
-            sensibleHeatFluxWm2: value('sensible-heat-flux'), latentHeatFluxWm2: value('latent-heat-flux'),
             wind10mU: value('wind-10m-u'), wind10mV: value('wind-10m-v'),
             levels: column.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN, temperatureC: level.temperatureC ?? NaN,
               uMps: level.uWindMps, vMps: level.vWindMps })) };
