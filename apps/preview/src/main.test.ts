@@ -260,7 +260,7 @@ it('shows the horizon warning as time advances without hiding tile errors or dis
   map().emit('error', { sourceId: sourceId(), tile: {} });
   vi.advanceTimersByTime(5000);
   expect(ui('horizon-notice').hidden).toBe(false);
-  expect(ui('horizon-notice').textContent).toContain('Forecast ended at 2026-10-31T00:00:00.000Z');
+  expect(ui('horizon-notice').textContent).toContain('Map forecast ended at 2026-10-31T00:00:00.000Z');
   expect(ui('tile-error').hidden).toBe(false);
   expect(ui('time').disabled).toBe(false);
   expect(map().layers.has(sourceId())).toBe(true);
@@ -372,6 +372,35 @@ it('makes point values keyboard-scrollable only while the card is open', async (
   expect(ui('point-body').children).toHaveLength(0);
   expect(ui('point-body').tabIndex).toBe(-1);
   expect(ui('point-card').hidden).toBe(true);
+});
+
+it('loads the point renderer on demand while the sample runs and ignores it after close', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const loadRenderer = vi.fn(async (importOriginal: () => Promise<typeof import('@av/windgram')>) => {
+    await gate;
+    return importOriginal();
+  });
+  vi.doMock('@av/windgram', loadRenderer);
+  try {
+    await start();
+    expect(loadRenderer).not.toHaveBeenCalled();
+    fetchMock.mockImplementationOnce((_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+    }));
+    map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+    await vi.waitFor(() => {
+      expect(loadRenderer).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    expect(ui('point-status').textContent).toBe('Loading forecast…');
+    ui('point-close').dispatchEvent(new Event('click'));
+    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true);
+    release();
+    await vi.dynamicImportSettled();
+    expect(ui('point-body').children).toHaveLength(0);
+    expect(ui('point-card').hidden).toBe(true);
+  } finally { release(); vi.doUnmock('@av/windgram'); }
 });
 
 
@@ -602,6 +631,8 @@ it('pages the full native point forecast while later point times keep the raster
   const gate = new Promise<void>(resolve => { release = resolve; });
   let loadingLaterHours = false;
   const firstPointOnlyFrame = published.frames[24].id;
+  const mapEnd = published.frames[23].validTime;
+  vi.setSystemTime(Date.parse(mapEnd) + 1);
   fetchMock.mockImplementation(async input => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(v5Latest(published)));
@@ -613,6 +644,7 @@ it('pages the full native point forecast while later point times keep the raster
   });
   await start();
   expect(ui('point-horizon-label').hidden).toBe(false);
+  expect(ui('horizon-notice').textContent).toContain(`Map forecast ended at ${mapEnd}`);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
   const chart = ui('point-body').children[0];

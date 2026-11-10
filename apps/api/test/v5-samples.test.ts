@@ -24,6 +24,21 @@ async function body(response: Response) {
 }
 
 describe('version-5 batch samples', () => {
+  it.each([undefined, true] as const)('serves single and batch MSL values using the build sampling marker %s', async useStoredMslNoLift => {
+    const fixture = createV5Fixture(), point = finePoint(3.5, 16.5), layer = 'usable-lift-msl';
+    if (useStoredMslNoLift) {
+      fixture.manifest.tool.useStoredMslNoLift = useStoredMslNoLift;
+      fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(fixture.manifest)));
+    }
+    const selection = `&layers=${layer}`;
+    const scalar = await fixture.sample(point.lat, point.lon, selection);
+    expect(scalar.status).toBe(200);
+    const sample = sampleResponseV5Schema.parse(await scalar.json());
+    const bulk = await body(await batch(fixture, `${point.lat},${point.lon}`, selection));
+    expect(bulk.points[0]!.sample).toEqual(sample);
+    expect(sample.frames[0]!.layers[layer]!.value).toBeCloseTo(useStoredMslNoLift ? 235.1875 : 313.583333);
+  });
+
   it('preserves exact coordinates, ordering and duplicates while merging overlapping immutable ranges', async () => {
     const fixture = createV5Fixture(), precise = { lat: 8.912345678901, lon: -179.876543210987 };
     const result = await body(await batch(fixture, `${precise.lat},${precise.lon};${commonPoint.lat},${commonPoint.lon};${precise.lat},${precise.lon}`, '&layers=precip-rate'));

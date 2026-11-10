@@ -17,16 +17,41 @@ export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
 export const MAX_MODEL_WORKERS = 3;
 const workerLimit = z.number().int().min(0).max(MAX_MODEL_WORKERS);
 const jobLimit = z.number().int().positive().max(MAX_FORECAST_SHARDS);
+const cronRanges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]] as const;
+function cronTerm(term: string, min: number, max: number) {
+  const match = /^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(term);
+  if (!match || (match[1] === '*' && match[2] !== undefined)) return;
+  const start = match[1] === '*' ? min : Number(match[1]);
+  const step = match[3] === undefined ? 1 : Number(match[3]);
+  let end = start;
+  if (match[2] !== undefined) end = Number(match[2]);
+  else if (match[1] === '*' || match[3] !== undefined) end = max;
+  if (start >= min && end <= max && start <= end && Number.isSafeInteger(step) && step > 0) return { start, end, step };
+}
+
 function validSchedule(value: string): boolean {
-  const fields = value.split(' '), ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
-  return fields.length === ranges.length && fields.every((field, i) => field.split(',').every(term => {
-    const match = /^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(term);
-    if (!match || (match[1] === '*' && match[2] !== undefined)) return false;
-    const [min, max] = ranges[i], start = match[1] === '*' ? min : Number(match[1]);
-    const end = match[2] === undefined ? start : Number(match[2]);
-    return start >= min && end <= max && start <= end
-      && (match[3] === undefined || (Number.isSafeInteger(Number(match[3])) && Number(match[3]) > 0));
-  }));
+  const fields = value.split(' ');
+  return fields.length === cronRanges.length && cronRanges.every(([min, max], index) =>
+    fields[index]!.split(',').every(term => cronTerm(term, min, max) !== undefined));
+}
+
+function cronFieldCount(field: string, min: number, max: number): number {
+  const values = new Set<number>();
+  for (const term of field.split(',')) {
+    const range = cronTerm(term, min, max);
+    if (!range) throw new RangeError('Invalid forecast schedule');
+    for (let value = range.start; value <= range.end; value += range.step) values.add(value);
+  }
+  return values.size;
+}
+
+/** Bound scheduled UTC starts per day assuming every cron date filter matches. */
+export function forecastStartsPerDay(schedules: readonly string[]): number {
+  return schedules.reduce((starts, schedule) => {
+    const [minutes, hours] = schedule.split(' ');
+    if (!minutes || !hours) throw new RangeError('Invalid forecast schedule');
+    return starts + cronFieldCount(minutes, ...cronRanges[0]) * cronFieldCount(hours, ...cronRanges[1]);
+  }, 0);
 }
 const schedules = z.array(z.string().refine(validSchedule, 'Expected a numeric five-field cron schedule')).refine(
   values => new Set(values).size === values.length, 'Model schedules must be unique'

@@ -105,6 +105,35 @@ describe('point sampling', () => {
     return { grid: target, output: new Uint8Array(bytes).fill(255), halo: new Uint8Array(bytes), tiles: Uint8Array.of(1), maxZoom: 0 };
   };
   const result = () => ({ value: null as number | null, status: 3, support: 0, interpolated: false });
+  it('uses stored MSL elevations at the center and continuously up to a cell edge when the build opts in', () => {
+    const mask = coverage(grid), layer = 'usable-lift-msl';
+    const field = { values: Float32Array.of(410, 100, 300, 200), flags: Uint8Array.of(0, STATUS_NO_LIFT | SUPPORT_PROFILE_TOP, 0, 0) };
+    const bytes = packCells(field), lats = Float64Array.of(0.5, 1 - 1e-8, 1), lons = Float64Array.of(0.5);
+    const gridSampler = prepareGridSampling(mask, lats, lons), pointSampler = preparePointSampling(mask, lats, Float64Array.of(0.5, 0.5, 0.5));
+    const gridSample = gridSampler.bind(field, layer, true), pointSample = pointSampler.bind(field, layer, true);
+    for (const [index, lat] of lats.entries()) {
+      const plan = planSample(grid, lat, 0.5)!;
+      const packed = sampleCells(plan, cellsFromRange(plan, bytes.subarray(plan.byteRange.offset, plan.byteRange.offset + plan.byteRange.length)), layer, true);
+      const prepared = result(), paired = result();
+      gridSample(0, index, prepared); pointSample(index, 0, paired);
+      expect(packed).toMatchObject({ status: 0, support: SUPPORT_PROFILE_TOP, interpolated: true });
+      expect(packed.value).toBeCloseTo(index === 0 ? 252.5 : 255, 5);
+      expect(prepared).toEqual(packed);
+      expect(paired).toEqual(packed);
+    }
+    const retained = result();
+    gridSampler.bind(field, layer)(0, 0, retained);
+    expect(retained).toEqual(sampleGrid(grid, field, 0.5, 0.5, layer));
+    expect(retained.value).toBeCloseTo(303.333333);
+
+    const majority = result();
+    prepareGridSampling(mask, Float64Array.of(0.9), Float64Array.of(0.9)).bind(field, layer, true)(0, 0, majority);
+    expect(majority).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    const agl = result();
+    gridSampler.bind(field, 'usable-lift-agl', true)(0, 0, agl);
+    expect(agl).toMatchObject({ value: 227.5, status: 0 });
+  });
+
   it('samples paired coordinates at nodes, boundaries and outside cells like scalar sampling', () => {
     const mask = coverage(grid), layer = 'precip-rate';
     const field = { values: Float32Array.of(10, 20, 30, 40), flags: new Uint8Array(4) };

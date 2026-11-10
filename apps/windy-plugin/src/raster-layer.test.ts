@@ -58,6 +58,33 @@ it('loads hidden staging tiles and commits only successful render readiness', as
   f.layer.remove();
 });
 
+it.each([false, true])('settles a stationary viewport with no tiles and retries on movement (old raster: %s)', async committed => {
+  const f = fixture(), statuses = vi.fn();
+  f.layer.onStatus(statuses); f.layer.addTo(f.map);
+  if (committed) { f.complete(); await Promise.resolve(); f.layer.setUrl(url('f006')); }
+  const empty = f.natives.at(-1)!, tile = {};
+  empty.loading = false;
+  f.emit('render');
+  expect(f.map.removeLayer).not.toHaveBeenCalledWith(empty);
+  f.move(true);
+  empty.listeners.get('dataloading')?.({ tile });
+  empty.listeners.get('dataabort')?.({ tile });
+  f.emit('idle');
+  expect(f.map.removeLayer).not.toHaveBeenCalledWith(empty);
+  f.move(false);
+  f.emit('idle');
+  expect(f.map.removeLayer).toHaveBeenCalledExactlyOnceWith(empty);
+  expect(statuses).toHaveBeenLastCalledWith('error', committed ? url('f003') : '');
+  f.emit('idle');
+  expect(f.natives.at(-1)).toBe(empty);
+  f.move(true); f.move(false); f.emit('moveend');
+  expect(f.natives.at(-1)).not.toBe(empty);
+  f.complete();
+  await Promise.resolve();
+  expect(statuses).toHaveBeenLastCalledWith('ready', url(committed ? 'f006' : 'f003'));
+  f.layer.remove();
+});
+
 it.each(['ready', 'supersede', 'move', 'freeze', 'remove', 'expire'] as const)('warms committed Windy frames only while current (%s)', async action => {
   const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));

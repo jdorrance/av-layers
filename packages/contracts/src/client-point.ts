@@ -63,6 +63,13 @@ export function pointSeriesSelection(build: PinnedBuild, horizon: PointHorizon =
   return { layers, frames: layers.length ? pointFrames(build.manifest, horizon) : [] };
 }
 
+/** Choose the first preferred frame in the requested point horizon. */
+export function selectPointFrame(frames: readonly string[], preferred: string | null, fallback: string | null): string | null {
+  if (preferred !== null && frames.includes(preferred)) return preferred;
+  if (fallback !== null && frames.includes(fallback)) return fallback;
+  return frames[0] ?? null;
+}
+
 type ReadPage = (frames: readonly string[], layers: readonly LayerId[], signal: AbortSignal) => Promise<{ frames: readonly PointFrame[] }>;
 interface PointSource {
   read: ReadPage;

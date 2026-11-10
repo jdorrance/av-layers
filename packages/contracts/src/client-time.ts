@@ -1,5 +1,6 @@
 import type { Manifest } from './index.ts';
 import { normalizeLon } from './coverage.ts';
+import { renderedFrames } from './publication.ts';
 
 export interface FrameLike {
   id: string;
@@ -160,12 +161,17 @@ export function watchBuildExpiry(expiresAtMs: number, expire: () => void, target
   };
 }
 
-/** Forecast usefulness is independent of how long its artifacts are retained. */
-export function forecastHorizonNotice(manifest: Pick<Manifest, 'frames'>, nowMs = Date.now()): string | null {
-  if (manifest.frames.length === 0) return null;
-  const endMs = Math.max(...manifest.frames.map(frame => frameTime(frame.validTime)));
-  return nowMs >= endMs
-    ? `Forecast ended at ${new Date(endMs).toISOString()} — update overdue. Showing historical forecast.`
+type MapTimeline = Parameters<typeof renderedFrames>[0];
+
+export function mapForecastEnd(manifest: MapTimeline): number | null {
+  const frames = renderedFrames(manifest);
+  return frames.length ? Math.max(...frames.map(frame => frameTime(frame.validTime))) : null;
+}
+
+export function mapForecastHorizonNotice(manifest: MapTimeline, nowMs = Date.now()): string | null {
+  const endMs = mapForecastEnd(manifest);
+  return endMs !== null && nowMs >= endMs
+    ? `Map forecast ended at ${new Date(endMs).toISOString()} — update overdue. Showing historical forecast.`
     : null;
 }
 

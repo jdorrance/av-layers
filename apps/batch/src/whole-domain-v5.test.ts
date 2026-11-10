@@ -828,11 +828,17 @@ describe('whole-domain v5 production', () => {
   it('uses actual per-shard bytes for v5 performance admission and reports aggregate bytes separately', async () => {
     const manifest = await builtManifest(), shard = 60 * 1024 * 1024, stored = shard / 5;
     const aggregate = sizedManifest(manifest, Array.from({ length: 5 }, () => ({ bytes: shard, storedCells: stored })));
+    const fine = surface(aggregate, 'fine').grid;
+    fine.width = BUILD_BUDGETS.gridCells + 1;
     const passed = checkPerformance(aggregate);
     expect(passed.passed).toBe(true);
-    expect(passed.observed).toMatchObject({ samplePackBytes: shard, gridCells: product.grid.width * product.grid.height });
+    expect(passed.observed).toMatchObject({ samplePackBytes: shard, gridCells: product.grid.width * product.grid.height,
+      fineGridCells: fine.width * fine.height });
     expect(passed.observed.emittedSampleBytes).toBeGreaterThan(256 * 1024 * 1024);
     expect(passed.budgets.samplePackBytes).toBe(64 * 1024 * 1024);
+    const native = surface(aggregate, 'native').grid;
+    native.width = BUILD_BUDGETS.gridCells + 1;
+    expect(checkPerformance(aggregate).failures).toContain(`gridCells: ${native.width * native.height} exceeds ${BUILD_BUDGETS.gridCells}`);
     const oversized = sizedManifest(manifest, [{ bytes: 65 * 1024 * 1024, storedCells: (65 * 1024 * 1024) / 5 }]);
     const rejected = checkPerformance(oversized);
     expect(rejected.passed).toBe(false);

@@ -27,11 +27,12 @@ missingness mask.
 [Frame derivation](../packages/forecast/src/frame.ts) evaluates solar elevation
 across each cell's trailing interval and valid time using
 [`@av/solar/grid`](../packages/solar/src/grid.ts) (`minimumSolarElevationDeg = -0.833°`).
-Dark cells emit `STATUS_NO_LIFT` on lift layers and `STATUS_UNAVAILABLE` on
-`precip-rate`. For `regional-daylight` products,
-[daylight frame selection](../packages/forecast/src/daylight.ts) also filters out
-candidate forecast hours before acquisition when no covered output cell is sunlit
-at the interval start, midpoint, or end.
+Dark lift cells with known ground elevation emit `STATUS_NO_LIFT`.
+Current precipitation uses the trailing interval at all hours. Retained
+precipitation v1 builds mark dark cells unavailable. For `regional-daylight`
+products, [daylight frame selection](../packages/forecast/src/daylight.ts) keeps
+hours with daylight in the covered grid and keeps the full candidate list when
+none qualify, including polar night.
 
 ## Statistical windows
 
@@ -171,17 +172,20 @@ solver workspace and fallback fields.
 
 [`@av/forecast/sampler`](../packages/forecast/src/sampler.ts) checks coverage
 membership, snaps coordinates within $10^{-10}$ grid steps, wraps periodic
-longitudes, and ignores zero-weight neighbors. Known contributors interpolate
-bilinearly, using `0` AGL / model-terrain MSL for no-lift cells; public no-lift
-results follow [data](data.md#layers-and-missing-values). If a contributing cell
-is `unavailable` or `outside-domain`, the nearest contributing cell supplies
-the value and status.
+longitudes, and ignores zero-weight neighbors. No-lift contributors store zero
+AGL and surface elevation in MSL. When no-lift weights exceed half the total,
+the result uses the public [no-lift values](data.md#layers-and-missing-values).
+Otherwise, known contributors interpolate bilinearly. Builds with
+`tool.useStoredMslNoLift` use the stored MSL elevations throughout. Earlier
+builds renormalize the MSL weights over valid cells in a four-cell mix. If a
+contributor is unavailable or outside the domain, the nearest contributing cell
+supplies the value and status.
 
-Tile rendering evaluates four quarter-pixel subsamples in Web Mercator, applies
-the layer palette, and averages premultiplied RGBA before encoding lossless
-WebP. [Palette descriptors](../packages/contracts/src/layers.ts) select discrete
-bins or interpolation of encoded 8-bit sRGB channels. Rain keeps its thresholded
-palette. Render style changes the recipe identity while preserving numeric packs.
+Tile rendering evaluates four quarter-pixel subsamples in Web Mercator. Linear
+lift palettes colour the mean valid value and scale alpha by valid coverage.
+Other paths, including rain, average premultiplied RGBA. The renderer encodes
+lossless WebP. Render style changes the recipe identity while preserving numeric
+packs. [Layer descriptors](../packages/contracts/src/layers.ts) select palettes.
 Point samples are stored in 5-byte records (`Float32` value + 1-byte
 status/support bitmask defined in [layers.ts](../packages/contracts/src/layers.ts))
 arranged in $16 \times 16$ cell blocks with a 1-cell halo ([architecture](architecture.md#build-and-storage)).

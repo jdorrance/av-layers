@@ -43,11 +43,11 @@ encoded coverage to its grid and validates its halo.
 ## Entry points
 
 - [`@av/contracts`](src/index.ts): manifest/pointer/sample schemas, `getProduct`,
-  grid projections, layer descriptors, and palettes.
-- [`@av/contracts/client`](src/client.ts): `ApiClient`, frame matching, tile URL
-  builders, and sample formatting.
+  grid projections, layer descriptors, palettes, and publication validation.
+- [`@av/contracts/client`](src/client.ts): pinned API and raster transport,
+  frame matching, tile URL builders, and sample formatting.
 - [`@av/contracts/client/dom`](src/client-dom.ts): DOM renderers for legends and
-  build diagnostics.
+  build diagnostics. Point presentation lives in [windgram](../windgram/README.md).
 - [`@av/contracts/refinement`](src/refinement.ts): polygon validation, 1 km Lambert grids,
   and per-layer patch lookup.
 - [`@av/contracts/fixture-product`](src/fixture-product.ts): synthetic product

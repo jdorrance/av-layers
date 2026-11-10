@@ -1,6 +1,6 @@
 import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/contracts/client';
 import { mountWindgram, type WindgramMount } from './dom.ts';
-import { pointSeriesToSiteForecast } from './from-av-profile.ts';
+import { createPointForecast } from './from-av-profile.ts';
 import { panelStyles } from './panel-styles.ts';
 import { renderPointSeries } from './scalar-point.ts';
 import { localDateKey, type SiteForecast } from './internal-meteo.ts';
@@ -90,11 +90,14 @@ function createPointWindgram(
   };
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
+  const toForecast = createPointForecast(build, options.point);
   let grouped: Calendar | undefined;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {
-    const frames = nextOptions.totalFrames === undefined ? nextInput.frames : build.manifest.frames.slice(0, nextOptions.totalFrames);
-    const forecast = pointSeriesToSiteForecast(nextInput, build, { point: nextOptions.point, expectedFrames: frames.map(frame => frame.id) });
     const loaded = new Map(nextInput.frames.map(frame => [frame.id, frame]));
+    const frames = nextOptions.totalFrames === undefined
+      ? build.manifest.frames.filter(frame => loaded.has(frame.id))
+      : build.manifest.frames.slice(0, nextOptions.totalFrames);
+    const forecast = toForecast(frames, loaded);
     const previous = grouped;
     const calendar = previous && previous.frames.length === frames.length && frames.every(({ id, validTime }, i) => {
       const old = previous.frames[i];

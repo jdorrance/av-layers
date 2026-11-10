@@ -124,7 +124,7 @@ function mountWindgramInspector(
     attr(point, { cx: x, cy: y });
     cursor?.setAttribute('visibility', 'visible');
     const aglText = heightMode
-      ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} ${reading.heightAglReference === 'model' ? 'model AGL' : 'AGL'}`
+      ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} ${reading.heightAglReference === 'model' ? 'model AGL' : reading.heightAglReference === 'terrain' ? 'surface AGL' : 'AGL'}`
       : `${formatMapLiftCell(lift.agl, system)} AGL`;
     const mslText = `${heightMode ? formatQuantity(reading.heightM, 'elevation', undefined, system) : formatMapLiftCell(lift.msl, system)} MSL`;
     if (aglLabel) aglLabel.textContent = aglText;

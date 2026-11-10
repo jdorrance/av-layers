@@ -1,5 +1,6 @@
 import type { PointFrame, pointMapLift } from '@av/contracts/client';
 import type { WindgramReading } from './scene-types.ts';
+import { METRES_PER_THOUSAND_FEET } from './windgram-format.ts';
 
 export interface FieldNode {
   readonly altitudeM: number;
@@ -62,7 +63,7 @@ export function lapseRateCPer1000Ft(
 ): number | null {
   const dz = upper.heightM - lower.heightM;
   if (!(dz > 0) || !Number.isFinite(lower.temperatureC) || !Number.isFinite(upper.temperatureC)) return null;
-  return ((upper.temperatureC - lower.temperatureC) / dz) * 304.8;
+  return ((upper.temperatureC - lower.temperatureC) / dz) * METRES_PER_THOUSAND_FEET;
 }
 
 const dateFormats = new Map<string, Intl.DateTimeFormat>();

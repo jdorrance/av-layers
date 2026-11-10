@@ -8,7 +8,9 @@ and point queries evaluate the same grids and interpolation rules.
 - `usable-lift-msl`: estimated usable thermal top in metres above mean sea
   level.
 - `usable-lift-agl`: usable depth in metres above ground. The descriptor names
-  `model-AGL` for model terrain or `terrain-AGL` for prepared DEM terrain.
+  `model-AGL` for native model ground or `terrain-AGL` for the prepared surface
+  elevation. Current fine grids use Copernicus GLO-90, a digital surface model
+  that includes vegetation and buildings.
 - `precip-rate`: mean precipitation rate over the frame's trailing interval in
   millimetres per hour.
 
@@ -16,6 +18,11 @@ Each build's manifest descriptors list its available layers and delivery.
 [Native fields](../packages/contracts/src/native-layers.ts) add lift, flux,
 surface, cloud, stability and wind samples. Map layers carry palettes; native
 scalar channels use point queries.
+
+GFS and RRFS use surface CAPE and valid-time `GUST`. ICON-EU uses mixed-layer
+`CAPE_ML` and the 10 m interval maximum `VMAX_10M`. RRFS mean sea-level pressure
+uses the Eta reduction (`MSLET`). See the [model registry](../packages/contracts/config/models.json)
+for the source fields and levels behind each layer.
 
 Every sample carries a status:
 
@@ -67,20 +74,19 @@ Current products emit native weather and profiles through the complete
 selected horizon, including night. Precipitation retains its trailing interval
 at night. `mapFrameCount` selects the tiles and fine-lift
 prefix; retained builds may expose later native samples and profiles.
-Retained `regional-daylight` builds omit fully dark frames according to their
-declared method.
+Retained `regional-daylight` builds follow the [daylight selection rule](science.md#input-fields),
+including its all-dark fallback.
 
-Point profiles select the nearest covered native cell and retain every selected
-vertical level. Temperature and height remain usable when optional humidity or
-wind fields are absent. Responses report the selected cell, model terrain,
-statuses and nullable diagnostics; [point-products.ts](../packages/contracts/src/point-products.ts)
-owns the wire contract. Page explicit frame and field selections within its
-request budgets.
+Point profiles report the requested coordinate and the nearest covered native
+cell. Scalars, vertical levels, and derived diagnostics share that cell. The
+windgram combines them with map lift sampled separately at the requested
+coordinate. [Point products](../packages/contracts/src/point-products.ts) owns
+the wire contract and page budgets.
 
-`expiresAt` sets the 7-day retention deadline. Clients display a notice once
-`now` passes the last frame's `validTime` while keeping historical frames
-viewable until `expiresAt`. See [operations](operations.md) for publication and
-expiry rules.
+API freshness and the map notice use the last rendered frame's `validTime`.
+The full point forecast uses the complete frame axis. Historical frames remain
+viewable until the build's `expiresAt` deadline. See [operations](operations.md)
+for publication and expiry rules.
 
 ## Colour and interpolation
 

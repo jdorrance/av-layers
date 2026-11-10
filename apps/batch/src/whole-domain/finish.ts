@@ -6,6 +6,7 @@ import { createWholeDomainDescriptors, encodeBoundedJson, manifestV5Schema, MAX_
 import type { BuildStamp, ForecastInputs } from '../frame-build.js';
 import { failureReason } from '../failure.js';
 import { checkPerformance } from '../capacity.js';
+import { RASTER_SAMPLING } from '../raster.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from '../validate.js';
 import type { WholeDomainFrameResult } from './frames.js';
 import type { WholeDomainPrepared } from './prepare.js';
@@ -84,7 +85,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
         frameCount: result.frames.length, provenanceKey, provenanceSha256: sha256(provenanceBytes),
         terrain: { dataId: surfaces.find(surface => surface.terrain)?.terrain?.dataId ?? '', key: prepared.terrain.key, sha256: prepared.terrain.sha256, arrayBytes: prepared.terrain.arrayBytes } },
       tool: { components: options.identity.components, node: process.version, tileFormat: 'webp', liftRenderStyle: 'transparent-no-lift-v2',
-        terrainMethod: refinementMethod.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id },
+        terrainMethod: refinementMethod.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id, ...RASTER_SAMPLING },
       palettes: descriptors.palettes.map(palette => palette.id), metrics: {}
     };
     const tValidate = Date.now();

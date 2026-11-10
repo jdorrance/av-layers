@@ -4,7 +4,9 @@ export type { UnitSystem } from '@av/contracts/client';
 import type { UnitSystem } from '@av/contracts/client';
 import { FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
 
-const FEET_PER_METRE = 1 / 0.3048;
+const METRES_PER_FOOT = 0.3048;
+const FEET_PER_METRE = 1 / METRES_PER_FOOT;
+export const METRES_PER_THOUSAND_FEET = 1000 * METRES_PER_FOOT;
 const FPM_PER_MPS = 1 / FEET_PER_MINUTE_TO_MPS;
 
 export const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
@@ -28,7 +30,7 @@ const quantityDefinitions = {
   lift: { imperial: [FPM_PER_MPS, 0, 'ft/min', 0], metric: [1, 0, 'm/s', 2] },
   rainRate: { imperial: [1 / 25.4, 0, 'in/h', 2], metric: [1, 0, 'mm/h', 1] },
   pressure: { imperial: [1 / 33.8638866667, 0, 'inHg', 2], metric: [1, 0, 'hPa', 0] },
-  lapseRate: { imperial: [1.8, 0, '°F/1,000 ft', 1], metric: [1000 / 304.8, 0, '°C/km', 1] },
+  lapseRate: { imperial: [1.8, 0, '°F/1,000 ft', 1], metric: [1000 / METRES_PER_THOUSAND_FEET, 0, '°C/km', 1] },
 } as const;
 
 type QuantityKind = keyof typeof quantityDefinitions;

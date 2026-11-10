@@ -121,6 +121,16 @@ function v5(): ManifestV5 {
 }
 
 describe('v5 forecast publications', () => {
+  it('pins the stored MSL no-lift rule without restricting other tool metadata', () => {
+    for (const manifest of [refined(), v5()]) {
+      const tool = { ...manifest.tool, node: 'v22.23.4' };
+      expect(publishedManifestSchema.parse({ ...manifest, tool }).tool).toEqual(tool);
+      const corrected = { ...tool, useStoredMslNoLift: true };
+      expect(publishedManifestSchema.parse({ ...manifest, tool: corrected }).tool).toEqual(corrected);
+      expect(publishedManifestSchema.safeParse({ ...manifest, tool: { ...tool, useStoredMslNoLift: 'true' } }).success).toBe(false);
+    }
+  });
+
   it('binds uneven frame groups to complete surface-specific block partitions', () => {
     const manifest = v5();
     for (const surface of manifest.surfaces) {

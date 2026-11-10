@@ -1,5 +1,5 @@
 import type { LayerId } from '@av/contracts';
-import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries } from '@av/contracts/client';
+import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/contracts/client';
 import { windFromComponents } from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 
@@ -42,24 +42,31 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
   };
 }
 
-/** Convert pinned samples to chart hours, retaining scheduled slots while either surface is missing. */
-export function pointSeriesToSiteForecast(
-  payload: Pick<PointSeries, 'frames'>,
-  build: PinnedBuild,
-  options: { readonly point: GeoPoint; readonly timeZone?: string; readonly expectedFrames?: readonly string[] }
-): SiteForecast {
-  const frames = new Map(payload.frames.map(frame => [frame.id, frame]));
-  const expected = options.expectedFrames ? new Set(options.expectedFrames) : frames;
+type ScheduledFrame = { readonly id: string; readonly validTime: string };
+
+/** Keep chart hours for the lifetime of one pinned point. */
+export function createPointForecast(build: PinnedBuild, point: GeoPoint) {
   const layers = build.manifest.descriptors.layers;
   const gust = layers['wind-gust-10m'], precipitation = layers['precip-rate'];
-  const { lat, lon } = options.point;
-  return {
+  const { lat, lon } = point;
+  const metadata: Omit<SiteForecast, 'hours'> = {
     model: build.manifest.model,
-    site: { latitude: lat, longitude: lon, timeZone: options.timeZone ?? timeZoneForLongitude(lon) },
+    site: { latitude: lat, longitude: lon, timeZone: timeZoneForLongitude(lon) },
     semantics: {
       gust: gust ? gust.timeSupport === 'interval-maximum' ? 'hourMax' : 'instant' : null,
       precipitation: precipitation ? precipitation.timeSupport === 'valid-time' ? 'instantRate' : 'windowMeanRate' : null
-    },
-    hours: build.manifest.frames.filter(frame => expected.has(frame.id)).map(frame => chartHour(frame.validTime, frames.get(frame.id), build))
+    }
   };
+  const cache = new Map<string, { frame: PointFrame | undefined; hour: PublishedForecastHour }>();
+  return (frames: readonly ScheduledFrame[], loaded: ReadonlyMap<string, PointFrame>): SiteForecast => ({
+    ...metadata,
+    hours: frames.map(({ id, validTime }) => {
+      const frame = loaded.get(id);
+      const cached = cache.get(id);
+      if (cached && cached.frame === frame && cached.hour.validAt === validTime) return cached.hour;
+      const hour = chartHour(validTime, frame, build);
+      cache.set(id, { frame, hour });
+      return hour;
+    })
+  });
 }

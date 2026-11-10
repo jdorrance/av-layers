@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
+import { mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
 
 afterEach(() => vi.useRealTimers());
 
@@ -118,10 +118,18 @@ describe('host timestamp synchronization', () => {
   });
 });
 
-it('shows forecast-horizon exhaustion at the last valid time, independently of interval ends or retention', () => {
+it('shows map forecast exhaustion at the last valid time, independently of interval ends or retention', () => {
   const manifest = { frames: [...frames].reverse() };
   const horizon = Date.parse('2026-10-30T09:00:00Z');
-  expect(forecastHorizonNotice(manifest, horizon - 1)).toBeNull();
-  expect(forecastHorizonNotice(manifest, horizon)).toContain('Forecast ended at 2026-10-30T09:00:00.000Z');
-  expect(forecastHorizonNotice(manifest, horizon + 6 * 3600_000)).toContain('Showing historical forecast');
+  expect(mapForecastHorizonNotice(manifest, horizon - 1)).toBeNull();
+  expect(mapForecastHorizonNotice(manifest, horizon)).toContain('Map forecast ended at 2026-10-30T09:00:00.000Z');
+  expect(mapForecastHorizonNotice(manifest, horizon + 6 * 3600_000)).toContain('Showing historical forecast');
+});
+
+it('uses the rendered prefix when the point forecast continues', () => {
+  const manifest = { frames, version: 5, mapFrameCount: 2 };
+  const horizon = Date.parse(frames[1].validTime);
+  expect(mapForecastHorizonNotice(manifest, horizon - 1)).toBeNull();
+  expect(mapForecastHorizonNotice(manifest, horizon)).toContain(`Map forecast ended at ${frames[1].validTime}`);
+  expect(horizon).toBeLessThan(Date.parse(frames.at(-1)!.validTime));
 });

@@ -1,25 +1,22 @@
 /** Serve bounded profiles and scalar diagnostics from one covered native cell. */
 import {
-  MAX_SAMPLE_RANGE_BYTES, SAMPLE_STATUSES, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, assertProfileLayoutBindingV5,
-  prepareGridGeometry, sparseCoverageLookup, type ForecastSurfaceV5, type LayerId, type ManifestV5
+  SAMPLE_STATUSES, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, assertProfileLayoutBindingV5,
+  prepareGridGeometry, sparseCoverageLookup, type LayerId, type ManifestV5
 } from '@av/contracts';
 import {
   packedCellsFromRange, packedRecordsFromRange, planSample, planShardedPackedSample,
   prepareShardedSamplePackLayout, readProfileRecord, sampleCells, samplingCovered, type NativeProfile,
-  type SamplePlan, type ShardedPackedSamplePlan
+  type SamplePlan
 } from '@av/forecast';
 import { nativeColumnHumidityAtHeight, nativeColumnCloudDiagnostics, nativeColumnWindAtHeight, deriveSoaringViews } from '@av/soaring';
 import { resolveSparseCoverage, sha256 } from './coverage';
-import { binaryRead, countRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, readObjectBytes, reserveAllocation, waitFor, type WaitContext } from './resources';
-import { cached, ensureLive, fail, response } from './http';
+import { reserveAllocation, waitFor, type WaitContext } from './resources';
+import { cached, fail, response } from './http';
+import { readPackedRanges, type PackedRange } from './packed-ranges';
 import { servedSource, type PublishedManifest } from './publication';
 import { readPointCoordinates, selectSampleFields } from './point-query';
 
-interface ReadJob {
-  shard: ForecastSurfaceV5['samples']['shards'][number];
-  packed: ShardedPackedSamplePlan;
-  apply(bytes: Uint8Array): void;
-}
+interface ReadJob extends PackedRange { apply(bytes: Uint8Array): void }
 
 export async function serveProfile(request: Request, bucket: R2Bucket, ctx: WaitContext, manifest: PublishedManifest, url: URL): Promise<Response> {
   if (manifest.version !== 5) fail(409, 'profile-unavailable', 'This build has no native profiles');
@@ -58,7 +55,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           if (!selected.length) continue;
           const channels = selected.flatMap(frame => layers.map(layer => (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer)));
           const packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, channels, group.shards), shard = group.shards[packed.shard]!;
-          jobs.push({ shard, packed, apply(bytes) {
+          jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const frame of selected) for (const layer of layers) {
               const channel = (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer);
               const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer]);
@@ -79,7 +76,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             layouts.set(group.frameCount, layout);
           }
           const packed = planShardedPackedSample(layout, plan, selected.map(frame => m.frames.indexOf(frame) - group.firstFrame), shards), shard = shards[packed.shard]!;
-          jobs.push({ shard, packed, apply(bytes) {
+          jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const frame of selected) {
               try { columns.set(frame.id, readProfileRecord(packedRecordsFromRange(packed, bytes, m.frames.indexOf(frame) - group.firstFrame)[0]!)); }
               catch { fail(503, 'publication-invalid', 'Invalid atmospheric profile record'); }
@@ -87,35 +84,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           } });
         }
       }
-      let total = 0;
-      for (const { packed, shard } of jobs) {
-        const { offset, length } = packed.byteRange;
-        if (!shard || !Number.isSafeInteger(offset + length) || offset < 0 || length < 1 || offset + length > shard.bytes) fail(503, 'publication-invalid', 'Invalid profile range');
-        total += length;
-      }
-      if (total > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected profile ranges exceed the byte budget');
-      let next = 0, failed = false, failure: unknown;
-      const work = async () => { while (!failed && next < jobs.length) {
-        const job = jobs[next++]!, { shard, packed } = job, range = packed.byteRange;
-        try {
-          const bytes = await binaryRead(bucket, `${shard.key}:${shard.sha256}:${range.offset}:${range.length}`, async signal => {
-            countRead(ctx);
-            const object = await bucket.get(shard.key, { range });
-            if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Profile data is missing');
-            if (object.size !== shard.bytes || object.customMetadata?.sha256 !== shard.sha256 || !object.range || !('offset' in object.range) || object.range.offset !== range.offset || !('length' in object.range) || object.range.length !== range.length) {
-              void object.body.cancel().catch(() => {});
-              fail(503, 'publication-incomplete', 'Profile data metadata or range mismatch');
-            }
-            return readObjectBytes(object, range.length, true, ctx, signal);
-          }, ctx, request.signal);
-          ensureLive(m.expiresAt);
-          if (bytes.length !== range.length) fail(503, 'publication-incomplete', 'Incomplete profile range');
-          job.apply(bytes);
-        } catch (error) { if (!failed) { failed = true; failure = error; } }
-      } };
-      await Promise.all(Array.from({ length: Math.min(jobs.length, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST) }, work));
-      if (failed) throw failure;
-      request.signal.throwIfAborted();
+      await readPackedRanges(bucket, ctx, request.signal, m.expiresAt, 'profile', jobs, (job, bytes) => job.apply(bytes));
       const result = { version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle, createdAt: m.createdAt, expiresAt: m.expiresAt,
         lat, lon, cell, method: m.method, source: servedSource(m, url.origin), frames: frames.map(frame => {
           const column = columns.get(frame.id)!, fields = values.get(frame.id)!;

@@ -190,6 +190,10 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
+While a build marked `tool.useStoredMslNoLift` remains retained, use a Worker
+revision that recognizes the marker. Pointer rollback leaves retained builds
+readable by ID.
+
 Delete unreferenced build prefixes whose newest object is at least seven days old:
 
 ```sh

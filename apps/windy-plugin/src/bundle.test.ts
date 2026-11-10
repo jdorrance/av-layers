@@ -207,7 +207,7 @@ it.each([
   expect(protocols.size).toBe(1);
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;
   expect(horizonNotice.hidden).toBe(false);
-  expect(horizonNotice.textContent).toContain('Forecast ended at 2026-10-30T06:00:00.000Z');
+  expect(horizonNotice.textContent).toContain('Map forecast ended at 2026-10-30T06:00:00.000Z');
   const tileError = elements.find(element => element.className === 'av-error')!;
   const failed = { tile: {} }, successful = { tile: {} };
   tileListeners.get('dataloading')?.(failed);

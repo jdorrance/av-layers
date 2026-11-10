@@ -122,7 +122,7 @@ export const manifestSchema = z.object({
   artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), samples: samplePackSchema,
   patches: z.array(refinementPatchSchema).min(1).max(MAX_REFINEMENT_ZONES).optional(),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
-  tool: z.record(z.string(), z.unknown()), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
+  tool: z.looseObject({ useStoredMslNoLift: z.literal(true).optional() }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
 }).superRefine((manifest, ctx) => {
   if ((manifest.version === 4) !== (manifest.patches !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only version 4 publishes refinement patches' });
 });

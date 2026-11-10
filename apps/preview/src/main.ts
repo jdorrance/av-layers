@@ -1,5 +1,4 @@
 import { renderBuildDiagnostics } from '@av/contracts/client/dom';
-import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -9,11 +8,12 @@ import {
   activePalettes,
   assertNotExpired,
   pointSeriesSelection,
-  forecastHorizonNotice,
+  mapForecastHorizonNotice,
   formatBuildFreshness,
   longitudeOffsetHours,
   normalizePoint,
   samePoint,
+  selectPointFrame,
   watchBuildExpiry,
   type GeoPoint,
   type PinnedBuild,
@@ -24,6 +24,8 @@ import {
 } from '@av/contracts/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
+
+type PointWindgram = typeof import('@av/windgram');
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -222,8 +224,10 @@ function startPreview(): void {
   let pointUnitSystem: UnitSystem = 'metric';
   let pointHorizon: PointHorizon = 'day';
   let pointFrameId: string | null = null;
+  let pointFrameIds: readonly string[] = [];
   let pointLoader: PointSeriesLoader | null = null;
-  let updatePointSeries: ReturnType<typeof renderPointWindgram> | null = null;
+  let windgram: PointWindgram | null = null;
+  let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
   let urlReady = false;
@@ -299,11 +303,12 @@ function startPreview(): void {
     seriesAbort?.abort();
     seriesAbort = null;
     pointLoader?.dispose(); pointLoader = null; pointFrameId = null;
+    pointFrameIds = [];
     pointCard.hidden = true;
     pointCard.ariaBusy = 'false';
     pointSettings.open = pointBuildDetails.open = false;
     setPointStatus();
-    disposePointWindgram(pointBody);
+    windgram?.disposePointWindgram(pointBody);
     pointBody.replaceChildren();
     updatePointSeries = null;
     pointBody.tabIndex = -1;
@@ -328,7 +333,7 @@ function startPreview(): void {
       expireView();
       return;
     }
-    const notice = forecastHorizonNotice({ frames: renderedFrames(build.manifest) }, now);
+    const notice = mapForecastHorizonNotice(build.manifest, now);
     horizonNotice.textContent = notice ?? '';
     horizonNotice.hidden = notice === null;
     freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);
@@ -481,7 +486,7 @@ function startPreview(): void {
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
-    pointFrameId = selectedFrame;
+    pointFrameId = selectPointFrame(pointFrameIds, selectedFrame, pointFrameId);
     updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
@@ -565,11 +570,11 @@ function startPreview(): void {
   }
 
   function showPoint(point: GeoPoint, payload: PointSeries, totalFrames: number, loading: boolean): void {
-    if (build) {
+    if (build && windgram) {
       const requestedBuild = build;
-      if (pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === pointFrameId))) pointFrameId = payload.frames.some(frame => frame.id === selectedFrame) ? selectedFrame : payload.frames[0]?.id ?? null;
-      updatePointSeries = renderPointWindgram(pointBody, payload, build, { point, frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, loading, onFrame(id) {
-        if (build !== requestedBuild || !pointOpen || !ensureLive()) return;
+      const requestedLoader = pointLoader;
+      updatePointSeries = windgram.renderPointWindgram(pointBody, payload, build, { point, frameId: pointFrameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, loading, onFrame(id) {
+        if (build !== requestedBuild || pointLoader !== requestedLoader || !pointOpen || !pointFrameIds.includes(id) || !ensureLive()) return;
         pointFrameId = id;
         updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());
         selectIndex(renderedFrames(build.manifest).findIndex(frame => frame.id === id), 'push');
@@ -590,7 +595,7 @@ function startPreview(): void {
     pointSettings.open = pointBuildDetails.open = false;
     pointLocation.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     meta.replaceChildren();
-    disposePointWindgram(pointBody);
+    windgram?.disposePointWindgram(pointBody);
     pointBody.replaceChildren(); updatePointSeries = null; pointBody.tabIndex = -1;
     await loadPointRange();
   }
@@ -602,18 +607,28 @@ function startPreview(): void {
     seriesAbort = requestAbort;
     const requestedBuild = build;
     const requestedPoint = { ...clicked }, requestedLoader = pointLoader;
-    const frames = pointSeriesSelection(requestedBuild, pointHorizon).frames;
-    if (!frames.includes(pointFrameId ?? '')) pointFrameId = frames.includes(selectedFrame ?? '') ? selectedFrame : frames[0] ?? null;
+    pointFrameIds = pointSeriesSelection(requestedBuild, pointHorizon).frames;
+    pointFrameId = selectPointFrame(pointFrameIds, pointFrameId, selectedFrame);
     pointCard.ariaBusy = 'true';
     setPointStatus('Loading forecast…');
+    const current = () => !requestAbort.signal.aborted && build === requestedBuild && pointLoader === requestedLoader
+      && pointOpen && samePoint(clicked, requestedPoint) && ensureLive();
+    let buffered: { payload: PointSeries; totalFrames: number; loading: boolean } | null = null;
+    const rendering = windgram ? Promise.resolve() : import('@av/windgram').then(module => {
+      windgram = module;
+      if (buffered && current()) showPoint(requestedPoint, buffered.payload, buffered.totalFrames, buffered.loading);
+      buffered = null;
+    });
     try {
-      await requestedLoader.load(pointHorizon, requestAbort.signal, { frameId: pointFrameId ?? selectedFrame, onProgress(payload, totalFrames, loading) {
-        if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !samePoint(clicked, requestedPoint) || !ensureLive()) return;
-        showPoint(requestedPoint, payload, totalFrames, loading);
-      } });
+      const loading = requestedLoader.load(pointHorizon, requestAbort.signal, { frameId: pointFrameId, onProgress(payload, totalFrames, loading) {
+        if (!current()) return;
+        if (!windgram) buffered = { payload, totalFrames, loading };
+        else { buffered = null; showPoint(requestedPoint, payload, totalFrames, loading); }
+      } }).catch(async error => { await rendering; throw error; });
+      await Promise.all([loading, rendering]);
     } catch (error) {
-      if (requestAbort.signal.aborted || build !== requestedBuild || pointLoader !== requestedLoader || !pointOpen || !samePoint(clicked, requestedPoint)) return;
-      if (!ensureLive()) return;
+      if (!current()) return;
+      requestAbort.abort();
       updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame(), false);
       pointCard.ariaBusy = 'false';
       const detail = error instanceof Error ? error.message : String(error);
@@ -750,7 +765,7 @@ function startPreview(): void {
       pointCard.hidden = false;
       pointCard.ariaBusy = 'false';
       setPointStatus('Point request interrupted. Click the map again.');
-      disposePointWindgram(pointBody);
+      windgram?.disposePointWindgram(pointBody);
       updatePointSeries = null;
     }
     seriesAbort?.abort();
@@ -761,7 +776,7 @@ function startPreview(): void {
     }
     removeOverlay(true);
     if (event.persisted) return;
-    disposePointWindgram(pointBody);
+    windgram?.disposePointWindgram(pointBody);
     pointLoader?.dispose(); pointLoader = null;
     disposeExpiry();
     if (!mapFailed) { overlay.destroy(); map.remove(); }

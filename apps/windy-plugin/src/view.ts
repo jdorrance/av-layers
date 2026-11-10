@@ -1,4 +1,4 @@
-import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
+import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, selectPointFrame, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
@@ -66,6 +66,7 @@ export class PluginPanel {
   private readonly pointHorizonLabel = node('label', undefined, 'Point horizon');
   private unitSystem: UnitSystem = 'metric';
   private pointFrameId: string | null = null;
+  private pointFrameIds: readonly string[] = [];
   private selectedFrameId: string | null = null;
   private mapFrameId: string | null = null;
   private pointLocation: GeoPoint | undefined;
@@ -176,7 +177,9 @@ export class PluginPanel {
     if (state.phase === 'ready' && state.buildId) this.setStatus(`Pinned build ${state.buildId}`);
     if (state.phase === 'error') this.setStatus('No viewable build');
     if (state.phase === 'ready') {
-      if (state.frameId !== null && this.selectedFrameId !== state.frameId) this.pointFrameId = state.frameId;
+      if (state.frameId !== null && this.selectedFrameId !== state.frameId) {
+        this.pointFrameId = selectPointFrame(this.pointFrameIds, state.frameId, this.pointFrameId);
+      }
       this.selectedFrameId = state.frameId;
       this.mapFrameId = state.displayedFrameId;
       this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
@@ -191,20 +194,24 @@ export class PluginPanel {
     this.setPointStatus('Loading forecast…');
   }
 
-  pointLoading(frameId: string | null): void {
-    this.pointFrameId = frameId;
+  pointLoading(frames: readonly string[], mapFrameId: string | null): string | null {
+    this.pointFrameIds = frames;
+    this.pointFrameId = selectPointFrame(frames, this.pointFrameId, mapFrameId);
     this.point.ariaBusy = 'true';
     this.setPointStatus('Loading forecast…');
+    this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, true);
+    return this.pointFrameId;
   }
 
   get pointFrame(): string | null { return this.pointFrameId; }
 
-  renderPoint(payload: PointSeries, build: PinnedBuild, frameId: string | null, onFrame: (id: string) => void, totalFrames = payload.frames.length, loading = payload.frames.length < totalFrames): void {
-    if (!this.pointLocation) return;
-    if (this.pointFrameId === null || (payload.frames.length === totalFrames && !payload.frames.some(frame => frame.id === this.pointFrameId))) this.pointFrameId = payload.frames.some(frame => frame.id === frameId) ? frameId : payload.frames[0]?.id ?? null;
+  renderPoint(payload: PointSeries, build: PinnedBuild, onFrame: (id: string) => void, loading = payload.frames.length < this.pointFrameIds.length): void {
+    const point = this.pointLocation;
+    if (!point) return;
     this.point.ariaBusy = String(loading);
     if (!loading) this.setPointStatus();
-    this.updatePoint = renderPointWindgram(this.pointBody, payload, build, { point: this.pointLocation, frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading, onFrame: id => {
+    this.updatePoint = renderPointWindgram(this.pointBody, payload, build, { point, frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames: this.pointFrameIds.length, loading, onFrame: id => {
+      if (point !== this.pointLocation || !this.pointFrameIds.includes(id)) return;
       this.pointFrameId = id;
       this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
       onFrame(id);
@@ -224,7 +231,7 @@ export class PluginPanel {
 
   clearPoint(): void {
     disposePointWindgram(this.pointBody);
-    this.updatePoint = null; this.pointFrameId = null; this.pointLocation = undefined; this.point.hidden = true;
+    this.updatePoint = null; this.pointFrameId = null; this.pointFrameIds = []; this.pointLocation = undefined; this.point.hidden = true;
     this.pointSettings.open = false;
     this.point.ariaBusy = 'false';
     this.pointBody.replaceChildren(); this.setPointStatus();

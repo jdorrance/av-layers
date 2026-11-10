@@ -103,6 +103,9 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
   expect(report.capacity.workingSet.nativeFields).toBeGreaterThan(0);
   expect(report.capacity.workingSet.shardAssembly).toBeGreaterThan(0);
   expect(report.capacity.violations).toEqual([]);
+  expect(report.violations).toEqual([]);
+  expect(report.retention).toEqual({ cadenceHours: 6, retentionDays: 7, retainedPerModel: 28,
+    retentionBasis: 'schedule', retainedNumericBytes: 28 * report.capacity.numericBytes });
   expect(report.capacity.tiles).toBeGreaterThan(0);
   expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
   expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
@@ -113,9 +116,13 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
   expect(fake.storage).not.toHaveBeenCalled();
 });
 
-it('rejects scenario overrides for whole-domain capacity reports', async () => {
+it('accepts retention overrides and rejects geometry overrides for whole-domain capacity reports', async () => {
   const { readLocalFile } = await vi.importActual<typeof import('./local-file.js')>('./local-file.js');
   fake.read.mockImplementation(readLocalFile);
-  await expect(runBatch(['capacity', '--model', 'gfs', '--frames', '2'])).rejects.toThrow('scenario overrides are unsupported');
+  await runBatch(['capacity', '--model', 'rrfs', '--cadence-hours', '12', '--retention-days', '3']);
+  const report = JSON.parse(vi.mocked(console.log).mock.lastCall![0] as string);
+  expect(report.retention).toEqual({ cadenceHours: 12, retentionDays: 3, retainedPerModel: 6,
+    retentionBasis: 'cadence-override', retainedNumericBytes: 6 * report.capacity.numericBytes });
+  await expect(runBatch(['capacity', '--model', 'gfs', '--frames', '2'])).rejects.toThrow('accepts only retention overrides');
   expect(fake.storage).not.toHaveBeenCalled();
 });
