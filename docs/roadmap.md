@@ -63,14 +63,6 @@ and [serving budgets](serving-budgets.md):
   height-supported donor weights used for $E_{\text{supported}}(h_f)$, falling
   back lazily to [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
   only on cells where all donors exceed `maximumBelowGroundExtrapolationM`.
-- **Mixed `VALID` / `NO_LIFT` bilinear MSL invariant (`@av/forecast/sampler`):**
-  in [`reduceKnownQuad` and `reduceCells`](../packages/forecast/src/sampler.ts),
-  prevent `STATUS_NO_LIFT` cells (which store bare terrain height $h_i$ in
-  `usable-lift-msl`) from pulling adjacent `STATUS_VALID` thermal ceilings
-  upward toward high mountain ground; interpolate MSL across `STATUS_VALID`
-  contributors or as interpolated terrain plus interpolated AGL so
-  $\text{MSL} = \text{Terrain} + \text{AGL}$ holds across every sub-grid sample
-  and tile pixel.
 - **Refinement patch boundary feathering (`apps/batch/src/raster.ts`):** blend
   1 km patch fields with base native fields across a narrow border collar in
   [`compositeGeometry`](../apps/batch/src/raster.ts) to eliminate hard seams at

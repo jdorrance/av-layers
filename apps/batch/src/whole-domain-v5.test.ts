@@ -445,7 +445,7 @@ describe('whole-domain v5 production', () => {
     const serial = await readV5(serialPath);
     expect(serial.version).toBe(5);
     expect(serial.method.id).toBe(`${TERRAIN_COLUMN_METHOD.id}+${PRECIPITATION_ALL_HOURS_METHOD.id}`);
-    expect(serial.tool).toMatchObject({ terrainMethod: TERRAIN_COLUMN_METHOD.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id });
+    expect(serial.tool).toMatchObject({ terrainMethod: TERRAIN_COLUMN_METHOD.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id, useStoredMslNoLift: true });
     expect(serial.descriptors.layers['usable-lift-msl']).toMatchObject({ methodId: TERRAIN_COLUMN_METHOD.id, verticalReference: 'MSL' });
     expect(serial.descriptors.layers['usable-lift-agl']).toMatchObject({ methodId: TERRAIN_COLUMN_METHOD.id, verticalReference: 'terrain-AGL', label: 'Usable lift depth (terrain AGL)' });
     expect(serial.descriptors.layers['precip-rate']).toMatchObject({ methodId: PRECIPITATION_ALL_HOURS_METHOD.id, verticalReference: 'surface' });
@@ -477,6 +477,7 @@ describe('whole-domain v5 production', () => {
       onValidated: async result => { assertValidatedBuild(parallelRoot, result.manifest, result); parallelSealed = true; } });
     expect(parallelSealed).toBe(true);
     const parallel = await readV5(parallelPath);
+    expect(parallel.tool.useStoredMslNoLift).toBe(true);
     const timings = z.record(z.string(), z.number().nonnegative()).parse(parallel.metrics.phasesMs);
     const scalarMs = ['scalarStageMs', 'scalarMergeMs', 'scalarUploadMs'].map(key => {
       expect(timings[key]).toEqual(expect.any(Number));
