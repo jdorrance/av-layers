@@ -27,7 +27,8 @@ async function archiveWithTile(bytes: Uint8Array): Promise<string> {
     for (const [key, value] of Object.entries({ name: 'fixture', format: 'webp', minzoom: '0', maxzoom: '0' })) metadata.run(key, value);
     db.prepare('INSERT INTO tiles VALUES (0, 0, 0, ?)').run(bytes);
   } finally { db.close(); }
-  execFileSync(fileURLToPath(new URL('../../../.tools/pmtiles', import.meta.url)), ['convert', input, output], { stdio: 'pipe' });
+  const binary = process.env.PMTILES_BIN || fileURLToPath(new URL('../../../.tools/pmtiles', import.meta.url));
+  execFileSync(binary, ['convert', input, output], { stdio: 'pipe' });
   return output;
 }
 
