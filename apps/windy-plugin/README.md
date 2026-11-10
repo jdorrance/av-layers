@@ -19,9 +19,10 @@ For a standalone map, use [`@av/preview`](../preview/README.md).
 
 ## Source layout
 
-- [src/plugin.ts](src/plugin.ts): pane lifecycle, point requests, and cancellation.
+- [src/plugin.ts](src/plugin.ts): pane lifecycle and Windy map events.
 - [src/controller.ts](src/controller.ts): build pinning, usable-lift selection, and host timestamp sync.
 - [src/raster-layer.ts](src/raster-layer.ts): LeafletGL tile layer, tile protocol, and stacking order.
-- [src/view.ts](src/view.ts): model and opacity controls and the point panel.
+- [src/view.ts](src/view.ts): model and opacity controls and the point panel,
+  using [`@av/client`](../../packages/client/README.md) for point requests.
 
 See [the data guide](../../docs/data.md) for layer units.

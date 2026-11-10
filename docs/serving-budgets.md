@@ -64,7 +64,8 @@ Publication compacts scalar hours into serving groups in
 `/samples` can split cell spans into row spans or selected records to fit the
 combined byte budget. `/profile` charges each scalar or profile group's
 contiguous span from its first selected channel to its last for the nearest
-covered native cell. Retained regional patches load their coverage lazily.
+covered native cell. Retained regional builds read selected grids in order
+and load patch coverage lazily.
 
 Profile responses cap JSON at 1 MiB. The point loader uses `maxProfileFrames`
 to page the selected fields and native levels under the server's response

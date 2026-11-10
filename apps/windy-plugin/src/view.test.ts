@@ -65,7 +65,8 @@ class FakeElement {
   }
 }
 
-const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn(), onPointHorizon: vi.fn() });
+const callbacks = () => ({ onModel: vi.fn(), onOpacity: vi.fn(), onBack: vi.fn(), canRenderPoint: () => true, onPointFrame: vi.fn() });
+const unusedPointApi = { pointSeries() { throw new Error('Unexpected point request'); } };
 
 function installDom(active: FakeElement | null = null) {
   const document = {
@@ -94,7 +95,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 it('offers the published models and follows the selected build', () => {
   installDom();
-  const panel = new PluginPanel(callbacks());
+  const panel = new PluginPanel(unusedPointApi, callbacks());
   panel.renderBuild(fixtureBuild({ buildId: 'build-1' }));
   panel.renderState(ready);
   const nodes = visit(panel.root as unknown as FakeElement);
@@ -108,7 +109,7 @@ it('offers the published models and follows the selected build', () => {
 
 it('associates visible labels with the model and opacity controls', () => {
   installDom();
-  const panel = new PluginPanel(callbacks());
+  const panel = new PluginPanel(unusedPointApi, callbacks());
   const nodes = visit(panel.root as unknown as FakeElement);
   const controls = nodes.filter(element => element.tag === 'select' || element.tag === 'input');
   expect(controls.map(control => control.id)).toEqual(['av-model', 'av-opacity', 'av-units', 'av-point-horizon']);
@@ -126,7 +127,7 @@ it('offers a horizon choice only when a pinned build has additional point frames
   delete unprefixed.manifest.mapFrameCount;
   for (const [build, hidden, label] of [[matching, true, 'Map forecast'], [retainedPointBuild(), false, 'Map forecast'],
     [retainedLegacyPointBuild(), false, '24 hours'], [unprefixed, false, '24 hours']] as const) {
-    const panel = new PluginPanel(callbacks());
+    const panel = new PluginPanel(unusedPointApi, callbacks());
     panel.renderBuild(build);
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.find(node => node.id === 'av-point-horizon')?.hidden).toBe(hidden);
@@ -138,7 +139,7 @@ it('offers a horizon choice only when a pinned build has additional point frames
 it('keeps native panel control keys separate from page shortcuts while allowing Escape and Tab', () => {
   installDom();
   const handlers = callbacks();
-  const panel = new PluginPanel(handlers);
+  const panel = new PluginPanel(unusedPointApi, handlers);
   const body = new FakeElement('body'), map = new FakeElement('canvas');
   body.append(panel.root as unknown as FakeElement, map);
   const pageKeys: string[] = [];
@@ -171,7 +172,7 @@ it('keeps native panel control keys separate from page shortcuts while allowing 
 
 it('leaves native mobile header gestures to the host and hides both pane elements together', () => {
   installDom();
-  const panel = new PluginPanel(callbacks());
+  const panel = new PluginPanel(unusedPointApi, callbacks());
   const target = new FakeElement('target');
   target.append(panel.mobileHeader as unknown as FakeElement, panel.root as unknown as FakeElement);
   const startSlide = vi.fn();
@@ -189,7 +190,7 @@ it('leaves native mobile header gestures to the host and hides both pane element
 
 it('keeps horizon warnings visible alongside errors and removes them on expiry', () => {
   installDom();
-  const panel = new PluginPanel(callbacks());
+  const panel = new PluginPanel(unusedPointApi, callbacks());
   const state: ControllerState = { ...ready, message: 'Overlay tile failed to load', horizonNotice: 'Map forecast ended — update overdue.' };
   panel.renderState(state);
   const children = (panel.root as unknown as FakeElement).children;
@@ -210,7 +211,7 @@ it('keeps horizon warnings visible alongside errors and removes them on expiry',
 it('leaves the opacity slider alone while it is being dragged', () => {
   const opacity = new FakeElement('input');
   installDom(opacity);
-  const panel = new PluginPanel(callbacks());
+  const panel = new PluginPanel(unusedPointApi, callbacks());
   const input = visit(panel.root as unknown as FakeElement).find(element => element.id === 'av-opacity')!;
   const document = globalThis.document as { activeElement: FakeElement | null };
   document.activeElement = input;
@@ -228,24 +229,22 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   if (m.version !== 5) throw new Error('Expected v5');
   const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))));
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
-  const point = { lat: 32.9, lon: -117.25 }, loader = api.pointSeries(build, point), handlers = callbacks(), chooseFrame = vi.fn();
-  const panel = new PluginPanel(handlers), mapId = m.frames[m.mapFrameCount! - 1].id;
+  const point = { lat: 32.9, lon: -117.25 }, handlers = callbacks();
+  const panel = new PluginPanel(api, handlers), mapId = m.frames[m.mapFrameCount! - 1].id;
   const state = { ...ready, buildId: m.buildId, frameId: mapId, displayedFrameId: mapId };
-  panel.renderState(state); panel.loadPoint(point);
-  panel.pointLoading(pointSeriesSelection(build).frames, mapId);
-  panel.renderPoint(await loader.load('day'), build, chooseFrame);
+  panel.renderState(state);
+  await panel.openPoint(build, point);
   let nodes = visit(panel.root as unknown as FakeElement);
   const horizon = nodes.find(element => element.id === 'av-point-horizon')!;
+  const pointPanel = nodes.find(element => element.className === 'av-point')!;
   horizon.value = 'forecast'; horizon.dispatchEvent(new Event('change'));
-  expect(handlers.onPointHorizon).toHaveBeenCalledWith('forecast');
-  panel.pointLoading(pointSeriesSelection(build, 'forecast').frames, mapId);
-  panel.renderPoint(await loader.load('forecast'), build, chooseFrame);
+  await vi.waitFor(() => expect(pointPanel.ariaBusy).toBe('false'));
   nodes = visit(panel.root as unknown as FakeElement);
   const dayTabs = nodes.find(element => element.className === 'av-windgram-days')!;
   expect(dayTabs.children.length).toBeGreaterThan(1);
   dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
-  expect(chooseFrame).toHaveBeenCalled();
-  const chosenId = chooseFrame.mock.calls.at(-1)![0] as string;
+  expect(handlers.onPointFrame).toHaveBeenCalled();
+  const chosenId = handlers.onPointFrame.mock.calls.at(-1)![0] as string;
   const chosenFrame = m.frames.find(f => f.id === chosenId)!;
   panel.renderState({ ...state, opacity: 0.75 });
   const time = nodes.find(element => element.className === 'av-point-time')!;
@@ -260,7 +259,8 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   panel.renderState({ ...state, frameId: null, displayedFrameId: null });
   expect(time.textContent).toContain(`Point: ${chosenFrame.validTime.slice(0, 10)}`);
   expect(time.textContent).toContain('Map: unavailable');
-  panel.renderPoint(await loader.load('forecast'), build, chooseFrame);
+  horizon.dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(pointPanel.ariaBusy).toBe('false'));
   nodes = visit(panel.root as unknown as FakeElement);
   expect(nodes.find(element => element.className === 'av-point-time')!.textContent).toContain('Map: unavailable');
 });
@@ -269,26 +269,25 @@ it('navigates forecast hours via windgram keyboard controls', async () => {
   installDom();
   const build = fixtureProfileBuild({ frameHours: [1, 2, 4, 7, 13], mapFrameCount: 5 });
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))), now: () => Date.parse(build.manifest.createdAt) });
-  const panel = new PluginPanel(callbacks()), chooseFrame = vi.fn();
-  panel.loadPoint({ lat: 32.9, lon: -117.25 });
-  panel.pointLoading(pointSeriesSelection(build).frames, 'f001');
-  panel.renderPoint(await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), build, chooseFrame);
+  const handlers = callbacks(), panel = new PluginPanel(api, handlers);
+  panel.renderState({ ...ready, frameId: 'f001', displayedFrameId: 'f001' });
+  await panel.openPoint(build, { lat: 32.9, lon: -117.25 });
   const nodes = visit(panel.root as unknown as FakeElement);
   const host = nodes.find(node => node.className === 'av-windgram-host')!;
   expect(host.innerHTML).toContain('class="windgram');
   expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
   const key = (value: string) => Object.assign(new Event('keydown', { cancelable: true }), { key: value });
   host.dispatchEvent(key('ArrowRight'));
-  expect(chooseFrame).toHaveBeenLastCalledWith('f002');
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f002', build);
   host.dispatchEvent(key('ArrowLeft'));
-  expect(chooseFrame).toHaveBeenLastCalledWith('f001');
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f001', build);
   host.dispatchEvent(key('End'));
-  expect(chooseFrame).toHaveBeenLastCalledWith('f007');
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f007', build);
   host.dispatchEvent(key('Home'));
-  expect(chooseFrame).toHaveBeenLastCalledWith('f001');
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f001', build);
   const steps = nodes.filter(node => node.className === 'av-windgram-step');
   for (let count = 0; count < 4; count++) steps[1].dispatchEvent(new Event('click'));
-  expect(chooseFrame).toHaveBeenLastCalledWith('f013');
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f013', build);
 });
 
 it('refreshes the same chart on a page append and resize, and disposes the observer and inspector', async () => {
@@ -405,23 +404,16 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
   });
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
-  const panel = new PluginPanel(callbacks()), point = { lat: 32.9, lon: -117.25 };
+  const panel = new PluginPanel(api, callbacks()), point = { lat: 32.9, lon: -117.25 };
   panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f072', displayedFrameId: m.frames[0].id });
-  panel.loadPoint(point);
-  const frameIds = pointSeriesSelection(build).frames;
-  panel.pointLoading(frameIds, 'f072');
+  const pending = panel.openPoint(build, point);
   const location = visit(panel.root as unknown as FakeElement).find(node => node.className === 'av-point-location')!;
   expect(location.parent?.className).toBe('av-point-settings');
   expect(location.textContent).toBe('32.900°, -117.250°');
-  const pending = api.pointSeries(build, point).load('day', undefined, { frameId: 'f072', onProgress(series, _total, loading) {
-    panel.renderPoint(series, build, vi.fn(), loading);
-  } });
-  const rejected = fail ? expect(pending).rejects.toThrow('Late page failed') : null;
   try {
     await vi.waitFor(() => expect(pages).toHaveLength(fail ? 3 : 2));
     const nodes = visit(panel.root as unknown as FakeElement);
     expect(nodes.find(node => node.className === 'av-point')?.ariaBusy).toBe('true');
-    panel.pointLoading(frameIds, 'f072');
     const status = nodes.find(node => node.className === 'av-muted' && node.parent?.className === 'av-point');
     expect(status?.hidden).toBe(false);
     expect(status?.textContent).toBe('Loading forecast…');
@@ -429,21 +421,19 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     expect(nodes.find(node => node.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
     expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(' · Map: ');
-    expect(panel.pointFrame).toBe('f072');
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[39].validTime.slice(0, 16).replace('T', ' '));
     expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe('Map forecast');
     if (!keepKnown) {
       panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f069', displayedFrameId: m.frames[0].id });
       expect(nodes.find(node => node.className === 'av-windgram-profile-status')?.textContent).toBe('Loading native profile…');
     }
   } finally { release(); }
+  await pending;
   if (fail) {
-    await rejected;
-    panel.pointError('Late page failed');
     const nodes = visit(panel.root as unknown as FakeElement), summary = nodes.find(node => node.className === 'av-windgram-lift-summary')!;
     const status = nodes.find(node => node.className === 'av-muted' && node.parent?.className === 'av-point');
     expect(status?.hidden).toBe(false);
     expect(status?.textContent).toBe('Late page failed');
-    expect(panel.pointFrame).toBe(keepKnown ? 'f072' : 'f069');
     expect(summary.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-windgram-profile-status')?.hidden).toBe(keepKnown);
     const incomplete = nodes.find(node => node.className === 'av-point-incomplete')!;
@@ -459,12 +449,11 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     expect(incomplete.hidden).toBe(false);
     return;
   }
-  await pending;
   const nodes = visit(panel.root as unknown as FakeElement);
   expect(nodes.find(node => node.className === 'av-point')?.ariaBusy).toBe('false');
   expect(nodes.find(node => node.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
   expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
-  expect(panel.pointFrame).toBe('f069');
+  expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[38].validTime.slice(0, 16).replace('T', ' '));
   expect(pages).toHaveLength(3);
 });
 
@@ -472,12 +461,10 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   installDom();
   const build = fixtureProfileBuild(), m = build.manifest;
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async input => new Response(JSON.stringify(fixturePointFetch(build, String(input)))), now: () => Date.parse(m.createdAt) });
-  const panel = new PluginPanel(callbacks()), first = m.frames[0], second = m.frames[1];
+  const panel = new PluginPanel(api, callbacks()), first = m.frames[0], second = m.frames[1];
   const state = { ...ready, buildId: m.buildId, frameId: second.id, displayedFrameId: null };
   panel.renderState(state);
-  panel.loadPoint({ lat: 32.9, lon: -117.25 });
-  panel.pointLoading(pointSeriesSelection(build).frames, second.id);
-  panel.renderPoint(await api.pointSeries(build, { lat: 32.9, lon: -117.25 }).load('day'), build, vi.fn());
+  await panel.openPoint(build, { lat: 32.9, lon: -117.25 });
   const time = visit(panel.root as unknown as FakeElement).find(element => element.className === 'av-point-time')!;
   const stamp = (value: string) => value.slice(0, 16).replace('T', ' ');
   expect(time.textContent).toBe(`Point: ${stamp(second.validTime)} UTC · Map: unavailable`);
@@ -492,14 +479,17 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   expect(time.textContent).toContain('Map: unavailable');
 });
 
-it('keeps a point hour in the planned horizon when the legacy map time lies beyond it', () => {
+it('requests a point hour in the planned horizon when the legacy map time lies beyond it', async () => {
   installDom();
   const build = retainedLegacyPointBuild(), frames = pointSeriesSelection(build).frames;
   const mapFrame = build.manifest.frames[frames.length];
-  const panel = new PluginPanel(callbacks());
-  panel.loadPoint({ lat: 32.9, lon: -117.25 });
-  expect(panel.pointLoading(frames, mapFrame.id)).toBe(frames[0]);
+  const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error('Point request failed'); });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+  const panel = new PluginPanel(api, callbacks());
   panel.renderState({ ...ready, frameId: mapFrame.id, displayedFrameId: mapFrame.id });
-  panel.pointError('A later page failed');
-  expect(panel.pointFrame).toBe(frames[0]);
+  await panel.openPoint(build, { lat: 32.9, lon: -117.25 });
+  expect(new URL(String(fetchImpl.mock.calls[0][0])).searchParams.get('frame')).toBe(frames[0]);
+  const nodes = visit(panel.root as unknown as FakeElement);
+  const status = nodes.find(node => node.className === 'av-muted' && node.parent?.className === 'av-point');
+  expect(status?.textContent).toBe('Forecast unavailable. Point request failed');
 });
