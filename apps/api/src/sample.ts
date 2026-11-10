@@ -2,10 +2,10 @@ import { MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_POINTS, SAMPLE_STATUSES, STATUS_OUTS
 import { refinementCandidate } from '@av/contracts/refinement';
 import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Cell, type PackedSamplePlan, type Sample } from '@av/forecast';
 import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from './coverage';
-import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObjectBytes, waitFor, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, waitFor, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 import { artifact, servedSource, type PublishedManifest } from './publication';
-import { cached, ensureLive, fail, json, response } from './http';
-import { readPackedRanges, type PackedRange } from './packed-ranges';
+import { cached, fail, json, response } from './http';
+import { admitPackedRangeBytes, readLegacySampleRange, readPackedRanges, validatedRangeLength, type PackedRange } from './packed-ranges';
 import { readCoordinatePair, readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface Point { lat: number; lon: number }
@@ -50,36 +50,16 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
       const plan = outside ? null : planSample(grid.grid, lat, lon);
       if (!plan && group.patchId) fail(503, 'publication-invalid', 'Refinement coverage lacks sample support');
       const packed = plan ? planPackedSample(resolved.get(grid)!.layout, plan, grid.samples.channelCount, jobs.map(job => job.channel)) : null;
-      if (packed) {
-        const { offset, length } = packed.byteRange;
-        if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || offset + length > grid.samples.bytes) {
-          fail(503, 'publication-invalid', 'Invalid sample range');
-        }
-        rangeBytes += length;
-      }
+      if (packed) rangeBytes += validatedRangeLength(packed.byteRange, grid.samples);
       return { grid, patchId: group.patchId, jobs, plan, packed };
     });
-    if (rangeBytes > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
+    admitPackedRangeBytes(rangeBytes);
     const source = servedSource(m, url.origin);
     const values = new Map<string, Sample & { patchId?: string }>();
     for (const { grid, patchId, jobs, plan, packed } of plans) {
-      let bytes: Uint8Array = new Uint8Array();
-      if (packed) {
-        bytes = await binaryRead(bucket, `${grid.samples.key}:${packed.byteRange.offset}:${packed.byteRange.length}`, async signal => {
-          countRead(ctx);
-          const object = await bucket.get(grid.samples.key, { range: packed.byteRange });
-          if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
-          if (object.size !== grid.samples.bytes) {
-            void object.body.cancel().catch(() => {});
-            fail(503, 'publication-incomplete', 'Sample pack missing or invalid');
-          }
-          return readObjectBytes(object, packed.byteRange.length, true, ctx, signal);
-        }, ctx, request.signal);
-        ensureLive(m.expiresAt);
-        if (bytes.byteLength !== packed.byteRange.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-      }
+      const bytes = packed ? await readLegacySampleRange(bucket, ctx, request.signal, m.expiresAt, grid.samples, packed.byteRange) : null;
       for (const job of jobs) {
-        const value = plan && packed
+        const value = plan && packed && bytes
           ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer], m.tool.useStoredMslNoLift === true)
           : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
         values.set(`${job.frame.id}/${job.layer}`, { ...value, ...(patchId ? { patchId } : {}) });

@@ -230,7 +230,7 @@ describe('Windgram data', () => {
     vi.stubGlobal('document', { head: otherHead, createElement: (tag: string) => new FakeElement(tag) });
     let resizeCallback: (() => void) | null = null;
     const disconnected = vi.fn();
-    let maxHeight = '58vh';
+    let maxHeight = '50%';
     const owner = {
       head,
       getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
@@ -257,7 +257,8 @@ describe('Windgram data', () => {
     expect(host.ownerDocument).toBe(owner);
     expect(head.children).toHaveLength(2);
     expect(otherHead.children).toHaveLength(0);
-    expect(Number(/viewBox="0 0 420 (\d+)"/.exec(host.innerHTML)?.[1])).toBeGreaterThan(120);
+    // A percentage can remain unresolved in computed style. The chart keeps its natural height.
+    expect(Number(/viewBox="0 0 420 (\d+)"/.exec(host.innerHTML)?.[1])).toBeGreaterThan(286);
     maxHeight = '286px';
     resizeCallback!();
     expect(host.innerHTML).toContain('viewBox="0 0 420 286"');

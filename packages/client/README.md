@@ -27,8 +27,9 @@ The [point series loader](src/client-point.ts) fetches samples and profiles
 independently and merges them by frame ID. If the selected frame has map lift,
 progress waits for its sample request to settle. Progress reports outstanding
 requests separately from the frame count. The day view uses the v5 map prefix
-when available and the first 24 hours otherwise. Dispose the loader when the
-point closes.
+when available and the first 24 hours otherwise.
+[`PointSeriesController`](src/point-series-controller.ts) owns the open point,
+selected hour and current request for each map. Close it to dispose the loader.
 
 ```sh
 pnpm test packages/client

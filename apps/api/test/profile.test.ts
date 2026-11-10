@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, profileLevelSchema, sampleResponseV5Schema, type LayerId } from '@av/contracts';
-import { nativeColumnCloudDiagnostics, nativeColumnWindAtHeight } from '@av/soaring';
+import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, sampleResponseV5Schema, type LayerId } from '@av/contracts';
+import { nativeColumnCloudDiagnostics } from '@av/soaring';
 import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
@@ -139,33 +139,39 @@ describe('native profile API', () => {
     expect(spec.paths[`${root}/profile`]!.get.responses['409']).toBeDefined();
   });
 
-  it('uses one native cell for scalar layers, levels, and derived diagnostics at an off-grid point', async () => {
+  it.each([
+    { location: 'a cell center', point: nativePoint(6, 8), donorX: 6, donorWindU: 3 },
+    { location: 'an off-node point', point: nativePoint(5.75, 8.2), donorX: 6, donorWindU: 3, pointWindU: 2 },
+    { location: 'the midpoint between cell centers', point: nativePoint(5.5, 8), donorX: 5, donorWindU: -1, pointWindU: 1 }
+  ])('uses one native cell for scalar layers, levels, and derived diagnostics at $location', async ({ point, donorX, donorWindU, pointWindU }) => {
     const f = attachNativeProfiles(createV5Fixture({ nativeLayers: layers,
       nativeValue: (layer, frame, x) => layer === 'wind-10m-u' ? 3 + 4 * (x - 6) : nativeValue(layer, frame, x) }));
-    const point = nativePoint(5.75, 8.2), body = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=all`)));
-    const sample = await f.sample(point.lat, point.lon, '&frame=all&layers=wind-10m-u');
-    expect(sample.status).toBe(200);
-    const pointSamples = sampleResponseV5Schema.parse(await sample.json());
-    expect(pointSamples.frames.map(frame => frame.layers['wind-10m-u']?.value)).toEqual([2, 2]);
-    expect(pointSamples.frames.every(frame => frame.layers['wind-10m-u']?.interpolated)).toBe(true);
+    const body = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=all`)));
+    if (pointWindU !== undefined) {
+      const sample = await f.sample(point.lat, point.lon, '&frame=all&layers=wind-10m-u');
+      expect(sample.status).toBe(200);
+      const pointSamples = sampleResponseV5Schema.parse(await sample.json());
+      expect(pointSamples.frames.map(frame => frame.layers['wind-10m-u']?.value)).toEqual([pointWindU, pointWindU]);
+      expect(pointSamples.frames.every(frame => frame.layers['wind-10m-u']?.interpolated)).toBe(true);
+    }
     expect(body.lat).toBe(point.lat); expect(body.lon).toBe(point.lon);
-    expect(body.cell).toEqual({ index: 8 * 32 + 6, ...nativePoint(6, 8), surfaceId: 'native' });
+    expect(body.cell).toEqual({ index: 8 * 32 + donorX, ...nativePoint(donorX, 8), surfaceId: 'native' });
     expect(body.frames).toHaveLength(2);
+    const terrainM = 100 + donorX, temperatureC = Math.fround(20 + donorX * 0.01), levelWindU = 2 + donorX;
     for (const frame of body.frames) {
-      expect(frame.profile).toMatchObject({ status: 'valid', modelTerrainM: 106, surfacePressureHpa: 987.6 });
-      expect(frame.profile.levels).toHaveLength(2);
-      expect(frame.profile.levels.map(level => profileLevelSchema.parse(level).uWindMps)).toEqual([8, 8]);
+      expect(frame.profile).toMatchObject({ status: 'valid', modelTerrainM: terrainM, surfacePressureHpa: 987.6 });
+      expect(frame.profile.levels.map(level => level.uWindMps)).toEqual([levelWindU, levelWindU]);
       expect(Object.keys(frame.layers).sort()).toEqual([...layers].sort());
-      expect(frame.layers['sfc-temp-c']).toMatchObject({ value: Math.fround(20.06), interpolated: false, surfaceId: 'native' });
-      expect(frame.layers['wind-10m-u']).toMatchObject({ value: 3, interpolated: false, surfaceId: 'native' });
-      const input = { terrainM: 106, surfacePressureHpa: 987.6, surfaceTemperatureC: frame.layers['sfc-temp-c']!.value!, surfaceDewPointC: 10,
-        wind10mU: 3, wind10mV: 4, levels: frame.profile.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN,
+      expect(frame.layers['sfc-temp-c']).toMatchObject({ value: temperatureC, interpolated: false, surfaceId: 'native' });
+      expect(frame.layers['wind-10m-u']).toMatchObject({ value: donorWindU, interpolated: false, surfaceId: 'native' });
+      const input = { terrainM, surfacePressureHpa: 987.6, surfaceTemperatureC: temperatureC, surfaceDewPointC: 10,
+        levels: frame.profile.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN,
           temperatureC: level.temperatureC ?? NaN, uMps: level.uWindMps, vMps: level.vWindMps })) };
-      const cloud = nativeColumnCloudDiagnostics(input, 700), wind = nativeColumnWindAtHeight(input, 700);
+      const cloud = nativeColumnCloudDiagnostics(input, 700);
       expect(frame.derived.mixedLayerLclM).toBeCloseTo(cloud.mixedLayerLclM!);
       expect(frame.derived.effectiveCloudLimitM).toBeCloseTo(cloud.effectiveCloudLimitM!);
-      expect(frame.derived.blTopWindSpeedMps).toBeCloseTo(Math.hypot(wind.blTopWindU!, wind.blTopWindV!));
-      expect(frame.derived.wind10mSpeedMps).toBe(5);
+      expect(frame.derived.blTopWindSpeedMps).toBeCloseTo(Math.hypot(levelWindU, -3));
+      expect(frame.derived.wind10mSpeedMps).toBeCloseTo(Math.hypot(donorWindU, 4));
     }
     expect(profileReads(f)).toHaveLength(1);
     expect(f.get.mock.calls.some(([key]) => key.startsWith('coverage/') && key.includes(f.fine.surface.coverage.hash))).toBe(false);

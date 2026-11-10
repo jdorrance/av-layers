@@ -1,4 +1,4 @@
-import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, selectPointFrame, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/client';
+import { DEFAULT_OPACITY, PointSeriesController, populateModelOptions, pointSeriesSelection, type ApiClient, type PinnedBuild, type GeoPoint, type UnitSystem } from '@av/client';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
@@ -7,7 +7,8 @@ export interface PanelCallbacks {
   onModel(model: string): void;
   onOpacity(opacity: number): void;
   onBack(): void;
-  onPointHorizon(horizon: PointHorizon): void;
+  canRenderPoint(build: PinnedBuild): boolean;
+  onPointFrame(id: string, build: PinnedBuild): void;
 }
 
 const STYLE_ID = 'av-windy-plugin-style';
@@ -64,16 +65,15 @@ export class PluginPanel {
   private readonly units = node('select');
   private readonly pointHorizon = node('select');
   private readonly pointHorizonLabel = node('label', undefined, 'Point horizon');
+  private readonly pointSeries: PointSeriesController;
   private unitSystem: UnitSystem = 'metric';
-  private pointFrameId: string | null = null;
-  private pointFrameIds: readonly string[] = [];
   private selectedFrameId: string | null = null;
   private mapFrameId: string | null = null;
-  private pointLocation: GeoPoint | undefined;
   private updatePoint: ReturnType<typeof renderPointWindgram> | null = null;
   private renderedBuildId: string | null = null;
 
-  constructor(callbacks: PanelCallbacks) {
+  constructor(api: Pick<ApiClient, 'pointSeries'>, private readonly callbacks: PanelCallbacks) {
+    this.pointSeries = new PointSeriesController(api);
     ensureStyles();
     this.root = node('section', 'plugin__content av-panel');
     this.mobileHeader = node('div', 'plugin__mobile-header av-mobile-header', config.title);
@@ -117,13 +117,13 @@ export class PluginPanel {
     const unitsLabel = node('label', undefined, 'Units'); unitsLabel.htmlFor = this.units.id;
     this.units.addEventListener('change', () => {
       this.unitSystem = this.units.value === 'imperial' ? 'imperial' : 'metric';
-      this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
+      this.updatePoint?.(this.pointSeries.frameId, this.unitSystem, this.mapFrameId);
     });
     this.pointHorizon.id = 'av-point-horizon';
     this.pointHorizon.add(new Option('Map forecast', 'day')); this.pointHorizon.add(new Option('Full forecast', 'forecast'));
     this.pointHorizon.value = 'day';
     this.pointHorizonLabel.htmlFor = this.pointHorizon.id;
-    this.pointHorizon.addEventListener('change', () => callbacks.onPointHorizon(this.pointHorizon.value === 'forecast' ? 'forecast' : 'day'));
+    this.pointHorizon.addEventListener('change', () => { void this.loadPointRange(); });
     this.point.hidden = true;
     this.point.ariaLabel = 'Point forecast';
     this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
@@ -178,50 +178,53 @@ export class PluginPanel {
     if (state.phase === 'error') this.setStatus('No viewable build');
     if (state.phase === 'ready') {
       if (state.frameId !== null && this.selectedFrameId !== state.frameId) {
-        this.pointFrameId = selectPointFrame(this.pointFrameIds, state.frameId, this.pointFrameId);
+        this.pointSeries.followMapFrame(state.frameId);
       }
       this.selectedFrameId = state.frameId;
       this.mapFrameId = state.displayedFrameId;
-      this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId);
+      this.updatePoint?.(this.pointSeries.frameId, this.unitSystem, this.mapFrameId);
     }
     if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') this.clearPoint();
   }
 
-  loadPoint(point: GeoPoint): void {
-    this.clearPoint(); this.pointLocation = point; this.point.hidden = false;
+  openPoint(build: PinnedBuild, point: GeoPoint): Promise<void> {
+    this.pointSeries.open(build, point);
+    this.resetPoint();
+    this.point.hidden = false;
     this.pointCoordinates.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
-    this.point.ariaBusy = 'true';
-    this.setPointStatus('Loading forecast…');
+    return this.loadPointRange();
   }
 
-  pointLoading(frames: readonly string[], mapFrameId: string | null): string | null {
-    this.pointFrameIds = frames;
-    this.pointFrameId = selectPointFrame(frames, this.pointFrameId, mapFrameId);
-    this.point.ariaBusy = 'true';
-    this.setPointStatus('Loading forecast…');
-    this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, true);
-    return this.pointFrameId;
-  }
-
-  get pointFrame(): string | null { return this.pointFrameId; }
-
-  renderPoint(payload: PointSeries, build: PinnedBuild, onFrame: (id: string) => void, loading = payload.frames.length < this.pointFrameIds.length): void {
-    const point = this.pointLocation;
-    if (!point) return;
-    this.point.ariaBusy = String(loading);
-    if (!loading) this.setPointStatus();
-    this.updatePoint = renderPointWindgram(this.pointBody, payload, build, { point, frameId: this.pointFrameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames: this.pointFrameIds.length, loading, onFrame: id => {
-      if (point !== this.pointLocation || !this.pointFrameIds.includes(id)) return;
-      this.pointFrameId = id;
-      this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
-      onFrame(id);
-    } });
-  }
-
-  pointError(message: string): void {
-    this.updatePoint?.(this.pointFrameId, this.unitSystem, this.mapFrameId, false);
-    this.point.ariaBusy = 'false';
-    this.setPointStatus(this.pointBody.children.length ? message : `Forecast unavailable. ${message}`);
+  private async loadPointRange(): Promise<void> {
+    const context = this.pointSeries.current;
+    if (!context) return;
+    const { build, point } = context;
+    const canRender = () => this.callbacks.canRenderPoint(build);
+    await this.pointSeries.load(this.pointHorizon.value === 'forecast' ? 'forecast' : 'day', this.selectedFrameId, {
+      canRender,
+      onLoading: () => {
+        this.point.ariaBusy = 'true';
+        this.setPointStatus('Loading forecast…');
+        this.updatePoint?.(this.pointSeries.frameId, this.unitSystem, this.mapFrameId, true);
+      },
+      onProgress: (payload, totalFrames, loading) => {
+        this.point.ariaBusy = String(loading);
+        if (!loading) this.setPointStatus();
+        this.updatePoint = renderPointWindgram(this.pointBody, payload, build, {
+          point, frameId: this.pointSeries.frameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading,
+          onFrame: id => {
+            if (!canRender() || !this.pointSeries.selectFrame(context, id)) return;
+            this.updatePoint?.(id, this.unitSystem, this.mapFrameId);
+            this.callbacks.onPointFrame(id, build);
+          }
+        });
+      },
+      onError: message => {
+        this.updatePoint?.(this.pointSeries.frameId, this.unitSystem, this.mapFrameId, false);
+        this.point.ariaBusy = 'false';
+        this.setPointStatus(this.pointBody.children.length ? message : `Forecast unavailable. ${message}`);
+      }
+    });
   }
 
   private setPointStatus(message = ''): void {
@@ -230,8 +233,14 @@ export class PluginPanel {
   }
 
   clearPoint(): void {
+    this.pointSeries.close();
+    this.resetPoint();
+    this.point.hidden = true;
+  }
+
+  private resetPoint(): void {
     disposePointWindgram(this.pointBody);
-    this.updatePoint = null; this.pointFrameId = null; this.pointFrameIds = []; this.pointLocation = undefined; this.point.hidden = true;
+    this.updatePoint = null;
     this.pointSettings.open = false;
     this.point.ariaBusy = 'false';
     this.pointBody.replaceChildren(); this.setPointStatus();

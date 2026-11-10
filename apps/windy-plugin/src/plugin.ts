@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL, renderedFrames, type ModelId } from '@av/contracts';
-import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, pointSeriesSelection, type GeoPoint, type RasterTileProtocol, type PointSeriesLoader, type PointHorizon } from '@av/client';
+import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, type GeoPoint, type RasterTileProtocol } from '@av/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -18,15 +18,6 @@ let rasterProtocol: RasterTileProtocol | null = null;
 let previousController: PluginController | null = null;
 let paneOpen = false;
 let pointListening = false;
-let pointAbort: AbortController | null = null;
-let pointLoader: PointSeriesLoader | null = null;
-let pointHorizon: PointHorizon = 'day';
-
-function clearPoint(): void {
-  pointAbort?.abort(); pointAbort = null; panel?.clearPoint();
-  pointLoader?.dispose(); pointLoader = null;
-}
-
 const pointClick = (point: GeoPoint): void => { void loadPoint(normalizePoint(point.lat, point.lon)); };
 
 function pointListener(enabled: boolean): void {
@@ -39,31 +30,9 @@ function pointListener(enabled: boolean): void {
 async function loadPoint(point: GeoPoint): Promise<void> {
   const active = controller, build = active?.currentBuild;
   if (!paneOpen || !active || !build || active.state().phase !== 'ready' || active.checkExpiry()) return;
-  clearPoint();
-  pointLoader = api.pointSeries(build, point);
-  panel?.loadPoint(point);
-  await loadPointRange();
+  await panel?.openPoint(build, point);
 }
 
-async function loadPointRange(): Promise<void> {
-  const active = controller, build = active?.currentBuild, loader = pointLoader;
-  if (!paneOpen || !active || !build || !loader || active.state().phase !== 'ready' || active.checkExpiry()) return;
-  pointAbort?.abort();
-  const pending = new AbortController(); pointAbort = pending;
-  const frames = pointSeriesSelection(build, pointHorizon).frames;
-  const frameId = panel?.pointLoading(frames, active.state().frameId) ?? null;
-  try {
-    await loader.load(pointHorizon, pending.signal, { frameId, onProgress(payload, _totalFrames, loading) {
-      if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
-      panel?.renderPoint(payload, build, id => {
-        if (paneOpen && controller === active && active.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
-      }, loading);
-    } });
-  } catch (error) {
-    if (pending.signal.aborted || controller !== active || active.currentBuild !== build || pointLoader !== loader || !paneOpen || active.checkExpiry()) return;
-    panel?.pointError(error instanceof Error ? error.message : String(error));
-  } finally { if (pointAbort === pending) pointAbort = null; }
-}
 function protocol(): RasterTileProtocol {
   if (!rasterProtocol) {
     rasterProtocol = createRasterTileProtocol(API_BASE);
@@ -91,7 +60,7 @@ function bindHostListeners(): void {
   window.addEventListener('focus', refreshTime);
   document.addEventListener('visibilitychange', refreshTime);
   window.addEventListener('pagehide', () => {
-    pointListener(false); clearPoint();
+    pointListener(false); panel?.clearPoint();
     controller?.dispose(); controller = null;
     previousController?.dispose(); previousController = null;
     if (rasterProtocol) { rasterProtocol.dispose(); L.removeProtocol(rasterProtocol.scheme); rasterProtocol = null; }
@@ -103,7 +72,7 @@ function bindHostListeners(): void {
 function ensurePanel(): PluginPanel {
   const container = mountTarget ?? document.body;
   if (!panel) {
-    panel = new PluginPanel({
+    panel = new PluginPanel(api, {
       onModel: model => {
         selectedModel = model as ModelId;
         void startController(selectedModel);
@@ -112,7 +81,14 @@ function ensurePanel(): PluginPanel {
         controller?.setOpacity(opacity);
         previousController?.setOpacity(opacity);
       },
-      onPointHorizon: horizon => { pointHorizon = horizon; void loadPointRange(); },
+      canRenderPoint: build => {
+        const active = controller;
+        return paneOpen && active?.currentBuild === build && !active.checkExpiry();
+      },
+      onPointFrame: (id, build) => {
+        const active = controller;
+        if (active?.currentBuild === build && renderedFrames(build.manifest).some(frame => frame.id === id)) active.selectFrame(id);
+      },
       onBack: () => {
         onclose();
         bcast.emit('rqstClose', __pluginConfig.name);
@@ -155,7 +131,7 @@ function showCurrent(ui: PluginPanel): boolean {
 }
 
 async function startController(model: ModelId): Promise<void> {
-  clearPoint();
+  panel?.clearPoint();
   const opacity = controller?.state().opacity;
   const previous = previousController ?? controller;
   if (previousController) controller?.dispose();
@@ -188,7 +164,6 @@ async function startController(model: ModelId): Promise<void> {
         const oldBuildId = previous?.currentBuild?.manifest.buildId;
         if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);
       }
-      if (state.phase === 'expired' || state.phase === 'disposed' || state.phase === 'error') clearPoint();
       renderController(ui, activeController);
     }
   });
@@ -207,7 +182,7 @@ export const onopen = (): void => {
 };
 
 export function onclose(): void {
-  paneOpen = false; pointListener(false); clearPoint();
+  paneOpen = false; pointListener(false); panel?.clearPoint();
   panel?.setVisible(false);
 }
 
