@@ -216,6 +216,28 @@ describe('native profile API', () => {
     }
   });
 
+  it.each([
+    { terrain: 500.4, top: 500.4, velocity: 0, packed: 500, topWind: Math.hypot(3, 12), shear: 8 },
+    { terrain: 500.6, top: 500.6, velocity: 0, packed: 501, topWind: Math.hypot(3, 12.02), shear: 8.02 },
+    { terrain: 500.4, top: 500.45, velocity: 2, packed: 500, topWind: 5, shear: 0 }
+  ])('selects the native layer top across V1 terrain rounding for terrain $terrain and top $top', async ({ terrain, top, velocity, packed, topWind, shear }) => {
+    const f = attachNativeProfiles(createV5Fixture({ nativeLayers: layers,
+      nativeValue: (layer, frame, x) => layer === 'thermal-velocity' ? velocity : layer === 'thermal-top-msl' ? top
+        : layer === 'pbl-height-agl' ? 500 : nativeValue(layer, frame, x) }), {
+      profile: () => ({ modelTerrainM: terrain, surfacePressureHpa: 1000, status: 'valid', levels: [
+        { pressureHpa: 980, heightM: 600, temperatureC: 18, dewPointC: 9, uWindMps: 3, vWindMps: 4, omegaPaS: null },
+        { pressureHpa: 920, heightM: 1100, temperatureC: 15, dewPointC: 7, uWindMps: 3, vWindMps: 14, omegaPaS: null }
+      ] })
+    });
+    const body = await read(await f.request(path(f)));
+    const frame = body.frames[0]!;
+    expect(frame.profile.modelTerrainM).toBe(packed);
+    expect(frame.layers['thermal-top-msl']!.value).toBe(Math.fround(top));
+    expect(frame.derived.blTopWindSpeedMps).toBeCloseTo(topWind, 5);
+    expect(frame.derived.blWindShearMps).toBeCloseTo(shear, 5);
+    assertReleased(f);
+  });
+
   it('returns outside-domain frames without reading scalar or profile ranges', async () => {
     const f = fixture(), body = await read(await f.request(path(f, 'lat=-50&lon=0')));
     expect(body.cell).toBeNull();

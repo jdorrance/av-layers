@@ -166,9 +166,12 @@ export function reserveAllocation(bytes: number): () => void {
   return () => { if (!released) { released = true; reservedReadBytes -= bytes; } };
 }
 
-export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limit: number, ctx?: WaitContext, options: { signal?: AbortSignal; timeoutMs?: number; reserved?: boolean } = {}): Promise<Uint8Array> {
+export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limit: number, ctx?: WaitContext, options: { signal?: AbortSignal; timeoutMs?: number; reserved?: boolean; exactLength?: boolean } = {}): Promise<Uint8Array> {
   let release: () => void;
-  try { release = options.reserved ? () => {} : reserveAllocation(limit * 2); }
+  try {
+    release = options.reserved || (options.exactLength && limit === 0)
+      ? () => {} : reserveAllocation(limit * (options.exactLength ? 1 : 2));
+  }
   catch (error) { void stream.cancel(error).catch(() => {}); throw error; }
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -176,15 +179,15 @@ export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limi
   try {
     reader = stream.getReader();
     const bytes = new Uint8Array(limit);
-    let length = 0, chunks = 0, failure: unknown;
-    const cancel = (reason: unknown) => { failure = reason; void reader!.cancel(reason).catch(() => {}); };
+    let length = 0, chunks = 0, failure: { reason: unknown } | undefined;
+    const cancel = (reason: unknown) => { failure = { reason }; void reader!.cancel(reason).catch(() => {}); };
     abort = () => cancel(options.signal!.reason);
     timer = setTimeout(() => cancel(new ResourceLimitError('Object body deadline exceeded')), options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
     for (;;) {
       const next = await reader.read();
-      if (failure) throw failure;
+      if (failure) throw failure.reason;
       if (next.done) break;
       if (++chunks > 65_536) { const error = new ResourceLimitError('Stream fragmentation exceeds budget'); cancel(error); throw error; }
       if (ctx?.metrics) ctx.metrics.r2Bytes += next.value.byteLength;
@@ -193,17 +196,18 @@ export async function readBoundedStream(stream: ReadableStream<Uint8Array>, limi
       }
       bytes.set(next.value, length); length += next.value.byteLength;
     }
+    if (options.exactLength && length !== limit) throw new RangeError('Response length differs from object size');
     return length === limit ? bytes : bytes.slice(0, length);
   } finally { clearTimeout(timer); if (abort) options.signal?.removeEventListener('abort', abort); release(); reader?.releaseLock(); }
 }
 
 export async function readObjectBytes(object: R2ObjectBody, limit: number, range = false, ctx?: WaitContext, signal?: AbortSignal, reserved = false): Promise<Uint8Array> {
-  if (signal?.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
-  if (!range && (!Number.isSafeInteger(object.size) || object.size < 0 || object.size > limit)) {
-    await object.body?.cancel?.();
+  if (signal?.aborted) { void object.body.cancel(signal.reason).catch(() => {}); throw signal.reason; }
+  if (!Number.isSafeInteger(limit) || limit < 0 || (!range && (!Number.isSafeInteger(object.size) || object.size < 0 || object.size > limit))) {
+    void object.body.cancel().catch(() => {});
     throw new ResourceLimitError('Object exceeds byte budget');
   }
-  return readBoundedStream(object.body, limit, ctx, { signal, reserved });
+  return readBoundedStream(object.body, range ? limit : object.size, ctx, { signal, reserved, exactLength: !range });
 }
 
 export function estimateJsonBytes(value: unknown): number {

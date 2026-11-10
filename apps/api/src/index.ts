@@ -30,9 +30,10 @@ import { serveProfile } from './profile';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveCoverage, resolveSparseTiles, sha256 } from './coverage';
-import { type RequestMetrics, boundResponse, waitFor, type WaitContext } from './resources';
+import { type RequestMetrics, boundResponse, ResourceLimitError, waitFor, type WaitContext } from './resources';
 import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
+import { apiDocs } from './api-docs';
 
 type Env = {
   Bindings: {
@@ -154,24 +155,26 @@ const catalogModelSchema = z.object({
   error: z.string().optional()
 });
 
+function unavailableCatalogModel(model: string, label: string, error: string) {
+  return { model, label, available: false, error };
+}
+
 registerJsonRoute(
   '/v1/catalog',
   {},
   {},
   z.object({ models: z.array(catalogModelSchema) }),
   async c => {
-    const observed = new Map<string, ModelPointer | Problem>(), expiries: string[] = [];
-    const models = await Promise.all(
-      Object.keys(products).map(async model => {
+    const results = await Promise.all(
+      Object.entries(products).map(async ([model, product]): Promise<{ row: z.infer<typeof catalogModelSchema>; observed: ModelPointer | Problem }> => {
         try {
           const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx);
           const entry = await admit(c.env.BUCKET, model, ptr.latestBuildId, c.executionCtx, ptr);
-          const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model]);
-          observed.set(model, ptr); expiries.push(m.expiresAt);
+          const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, product);
           const freshness = computeFreshness(m);
-          return {
+          return { observed: ptr, row: {
             model,
-            label: products[model].label,
+            label: product.label,
             available: true,
             latest: `/v1/models/${model}/latest`,
             cycle: m.cycle,
@@ -179,18 +182,27 @@ registerJsonRoute(
             ...(m.version === 5 ? { surfaces: m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })) } : { coverage: m.coverage }),
             ageSeconds: freshness.ageSeconds,
             freshness
-          };
-        } catch (e) {
-          if (e instanceof Problem && e.code === 'publication-unavailable') {
-            observed.set(model, e);
-            return { model, label: products[model].label, available: false, error: e.code };
+          } };
+        } catch (error) {
+          if (error instanceof Problem && ['publication-unavailable', 'publication-invalid', 'publication-incomplete', 'not-retained'].includes(error.code)) {
+            if (error.code === 'publication-invalid' || error.code === 'publication-incomplete') console.warn('Catalog publication unavailable', { model, code: error.code });
+            return { observed: error, row: unavailableCatalogModel(model, product.label, error.code) };
           }
-          throw e;
+          throw error;
         }
       })
     );
+    const expiries = results.flatMap(({ row }) => row.expiresAt === undefined ? [] : [row.expiresAt]);
     const expiresAt = expiries.length ? new Date(Math.min(...expiries.map(Date.parse))).toISOString() : undefined;
-    return discovery(c, () => ({ models }), Object.keys(products).map(model => observed.get(model)!), expiries, expiresAt);
+    try {
+      return await discovery(c, () => ({ models: results.map(({ row }) => row) }), results.map(({ observed }) => observed), expiries, expiresAt);
+    } catch (error) {
+      if (!(error instanceof Problem) || error.code !== 'not-retained') throw error;
+      const now = Date.now();
+      const models = results.map(({ row }) => row.expiresAt !== undefined && Date.parse(row.expiresAt) <= now
+        ? unavailableCatalogModel(row.model, products[row.model].label, 'not-retained') : row);
+      return finish(c.req.raw, json({ models }));
+    }
   }
 );
 
@@ -361,6 +373,7 @@ app.openAPIRegistry.registerPath(
     }
   })
 );
+const paletteAssets = new Map<string, { bytes: Uint8Array; etag: string }>();
 app.get('/v1/palettes/:asset', async c => {
   const url = new URL(c.req.url);
   query(url, []);
@@ -368,10 +381,16 @@ app.get('/v1/palettes/:asset', async c => {
   if (!match) fail(400, 'invalid-parameter', 'Invalid palette path');
   const [, id, format] = match;
   if (!isPaletteId(id)) fail(404, 'unknown-palette', 'Unknown palette');
-  const palette = PALETTES[id];
+  const key = c.req.param('asset');
+  let asset = paletteAssets.get(key);
+  if (!asset) {
+    const palette = PALETTES[id];
+    const bytes = new TextEncoder().encode(format === 'json' ? JSON.stringify(palette) : paletteSvg(palette));
+    asset = { bytes, etag: await sha256(bytes) };
+    paletteAssets.set(key, asset);
+  }
   const expiry = new Date(Date.now() + 86400000).toISOString();
-  const bytes = new TextEncoder().encode(format === 'json' ? JSON.stringify(palette) : paletteSvg(palette));
-  return response(bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, await sha256(bytes), false);
+  return response(asset.bytes, format === 'json' ? 'application/json; charset=utf-8' : 'image/svg+xml', expiry, asset.etag, false);
 });
 
 const tileParamSchema = z.object({ model: param, buildId: param, layer: param, frame: param, z: param, x: param, y: param });
@@ -417,12 +436,14 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });
 app.openAPIRegistry.registerPath({ method: 'get', path: '/docs', responses: { 200: { description: 'Interactive API documentation' } } });
-app.get('/openapi.json', () => json(app.getOpenAPIDocument({ openapi: '3.1.0', info: { title: 'Aviation Forecast Layers API', version: '1.0.0' } })));
-app.get('/docs', () =>
-  response(
-    '<!doctype html><html><head><title>Aviation Forecast Layers API</title></head><body><h1>Aviation Forecast Layers API</h1><p><a href="/openapi.json">OpenAPI document</a></p><script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script><div id="swagger-ui"></div><script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"})</script></body></html>', 'text/html; charset=utf-8'
-  )
-);
+let openApi: Uint8Array | undefined;
+app.get('/openapi.json', () => {
+  openApi ??= new TextEncoder().encode(JSON.stringify(app.getOpenAPIDocument({
+    openapi: '3.1.0', info: { title: 'Aviation Forecast Layers API', version: '1.0.0' }
+  })));
+  return response(openApi, 'application/json; charset=utf-8');
+});
+app.get('/docs', apiDocs);
 app.notFound(() => {
   throw new Problem(404, 'not-found', 'Route not found');
 });
@@ -486,7 +507,11 @@ return {
     let result: Response;
     try { result = boundResponse(finish(request, await app.fetch(req, env, observed as unknown as Parameters<typeof app.fetch>[2]))); }
     catch (error) {
-      result = finish(request, new Response(JSON.stringify({ type: 'urn:windy-av:resource-limit', title: 'resource-limit', status: 503, detail: error instanceof Error ? error.message : 'Serving resource budget exceeded' }), { status: 503, headers: { 'content-type': 'application/problem+json', 'cache-control': 'no-store' } }));
+      const limited = error instanceof ResourceLimitError;
+      if (!limited) console.error('Worker response failed', error);
+      const title = limited ? 'resource-limit' : 'internal-error', status = limited ? 503 : 500;
+      const detail = limited ? 'Serving resource budget exceeded' : 'Internal server error';
+      result = finish(request, new Response(JSON.stringify({ type: `urn:windy-av:${title}`, title, status, detail }), { status, headers: { 'content-type': 'application/problem+json', 'cache-control': 'no-store' } }));
     }
     const elapsed = performance.now() - start;
     result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');

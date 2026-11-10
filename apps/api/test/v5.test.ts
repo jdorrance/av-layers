@@ -20,6 +20,20 @@ beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW)
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('API v5 metadata', () => {
+  it.each([false, true])('admits reordered descriptor records while retaining array identity, modified=%s', async modified => {
+    const fixture = createV5Fixture(), { descriptors } = fixture.manifest;
+    const reverse = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).reverse());
+    descriptors.layers = reverse(descriptors.layers);
+    descriptors.methods = reverse(descriptors.methods);
+    for (const method of Object.values(descriptors.methods)) method.parameters = reverse(method.parameters);
+    if (modified) descriptors.palettes.reverse();
+    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(fixture.manifest)));
+    const result = await fixture.request('/v1/models/gfs/latest');
+    expect(result.status, await result.clone().text()).toBe(modified ? 503 : 200);
+    if (modified) expect(await result.json()).toMatchObject({ title: 'publication-invalid' });
+    else await result.body?.cancel();
+  });
+
   it.each(['success', 'failure', 'both-abort'] as const)('cancels coalesced samples while a shared range settles: %s', async outcome => {
     const fixture = createV5Fixture(), original = fixture.get.getMockImplementation()!;
     let started!: () => void, finish!: () => void;

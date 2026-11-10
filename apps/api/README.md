@@ -35,9 +35,9 @@ pnpm --filter @av/api build
 diagnostics for the native grid cell identified by `cell`. `frame` selects
 times and `layers` selects scalar inputs. Omitted dependencies produce null
 derived values. See [sampling and profiles](../../docs/data.md#time-and-retention).
-V5 point routes default to the first frame; callers select bounded frame pages for
-complete timelines. See the [OpenAPI spec](../../docs/reference/openapi.json)
-for request limits and response schemas.
+V5 point routes default to the first frame. For complete timelines, page the
+frames or use `frame=all` with a layer subset that fits the value budget.
+See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.
 
 `/provenance` serves the run receipt or frame index; `?frame=f001` selects a
 verified source receipt from an indexed run.

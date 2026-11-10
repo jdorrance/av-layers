@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ByteCache, MaterializedReads, readBoundedStream, binaryRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
+import { ByteCache, MaterializedReads, readBoundedStream, readObjectBytes, inFlightAllocationBytes, reserveAllocation, binaryRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
 
 describe('serving resource bounds', () => {
   it('admits three distinct point pages while bounding their combined reads', async () => {
@@ -80,8 +80,37 @@ it('uses bounded buffers for fragmented streams, cancels stalled reads and relea
   const stream = new ReadableStream<Uint8Array>(), locked = stream.getReader();
   await expect(readBoundedStream(stream, 16 * 1024 * 1024)).rejects.toThrow();
   locked.releaseLock();
-  const { reserveAllocation } = await import('../src/resources');
   const release = reserveAllocation(32 * 1024 * 1024); release();
+});
+
+it('reserves only the declared bytes for a whole object', async () => {
+  const release = reserveAllocation(32 * 1024 * 1024 - 4);
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } });
+  const pending = readObjectBytes({ size: 4, body } as R2ObjectBody, 512 * 1024);
+  try {
+    expect(inFlightAllocationBytes()).toBe(32 * 1024 * 1024);
+    stream.enqueue(Uint8Array.of(1, 2)); stream.enqueue(Uint8Array.of(3, 4)); stream.close();
+    const bytes = await pending;
+    expect(bytes).toEqual(Uint8Array.of(1, 2, 3, 4));
+    expect(bytes.buffer.byteLength).toBe(4);
+  } finally { release(); }
+  expect(inFlightAllocationBytes()).toBe(0);
+});
+
+it('rejects truncated and oversized whole bodies, and cancels aborted reads', async () => {
+  const short = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Uint8Array.of(1)); controller.close(); } });
+  await expect(readObjectBytes({ size: 2, body: short } as R2ObjectBody, 1024)).rejects.toThrow('length differs');
+  const cancel = vi.fn();
+  const overrun = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Uint8Array.of(1, 2, 3)); }, cancel });
+  await expect(readObjectBytes({ size: 2, body: overrun } as R2ObjectBody, 1024)).rejects.toThrow('byte budget');
+  expect(cancel).toHaveBeenCalledOnce();
+  const controller = new AbortController(), aborted = vi.fn();
+  const pending = readObjectBytes({ size: 2, body: new ReadableStream<Uint8Array>({ cancel: aborted }) } as R2ObjectBody, 1024, false, undefined, controller.signal);
+  controller.abort(false);
+  await expect(pending).rejects.toBe(false);
+  expect(aborted).toHaveBeenCalledWith(false);
+  expect(inFlightAllocationBytes()).toBe(0);
 });
 
 it('holds admission after a deadline until an uncancellable owner actually settles', async () => {
