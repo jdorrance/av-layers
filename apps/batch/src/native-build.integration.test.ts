@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { MODEL_IDS, getProduct, gridSchema, manifestSchema, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { MODEL_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_VALID, getProduct, gridSchema, manifestSchema, type CoverageMask, type ProductDefinition } from '@av/contracts';
 import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, sampleGrid } from '@av/forecast';
 import fixture from '../../../packages/contracts/src/fixtures/lambert.json';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
@@ -52,13 +52,23 @@ describe('offline native-grid build integration', () => {
     const size = Math.ceil(product.grid.width * product.grid.height / 8);
     const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, output: new Uint8Array(size), halo: new Uint8Array(size), tiles: Uint8Array.of(1), maxZoom: 0 };
     for (let index = 0; index < product.grid.width * product.grid.height; index++) mask.output[index >> 3] |= 1 << (index & 7);
+    const plan = planSample(product.grid, scenario.point.lat, scenario.point.lon)!;
     let closed = false;
     const frames = new Map<number, NormalizedFrame>();
     const provider: ForecastProvider = {
       id: `fixture-${scenario.name}`, provider: 'Synthetic offline fixture', maxLevels: 3,
       async open({ activeIndices }) {
         return { cycle: CYCLE, stats: { fixture: true },
-          async acquire(hour) { const frame = normalizedFixtureFrame(product.grid, activeIndices, CYCLE, hour, product.intervalHours); frames.set(hour, frame); return frame; },
+          async acquire(hour) {
+            const frame = normalizedFixtureFrame(product.grid, activeIndices, CYCLE, hour, product.intervalHours);
+            if (scenario.name === 'lambert') {
+              const noLift = activeIndices.indexOf(plan.contributors.at(-1)!.index);
+              frame.sensibleHeatFluxWm2[noLift] = 0;
+              frame.latentHeatFluxWm2[noLift] = 0;
+            }
+            frames.set(hour, frame);
+            return frame;
+          },
           async close() { closed = true; }
         };
       }
@@ -93,22 +103,31 @@ describe('offline native-grid build integration', () => {
 
     const bytes = await readFile(localPath(root, manifest.samples.key));
     const layout = prepareSamplePackLayout(product.grid, mask.output, mask.halo);
-    const plan = planSample(product.grid, scenario.point.lat, scenario.point.lon)!;
     const packed = planPackedSample(layout, plan, manifest.samples.channelCount, Array.from({ length: manifest.samples.channelCount }, (_, i) => i));
     const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
+    const { useStoredMslNoLift } = manifest.tool;
     let channel = 0;
     for (const hour of scenario.hours) {
       const fields = deriveFrame(frames.get(hour)!, mask);
       for (const layer of scenario.layers) {
-        const actual = sampleCells(plan, packedCellsFromRange(packed, body, channel++), manifest.descriptors.layers[layer]);
-        expect(actual).toEqual(sampleGrid(product.grid, fields[layer]!, scenario.point.lat, scenario.point.lon, manifest.descriptors.layers[layer], mask));
+        const spec = manifest.descriptors.layers[layer], field = fields[layer]!;
+        const cells = packedCellsFromRange(packed, body, channel++);
+        const actual = sampleCells(plan, cells, spec, useStoredMslNoLift);
+        expect(actual).toEqual(sampleGrid(product.grid, field, scenario.point.lat, scenario.point.lon, spec, mask, useStoredMslNoLift));
+        if (layer === 'usable-lift-msl') {
+          expect(useStoredMslNoLift).toBe(true);
+          expect(cells.map(cell => cell.flags & STATUS_MASK)).toEqual([STATUS_VALID, STATUS_VALID, STATUS_VALID, STATUS_NO_LIFT]);
+          const bilinearMsl = plan.contributors.reduce((sum, { index, weight }) => sum + field.values[index] * weight, 0);
+          expect(actual).toMatchObject({ status: STATUS_VALID, interpolated: true });
+          expect(actual.value).toBeCloseTo(bilinearMsl, 9);
+        }
         if (layer === 'precip-rate') expect(actual.value).toBeCloseTo(scenario.expectedRain + hour - scenario.hours[0], 9);
         const artifact = manifest.artifacts.find(item => item.layer === layer && item.frame === `f${String(hour).padStart(3, '0')}`)!;
         const archiveBytes = await readFile(localPath(root, artifact.tilesKey));
         const archive = new PMTiles({ getKey: () => artifact.tilesKey, async getBytes(offset, length) { const selected = archiveBytes.subarray(offset, offset + length); return { data: selected.buffer.slice(selected.byteOffset, selected.byteOffset + selected.byteLength) }; } });
         const tile = await archive.getZxy(0, 0, 0);
         expect(tile).toBeDefined();
-        expect((await decodeWebp(new Uint8Array(tile!.data))).data).toEqual(renderTileRgba(fields[layer]!, mask, layer, 0, 0, 0));
+        expect((await decodeWebp(new Uint8Array(tile!.data))).data).toEqual(renderTileRgba(field, mask, layer, 0, 0, 0));
       }
     }
     expect(MODEL_IDS).toEqual(registeredModels);

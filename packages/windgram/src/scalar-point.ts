@@ -49,9 +49,9 @@ export function renderPointSeries(
   const getViews = (units: UnitSystem) => viewsByUnit[units] ??= payload.frames.map(frame => pointFrameView(frame, build, units));
   const views = getViews(options.unitSystem);
   const knownFloors = views.filter(view => view.terrainM !== null).length;
-  legend.textContent = knownFloors === 0 ? 'UTC · Heights MSL · Lift ceiling marks blue · LCL gold · Terrain unknown'
-    : knownFloors === views.length ? 'UTC · Heights MSL · Lift bars blue · LCL gold · Terrain grey'
-    : 'UTC · Heights MSL · Lift bars blue; ceiling marks where terrain is unknown · LCL gold · Terrain grey where known';
+  legend.textContent = knownFloors === 0 ? 'UTC · Heights MSL · Blue lift ceiling marks · Gold LCL · Surface elevation unknown'
+    : knownFloors === views.length ? 'UTC · Heights MSL · Blue lift bars · Gold LCL · Gray surface elevation'
+    : 'UTC · Heights MSL · Blue lift bars or ceiling marks · Gold LCL · Gray surface elevation where known';
   if (views.some(view => view.thermalTopM !== null)) legend.textContent += ' · Native thermal top purple';
   const heightValues = views.flatMap(view => [view.terrainM, view.mslM, view.lclM, view.thermalTopM].filter((value): value is number => value !== null));
   const minimum = Math.min(0, ...heightValues), span = Math.max(1, ...heightValues) - minimum;

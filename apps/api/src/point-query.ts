@@ -1,4 +1,5 @@
-import { isLayerId, type LayerId } from '@av/contracts';
+import { isLayerId, surfaceFrameCount, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
+import type { ResolvedSparseCoverage } from './coverage';
 import type { PublishedManifest } from './publication';
 import { fail } from './http';
 
@@ -34,4 +35,23 @@ export function selectSampleFields(m: PublishedManifest, url: URL, defaultLayers
     return frame;
   }).sort((a, b) => a.validTime.localeCompare(b.validTime));
   return { frames, layers: selectedLayers };
+}
+
+/** Select frame-then-layer channels within the surface's packed scalar groups. */
+export function sampleChannelGroups(
+  manifest: ManifestV5, surface: ForecastSurfaceV5, coverage: ResolvedSparseCoverage,
+  frames: Readonly<ManifestV5['frames']>, layers: readonly LayerId[]
+) {
+  const groups = coverage.groups ?? [{ firstFrame: 0, frameCount: surfaceFrameCount(manifest, surface),
+    channelCount: surface.samples.channelCount, shards: surface.samples.shards }];
+  const frameIndices = frames.map(frame => ({ frameId: frame.id, index: manifest.frames.indexOf(frame) }));
+  const layerIndices = layers.map(layer => ({ layer, index: surface.layers.indexOf(layer) }));
+  return groups.flatMap(({ firstFrame, frameCount, channelCount, shards }) => {
+    const jobs = frameIndices.filter(({ index }) => index >= firstFrame && index < firstFrame + frameCount)
+      .flatMap(({ frameId, index }) => {
+        const firstChannel = (index - firstFrame) * surface.layers.length;
+        return layerIndices.map(({ layer, index }) => ({ frameId, layer, channel: firstChannel + index }));
+      });
+    return jobs.length ? [{ jobs, channels: jobs.map(job => job.channel), layout: coverage.layouts.get(channelCount)!, shards }] : [];
+  });
 }

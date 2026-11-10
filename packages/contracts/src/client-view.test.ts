@@ -151,7 +151,7 @@ it('keeps legacy display and grid diagnostics while v5 reports each surface once
   expect(rows.some(([label]) => label === 'Grid' || label === 'Display')).toBe(false);
   expect(rows.filter(([label]) => label.startsWith('Surface '))).toEqual([
     ['Surface gfs-native', '1440 × 721 · 0.25° × 0.25° · precip-rate · z0–7'],
-    ['Surface gfs-fine', '2880 × 1442 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9']
+    ['Surface gfs-fine', '2880 × 1442 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9 · DSM · EGM2008']
   ]);
 });
 
@@ -254,7 +254,7 @@ it('formats point altitude, wind vectors and regime without inventing missing te
     'thermal-velocity': { value: 1, status: 'valid' as const, support: SUPPORT_CUMULUS, interpolated: false, surfaceId: 'gfs-native' }
   } };
   const view = pointFrameView(frame, build, 'imperial');
-  expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Terrain unknown');
+  expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Surface elevation unknown');
   expect(view.summary).toContain('10 m 9.7 kt 0°'); expect(view.summary).toContain('Cu');
   expect(view.summary).toContain('w* 197 ft/min');
   expect(pointFrameView(frame, build, 'metric').summary).toContain('w* 1.0 m/s');

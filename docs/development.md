@@ -12,8 +12,11 @@ pnpm install
 pnpm tools:pmtiles
 ```
 
-pnpm installs the pinned Node runtime locally, and `tools:pmtiles` downloads the
-PMTiles CLI binary into `.tools/`.
+pnpm installs the pinned Node runtime locally. `pnpm tools:pmtiles` installs
+the PMTiles CLI in the current worktree's `.tools/` for archive tests. For
+offline setup, run `pnpm install --offline` with a populated store and copy
+`.tools/pmtiles` from a prepared worktree on the same machine. Use the version
+pinned in [pmtiles.json](../apps/batch/pmtiles.json).
 
 ## Start the sample-data map
 
@@ -95,7 +98,7 @@ pnpm docs:check
 
 ## Troubleshooting
 
-- **Missing PMTiles binary:** run `pnpm tools:pmtiles`.
+- **Missing PMTiles binary:** complete [worktree setup](#setup).
 - **Port in use:** pass `--port 8788` to `pnpm dev` or `pnpm sample-preview`.
 - **Expired local build:** rerun `pnpm dev` or `pnpm forecast`.
 - **Corrupt local state:** stop the servers and remove `output/offline-fixture`

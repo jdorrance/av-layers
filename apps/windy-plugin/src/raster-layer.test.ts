@@ -1,17 +1,18 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { windyTileOptions } from '@av/contracts/client';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
-import { forecastStackZIndex, WindyRasterLayer, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
+import { forecastStackZIndex, WindyRasterLayer, type NativeRasterMap, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const url = (frame: string) => `https://tiles.example/tiles/gfs/build-1/precip-rate/${frame}/{z}/{x}/{y}.webp`;
 function fixture() {
-  const handlers = new Map<string, Set<() => void>>();
+  type RenderListener = Parameters<NativeRasterMap['maplibreMap']['on']>[1];
+  const handlers = new Map<string, Set<RenderListener>>();
   let moving = false;
   const renderMap = {
     setPaintProperty: vi.fn(),
-    on: (event: string, listener: () => void) => { const listeners = handlers.get(event) ?? new Set(); listeners.add(listener); handlers.set(event, listeners); },
-    off: (event: string, listener: () => void) => handlers.get(event)?.delete(listener),
+    on: (event: string, listener: RenderListener) => { const listeners = handlers.get(event) ?? new Set(); listeners.add(listener); handlers.set(event, listeners); },
+    off: (event: string, listener: RenderListener) => handlers.get(event)?.delete(listener),
     isMoving: () => moving,
     getZoom: () => 7,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
@@ -20,6 +21,7 @@ function fixture() {
   function nativeLayer() {
     const listeners = new Map<string, (event: RasterSourceEvent) => void>();
     const source: NativeRasterSource = {
+      id: `source-${natives.length}`,
       on: vi.fn((event, listener) => { listeners.set(event, listener); }),
       off: vi.fn((event, listener) => { if (listeners.get(event) === listener) listeners.delete(event); })
     };
@@ -30,7 +32,7 @@ function fixture() {
   const create = vi.fn((_url: string, _options: ReturnType<typeof windyTileOptions>) => { const native = nativeLayer(); natives.push(native); return native; });
   const api = { tileLayer: create, addProtocol: vi.fn(), removeProtocol: vi.fn() };
   const layer = new WindyRasterLayer(api, 'https://tiles.example', url('f003'), windyTileOptions(7, 0.5, 'NOAA'));
-  const emit = (event: string) => { for (const listener of handlers.get(event) ?? []) listener(); };
+  const emit = (event: string, value?: Parameters<RenderListener>[0]) => { for (const listener of handlers.get(event) ?? []) listener(value); };
   const complete = (native = natives.at(-1)!) => { native.loading = false; native.listeners.get('data')?.({ tile: {} }); emit('render'); };
   return { layer, map, api, create, natives, handlers, emit, complete, move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'render'); } };
 }
@@ -82,6 +84,41 @@ it.each([false, true])('settles a stationary viewport with no tiles and retries 
   f.complete();
   await Promise.resolve();
   expect(statuses).toHaveBeenLastCalledWith('ready', url(committed ? 'f006' : 'f003'));
+  f.layer.remove();
+});
+
+it('settles the matching source idle event without waiting for map-wide idle', async () => {
+  const f = fixture(), statuses = vi.fn();
+  f.layer.onStatus(statuses); f.layer.addTo(f.map);
+  const native = f.natives[0], sourceId = native.sourceObject.id;
+  native.loading = false;
+  f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'metadata' });
+  f.emit('sourcedata', { sourceId: 'basemap', isSourceLoaded: true, sourceDataType: 'idle' });
+  await Promise.resolve();
+  expect(f.map.removeLayer).not.toHaveBeenCalled();
+  f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'idle' });
+  await Promise.resolve();
+  expect(f.map.removeLayer).toHaveBeenCalledExactlyOnceWith(native);
+  expect(statuses).toHaveBeenLastCalledWith('error', '');
+  f.layer.remove();
+});
+
+it('discards a failed staging tile that leaves the viewport during a pan', async () => {
+  const f = fixture(), errors = vi.fn(), statuses = vi.fn();
+  f.layer.on('tileerror', errors);
+  f.layer.onStatus(statuses); f.layer.addTo(f.map); f.complete();
+  await Promise.resolve();
+  f.layer.setUrl(url('f006'));
+  const replacement = f.natives[1], tile = {};
+  f.move(true);
+  replacement.loading = false;
+  replacement.listeners.get('error')?.({ tile });
+  replacement.listeners.get('dataabort')?.({ tile });
+  f.move(false);
+  f.complete(replacement);
+  await Promise.resolve();
+  expect(errors).not.toHaveBeenCalled();
+  expect(statuses).toHaveBeenLastCalledWith('ready', url('f006'));
   f.layer.remove();
 });
 

@@ -14,7 +14,7 @@ import { reserveAllocation, waitFor, type WaitContext } from './resources';
 import { cached, fail, response } from './http';
 import { readPackedRanges, type PackedRange } from './packed-ranges';
 import { servedSource, type PublishedManifest } from './publication';
-import { readPointCoordinates, selectSampleFields } from './point-query';
+import { readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface ReadJob extends PackedRange { apply(bytes: Uint8Array): void }
 
@@ -49,17 +49,12 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
         columns.set(frame.id, { modelTerrainM: null, surfacePressureHpa: null, status: 'outside-domain', levels: [] });
       }
       if (plan) {
-        const sampleGroups = coverage.groups ?? [{ firstFrame: 0, frameCount: m.frames.length, channelCount: surface.samples.channelCount, shards: surface.samples.shards }];
-        for (const group of sampleGroups) {
-          const selected = frames.filter(frame => { const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount; });
-          if (!selected.length) continue;
-          const channels = selected.flatMap(frame => layers.map(layer => (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer)));
-          const packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, channels, group.shards), shard = group.shards[packed.shard]!;
+        for (const { jobs: samples, layout, channels, shards } of sampleChannelGroups(m, surface, coverage, frames, layers)) {
+          const packed = planShardedPackedSample(layout, plan, channels, shards), shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
-            for (const frame of selected) for (const layer of layers) {
-              const channel = (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer);
+            for (const { frameId, layer, channel } of samples) {
               const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer]);
-              values.get(frame.id)![layer] = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
+              values.get(frameId)![layer] = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
             }
           } });
         }

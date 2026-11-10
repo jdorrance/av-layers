@@ -149,6 +149,41 @@ it.each([false, true])('settles a stationary viewport with no tiles and retries 
   f.overlay.destroy();
 });
 
+it('settles from the staging source idle event even while unrelated map sources remain busy', async () => {
+  const f = fixture(), b = build();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+  const sourceId = f.stage();
+  f.markLoaded(sourceId);
+  f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'metadata' });
+  f.emit('sourcedata', { sourceId: 'basemap', isSourceLoaded: true, sourceDataType: 'idle' });
+  await Promise.resolve();
+  expect(f.sources.has(sourceId)).toBe(true);
+  f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'idle' });
+  await Promise.resolve();
+  expect(f.sources.has(sourceId)).toBe(false);
+  expect(f.states.at(-1)?.replacementFailed).toBe(true);
+  f.overlay.destroy();
+});
+
+it('ignores a failed staging tile that leaves the viewport during a pan', async () => {
+  const f = fixture(), b = build();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+  await f.complete();
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
+  const sourceId = f.stage(), tile = {};
+  f.emit('movestart');
+  f.markLoaded(sourceId);
+  f.emit('error', { sourceId, tile, error: new Error('offscreen tile failed') });
+  expect(f.sources.has(sourceId)).toBe(true);
+  f.emit('sourcedataabort', { sourceId, tile });
+  f.emit('moveend');
+  await f.complete();
+  expect(f.states.at(-1)).toMatchObject({
+    displayed: { frame: b.manifest.frames[1].id }, incomplete: false, replacementFailed: false
+  });
+  f.overlay.destroy();
+});
+
 it('rechecks camera readiness and expires old imagery while a new model is loading', async () => {
   const f = fixture(), b = build();
   b.expiresAtMs = Date.now() + 1000;
