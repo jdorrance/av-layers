@@ -12,9 +12,11 @@ import {
   manifestSchema,
   refinementPatchSchema,
   setBit,
+  STATUS_NO_LIFT,
   STATUS_OUTSIDE,
   STATUS_UNAVAILABLE,
   STATUS_VALID,
+  SUPPORT_PARCEL_CROSSING,
   TERRAIN_CLEARANCE_METHOD,
   validateSampleFlags,
   validateArtifactRecords,
@@ -591,6 +593,21 @@ describe('paired evaluation CLI orchestration', () => {
       expect(decoded.fields.f001![layer]!.flags[1]! & 3).toBe(STATUS_UNAVAILABLE);
     }
   });
+  it('stores weighted model ground when no-lift cells dominate a mixed native quad', () => {
+    const grid = { ...sourceGrid, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1 };
+    const bounds: [number, number, number, number] = [0, 0, 1, 1];
+    const sourceMask = mask(grid, bounds);
+    const targetMask = mask({ ...grid, width: 1, height: 1, lon0: 0.5, lat0: 0.5 }, bounds);
+    const flags = Uint8Array.of(STATUS_NO_LIFT, STATUS_NO_LIFT, STATUS_NO_LIFT, STATUS_VALID | SUPPORT_PARCEL_CROSSING);
+    const sampled = sampleNativeTargetFields({ sourceMask, targetMask }, {
+      'usable-lift-msl': { values: Float32Array.of(100, 200, 300, 1000), flags },
+      'usable-lift-agl': { values: Float32Array.of(0, 0, 0, 600), flags }
+    });
+    expect(sampled['usable-lift-msl'].values[0]).toBe(250);
+    expect(sampled['usable-lift-agl'].values[0]).toBe(0);
+    for (const field of Object.values(sampled)) expect(field.flags[0]).toBe(STATUS_NO_LIFT | SUPPORT_PARCEL_CROSSING);
+  });
+
   it('samples large targets in bounded chunks and preserves uncovered cells as outside', () => {
     const sourceMask = mask(sourceGrid, sourceBounds);
     const largeGrid = {

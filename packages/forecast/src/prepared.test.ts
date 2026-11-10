@@ -23,10 +23,10 @@ describe('prepared grid sampling parity', () => {
     expect([...prepared.contributors]).toEqual([...expected]);
     const field = { values: Float32Array.from({ length: 16 }, (_, index) => index * 137.25), flags: new Uint8Array(16) };
     for (const layer of LAYER_IDS) {
-      const sample = prepared.bind(field, layer), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+      const sample = prepared.bind(field, layer, true), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
       for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
         sample(x, y, out);
-        expect({ ...out }).toEqual(sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask));
+        expect({ ...out }).toEqual(sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, true));
       }
     }
   });
@@ -43,9 +43,9 @@ describe('prepared grid sampling parity', () => {
       });
       const field = { values: new Float32Array(bits.buffer), flags: Uint8Array.from(n % 2 ? [4, 8, 16, 28] : [0, 0, 0, 0]) };
       for (const layer of LAYER_IDS) {
-        const sample = prepared.bind(field, layer), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+        const sample = prepared.bind(field, layer, true), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
         for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
-          expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask)));
+          expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, true)));
         }
       }
     }
@@ -56,7 +56,7 @@ describe('prepared grid sampling parity', () => {
     const prepared = prepareGridSampling(maskFor(grid), Float64Array.of(0.5), Float64Array.of(0.5));
     const field = { values: Float32Array.of(100, 200, 300, 400), flags: Uint8Array.of(1, 0, 1, 0) };
     const spec = { ...LAYERS['usable-lift-msl'], zeroOnNoLiftInterpolation: true, noLiftSampleValue: -42 };
-    const sample = prepared.bind(field, spec), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+    const sample = prepared.bind(field, spec, true), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
     sample(0, 0, out);
     expect(out).toEqual({ value: 150, status: 0, support: 0, interpolated: true });
     field.flags.fill(1);
@@ -83,10 +83,10 @@ describe('prepared grid sampling parity', () => {
       const prepared = prepareGridSampling(mask, lats, lons);
       expect(prepared.byteLength).toBe((lats.length + lons.length) * 24 + Math.ceil(lats.length * lons.length / 8) + prepared.contributors.byteLength);
       for (const layer of LAYER_IDS) {
-        const sample = prepared.bind(field, layer), out: Sample = { value: 99, status: 0, support: 255, interpolated: true };
+        const sample = prepared.bind(field, layer, true), out: Sample = { value: 99, status: 0, support: 255, interpolated: true };
         for (let i = 0; i < lats.length * lons.length; i++) {
           const x = i % lons.length, y = (i - x) / lons.length;
-          const expected = outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask));
+          const expected = outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, true));
           expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(expected);
         }
       }
@@ -104,10 +104,10 @@ describe('prepared grid sampling parity', () => {
         const field = { values: Float32Array.from({ length: grid.width * grid.height }, (_, i) => i % 2 ? -0 : 300), flags: Uint8Array.from({ length: grid.width * grid.height }, (_, i) => (combination >> (i * 2)) & 3) };
         const prepared = prepareGridSampling(mask, lats, lons);
         for (const layer of LAYER_IDS) {
-          const sample = prepared.bind(field, layer), out = { value: null, status: 3, support: 0, interpolated: false } as Sample;
+          const sample = prepared.bind(field, layer, true), out = { value: null, status: 3, support: 0, interpolated: false } as Sample;
           for (let i = 0; i < lats.length * lons.length; i++) {
             const x = i % lons.length, y = (i - x) / lons.length;
-            expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask)));
+            expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, true)));
           }
         }
       }
@@ -116,14 +116,14 @@ describe('prepared grid sampling parity', () => {
 
   it('validates field dimensions and sample plan counts', () => {
     const plan = { contributors: Array.from({ length: 5 }, (_, i) => ({ row: 0, column: i, index: i, weight: 0.2 })), byteRange: { offset: 0, length: 25 } };
-    const fiveCellResult = sampleCells(plan, Array.from({ length: 5 }, (_, i) => ({ value: i - 2, flags: 0 })), 'usable-lift-msl');
+    const fiveCellResult = sampleCells(plan, Array.from({ length: 5 }, (_, i) => ({ value: i - 2, flags: 0 })), 'usable-lift-msl', true);
     expect(fiveCellResult).toMatchObject({ status: 0, interpolated: true });
     expect(fiveCellResult.value).toBeCloseTo(0, 15);
-    expect(() => sampleCells(plan, [{ value: '1' as unknown as number, flags: 0 }, ...Array.from({ length: 4 }, () => ({ value: 1, flags: 0 }))], 'usable-lift-msl')).toThrow('known cell has non-finite value');
-    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: NaN, flags: 2 }, { value: 1, flags: 4 }, { value: 0, flags: 1 }, { value: 3, flags: 0 }], 'usable-lift-msl')).toThrow('valid cell has non-finite value');
+    expect(() => sampleCells(plan, [{ value: '1' as unknown as number, flags: 0 }, ...Array.from({ length: 4 }, () => ({ value: 1, flags: 0 }))], 'usable-lift-msl', true)).toThrow('known cell has non-finite value');
+    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: NaN, flags: 2 }, { value: 1, flags: 4 }, { value: 0, flags: 1 }, { value: 3, flags: 0 }], 'usable-lift-msl', true)).toThrow('valid cell has non-finite value');
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
     const prepared = prepareGridSampling(maskFor(grid), Float64Array.of(1), Float64Array.of(0));
-    expect(() => prepared.bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate')).toThrow('field size differs from grid');
-    expect(outcome(() => sampleCells({ ...plan, contributors: [] }, [], 'precip-rate' as LayerId))).toEqual({ error: 'cell count does not match sample plan' });
+    expect(() => prepared.bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate', false)).toThrow('field size differs from grid');
+    expect(outcome(() => sampleCells({ ...plan, contributors: [] }, [], 'precip-rate' as LayerId, true))).toEqual({ error: 'cell count does not match sample plan' });
   });
 });

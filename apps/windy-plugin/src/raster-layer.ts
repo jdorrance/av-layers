@@ -80,15 +80,15 @@ export class WindyRasterLayer implements HostTileLayer {
     if (!next || (!next.successful && !next.failed.size) || !this.tilesSettled(next)) return;
     if (!next.successful) { this.abandon(next); return; }
     next.native.setOpacity(this.options.opacity);
-    const previous = this.active;
+    const previous = this.active, map = this.map;
     this.active = next; this.staging = null;
     this.move();
-    const failed = [...next.failed];
     queueMicrotask(() => {
-      if (this.active !== next) return;
-      this.drop(previous);
+      this.drop(previous, map);
+      if (this.active !== next || this.url !== next.url) return;
       this.setStatus('ready');
-      for (const tile of failed) {
+      if (this.active !== next || this.url !== next.url) return;
+      for (const tile of next.failed) {
         this.listeners.get('tileloadstart')?.forEach(callback => callback({ tile }));
         this.listeners.get('tileerror')?.forEach(callback => callback({ tile }));
       }

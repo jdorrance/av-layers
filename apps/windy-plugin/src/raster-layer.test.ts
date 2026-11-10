@@ -122,6 +122,53 @@ it('discards a failed staging tile that leaves the viewport during a pan', async
   f.layer.remove();
 });
 
+it('retires the previous layer when removed before the replacement callback', async () => {
+  const f = fixture();
+  f.layer.addTo(f.map); f.complete();
+  await Promise.resolve();
+  f.layer.setUrl(url('f006')); f.complete();
+  f.layer.remove();
+  await Promise.resolve();
+  expect(f.map.removeLayer.mock.calls).toEqual([[f.natives[1]], [f.natives[0]]]);
+  expect(f.natives[0].listeners.size).toBe(0);
+});
+
+it.each(['loading', 'error'] as const)('preserves a newer replacement status before the previous callback (%s)', async status => {
+  const f = fixture(), statuses = vi.fn();
+  f.layer.onStatus(statuses); f.layer.addTo(f.map); f.complete();
+  await Promise.resolve();
+  f.layer.setUrl(url('f006')); f.complete();
+  if (status === 'error') f.create.mockImplementationOnce(() => { throw new Error('new source failed'); });
+  f.layer.setUrl(url('f009'));
+  await Promise.resolve();
+  expect(f.map.removeLayer).toHaveBeenCalledExactlyOnceWith(f.natives[0]);
+  expect(statuses).toHaveBeenLastCalledWith(status, url('f006'));
+  f.layer.remove();
+});
+
+it.each(['unload', 'remove on ready', 'replace on ready'] as const)('skips stale tile errors before the replacement callback (%s)', async action => {
+  const f = fixture(), errors = vi.fn();
+  f.layer.on('tileerror', errors);
+  f.layer.onStatus((status, shown) => {
+    if (status !== 'ready' || shown !== url('f006')) return;
+    if (action === 'remove on ready') f.layer.remove();
+    else if (action === 'replace on ready') f.layer.setUrl(url('f009'));
+  });
+  f.layer.addTo(f.map); f.complete();
+  await Promise.resolve();
+  f.layer.setUrl(url('f006'));
+  const replacement = f.natives[1], tile = {};
+  replacement.listeners.get('error')?.({ tile });
+  f.complete(replacement);
+  if (action === 'unload') replacement.listeners.get('dataabort')?.({ tile });
+  await Promise.resolve();
+  expect(errors).not.toHaveBeenCalled();
+  if (action !== 'remove on ready') f.layer.remove();
+  expect(f.map.removeLayer.mock.calls).toEqual([
+    [f.natives[0]], ...(action === 'replace on ready' ? [[f.natives[2]]] : []), [replacement]
+  ]);
+});
+
 it.each(['ready', 'supersede', 'move', 'freeze', 'remove', 'expire'] as const)('warms committed Windy frames only while current (%s)', async action => {
   const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));

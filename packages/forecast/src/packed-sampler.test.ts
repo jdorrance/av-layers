@@ -37,18 +37,18 @@ describe('packed sampling', () => {
         const cell = sparseCoverageLookup(coverage, x, y);
         if (cell) packed.values[cell.offset] = y * 514 + x + 100;
       }
-      const sample = prepare(sparse, latitudes, longitudes).bind(packed, 'usable-lift-msl');
+      const sample = prepare(sparse, latitudes, longitudes).bind(packed, 'usable-lift-msl', true);
       const out = { value: null as number | null, status: 3, support: 0, interpolated: false };
       sample(0, 0, out);
-      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse));
+      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse, true));
       if (missing) expect(() => sample(1, 0, out)).toThrow('outside active coverage');
       else {
         sample(1, 0, out);
-        expect(out).toEqual(sampleGrid(grid, packed, latitudes[1], longitudes[1], 'usable-lift-msl', sparse));
+        expect(out).toEqual(sampleGrid(grid, packed, latitudes[1], longitudes[1], 'usable-lift-msl', sparse, true));
       }
       packed.values[0] = 999; packed.flags[1] = STATUS_NO_LIFT;
       sample(0, 0, out);
-      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse));
+      expect(out).toEqual(sampleGrid(grid, packed, latitudes[0], longitudes[0], 'usable-lift-msl', sparse, true));
     }
   });
 
@@ -57,15 +57,15 @@ describe('packed sampling', () => {
     const lats = Float64Array.of(2, 2, 2.25, 1.5, 1, 1.5, 3, 2);
     const lons = Float64Array.of(-180, 162, 171, 126, 108, 135, 0, -90);
     for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
-      const a = preparePointSampling(mask, lats, lons).bind(dense, layer), b = preparePointSampling(sparse, lats, lons).bind(packed, layer);
+      const a = preparePointSampling(mask, lats, lons).bind(dense, layer, true), b = preparePointSampling(sparse, lats, lons).bind(packed, layer, true);
       for (let i = 0; i < lats.length; i++) {
-        const expected = sampleGrid(grid, dense, lats[i], lons[i], layer, mask);
+        const expected = sampleGrid(grid, dense, lats[i], lons[i], layer, mask, true);
         const actual = { value: null as number | null, status: 3, support: 0, interpolated: false }, baseline = { ...actual };
         a(i, 0, baseline); b(i, 0, actual);
         expect(actual).toEqual(baseline); expect(actual).toEqual(expected);
-        expect(sampleGrid(grid, packed, lats[i], lons[i], layer, sparse)).toEqual(expected);
+        expect(sampleGrid(grid, packed, lats[i], lons[i], layer, sparse, true)).toEqual(expected);
       }
-      const regular = prepareGridSampling(mask, lats, lons).bind(dense, layer), sparseRegular = prepareGridSampling(sparse, lats, lons).bind(packed, layer);
+      const regular = prepareGridSampling(mask, lats, lons).bind(dense, layer, true), sparseRegular = prepareGridSampling(sparse, lats, lons).bind(packed, layer, true);
       for (let y = 0; y < lats.length; y++) for (let x = 0; x < lons.length; x++) {
         const expected = { value: null as number | null, status: 3, support: 0, interpolated: false }, actual = { ...expected };
         regular(x, y, expected); sparseRegular(x, y, actual); expect(actual).toEqual(expected);
@@ -86,35 +86,35 @@ describe('packed sampling', () => {
     }
     const lats = Float64Array.of(2, 2, 2, 1, 2.25, 1.5, 2, 1);
     const lons = Float64Array.of(-90, -180, 162, 108, 171, 126, 0, -175.5);
-    const a = preparePointSampling(mask, lats, lons).bind(dense, 'usable-lift-msl'), b = preparePointSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl');
+    const a = preparePointSampling(mask, lats, lons).bind(dense, 'usable-lift-msl', true), b = preparePointSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl', true);
     for (let i = 0; i < lats.length; i++) {
-      const expected = sampleGrid(grid, dense, lats[i], lons[i], 'usable-lift-msl', mask);
+      const expected = sampleGrid(grid, dense, lats[i], lons[i], 'usable-lift-msl', mask, true);
       const actual = { value: null as number | null, status: 3, support: 0, interpolated: false }, baseline = { ...actual };
       a(i, 0, baseline); b(i, 0, actual);
       expect(actual).toEqual(baseline);
       expect(actual).toEqual(expected);
-      expect(sampleGrid(grid, packed, lats[i], lons[i], 'usable-lift-msl', sparse)).toEqual(expected);
+      expect(sampleGrid(grid, packed, lats[i], lons[i], 'usable-lift-msl', sparse, true)).toEqual(expected);
     }
-    const regular = prepareGridSampling(mask, lats, lons).bind(dense, 'usable-lift-msl'), sparseRegular = prepareGridSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl');
+    const regular = prepareGridSampling(mask, lats, lons).bind(dense, 'usable-lift-msl', true), sparseRegular = prepareGridSampling(sparse, lats, lons).bind(packed, 'usable-lift-msl', true);
     for (let y = 0; y < lats.length; y++) for (let x = 0; x < lons.length; x++) {
       const expected = { value: null as number | null, status: 3, support: 0, interpolated: false }, actual = { ...expected };
       regular(x, y, expected); sparseRegular(x, y, actual);
       expect(actual).toEqual(expected);
-      expect(sampleGrid(grid, packed, lats[y], lons[x], 'usable-lift-msl', sparse)).toEqual(sampleGrid(grid, dense, lats[y], lons[x], 'usable-lift-msl', mask));
+      expect(sampleGrid(grid, packed, lats[y], lons[x], 'usable-lift-msl', sparse, true)).toEqual(sampleGrid(grid, dense, lats[y], lons[x], 'usable-lift-msl', mask, true));
     }
   });
 
   it('rejects mismatched packed layouts and inactive positive contributors', () => {
     const { grid, sparse, packed } = fixture();
-    expect(() => sampleGrid(grid, { ...packed, flags: new Uint8Array(1) }, 2, -180, 'usable-lift-msl', sparse)).toThrow('Packed field');
-    expect(() => sampleGrid(grid, { ...packed, coverage: { ...packed.coverage } }, 2, -180, 'usable-lift-msl', sparse)).toThrow('Packed field');
+    expect(() => sampleGrid(grid, { ...packed, flags: new Uint8Array(1) }, 2, -180, 'usable-lift-msl', sparse, true)).toThrow('Packed field');
+    expect(() => sampleGrid(grid, { ...packed, coverage: { ...packed.coverage } }, 2, -180, 'usable-lift-msl', sparse, true)).toThrow('Packed field');
     const uncovered = { ...packed.coverage, halo: new Uint8Array(packed.coverage.halo.length) };
     const incompatible = { ...packed, coverage: uncovered };
     const mask = { ...sparse, coverage: uncovered };
-    expect(() => sampleGrid(grid, incompatible, 2.25, -175.5, 'usable-lift-msl', mask)).toThrow('outside active coverage');
+    expect(() => sampleGrid(grid, incompatible, 2.25, -175.5, 'usable-lift-msl', mask, true)).toThrow('outside active coverage');
     const latitudes = Float64Array.of(2.25), longitudes = Float64Array.of(-175.5);
     for (const prepare of [prepareGridSampling, preparePointSampling]) {
-      const sample = prepare(mask, latitudes, longitudes).bind(incompatible, 'usable-lift-msl');
+      const sample = prepare(mask, latitudes, longitudes).bind(incompatible, 'usable-lift-msl', true);
       expect(() => sample(0, 0, { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false })).toThrow('outside active coverage');
     }
   });

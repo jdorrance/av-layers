@@ -34,7 +34,7 @@
     "docs:check": "node --import tsx scripts/generate-reference.ts --check",
     "operations": "node --import tsx scripts/operations.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
-    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check && pnpm build && git diff --check"
+    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check && pnpm build && git diff --check"
   },
   "devDependencies": {
     "@av/client": "workspace:*",

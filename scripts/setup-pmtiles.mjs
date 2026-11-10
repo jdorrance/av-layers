@@ -31,10 +31,9 @@ function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function installedVersion() {
-  if (!existsSync(binaryPath)) return null;
+function installedVersion(path = binaryPath) {
   try {
-    return execFileSync(binaryPath, ['version'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    return execFileSync(path, ['version'], { encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim().split(/[\s,]+/)[1];
   } catch {
     return null;
   }
@@ -67,15 +66,18 @@ function extract(archive, destination) {
 }
 
 async function main() {
+  if (process.argv.includes('--check')) {
+    const override = process.env.PMTILES_BIN;
+    if (installedVersion(override || binaryPath) === VERSION) return;
+    if (override) fail(`PMTILES_BIN must point to a working PMTiles ${VERSION} executable.`);
+    fail(`PMTiles ${VERSION} is required. Run pnpm tools:pmtiles or copy .tools/pmtiles from a prepared worktree.`);
+  }
   const target = hostTarget();
   const spec = TARGETS[target];
   const asset = spec.asset.replace('{version}', VERSION);
-  if (!force) {
-    const current = installedVersion();
-    if (current?.split(/[\s,]+/)[1] === VERSION) {
-      console.log(`pmtiles ${VERSION} already installed at ${binaryPath}`);
-      return;
-    }
+  if (!force && installedVersion() === VERSION) {
+    console.log(`pmtiles ${VERSION} already installed at ${binaryPath}`);
+    return;
   }
 
   mkdirSync(toolsDir, { recursive: true });

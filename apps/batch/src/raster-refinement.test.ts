@@ -38,7 +38,7 @@ function referencePixel(base: GridField, fine: GridField, mask: CoverageMask, pa
     if (!isCovered(mask, point.lat, point.lon)) continue;
     const selected = refinementCandidate([patch], layer, point.lat, point.lon) && isCovered(patch.mask, point.lat, point.lon);
     const gridMask = selected ? patch.mask : mask, field = selected ? fine : base;
-    const sample = sampleGrid(gridMask.grid, field, point.lat, point.lon, layer, gridMask), color = paletteColor(layer, sample.value, sample.status);
+    const sample = sampleGrid(gridMask.grid, field, point.lat, point.lon, layer, gridMask, true), color = paletteColor(layer, sample.value, sample.status);
     if (!color) continue;
     r += parseInt(color.slice(1, 3), 16); g += parseInt(color.slice(3, 5), 16); b += parseInt(color.slice(5, 7), 16); alpha++;
   }
@@ -54,7 +54,7 @@ function referenceZonesPixel(base: GridField, mask: CoverageMask, zones: { patch
     const zone = selected ? zones.find(candidate => candidate.patch === selected) : undefined;
     const owned = zone && isCovered(zone.patch.mask, point.lat, point.lon) ? zone : undefined;
     const gridMask = owned ? owned.patch.mask : mask, field = owned ? owned.field : base;
-    const sample = sampleGrid(gridMask.grid, field, point.lat, point.lon, layer, gridMask), color = paletteColor(layer, sample.value, sample.status);
+    const sample = sampleGrid(gridMask.grid, field, point.lat, point.lon, layer, gridMask, true), color = paletteColor(layer, sample.value, sample.status);
     if (!color) continue;
     r += parseInt(color.slice(1, 3), 16); g += parseInt(color.slice(3, 5), 16); b += parseInt(color.slice(5, 7), 16); alpha++;
   }

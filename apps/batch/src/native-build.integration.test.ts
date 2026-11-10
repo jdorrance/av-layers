@@ -105,7 +105,7 @@ describe('offline native-grid build integration', () => {
     const layout = prepareSamplePackLayout(product.grid, mask.output, mask.halo);
     const packed = planPackedSample(layout, plan, manifest.samples.channelCount, Array.from({ length: manifest.samples.channelCount }, (_, i) => i));
     const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
-    const { useStoredMslNoLift } = manifest.tool;
+    const useStoredMslNoLift = manifest.tool.useStoredMslNoLift === true;
     let channel = 0;
     for (const hour of scenario.hours) {
       const fields = deriveFrame(frames.get(hour)!, mask);

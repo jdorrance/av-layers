@@ -13,7 +13,7 @@ describe('offline projected-grid scalar fixture', () => {
   it('samples an analytic native field at independent geographic control points', () => {
     for (const p of fixture.controlPoints) {
       const expected = 2 * ((p.xM - grid.x0M) / grid.dxM) + 3 * ((p.yM - grid.y0M) / grid.dyM);
-      expect(sampleGrid(grid, field, p.lat, p.lon, 'precip-rate', mask).value).toBeCloseTo(expected, 10);
+      expect(sampleGrid(grid, field, p.lat, p.lon, 'precip-rate', mask, false).value).toBeCloseTo(expected, 10);
       expect(isCovered(mask, p.lat, p.lon)).toBe(true);
     }
     expect(planSample(grid, 0, 0)).toBeNull();
@@ -28,12 +28,12 @@ describe('offline projected-grid scalar fixture', () => {
     const values = new Float32Array(field.values), flags = new Uint8Array(field.flags);
     flags[15 * grid.width + 28] = STATUS_UNAVAILABLE;
     values[15 * grid.width + 28] = NaN;
-    const prepared = prepareGridSampling(restricted, latitudes, longitudes), sampled = prepared.bind({ values, flags }, 'precip-rate');
+    const prepared = prepareGridSampling(restricted, latitudes, longitudes), sampled = prepared.bind({ values, flags }, 'precip-rate', false);
     const actualContributors = new Set<number>();
     for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
       const out: Sample = { value: 999, status: 0, support: 31, interpolated: true };
       sampled(x, y, out);
-      expect(out).toEqual(sampleGrid(grid, { values, flags }, latitudes[y], longitudes[x], 'precip-rate', restricted));
+      expect(out).toEqual(sampleGrid(grid, { values, flags }, latitudes[y], longitudes[x], 'precip-rate', restricted, false));
       if (isCovered(restricted, latitudes[y], longitudes[x])) for (const c of planSample(grid, latitudes[y], longitudes[x])?.contributors ?? []) actualContributors.add(c.index);
     }
     expect([...prepared.contributors].sort((a, b) => a - b)).toEqual([...actualContributors].sort((a, b) => a - b));
@@ -59,6 +59,6 @@ describe('offline projected-grid scalar fixture', () => {
     expect(() => prepareGridSampling(mask, new Float64Array(513), new Float64Array(512))).toThrow('budget');
     expect(MAX_PREPARED_SAMPLES).toBe(512 * 512);
     expect(() => prepareGridSampling({ ...mask, output: new Uint8Array(1) }, Float64Array.of(45), Float64Array.of(-90))).toThrow('Coverage size');
-    expect(() => prepareGridSampling(mask, Float64Array.of(45), Float64Array.of(-90)).bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate')).toThrow('field size');
+    expect(() => prepareGridSampling(mask, Float64Array.of(45), Float64Array.of(-90)).bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate', false)).toThrow('field size');
   });
 });

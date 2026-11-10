@@ -51,7 +51,7 @@ it.each([{ width: 3, height: 3, wrapLongitude: true }, { width: 1, height: 2, wr
         const expected = cellsFromRange(sample, flats[channel].subarray(sample.byteRange.offset, sample.byteRange.offset + sample.byteRange.length));
         const actual = packedCellsFromRange(packed, selected, channel);
         expect(actual).toEqual(expected);
-        expect(sampleCells(sample, actual, LAYER_IDS[channel])).toEqual(sampleCells(sample, expected, LAYER_IDS[channel]));
+        expect(sampleCells(sample, actual, LAYER_IDS[channel], true)).toEqual(sampleCells(sample, expected, LAYER_IDS[channel], true));
       }
     }
   }

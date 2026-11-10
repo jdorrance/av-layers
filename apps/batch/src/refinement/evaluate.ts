@@ -13,6 +13,7 @@ import {
   STATUS_NO_LIFT,
   STATUS_OUTSIDE,
   STATUS_UNAVAILABLE,
+  STATUS_VALID,
   TERRAIN_CLEARANCE_METHOD,
   prepareGridGeometry,
   type LayerId,
@@ -35,7 +36,7 @@ import { buildIdentity } from '../identity.js';
 import { readLocalFile } from '../local-file.js';
 import { localPath } from '../validate.js';
 import { createSamplePackBuilder } from '../sample-pack.js';
-import { createRasterizer } from '../raster.js';
+import { createRasterizer, RASTER_SAMPLING } from '../raster.js';
 import { encodeWebp } from '../webp.js';
 import {
   decodeSamplePack,
@@ -211,6 +212,17 @@ function sameInstant(actual: unknown, expected: string): boolean {
   return typeof actual === 'string' && Date.parse(actual) === Date.parse(expected);
 }
 
+function modelGroundField(derived: LiftFields): GridField {
+  const msl = derived['usable-lift-msl'], agl = derived['usable-lift-agl'];
+  const values = msl.values.slice(), flags = msl.flags.slice();
+  for (let i = 0; i < flags.length; i++) {
+    const status = flags[i] & STATUS_MASK;
+    if (status === STATUS_VALID) values[i] -= agl.values[i];
+    else if (status === STATUS_NO_LIFT) flags[i] &= ~STATUS_MASK;
+  }
+  return { values, flags };
+}
+
 export function sampleNativeTargetFields(
   masks: Pick<EvaluationControl, 'sourceMask' | 'targetMask'>,
   derived: LiftFields
@@ -224,10 +236,7 @@ export function sampleNativeTargetFields(
     'usable-lift-msl': { values: new Float32Array(cells).fill(Number.NaN), flags: new Uint8Array(cells).fill(STATUS_OUTSIDE) },
     'usable-lift-agl': { values: new Float32Array(cells).fill(Number.NaN), flags: new Uint8Array(cells).fill(STATUS_OUTSIDE) }
   };
-  const groundField = {
-    values: derived['usable-lift-msl'].values,
-    flags: Uint8Array.from(derived['usable-lift-msl'].flags, flag => (flag & STATUS_MASK) === STATUS_NO_LIFT ? flag & ~STATUS_MASK : flag)
-  };
+  let groundField: GridField | undefined;
   const sample: Sample = { value: null, status: 3, support: 0, interpolated: false };
   const ground: Sample = { value: null, status: 3, support: 0, interpolated: false };
   for (let start = 0; start < active.length; start += MAX_PREPARED_SAMPLES) {
@@ -240,9 +249,9 @@ export function sampleNativeTargetFields(
       lons[slot] = point.lon;
     }
     const sampling = preparePointSampling(masks.sourceMask, lats, lons);
-    const nativeGround = sampling.bind(groundField, 'usable-lift-msl');
+    let nativeGround: ReturnType<typeof sampling.bind> | undefined;
     for (const layer of FIELD_LAYERS) {
-      const into = sampling.bind(derived[layer], layer), target = output[layer];
+      const into = sampling.bind(derived[layer], layer, RASTER_SAMPLING.useStoredMslNoLift), target = output[layer];
       for (let slot = 0; slot < indices.length; slot++) {
         const index = indices[slot]!;
         into(slot, 0, sample);
@@ -250,6 +259,8 @@ export function sampleNativeTargetFields(
           target.values[index] = Number.NaN;
           target.flags[index] = STATUS_UNAVAILABLE;
         } else if (layer === 'usable-lift-msl' && sample.status === STATUS_NO_LIFT) {
+          groundField ??= modelGroundField(derived);
+          nativeGround ??= sampling.bind(groundField, 'usable-lift-msl', RASTER_SAMPLING.useStoredMslNoLift);
           nativeGround(slot, 0, ground);
           if (ground.value === null || !Number.isFinite(ground.value)) throw new Error('Native no-lift sample has no finite model-ground height');
           target.values[index] = ground.value;
