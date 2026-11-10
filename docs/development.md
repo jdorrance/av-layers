@@ -88,8 +88,9 @@ pnpm verify
 probe check for ICON-EU, set `ICON_DWD_PROBE_DIR` as shown in the
 [ICON adapter guide](../apps/batch/src/split-grib/README.md#offline-checks).
 
-`pnpm verify` runs lint, typecheck, tests, `docs:check`, and app builds. After
-changing API schemas, product configs, or CLI flags, regenerate the reference docs:
+`pnpm verify` checks the PMTiles version before lint, typecheck, tests,
+`docs:check`, and app builds. After changing API schemas, product configs, or
+CLI flags, regenerate the reference docs:
 
 ```sh
 pnpm docs:generate

@@ -226,7 +226,7 @@ export function cellsFromRange(plan: SamplePlan, bytes: Uint8Array): Cell[] {
 }
 
 /** The build's sampling marker selects the no-lift interpolation used by its tiles. */
-export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | LayerSpec, useStoredMslNoLift = false): Sample {
+export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | LayerSpec, useStoredMslNoLift: boolean): Sample {
   if (!plan.contributors.length || cells.length !== plan.contributors.length) throw new RangeError('cell count does not match sample plan');
   const scratch = reductionBuffer(cells.length);
   for (let i = 0; i < cells.length; i++) {
@@ -250,7 +250,7 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
 }
 
-export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask?: SamplingMask, useStoredMslNoLift = false): Sample {
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask: SamplingMask | undefined, useStoredMslNoLift: boolean): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
   if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
@@ -265,7 +265,7 @@ export interface PreparedGridSampling {
   readonly width: number;
   readonly height: number;
   readonly contributors: Uint32Array;
-  bind(field: GridField, layer: LayerId | LayerSpec, useStoredMslNoLift?: boolean): (x: number, y: number, out: Sample) => void;
+  bind(field: GridField, layer: LayerId | LayerSpec, useStoredMslNoLift: boolean): (x: number, y: number, out: Sample) => void;
 }
 
 export interface PreparedGridAxis {
@@ -362,7 +362,7 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   const contributors = Uint32Array.from(contributorSet);
   return {
     width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift = false) {
+    bind(field, layer, useStoredMslNoLift) {
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const packed = 'coverage' in field;
@@ -519,7 +519,7 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
   return {
     width, height: total / width, contributors,
     byteLength: total * (2 * Uint32Array.BYTES_PER_ELEMENT + 2 * Float64Array.BYTES_PER_ELEMENT) + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift = false) {
+    bind(field, layer, useStoredMslNoLift) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const packed = 'coverage' in field;

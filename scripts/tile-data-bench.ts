@@ -5,7 +5,7 @@ import { CELL_BYTES, compilePaletteColor, PALETTES, samplePaletteValueInto, expe
 import { prepareGridSampling, prepareSamplePackLayout, type GridField, type Sample } from '@av/forecast';
 import { readGridCoverage } from '../apps/batch/src/coverage.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
-import { createRasterizer, mercatorPoint } from '../apps/batch/src/raster.js';
+import { createRasterizer, mercatorPoint, RASTER_SAMPLING } from '../apps/batch/src/raster.js';
 import { decodeWebp, encodeWebp, WEBP_ENCODER } from '../apps/batch/src/webp.js';
 
 // Native-field pilot: compare a range-preserving two-plane candidate with the
@@ -69,7 +69,7 @@ for (let frame = 0; frame < Math.min(3, manifest.frames.length); frame++) {
       lats[i] = mercatorPoint(tile.z, tile.x, tile.y, 0, (i + 0.5) / 2).lat;
       lons[i] = mercatorPoint(tile.z, tile.x, tile.y, (i + 0.5) / 2, 0).lon;
     }
-    const plan = prepareGridSampling(mask, lats, lons), samplers = fields.map((field, i) => plan.bind(field, layers[i]!));
+    const plan = prepareGridSampling(mask, lats, lons), samplers = fields.map((field, i) => plan.bind(field, layers[i]!, RASTER_SAMPLING.useStoredMslNoLift));
     const numeric = new Uint8Array(256 * 256 * 4), flags = new Uint8Array(numeric.length), sample: Sample = { value: null, status: 3, support: 0, interpolated: false };
     for (let pixel = 0; pixel < 256 * 256; pixel++) {
       const x = (pixel % 256) * 2, y = Math.floor(pixel / 256) * 2, offset = pixel * 4;

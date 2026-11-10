@@ -201,10 +201,10 @@ describe('frame derivation', () => {
     const { input, mask, index } = fixture(12), fields = deriveFrame(input, mask);
     expect(fields['precip-rate']!.flags[index + 1]).toBe(STATUS_VALID);
     expect(fields['usable-lift-agl']!.flags[index + 1] & STATUS_MASK).not.toBe(STATUS_UNAVAILABLE);
-    const sample = sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.1, 'precip-rate', mask);
+    const sample = sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.1, 'precip-rate', mask, false);
     expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
     expect(sample.value).toBeCloseTo(2.8);
-    expect(sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(INDEXED_GRID, fields['precip-rate']!, 0, 0.25, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
   });
 
   it('drops finite subterranean heights but not missing profile levels', () => {

@@ -80,7 +80,7 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
       }
       for (const job of jobs) {
         const value = plan && packed
-          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer], m.tool.useStoredMslNoLift)
+          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer], m.tool.useStoredMslNoLift === true)
           : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
         values.set(`${job.frame.id}/${job.layer}`, { ...value, ...(patchId ? { patchId } : {}) });
       }
@@ -263,7 +263,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
     for (const { point, surface, jobs, plan, packed, cells } of plans) for (const job of jobs) {
       const contributors = cells.get(job.channel);
       if (packed && (!contributors || packed.contributorRanks.some((_, index) => !contributors[index]))) fail(503, 'publication-invalid', 'Sample range lacks a contributor');
-      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer], m.tool.useStoredMslNoLift)
+      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer], m.tool.useStoredMslNoLift === true)
         : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
       values[point]!.set(`${job.frameId}/${job.layer}`, { ...value, surfaceId: surface.id });
     }

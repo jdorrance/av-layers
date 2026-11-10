@@ -220,11 +220,11 @@ describe('packed sample and concurrent archive validation', () => {
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).not.toThrow();
       const restored = unpackCells(bytes), lat = INDEXED_GRID.lat0 + Math.floor(output / width) * INDEXED_GRID.dy, lon = INDEXED_GRID.lon0 + (output % width) * INDEXED_GRID.dx;
       expect(isCovered(mask, lat, lon + 0.1)).toBe(true);
-      const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask);
+      const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask, false);
       expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
       expect(sample.value).toBeCloseTo(2.8);
       expect(isCovered(mask, lat, lon + 0.25)).toBe(false);
-      expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+      expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
       bytes[outside * CELL_BYTES + 4] = STATUS_VALID;
       expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
       bytes[outside * CELL_BYTES + 4] = STATUS_OUTSIDE;
