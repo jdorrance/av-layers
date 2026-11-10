@@ -77,11 +77,12 @@ prefix; retained builds may expose later native samples and profiles.
 Retained `regional-daylight` builds follow the [daylight selection rule](science.md#input-fields),
 including its all-dark fallback.
 
-Point profiles report the requested coordinate and the nearest covered native
-cell. Scalars, vertical levels, and derived diagnostics share that cell. The
-windgram combines them with map lift sampled separately at the requested
-coordinate. [Point products](../packages/contracts/src/point-products.ts) owns
-the wire contract and page budgets.
+`/profile` echoes the requested `lat` and `lon` and identifies the nearest
+covered native grid cell in `cell`. Each frame's `layers` and `profile` come
+from that cell, and `derived` uses those same scalars and levels. `/sample`
+and `/samples` evaluate the requested coordinates. The windgram uses these
+point samples for map lift. [Point products](../packages/contracts/src/point-products.ts)
+owns the wire contract and page budgets.
 
 API freshness and the map notice use the last rendered frame's `validTime`.
 The full point forecast uses the complete frame axis. Historical frames remain

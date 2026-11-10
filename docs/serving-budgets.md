@@ -38,8 +38,9 @@ apply to the combined work across all grids selected by a request.
   the read for remaining consumers.
 - **Binary sample & provenance reads:** 8 concurrent loads; identical range
   reads coalesce and share materialized `Uint8Array` bytes. Up to 64 distinct
-  reads wait FIFO and 96 callers may wait in total; each sample request starts
-  at most 4 reads concurrently. The 15 s deadline includes queue time.
+  reads wait FIFO and 96 callers may wait in total. Each V5 point request
+  starts at most 4 numeric reads concurrently across scalar and profile
+  ranges. The 15 s deadline includes queue time.
 - **Memory & response pools:** 32 MiB shared stream/verification pool (provenance
   reserves from verified object length) and 16 MiB outgoing response pool (4×
   body size reserved until client and Cache API streams settle). Operations
@@ -59,9 +60,11 @@ JSON structural token caps: 16,384 for manifests, 8,192 for other metadata,
 at 16 KiB.
 
 Publication compacts scalar hours into serving groups in
-[serving-groups.ts](../apps/batch/src/serving-groups.ts). Point requests choose
-cell spans or row spans, then fall back to selected records to fit the combined
-byte budget. Retained regional patches load their coverage lazily.
+[serving-groups.ts](../apps/batch/src/serving-groups.ts). V5 `/sample` and
+`/samples` can split cell spans into row spans or selected records to fit the
+combined byte budget. `/profile` charges each scalar or profile group's
+contiguous span from its first selected channel to its last for the nearest
+covered native cell. Retained regional patches load their coverage lazily.
 
 Profile responses cap JSON at 1 MiB. The point loader uses `maxProfileFrames`
 to page the selected fields and native levels under the server's response

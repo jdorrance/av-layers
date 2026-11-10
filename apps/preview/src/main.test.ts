@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
-import { type RasterTileProtocol } from '@av/client';
+import { type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -334,6 +334,8 @@ it('stops the previous freshness interval when a replacement load fails', async 
 
 it('allows retrying a point request interrupted by BFCache navigation', async () => {
   await start();
+  const { ApiClient } = await import('@av/client');
+  const createLoader = vi.spyOn(ApiClient.prototype, 'pointSeries');
   let sampleSignal: AbortSignal | null | undefined;
   fetchMock.mockImplementationOnce((_url, init) => {
     sampleSignal = init?.signal;
@@ -341,8 +343,11 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
   });
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(sampleSignal?.aborted).toBe(false));
+  const dispose = vi.spyOn(createLoader.mock.results[0].value as PointSeriesLoader, 'dispose');
+  createLoader.mockRestore();
   page('pagehide', true);
   expect(sampleSignal?.aborted).toBe(true);
+  expect(dispose).toHaveBeenCalledOnce();
   page('pageshow', true);
   await Promise.resolve(); await Promise.resolve();
   expect(ui('point-status').textContent).toContain('Point request interrupted');
@@ -367,6 +372,13 @@ it('makes point values keyboard-scrollable only while the card is open', async (
   expect(ui('point-card').hidden).toBe(false);
   expect(ui('point-settings').open).toBe(false);
   expect(ui('point-location').textContent).toBe('32.900°, -117.250°');
+
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  const chart = ui('point-body').children[0], requests = fetchMock.mock.calls.length;
+  page('pagehide', true); page('pageshow', true);
+  expect(ui('point-card').hidden).toBe(false);
+  expect(ui('point-body').children[0]).toBe(chart);
+  expect(fetchMock).toHaveBeenCalledTimes(requests);
 
   ui('point-close').dispatchEvent(new Event('click'));
   expect(ui('point-body').children).toHaveLength(0);

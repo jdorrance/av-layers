@@ -776,6 +776,10 @@ function startPreview(): void {
     }
     seriesAbort?.abort();
     seriesAbort = null;
+    if (!event.persisted || pointInterrupted) {
+      pointLoader?.dispose();
+      pointLoader = null;
+    }
     if (expiryTimer !== null) {
       window.clearInterval(expiryTimer);
       expiryTimer = null;
@@ -783,7 +787,6 @@ function startPreview(): void {
     removeOverlay(true);
     if (event.persisted) return;
     windgram?.disposePointWindgram(pointBody);
-    pointLoader?.dispose(); pointLoader = null;
     disposeExpiry();
     if (!mapFailed) { overlay.destroy(); map.remove(); }
   });

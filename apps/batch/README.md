@@ -33,9 +33,11 @@ See the [CLI reference](../../docs/reference.md#batch-cli) for all options and
 Run batch tests with `pnpm test apps/batch`.
 
 The capacity report projects retention from configured UTC starts. Use
-`--cadence-hours` to model a different publishing interval. V5 performance
-reports count native and fine grid geometry separately. Fine work is bounded by
-packed cell storage, raster work, and memory in [whole-domain admission](src/whole-domain/capacity.ts).
+`--cadence-hours` to model a different publishing interval.
+`performance.json` reports the dense native and legacy patch cells in
+`observed.gridCells`. V5 reports fine grid width × height separately as
+`observed.fineGridCells`. [Whole-domain admission](src/whole-domain/capacity.ts)
+bounds fine work by packed cell storage, raster work, and memory.
 
 The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
 surfaces. Each additional zoom level adds about four times the previous level's
