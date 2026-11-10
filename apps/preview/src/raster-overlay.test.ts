@@ -136,13 +136,16 @@ it.each([false, true])('settles a stationary viewport with no tiles and retries 
   f.emit('idle');
   expect(f.sources.has(empty)).toBe(true);
   f.emit('moveend');
+  const settled = f.stage();
+  expect(settled).not.toBe(empty);
+  f.markLoaded(settled);
   f.emit('idle');
   expect([...f.sources.keys()]).toEqual(previous ? [previous] : []);
   expect(f.states.at(-1)?.replacementFailed).toBe(true);
   f.emit('idle');
-  expect(f.sources.has(empty)).toBe(false);
+  expect(f.sources.has(settled)).toBe(false);
   f.emit('movestart'); f.emit('moveend');
-  expect(f.stage()).not.toBe(empty);
+  expect(f.stage()).not.toBe(settled);
   await f.complete();
   expect(f.states.at(-1)?.displayed?.frame).toBe(b.manifest.frames[1].id);
   expect(f.states.at(-1)?.replacementFailed).toBe(false);
@@ -184,6 +187,29 @@ it('ignores a failed staging tile that leaves the viewport during a pan', async 
   f.overlay.destroy();
 });
 
+it('keeps the displayed raster if the replacement only succeeded before a pan', async () => {
+  const f = fixture(), b = build();
+  try {
+    const [previous, next] = b.manifest.frames;
+    f.overlay.select(b, 'usable-lift-agl', previous.id); await f.complete();
+    const displayed = f.stage();
+    f.overlay.select(b, 'usable-lift-agl', next.id);
+    const oldViewport = f.stage(), pending = {};
+    f.emit('sourcedataloading', { sourceId: oldViewport, tile: pending });
+    f.emit('sourcedata', { sourceId: oldViewport, tile: {} });
+    f.emit('movestart');
+    f.emit('sourcedataabort', { sourceId: oldViewport, tile: pending });
+    f.emit('moveend');
+    const newViewport = f.stage();
+    expect(newViewport).not.toBe(oldViewport);
+    f.markLoaded(newViewport);
+    f.emit('error', { sourceId: newViewport, tile: {}, error: new Error('new viewport failed') });
+    f.emit('render'); await Promise.resolve();
+    expect([...f.sources.keys()]).toEqual([displayed]);
+    expect(f.states.at(-1)).toMatchObject({ displayed: { frame: previous.id }, replacementFailed: true });
+  } finally { f.overlay.destroy(); }
+});
+
 it('rechecks camera readiness and expires old imagery while a new model is loading', async () => {
   const f = fixture(), b = build();
   b.expiresAtMs = Date.now() + 1000;
@@ -191,7 +217,7 @@ it('rechecks camera readiness and expires old imagery while a new model is loadi
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[0].id);
   f.emit('movestart'); await f.complete();
   expect(f.sources.size).toBe(2);
-  f.emit('moveend'); f.emit('render'); await Promise.resolve(); expect(f.sources.size).toBe(1);
+  f.emit('moveend'); await f.complete(); expect(f.sources.size).toBe(1);
   vi.advanceTimersByTime(1001); expect(f.sources.size).toBe(0);
   f.overlay.destroy();
 });

@@ -81,10 +81,13 @@ export class RasterOverlay {
   private readonly settled = (): void => {
     const moved = this.moving;
     this.moving = false;
-    if (!this.staging && moved && this.retryEmpty && this.requested && this.requested.build.expiresAtMs > Date.now()) {
-      const { build, layer, frame } = this.requested;
-      try { this.select(build, layer, frame); } catch { /* select reports a failed replacement. */ }
-    }
+    const selection = this.requested;
+    if (!moved || (!this.staging && !this.retryEmpty) || !selection || selection.build.expiresAtMs <= Date.now()) return;
+    // The renderer can cache a loaded tile after it leaves the viewport without emitting an abort.
+    const staging = this.staging;
+    this.staging = null;
+    this.drop(staging);
+    try { this.select(selection.build, selection.layer, selection.frame); } catch { /* select reports a failed replacement. */ }
   };
   private readonly idle = (): void => {
     this.render();
@@ -96,8 +99,8 @@ export class RasterOverlay {
     this.opacity = opacity;
     map.on('sourcedata', this.data); map.on('sourcedataloading', this.loading);
     map.on('sourcedataabort', this.abort); map.on('error', this.failed);
-    map.on('render', this.render); map.on('movestart', this.move); map.on('zoomstart', this.move);
-    map.on('moveend', this.settled); map.on('zoomend', this.settled); map.on('idle', this.idle);
+    map.on('render', this.render); map.on('movestart', this.move);
+    map.on('moveend', this.settled); map.on('idle', this.idle);
   }
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
@@ -162,8 +165,8 @@ export class RasterOverlay {
     this.clear(true);
     this.map.off('sourcedata', this.data); this.map.off('sourcedataloading', this.loading);
     this.map.off('sourcedataabort', this.abort); this.map.off('error', this.failed);
-    this.map.off('render', this.render); this.map.off('movestart', this.move); this.map.off('zoomstart', this.move);
-    this.map.off('moveend', this.settled); this.map.off('zoomend', this.settled); this.map.off('idle', this.idle);
+    this.map.off('render', this.render); this.map.off('movestart', this.move);
+    this.map.off('moveend', this.settled); this.map.off('idle', this.idle);
   }
 
   private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }

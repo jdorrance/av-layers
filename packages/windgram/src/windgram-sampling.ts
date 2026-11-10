@@ -78,10 +78,16 @@ export function hourSampling(hour: ProfileHour): HourSampling {
   const levels = hour.levels.filter(l => l.heightM !== null && (floorM === null || l.heightM > floorM));
   const gaps = profileHeightGaps(hour.levels);
   const missingValue = (altitudeM: number) => ({ altitudeM, value: NaN });
-  const nodes = (key: 'temperatureC' | 'dewPointC') => withHeightGaps([
-    ...(floorM === null ? [] : [{ altitudeM: floorM + 2, value: finiteScalar(hour.surface[key]) ?? NaN }]),
-    ...levels.map((l) => ({ altitudeM: finiteScalar(l.heightM)!, value: finiteScalar(l[key]) ?? NaN })),
-  ].sort((a, b) => a.altitudeM - b.altitudeM), gaps, missingValue);
+  const nodes = (key: 'temperatureC' | 'dewPointC') => {
+    const values = levels.map(l => ({ altitudeM: finiteScalar(l.heightM)!, value: finiteScalar(l[key]) ?? NaN }));
+    if (floorM !== null) {
+      const height = floorM + 2, surface = finiteScalar(hour.surface[key]);
+      const sameHeight = values.find(node => node.altitudeM === height);
+      if (!sameHeight) values.push({ altitudeM: height, value: surface ?? NaN });
+      else if (surface !== null) sameHeight.value = surface;
+    }
+    return withHeightGaps(values.sort((a, b) => a.altitudeM - b.altitudeM), gaps, missingValue);
+  };
   const temperatureC = nodes('temperatureC'), dewPointC = nodes('dewPointC');
   const wind = (u: number | null, v: number | null) => {
     return u === null || v === null ? { uMps: NaN, vMps: NaN } : { uMps: u, vMps: v };

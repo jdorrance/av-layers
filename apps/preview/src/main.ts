@@ -127,7 +127,7 @@ function clockLabel(validMs: number, offsetMinutes: number): string {
   const sign = offsetMinutes >= 0 ? '+' : '−';
   const abs = Math.abs(offsetMinutes);
   const zone = `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-  return `${hhmm(local)} local (${zone}) · ${hhmm(utc)} UTC`;
+  return `${hhmm(local)} longitude time (${zone}) · ${hhmm(utc)} UTC`;
 }
 
 function frameIndexFor(frames: readonly { validTime: string }[], requested: string | null, now: number): number {
@@ -154,16 +154,16 @@ function frameIndexFor(frames: readonly { validTime: string }[], requested: stri
   return best;
 }
 
-function terrainStyle(): maplibregl.StyleSpecification {
+function basemapStyle(): maplibregl.StyleSpecification {
   return {
     version: 8,
     sources: {
       basemap: {
         type: 'raster',
-        tiles: [0, 1, 2, 3].map(host => `https://mt${host}.google.com/vt/lyrs=p&hl=en&x={x}&y={y}&z={z}`),
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
         tileSize: 256,
-        maxzoom: 20,
-        attribution: '© Google'
+        maxzoom: 19,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       }
     },
     layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }]
@@ -196,9 +196,11 @@ function startPreview(): void {
     zoom,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : terrainStyle()
+      : basemapStyle()
   });
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+  const lifecycle = new AbortController();
+  const globalListener = { signal: lifecycle.signal };
 
   let build: PinnedBuild | null = null;
   let currentModel: ModelId = initialModel;
@@ -607,6 +609,7 @@ function startPreview(): void {
   }
 
   function applyHistory(): void {
+    if (lifecycle.signal.aborted) return;
     const params = startupQuery();
     const model = params.get('model');
     applyingHistory = true;
@@ -690,7 +693,7 @@ function startPreview(): void {
     const frames = renderedFrames(build.manifest);
     const index = frames.findIndex(frame => frame.id === selectedFrame);
     selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
-  });
+  }, globalListener);
   legendToggle.addEventListener('click', () => {
     legendOpen = !legendOpen;
     legend.className = legendOpen ? 'ribbon' : 'ribbon is-collapsed';
@@ -704,7 +707,7 @@ function startPreview(): void {
     const target = event.target;
     if (!(target instanceof Node) || map.getContainer().contains(target) || pointControls.some(control => control.contains(target))) return;
     closePoint();
-  });
+  }, globalListener);
   map.on('click', event => {
     if (mapFailed) return;
     void openPoint(normalizePoint(event.lngLat.lat, event.lngLat.lng));
@@ -716,8 +719,9 @@ function startPreview(): void {
   });
 
   map.on('error', (event: { error?: unknown }) => {
-    if (!(event.error instanceof maplibregl.GPUInitializationError)) return;
+    if (mapFailed || !(event.error instanceof maplibregl.GPUInitializationError)) return;
     mapFailed = true;
+    lifecycle.abort();
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
@@ -725,7 +729,7 @@ function startPreview(): void {
     overlay.destroy(); map.remove(); showMapFailure(event.error);
   });
 
-  window.addEventListener('popstate', applyHistory);
+  window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
     resumeModel = event.persisted ? pendingModel : null;
     loadAbort?.abort();
@@ -744,10 +748,11 @@ function startPreview(): void {
     }
     removeOverlay(true);
     if (event.persisted) return;
+    lifecycle.abort();
     windgram?.disposePointWindgram(pointBody);
     disposeExpiry();
-    if (!mapFailed) { overlay.destroy(); map.remove(); }
-  });
+    overlay.destroy(); map.remove();
+  }, globalListener);
   window.addEventListener('pageshow', (event: PageTransitionEvent) => {
     if (!event.persisted) return;
     if (resumeModel !== null) {
@@ -762,9 +767,9 @@ function startPreview(): void {
       updateFreshness();
       if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
     }
-  });
-  document.addEventListener('visibilitychange', updateFreshness);
-  window.addEventListener('focus', updateFreshness);
+  }, globalListener);
+  document.addEventListener('visibilitychange', updateFreshness, globalListener);
+  window.addEventListener('focus', updateFreshness, globalListener);
   syncReference();
   syncModels();
 

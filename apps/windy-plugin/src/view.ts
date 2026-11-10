@@ -54,6 +54,7 @@ export class PluginPanel {
   private readonly opacityInput = node('input');
   private readonly opacityReadout = node('span', 'av-readout', '50%');
   private readonly status = node('p', 'av-muted');
+  private readonly mapTime = node('p', 'av-map-time', '');
   private readonly notice = node('p', 'av-notice');
   private readonly error = node('p', 'av-error');
   private readonly horizonNotice = node('p', 'av-warning');
@@ -99,6 +100,7 @@ export class PluginPanel {
       this.opacityReadout.textContent = percent(opacity);
       callbacks.onOpacity(opacity);
     });
+    this.mapTime.hidden = true;
     this.notice.hidden = true;
     this.notice.role = 'status';
     this.error.hidden = true;
@@ -130,7 +132,7 @@ export class PluginPanel {
     this.pointStatus.role = 'status';
     this.pointSettings.append(node('summary', undefined, 'Settings'), this.pointCoordinates, unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon);
     this.point.append(this.pointBody, this.pointStatus, this.pointSettings);
-    this.root.append(header, this.status, this.horizonNotice, controls, this.notice, this.error, this.point);
+    this.root.append(header, this.status, this.mapTime, this.horizonNotice, controls, this.notice, this.error, this.point);
   }
 
   setVisible(visible: boolean): void {
@@ -140,6 +142,11 @@ export class PluginPanel {
 
   setStatus(text: string): void {
     this.status.textContent = text;
+  }
+
+  setMapTime(text: string): void {
+    this.mapTime.hidden = text === '';
+    this.mapTime.textContent = text;
   }
 
   setNotice(message: string | null): void {
@@ -162,6 +169,7 @@ export class PluginPanel {
   }
 
   renderState(state: ControllerState): void {
+    this.setMapTime(state.badge);
     this.setError(state.message);
     this.setNotice(state.notice);
     this.horizonNotice.hidden = state.horizonNotice === null;

@@ -82,6 +82,7 @@ describe('frame selection', () => {
     expect(hostTimestampMs(new Date(ms))).toBe(ms);
     expect(hostTimestampMs('  ')).toBeNull();
     expect(hostTimestampMs('soon')).toBeNull();
+    expect(hostTimestampMs(Number.MAX_VALUE)).toBeNull();
     expect(hostTimestampMs(null)).toBeNull();
   });
 

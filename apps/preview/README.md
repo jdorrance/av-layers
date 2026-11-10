@@ -36,7 +36,8 @@ publish no native profiles. Legacy builds offer a 24-hour point view.
 
 ## Source layout
 
-- [src/main.ts](src/main.ts): Google terrain map, model and AGL/MSL controls, local/UTC time, and the point card.
+- [src/main.ts](src/main.ts): OpenStreetMap basemap, model and AGL/MSL controls, forecast clock, and point card.
+- [src/raster-overlay.ts](src/raster-overlay.ts): raster replacement and prefetch.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.
 

@@ -34,7 +34,7 @@ function fixture() {
   const layer = new WindyRasterLayer(api, 'https://tiles.example', url('f003'), windyTileOptions(7, 0.5, 'NOAA'));
   const emit = (event: string, value?: Parameters<RenderListener>[0]) => { for (const listener of handlers.get(event) ?? []) listener(value); };
   const complete = (native = natives.at(-1)!) => { native.loading = false; native.listeners.get('data')?.({ tile: {} }); emit('render'); };
-  return { layer, map, api, create, natives, handlers, emit, complete, move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'render'); } };
+  return { layer, map, api, create, natives, handlers, emit, complete, move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'moveend'); } };
 }
 
 it('loads hidden staging tiles and commits only successful render readiness', async () => {
@@ -74,17 +74,45 @@ it.each([false, true])('settles a stationary viewport with no tiles and retries 
   f.emit('idle');
   expect(f.map.removeLayer).not.toHaveBeenCalledWith(empty);
   f.move(false);
-  f.emit('idle');
   expect(f.map.removeLayer).toHaveBeenCalledExactlyOnceWith(empty);
+  const settled = f.natives.at(-1)!;
+  expect(settled).not.toBe(empty);
+  settled.loading = false;
+  f.emit('idle');
+  expect(f.map.removeLayer).toHaveBeenCalledWith(settled);
   expect(statuses).toHaveBeenLastCalledWith('error', committed ? url('f003') : '');
   f.emit('idle');
-  expect(f.natives.at(-1)).toBe(empty);
-  f.move(true); f.move(false); f.emit('moveend');
-  expect(f.natives.at(-1)).not.toBe(empty);
+  expect(f.natives.at(-1)).toBe(settled);
+  f.move(true); f.move(false);
+  expect(f.natives.at(-1)).not.toBe(settled);
   f.complete();
   await Promise.resolve();
   expect(statuses).toHaveBeenLastCalledWith('ready', url(committed ? 'f006' : 'f003'));
   f.layer.remove();
+});
+
+it('keeps the displayed layer if the replacement only succeeded before a pan', async () => {
+  const f = fixture(), statuses = vi.fn();
+  f.layer.onStatus(statuses); f.layer.addTo(f.map); f.complete();
+  await Promise.resolve();
+  try {
+    const displayed = f.natives[0];
+    f.layer.setUrl(url('f006'));
+    const oldViewport = f.natives[1], pending = {};
+    oldViewport.listeners.get('dataloading')?.({ tile: pending });
+    oldViewport.listeners.get('data')?.({ tile: {} });
+    f.move(true);
+    oldViewport.listeners.get('dataabort')?.({ tile: pending });
+    f.move(false);
+    const newViewport = f.natives.at(-1)!;
+    expect(newViewport).not.toBe(oldViewport);
+    newViewport.loading = false;
+    newViewport.listeners.get('error')?.({ tile: {} });
+    f.emit('render'); await Promise.resolve();
+    expect(f.map.removeLayer).toHaveBeenCalledWith(newViewport);
+    expect(f.map.removeLayer).not.toHaveBeenCalledWith(displayed);
+    expect(statuses).toHaveBeenLastCalledWith('error', url('f003'));
+  } finally { f.layer.remove(); }
 });
 
 it('settles the matching source idle event without waiting for map-wide idle', async () => {
@@ -115,7 +143,7 @@ it('discards a failed staging tile that leaves the viewport during a pan', async
   replacement.listeners.get('error')?.({ tile });
   replacement.listeners.get('dataabort')?.({ tile });
   f.move(false);
-  f.complete(replacement);
+  f.complete();
   await Promise.resolve();
   expect(errors).not.toHaveBeenCalled();
   expect(statuses).toHaveBeenLastCalledWith('ready', url('f006'));
@@ -215,6 +243,7 @@ it('retains the committed layer on failed or superseded staging generations', as
   f.move(true); f.complete();
   expect(f.map.removeLayer).not.toHaveBeenCalledWith(first);
   f.move(false);
+  f.complete();
   await Promise.resolve();
   expect(f.map.removeLayer).toHaveBeenCalledWith(first);
   expect(f.api.addProtocol).toHaveBeenCalledTimes(1);

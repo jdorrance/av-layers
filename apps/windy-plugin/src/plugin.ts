@@ -114,6 +114,7 @@ function renderController(ui: PluginPanel, active: PluginController): void {
   if (previousController?.displayedForecast) {
     const base = state.notice ?? (state.phase === 'loading' ? `Loading ${state.model}.` : null);
     ui.setNotice([base, `Showing ${previousController.displayedForecast}.`].filter(Boolean).join(' '));
+    ui.setMapTime(previousController.state().badge);
   }
   if (state.phase === 'ready' && state.buildId && active.currentBuild) {
     ui.setStatus(formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
@@ -159,7 +160,7 @@ async function startController(model: ModelId): Promise<void> {
         }
         return;
       }
-      if (forecastCommitted(state) && previousController === previous) {
+      if ((forecastCommitted(state) || (state.phase === 'ready' && state.frameId === null)) && previousController === previous) {
         previousController = null; previous?.dispose();
         const oldBuildId = previous?.currentBuild?.manifest.buildId;
         if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);
