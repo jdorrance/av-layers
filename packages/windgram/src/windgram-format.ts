@@ -3,6 +3,7 @@
 export type { UnitSystem } from '@av/client';
 import type { UnitSystem } from '@av/client';
 import { FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
+import type { SiteForecast } from './internal-meteo.ts';
 
 const METRES_PER_FOOT = 0.3048;
 const FEET_PER_METRE = 1 / METRES_PER_FOOT;
@@ -51,11 +52,8 @@ export function formatQuantity(value: number | null | undefined, kind: QuantityK
   return `${label} ${unitLabel(kind, system)}`;
 }
 
-/** The gust class a forecast document declares (`semantics.gust`); absence means the document predates the tag. */
-export type GustSemantics = 'hourMax' | 'instant';
-
 /** Noun for a surface gust reading from the document's declaration; defaults to "gust". */
-export function gustNoun(semantics: GustSemantics | null | undefined): string {
+export function gustNoun(semantics: SiteForecast['semantics']['gust']): string {
   if (semantics === 'hourMax') return 'hour-max gust';
   if (semantics === 'instant') return 'gust sample';
   return 'gust';

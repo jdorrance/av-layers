@@ -31,10 +31,10 @@ pnpm --filter @av/api build
    and `GET /v1/models/:model/runs/:buildId/sample` requests.
 
 `/samples?points=lat,lon;lat,lon` batches coordinates in request order.
-`/profile?lat=...&lon=...` reports the requested coordinate and the nearest
-covered native cell. Scalars, vertical levels, and derived cloud and wind
-diagnostics share that cell. `frame` selects times and `layers` selects scalar
-inputs. Omitted dependencies produce null derived values.
+`/profile?lat=...&lon=...` returns scalars, vertical levels, and derived
+diagnostics for the native grid cell identified by `cell`. `frame` selects
+times and `layers` selects scalar inputs. Omitted dependencies produce null
+derived values. See [sampling and profiles](../../docs/data.md#time-and-retention).
 V5 point routes default to the first frame; callers select bounded frame pages for
 complete timelines. See the [OpenAPI spec](../../docs/reference/openapi.json)
 for request limits and response schemas.
