@@ -19,7 +19,8 @@ export function calculateLift(frame: NormalizedFrame, mask: CoverageMask) {
 
 `deriveFrame` returns a `{ values: Float32Array, flags: Uint8Array }` grid per
 requested layer, evaluating both lift layers in a single column pass and gating
-daylight cells via [`@av/solar`](../solar/README.md).
+daylight cells via [`@av/solar`](../solar/README.md). Gated lift requires a valid
+frame timestamp. Pass `daylightOnly: false` for an ungated calculation.
 `validateNormalizedFrame` checks array dimensions, vertical pressure axes
 (`pressureLevelsHpa` or per-column `pressurePa`), and missingness masks before
 derivation.

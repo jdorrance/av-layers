@@ -140,6 +140,9 @@ describe('sparse terrain metadata reuse', () => {
     expect(reuseFrom).toHaveBeenCalledOnce();
     expect(createTerrainReader).not.toHaveBeenCalled();
     expect(prefetchSources).not.toHaveBeenCalled();
+    for (const [key] of oldObjects.filter(([key]) => key.startsWith(source.key.replace('manifest.json', '')))) {
+      expect(input.storage.gets.filter(read => read === key)).toHaveLength(1);
+    }
     for (const [key, bytes] of baseline.objects) expect(input.storage.objects.get(key)).toEqual(bytes);
     for (const [key, bytes] of oldObjects) expect(input.storage.objects.get(key)).toEqual(bytes);
     expect(writes.mock.calls.map(([key]) => key)).toEqual([ref.key.replace('manifest.json', 'elevation-0.f32'), ref.key.replace('manifest.json', 'valid-0.u8'), ref.key]);

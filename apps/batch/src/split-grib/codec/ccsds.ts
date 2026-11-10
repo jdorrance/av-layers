@@ -42,7 +42,7 @@ const { SE_SUM, SE_BASE } = (() => {
 class AecBitReader {
   private readonly bytes: Uint8Array;
   private bytePos = 0;
-  private acc = 0n;
+  private acc = 0;
   private bitsLeft = 0;
 
   constructor(bytes: Uint8Array) {
@@ -52,9 +52,8 @@ class AecBitReader {
   private ensureBits(count: number): void {
     while (this.bitsLeft < count) {
       if (this.bytePos >= this.bytes.length) throw new Error('Truncated CCSDS payload');
-      const nextByte = BigInt(this.bytes[this.bytePos]!);
-      this.bytePos += 1;
-      this.acc = (this.acc << 8n) | nextByte;
+      // A read needs at most 32 bits; the final refill retains at most seven extra.
+      this.acc = this.acc * 256 + this.bytes[this.bytePos++]!;
       this.bitsLeft += 8;
     }
   }
@@ -63,18 +62,14 @@ class AecBitReader {
     if (count === 0) return 0;
     this.ensureBits(count);
     this.bitsLeft -= count;
-    const mask = (1n << BigInt(count)) - 1n;
-    const value = Number((this.acc >> BigInt(this.bitsLeft)) & mask);
-    this.acc &= (1n << BigInt(this.bitsLeft)) - 1n;
-    return value >>> 0;
+    const scale = 1 << this.bitsLeft;
+    const value = Math.floor(this.acc / scale);
+    this.acc -= value * scale;
+    return value;
   }
 
   readBit(): number {
-    this.ensureBits(1);
-    this.bitsLeft -= 1;
-    const bit = Number((this.acc >> BigInt(this.bitsLeft)) & 1n);
-    this.acc &= (1n << BigInt(this.bitsLeft)) - 1n;
-    return bit;
+    return this.readBits(1);
   }
 
   /**
@@ -89,11 +84,9 @@ class AecBitReader {
   }
 
   alignToByte(): void {
-    const rem = this.bitsLeft & 7;
-    if (rem > 0) {
-      this.bitsLeft -= rem;
-      this.acc &= (1n << BigInt(this.bitsLeft)) - 1n;
-    }
+    // Refills are byte-sized, so only the current byte's remainder can be buffered.
+    this.bitsLeft = 0;
+    this.acc = 0;
   }
 }
 

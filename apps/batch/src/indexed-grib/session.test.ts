@@ -10,7 +10,6 @@ import { compactIndexedGribSamples, IndexedGribFieldSampler } from './sampling.t
 import { IndexedGribTransport } from './transport.ts';
 import type { IndexedGribFrameAcquisition } from './types.ts';
 import { createNormalizedFrameTarget } from '../provider.js';
-import { omegaFromGeometricWPaS, kelvinToCelsius } from '@av/thermodynamics';
 
 const cycle = '2026-10-30T00:00:00Z';
 afterEach(() => vi.restoreAllMocks());
@@ -38,6 +37,7 @@ function source(configured = profile) {
     const grid = { kind: 'latlon', gridKey: 'fixture-grid', ni: 1440, nj: 721, longitudeOfFirstGridPoint: 0, latitudeOfFirstGridPoint: 90, iDirectionIncrement: 0.25, jDirectionIncrement: 0.25, earthRadiusM: 6371229, gridDefinitionTemplateNumber: 0 };
     return { grid, packing: 3, packingError: 0, field: {}, receipt: {
       key: spec.key, kind: spec.kind, role: spec.role ?? 'current', variable: spec.variable, level: spec.level, forecastLabel: spec.forecast,
+      ...(spec.outputUnit ? { normalization: { units: spec.outputUnit, scale: spec.scale, ...(spec.conversion ? { conversion: spec.conversion } : {}) } } : {}),
       interval, grid, identification: { year: 2026, month: 10, day: 30, hour: 0, minute: 0, second: 0 }, productMetadata: { typeOfGeneratingProcess: 2 }, unit: spec.statistic === 'mean' ? 'W/m2' : 'kg/m2',
     } } as unknown as admission.InspectedIndexedGribField;
   });
@@ -117,23 +117,43 @@ it('acquires only configured auxiliary fields and retains their caller-owned sha
   } finally { await session.close(); }
 });
 
-it('normalizes configured geometric vertical velocity with the same isobaric temperature', async () => {
+it.each([false, true])('normalizes geometric vertical velocity with same-level temperature and humidity configured=%s', async moist => {
   const configured = indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream,
     parameters: { ...profile.upstream.parameters, DZDT: [2, 9, 'm/s'] },
-    auxLevels: { omegaPaS: { variable: 'DZDT', unit: 'Pa/s', conversion: 'geometric-w-to-omega' } }
+    auxLevels: { omegaPaS: { variable: 'DZDT', unit: 'Pa/s', conversion: 'geometric-w-to-omega' },
+      ...(moist ? { spfhKgKg: { variable: 'SPFH', unit: 'kg/kg' } } : {}) }
   } });
   const { fetchImpl, sample } = source(configured), original = sample.getMockImplementation()!;
+  const pressure = configured.pressureLevels[0]!;
   sample.mockImplementation(async (...args) => {
-    const result = await original(...args), kind = args[0].receipt.kind;
-    if (kind === 'temperature' || kind === 'aux-level') for (let i = 0; i < result.values.length; i++) {
-      if (!result.missing[i]) result.values[i] = kind === 'temperature' ? 280 : 2;
+    const result = await original(...args), { kind, variable, level } = args[0].receipt;
+    const values = kind === 'temperature' ? [280, 280, 280, NaN, 280]
+      : kind !== 'aux-level' ? undefined
+        : variable === 'DZDT' ? [2, -2, 1, 2, NaN] : [level === `${pressure} mb` ? 0.02 : 0.005, NaN, -0.01, 0.02, 0.02];
+    if (values) {
+      result.values.set(values);
+      result.missing.set(values.map(value => Number.isNaN(value) ? 1 : 0));
     }
     return result;
   });
-  const result = await acquireIndexedGribFrame(configured, { cycle, hour: 1, activeIndices: Uint32Array.of(0, 1), fetchImpl });
-  expect(result.auxLevels!.omegaPaS![0]!.values[0]).toBeCloseTo(omegaFromGeometricWPaS(2,
-    result.pressureLevelsHpa[0]!, kelvinToCelsius(result.tempK[0]![0]!)));
-  expect(result.auxLevels!.omegaPaS![0]!.missing).toEqual(Uint8Array.of(0, 1));
+  const result = await acquireIndexedGribFrame(configured, { cycle, hour: 1, activeIndices: Uint32Array.of(0, 1, 2, 3, 4), fetchImpl });
+  const expected = (w: number, p: number, q = 0) => -w * 9.80665 * p * 100 / (280 * (287.05 * (1 - q) + 287.05 / 0.622 * q));
+  const [first, second] = result.auxLevels!.omegaPaS!;
+  expect(first!.values[0]).toBeCloseTo(expected(2, pressure, moist ? 0.02 : 0), 5);
+  expect(second!.values[0]).toBeCloseTo(expected(2, configured.pressureLevels[1]!, moist ? 0.005 : 0), 5);
+  expect(first!.values[1]).toBeCloseTo(expected(-2, pressure), 5);
+  expect(first!.values[2]).toBeCloseTo(expected(1, pressure), 5);
+  expect(first!.values[3]).toBeNaN();
+  expect(first!.values[4]).toBeNaN();
+  expect(first!.missing).toEqual(Uint8Array.of(0, 0, 0, 1, 1));
+  const receipt = result.receipt.fields.find(field => field.key === `auxLevels.omegaPaS.${pressure}`)!;
+  expect(receipt.normalization).toEqual({ units: 'Pa/s', scale: 1, conversion: 'geometric-w-to-omega', density: 'same-level-specific-humidity-or-dry' });
+  const auxSpecs = indexedGribCurrentSpecs(configured, 1).filter(spec => spec.kind === 'aux-level');
+  expect(result.receipt.fields.filter(field => field.kind === 'aux-level').map(field => field.key)).toEqual(auxSpecs.map(spec => spec.key));
+  if (moist) {
+    expect(auxSpecs[0]!.auxId).toBe('omegaPaS');
+    expect(result.auxLevels!.spfhKgKg![0]!.values[0]).toBeCloseTo(0.02);
+  }
 });
 
 it('refuses auxiliary units, unknown names, half vectors and unsupported conversions at configuration', () => {

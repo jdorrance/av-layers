@@ -143,6 +143,34 @@ it('cancels one coalesced waiter while retaining the shared download for its sur
   expect(get).toHaveBeenCalledOnce();
 });
 
+it('starts a fresh download for a live waiter after the abandoned owner drains', async () => {
+  const input = fixture(), original = input.storage.get.bind(input.storage), key = input.keys[0];
+  let started!: (owner: AbortSignal) => void, finish!: () => void;
+  const ownerSignal = new Promise<AbortSignal>(resolve => { started = resolve; });
+  const drain = new Promise<void>(resolve => { finish = resolve; });
+  const get = vi.spyOn(input.storage, 'get').mockImplementationOnce(async (...args) => {
+    started(args[3]!);
+    await drain;
+    return original(...args);
+  });
+  const cache = await open(input, 16), controller = new AbortController(), reason = new Error('cancel first waiter');
+  const first = cache.storage.head(key, controller.signal);
+  try {
+    const owner = await ownerSignal;
+    controller.abort(reason);
+    await expect(first).rejects.toBe(reason);
+    expect(owner.aborted).toBe(true);
+    const next = cache.storage.head(key);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(get).toHaveBeenCalledOnce();
+    expect(cache.stats()).toMatchObject({ activeDownloads: 1, reservedBytes: 16 });
+    finish();
+    expect((await next)?.computedSha256).toBe(sha256(input.bytes[0]));
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(cache.stats()).toMatchObject({ downloads: 1, peakBytes: 16, reservedBytes: 0 });
+  } finally { finish(); }
+});
+
 it('observes cancelled source work when its waiter aborts before pin admission completes', async () => {
   const input = fixture(), cache = await open(input), reason = new Error('cancel during admission');
   for (const kind of ['head', 'prefetch']) {

@@ -139,7 +139,10 @@ export async function openTerrainSourceCache(options: {
       });
     });
   }
-  function materialize(entry: Entry, asset: TerrainAsset): Promise<Proof> {
+  async function materialize(entry: Entry, asset: TerrainAsset, waiterSignal: AbortSignal): Promise<Proof> {
+    // The abandoned download keeps its reservation until it settles.
+    while (entry.loading && entry.controller?.signal.aborted) await entry.loading.catch(() => {});
+    waiterSignal.throwIfAborted();
     if (entry.loading) return entry.loading;
     const controller = new AbortController(), ownerSignal = AbortSignal.any([signal, controller.signal]);
     entry.controller = controller;
@@ -172,7 +175,7 @@ export async function openTerrainSourceCache(options: {
       const combined = waiterSignal ? AbortSignal.any([signal, waiterSignal]) : signal;
       combined.throwIfAborted();
       const [entry] = await pin([asset]), unpin = release([entry]);
-      try { const proof = await wait(materialize(entry, asset), combined); combined.throwIfAborted(); return await run(entry, proof, combined); }
+      try { const proof = await wait(materialize(entry, asset, combined), combined); combined.throwIfAborted(); return await run(entry, proof, combined); }
       finally { unpin(); }
     })();
     reads.add(promise); void promise.then(() => reads.delete(promise), () => reads.delete(promise));
@@ -202,7 +205,7 @@ export async function openTerrainSourceCache(options: {
       if (unique.reduce((sum, asset) => sum + asset.bytes, 0) > maxBytes) throw new Error('Terrain source window exceeds cache byte budget');
       const combined = waiterSignal ? AbortSignal.any([signal, waiterSignal]) : signal;
       combined.throwIfAborted();
-      const pinned = await pin(unique), unpin = release(pinned), work = pinned.map((entry, index) => materialize(entry, unique[index]));
+      const pinned = await pin(unique), unpin = release(pinned), work = pinned.map((entry, index) => materialize(entry, unique[index], combined));
       try { await wait(Promise.all(work), combined); return unpin; }
       catch (error) { unpin(); await Promise.allSettled(work); throw error; }
     },

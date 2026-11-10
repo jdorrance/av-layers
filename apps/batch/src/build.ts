@@ -148,7 +148,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
     await options.onValidated?.(completed, path);
     return path;
   } catch (error) {
-    await writeFile(localPath(root, `${prefix}/failure.json`), JSON.stringify({ version: 1, state: 'failed', buildId, provider: provider.id, cycle, phase, failedFrameHour: null, completedFrames: frames.length, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }));
+    await writeFile(localPath(root, `${prefix}/failure.json`), JSON.stringify({ version: 1, state: 'failed', buildId, provider: provider.id, cycle, phase, failedFrameHour: null, completedFrames: frames.length, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) })).catch(() => {});
     throw error;
   }
 }

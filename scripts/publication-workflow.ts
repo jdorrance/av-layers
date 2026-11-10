@@ -81,8 +81,8 @@ export async function publicationWorkflow<T>(work: (run: {
         const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, signal);
         await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, deletedObjects, summary: summary ?? null, authority }, null, 2));
       } catch (error) {
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, error: String(error), summary: summary ?? null, authority }, null, 2));
-        throw new Error(`Publication committed; maintenance failed: ${String(error)}`);
+        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, error: String(error), summary: summary ?? null, authority }, null, 2)).catch(() => {});
+        throw new Error(`Publication committed; maintenance failed: ${String(error)}`, { cause: error });
       }
       const servingPath = join(dirname(path), 'serving.json');
       const smokeStarted = Date.now();
@@ -91,13 +91,15 @@ export async function publicationWorkflow<T>(work: (run: {
         await verifyPublishedForecast({ baseUrl: apiUrl.origin, manifest, signal });
         await writeFile(servingPath, JSON.stringify({ status: 'verified', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers, apiBaseUrl: apiUrl.origin }, null, 2));
       } catch (error) {
-        await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2));
-        throw new Error(`Publication committed; serving verification failed: ${String(error)}`);
+        await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2)).catch(() => {});
+        throw new Error(`Publication committed; serving verification failed: ${String(error)}`, { cause: error });
       }
     } });
   } catch (error) {
-    await mkdir(root, { recursive: true });
-    await writeFile(join(root, 'failure.json'), JSON.stringify({ at: new Date().toISOString(), revision, authority, publicationPath, publication: committed ? 'committed' : publicationAttempted ? 'unconfirmed' : 'not-attempted', cancelled: controller.signal.aborted, error: String(error) }, null, 2));
+    try {
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, 'failure.json'), JSON.stringify({ at: new Date().toISOString(), revision, authority, publicationPath, publication: committed ? 'committed' : publicationAttempted ? 'unconfirmed' : 'not-attempted', cancelled: controller.signal.aborted, error: String(error) }, null, 2));
+    } catch {}
     throw error;
   } finally {
     process.off('SIGINT', abort); process.off('SIGTERM', abort);

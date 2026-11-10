@@ -204,7 +204,7 @@ describe('packed sample and concurrent archive validation', () => {
     const values = (n: number) => new Float32Array([n, n]);
     const missing = () => new Uint8Array(2);
     const input = { activeIndices: new Uint32Array([output, halo]), terrainM: values(0), surfacePressurePa: values(100000), temp2mK: values(293), specificHumidity2mKgKg: values(0.008), sensibleHeatFluxWm2: values(200), latentHeatFluxWm2: values(100), precipitationMmPerHour: new Float32Array([2, 4]), pressureLevelsHpa: [], hgtM: [], tempK: [], missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(), precipitation: missing(), hgt: [], temp: [] } } as unknown as NormalizedFrame;
-    const field = deriveFrame(input, mask)['precip-rate']!;
+    const field = deriveFrame(input, mask, { layers: ['precip-rate'] })['precip-rate']!;
     let outside = -1;
     for (let i = 0; i < width * height; i++) {
       if (i !== output && i !== halo && (getBit(mask.output, i) || getBit(mask.halo, i))) field.flags[i] = STATUS_UNAVAILABLE;

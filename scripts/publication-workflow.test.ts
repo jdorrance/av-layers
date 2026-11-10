@@ -30,7 +30,7 @@ vi.mock('node:child_process', async () => {
 });
 vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories,
   stat: async (path: string) => { await fake.readLocal(path); return { isFile: () => true }; } }));
-import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, prepareForecastTerrain, runForecastShard, finalizeAndPublish } from './publication-workflow.js';
+import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, prepareForecastTerrain, runForecastShard, finalizeAndPublish, publicationWorkflow } from './publication-workflow.js';
 const revision = 'a'.repeat(40);
 const catalogRef = { key: `terrain/catalogs/${'c'.repeat(64)}.json`, sha256: 'c'.repeat(64), bytes: 100 };
 let manifest: Manifest;
@@ -41,6 +41,7 @@ beforeEach(() => {
   manifest.metrics = { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: [1, 4, 8, 30, 92, 267, 847, 2794] };
   manifest.recipe.sourceRevision = revision; manifest.recipe.sourceDirty = false;
   fake.storage.mockReturnValue({});
+  fake.write.mockResolvedValue(undefined);
   fake.fineCoverage.mockResolvedValue({ mask: { coverage: { fixture: true } }, bytes: Uint8Array.of(1) });
   fake.terrain.mockResolvedValue({ key: 'terrain/prepared/fixture/manifest.json' });
   fake.plan.mockResolvedValue({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
@@ -326,6 +327,12 @@ it('never starts cleanup after publication fails', async () => {
   fake.publish.mockRejectedValueOnce(new Error('CAS failed'));
   await expect(finalizeAndPublish()).rejects.toThrow('CAS failed');
   expect(fake.cleanup).not.toHaveBeenCalled();
+});
+
+it.each(['mkdir', 'write'] as const)('preserves the original failure when journal %s fails', async operation => {
+  const primary = new Error('source acquisition failed');
+  fake[operation].mockRejectedValueOnce(new Error('journal unavailable'));
+  await expect(publicationWorkflow(async () => { throw primary; })).rejects.toBe(primary);
 });
 
 it('records cancellation before commit without publishing or leaking signal handlers', async () => {

@@ -66,7 +66,15 @@ function check(asset: TerrainAsset, bytes: Uint8Array): void {
   if (bytes.length !== asset.bytes || sha256(bytes) !== asset.sha256) throw new Error(`Sparse terrain asset integrity mismatch: ${asset.key}`);
 }
 
-export async function validateSparsePreparedTerrain(refInput: SparseTerrainRef, read: (asset: TerrainAsset) => Promise<Uint8Array>, grid: Grid, coverage: SparseCoverage, coverageDescriptor: Uint8Array, signal?: AbortSignal, collect = false): Promise<{ descriptor: SparsePreparedTerrain['descriptor']; elevationM?: Float32Array; valid?: Uint8Array }> {
+interface TerrainValidation {
+  collect?: boolean;
+  onValidatedChunk?: (index: number, heights: Uint8Array, mask: Uint8Array) => Promise<void>;
+}
+
+export async function validateSparsePreparedTerrain(
+  refInput: SparseTerrainRef, read: (asset: TerrainAsset) => Promise<Uint8Array>, grid: Grid, coverage: SparseCoverage,
+  coverageDescriptor: Uint8Array, signal?: AbortSignal, { collect, onValidatedChunk }: TerrainValidation = {}
+): Promise<{ descriptor: SparsePreparedTerrain['descriptor']; elevationM?: Float32Array; valid?: Uint8Array }> {
   signal?.throwIfAborted();
   const expected = identity(grid, coverage, coverageDescriptor), ref = sparseTerrainRefSchema.parse(refInput), manifest = await read(ref);
   signal?.throwIfAborted();
@@ -95,6 +103,7 @@ export async function validateSparsePreparedTerrain(refInput: SparseTerrainRef, 
     }
     valid?.set(mask, start);
     signal?.throwIfAborted();
+    if (onValidatedChunk) await onValidatedChunk(i, heights, mask);
     await new Promise<void>(resolve => setImmediate(resolve));
     signal?.throwIfAborted();
   }
@@ -102,7 +111,7 @@ export async function validateSparsePreparedTerrain(refInput: SparseTerrainRef, 
 }
 
 export async function readSparsePreparedTerrain(ref: SparseTerrainRef, read: (asset: TerrainAsset) => Promise<Uint8Array>, grid: Grid, coverage: SparseCoverage, coverageDescriptor: Uint8Array, signal?: AbortSignal): Promise<SparsePreparedTerrain> {
-  const result = await validateSparsePreparedTerrain(ref, read, grid, coverage, coverageDescriptor, signal, true);
+  const result = await validateSparsePreparedTerrain(ref, read, grid, coverage, coverageDescriptor, signal, { collect: true });
   return { descriptor: result.descriptor, elevationM: result.elevationM!, valid: result.valid! };
 }
 
@@ -132,16 +141,17 @@ async function reuseSparseTerrain(options: SparseTerrainOptions, target: ReturnT
     if (!object) throw new Error(`Sparse terrain asset missing: ${asset.key}`);
     return object.bytes;
   };
-  await validateSparsePreparedTerrain(ref, read, target.grid, target.coverage, coverage.bytes, signal);
   const files: SparsePreparedTerrain['descriptor']['files'] = { elevationM: [], valid: [] };
-  for (const name of ['elevationM', 'valid'] as const) for (const asset of descriptor.files[name]) {
-    signal?.throwIfAborted();
-    const bytes = await read(asset);
-    check(asset, bytes);
-    const rebound = { ...asset, key: `${prefix}/${asset.key.slice(asset.key.lastIndexOf('/') + 1)}` };
-    await putImmutable(options.storage, rebound.key, bytes, 'application/octet-stream', signal);
-    files[name].push(rebound);
-  }
+  await validateSparsePreparedTerrain(ref, read, target.grid, target.coverage, coverage.bytes, signal, {
+    async onValidatedChunk(index, heights, mask) {
+      for (const [name, bytes] of [['elevationM', heights], ['valid', mask]] as const) {
+        const asset = descriptor.files[name][index];
+        const rebound = { ...asset, key: `${prefix}/${asset.key.slice(asset.key.lastIndexOf('/') + 1)}` };
+        await putImmutable(options.storage, rebound.key, bytes, 'application/octet-stream', signal);
+        files[name].push(rebound);
+      }
+    }
+  });
   const rebound = descriptorSchema.parse({ ...descriptor, coverageHash: target.coverageHash, files });
   const bytes = encodeJson(rebound, PREPARED_DESCRIPTOR_MAX_BYTES), key = `${prefix}/manifest.json`;
   await putImmutable(options.storage, key, bytes, 'application/json', signal);

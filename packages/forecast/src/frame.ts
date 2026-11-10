@@ -192,13 +192,8 @@ export function deriveSelectedFrameDiagnostics(frame: NormalizedFrame, sourceInd
 }
 
 const buildDaylightTimestampsMs = (frame: NormalizedFrame): readonly number[] => {
-  if (typeof frame.validAt !== 'string') {
-    return [];
-  }
   const endMs = Date.parse(frame.validAt);
-  if (!Number.isFinite(endMs)) {
-    return [];
-  }
+  if (!Number.isFinite(endMs)) throw new Error('Daylight-gated lift requires a valid frame timestamp');
   const startRaw = frame.intervals?.fluxWindow?.start;
   const startMs = typeof startRaw === 'string' ? Date.parse(startRaw) : NaN;
   return buildIntervalDaylightTimestampsMs(startMs, endMs);
@@ -219,6 +214,7 @@ export function deriveFrame(
     layer => layer === 'usable-lift-msl' || layer === 'usable-lift-agl'
   );
   const requiresPrecip = activeLayers.includes('precip-rate');
+  const timestampsMs = requiresLift && options?.daylightOnly !== false ? buildDaylightTimestampsMs(frame) : [];
   const diagnostics = options?.diagnostics;
   if (diagnostics) {
     if (!requiresLift) {
@@ -252,13 +248,11 @@ export function deriveFrame(
   const totalLevels = frame.pressurePa !== undefined ? frame.pressurePa.length : frame.pressureLevelsHpa.length;
   const column = createNativeColumnScratch(totalLevels);
 
-  const daylightOnly = options?.daylightOnly ?? true;
   const minimumSolarElevationDeg =
     options?.minimumSolarElevationDeg ?? LIFT_METHOD_PARAMETERS.minimumSolarElevationDeg;
   const minimumRateMmPerHour =
     options?.minimumRateMmPerHour ?? PRECIPITATION_METHOD_PARAMETERS.minimumRateMmPerHour;
 
-  const timestampsMs = daylightOnly ? buildDaylightTimestampsMs(frame) : [];
   const isDaylight = createMaskDaylightTester(
     mask.grid,
     timestampsMs,

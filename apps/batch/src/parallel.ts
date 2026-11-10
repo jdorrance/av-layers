@@ -368,7 +368,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
     await rename(path + '.tmp', path);
     return path;
   } catch (error) {
-    await writeFile(localPath(root, `${prefix}/worker-failure.json`), JSON.stringify({ buildId: plan.buildId, shard, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }));
+    await writeFile(localPath(root, `${prefix}/worker-failure.json`), JSON.stringify({ buildId: plan.buildId, shard, cancelled: options.signal?.aborted ?? false, error: failureReason(error) })).catch(() => {});
     throw error;
   }
 }

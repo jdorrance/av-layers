@@ -14,8 +14,9 @@ URLs, parameter identities, field roles, pressure routing, cycles and windows.
 [provider.ts](provider.ts) exposes the shared provider boundary.
 Optional `auxSurface` and `auxLevels` descriptors select instantaneous diagnostics
 in canonical [normalized units](../../../../packages/contracts/src/methods.ts).
-Wind components are paired and rotated to Earth coordinates. An explicit
-`geometric-w-to-omega` conversion uses the temperature at the same pressure level.
+Wind components are paired and rotated to Earth coordinates.
+`geometric-w-to-omega` uses hydrostatic density from same-level temperature and
+specific humidity. Cells without usable humidity use dry density.
 
 [acquire.ts](acquire.ts) owns session cancellation, bounded prefetch and companion
 reuse. [transport.ts](transport.ts) verifies inventory selection and cached

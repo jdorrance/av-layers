@@ -1,7 +1,7 @@
 import { MAX_SPLIT_OBJECT_BYTES, type SplitSource } from './source.js';
 import { copySourceIndices, sourceWindowStart } from '../source.js';
 import { recoverTrailingWindow } from '@av/forecast/intervals';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { DEFAULT_REQUEST_TIMEOUT_MS, sourceIntervalHours } from '@av/contracts';
@@ -17,8 +17,11 @@ import {
 import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
+import { pause } from '../pause.js';
 
 const DEFAULT_CONCURRENCY = 8;
+const MAX_TRANSFER_ATTEMPTS = 3;
+const RETRYABLE_HTTP_STATUS = [408, 429, 500, 502, 503, 504];
 
 export interface SplitGribObjectReceipt {
   readonly field: string;
@@ -89,13 +92,15 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
+class InvalidSplitGribResponse extends Error {}
+
 async function readObjectBody(response: Response): Promise<Uint8Array> {
   const declaredBytes = response.headers.get('content-length');
   if (declaredBytes !== null && (!/^\d+$/.test(declaredBytes) || Number(declaredBytes) > MAX_SPLIT_OBJECT_BYTES)) {
-    await response.body?.cancel();
-    throw new Error('Split GRIB object byte length out of bounds');
+    await response.body?.cancel().catch(() => {});
+    throw new InvalidSplitGribResponse('Split GRIB object byte length out of bounds');
   }
-  if (!response.body) throw new Error('Empty Split GRIB object body');
+  if (!response.body) throw new InvalidSplitGribResponse('Empty Split GRIB object body');
   const reader = response.body.getReader(), chunks: Uint8Array[] = [];
   let size = 0;
   try {
@@ -103,10 +108,10 @@ async function readObjectBody(response: Response): Promise<Uint8Array> {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > MAX_SPLIT_OBJECT_BYTES) throw new Error('Split GRIB object byte length out of bounds');
+      if (size > MAX_SPLIT_OBJECT_BYTES) throw new InvalidSplitGribResponse('Split GRIB object byte length out of bounds');
       chunks.push(value);
     }
-    if (!size) throw new Error('Empty Split GRIB object body');
+    if (!size) throw new InvalidSplitGribResponse('Empty Split GRIB object body');
     return Buffer.concat(chunks, size);
   } catch (error) {
     await reader.cancel().catch(() => {});
@@ -126,51 +131,57 @@ async function loadSplitGribField(
   const fileName = url.split('/').at(-1) ?? `${keyHash}.grib2.bz2`;
   const cachePath = join(cacheDir, 'objects', `${keyHash.slice(0, 16)}-${fileName}`);
 
+  let cached: Buffer | undefined;
   try {
-    const cached = await readLocalFile(cachePath, MAX_SPLIT_OBJECT_BYTES);
+    cached = await readLocalFile(cachePath, MAX_SPLIT_OBJECT_BYTES);
+    options.signal?.throwIfAborted();
     const decoded = decode(cached);
     stats.cacheHits += 1;
     return { decoded, compressedBytes: cached.byteLength, sha256: sha256Hex(cached), cacheHit: true };
   } catch (error) {
+    options.signal?.throwIfAborted();
     if (options.readOnlyCache || options.offline) {
-      throw new Error(`Split GRIB offline cache miss or invalid object ${url}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Split GRIB offline cache miss or invalid object ${url}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
-    await rm(cachePath, { force: true });
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (!cached && code && code !== 'ENOENT') throw error;
   }
 
-  if (options.offline) throw new Error(`Split GRIB offline cache miss for ${url}`);
   const fetchFn = options.fetchImpl ?? fetch;
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  let buffer: Uint8Array;
+  for (let attempt = 1; ; attempt++) {
     options.signal?.throwIfAborted();
     try {
       const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
       const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
       const response = await fetchFn(url, { signal });
       if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error(`HTTP ${response.status} for ${url}`);
+        await response.body?.cancel().catch(() => {});
+        const message = `HTTP ${response.status} for ${url}`;
+        if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
+        throw new Error(message);
       }
-      const buffer = await readObjectBody(response);
-      stats.downloads += 1;
-      stats.downloadedBytes += buffer.byteLength;
-      const decoded = decode(buffer);
-      await mkdir(dirname(cachePath), { recursive: true });
-      const tmpPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
-      try {
-        await writeFile(tmpPath, buffer);
-        await rename(tmpPath, cachePath);
-      } finally { await rm(tmpPath, { force: true }); }
-      return { decoded, compressedBytes: buffer.byteLength, sha256: sha256Hex(buffer), cacheHit: false };
+      buffer = await readObjectBody(response);
+      break;
     } catch (error) {
-      lastError = error;
-      if (options.signal?.aborted || attempt === 2) {
-        break;
-      }
+      options.signal?.throwIfAborted();
+      if (error instanceof InvalidSplitGribResponse || attempt === MAX_TRANSFER_ATTEMPTS) throw error;
+      await pause(Math.ceil(250 * 2 ** (attempt - 1) * (0.5 + Math.random())), options.signal);
       stats.retries += 1;
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(`Failed to fetch ${url}`);
+  options.signal?.throwIfAborted();
+  stats.downloads += 1;
+  stats.downloadedBytes += buffer.byteLength;
+  const decoded = decode(buffer);
+  await mkdir(dirname(cachePath), { recursive: true });
+  const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmpPath, buffer, { flag: 'wx', signal: options.signal });
+    options.signal?.throwIfAborted();
+    await rename(tmpPath, cachePath);
+  } finally { await rm(tmpPath, { force: true }).catch(() => {}); }
+  return { decoded, compressedBytes: buffer.byteLength, sha256: sha256Hex(buffer), cacheHit: false };
 }
 
 /** Recover the configured trailing flux mean and orientation. */

@@ -16,6 +16,12 @@ it('decodes a nonconstant libaec reference block without external fixture files'
   expect([...decodeCcsdsSamples(ccsdsPayload, ccsdsOptions)]).toEqual([1000, 1002, 1001, 999, 1005, 1010, 1008, 1007, 1011]);
 });
 
+it('reads full-width unsigned samples across bytes and padded intervals', () => {
+  const payload = Buffer.from('fffffffffc091a2b38fc0000000000000008', 'hex');
+  const options = { bitsPerSample: 32, blockSize: 2, rsi: 1, flags: 32, sampleCount: 4 };
+  expect([...decodeCcsdsSamples(payload, options)]).toEqual([0xffffffff, 0x81234567, 0x80000000, 1]);
+});
+
 it('rejects exhausted fixed-width and unary payloads within a bounded subprocess', () => {
   // A Vitest timeout cannot interrupt a synchronous infinite loop in the decoder.
   const source = `

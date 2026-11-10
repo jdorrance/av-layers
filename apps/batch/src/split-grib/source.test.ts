@@ -627,7 +627,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     await session.close();
   });
 
-  it.each(['decode', 'metadata'])('recovers from %s failures without preserving poisoned disk cache entries', async kind => {
+  it.each(['decode', 'metadata'])('replaces cached objects that fail %s validation', async kind => {
     const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-repair-'));
     tempDirs.push(cacheDir);
     const cycle = '2026-10-08T00:00:00Z', requested: string[] = [];
@@ -639,34 +639,68 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     });
     let attempts = 0;
     const fetchImpl: typeof fetch = async (input, init) => {
-      if (String(input).endsWith('_HSURF.grib2.bz2') && attempts++ === 0) return new Response(Buffer.from(invalid));
+      if (String(input).endsWith('_HSURF.grib2.bz2')) attempts++;
       return good(input, init);
     };
     const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
     const first = await createSplitGribAcquisitionSession(profile, options);
     await first.acquire(4);
-    expect(attempts).toBe(2);
-    expect(first.stats.retries).toBe(1);
+    expect(attempts).toBe(1);
+    expect(first.stats.retries).toBe(0);
     await first.close();
 
     const name = (await readdir(join(cacheDir, 'objects'))).find(name => name.endsWith('_HSURF.grib2.bz2'))!;
     await writeFile(join(cacheDir, 'objects', name), invalid);
     const second = await createSplitGribAcquisitionSession(profile, options);
     await second.acquire(5);
-    expect(attempts).toBe(3);
+    expect(attempts).toBe(2);
     expect(second.stats.cacheHits).toBeGreaterThan(0);
     await second.close();
   });
 
-  it('leaves no poisoned object behind when all download validation attempts fail', async () => {
+  it('does not retry or cache a response that fails GRIB validation', async () => {
     const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-invalid-'));
     tempDirs.push(cacheDir);
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response('invalid GRIB'));
     const session = await createSplitGribAcquisitionSession(profile, { cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     await expect(session.acquire(4)).rejects.toThrow();
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(await readdir(cacheDir)).toEqual([]);
     await session.close();
+  });
+
+  it('shares three attempts across a transient HTTP error and an interrupted body', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-retry-')), cycle = '2026-10-08T00:00:00Z';
+    tempDirs.push(cacheDir);
+    const good = syntheticFetch(cycle, []);
+    const fetchImpl = vi.fn(good).mockResolvedValueOnce(new Response('busy', { status: 503 }))
+      .mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('connection reset')); } })));
+    const session = await createSplitGribAcquisitionSession(profile, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+    try {
+      await session.acquire(4);
+      expect(session.stats.retries).toBe(2);
+      expect(fetchImpl.mock.calls.slice(0, 3).map(([url]) => url)).toEqual(Array(3).fill(fetchImpl.mock.calls[0][0]));
+    } finally { await session.close(); }
+  });
+
+  it('fails a permanent HTTP status once and preserves an unrelated cache filesystem error', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-permanent-')), cycle = '2026-10-08T00:00:00Z';
+    tempDirs.push(cacheDir);
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response('missing', { status: 404 }));
+    const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
+    const missing = await createSplitGribAcquisitionSession(profile, options);
+    try {
+      await expect(missing.acquire(4)).rejects.toThrow('HTTP 404');
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    } finally { await missing.close(); }
+
+    await writeFile(join(cacheDir, 'objects'), 'unexpected cache file');
+    const inaccessible = await createSplitGribAcquisitionSession(profile, options);
+    try {
+      await expect(inaccessible.acquire(4)).rejects.toMatchObject({ code: 'ENOTDIR' });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(readFileSync(join(cacheDir, 'objects'), 'utf8')).toBe('unexpected cache file');
+    } finally { await inaccessible.close(); }
   });
 
   it('shares one concurrency bound across surface, temperature and pressure downloads', async () => {
@@ -822,8 +856,8 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     }), { headers: kind === 'declared' ? { 'content-length': String(8 * 1024 * 1024 + 1) } : undefined }));
     const session = await createSplitGribAcquisitionSession(profile, { cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     await expect(session.acquire(4)).rejects.toThrow('byte length');
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(cancel).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
     expect(await readdir(cacheDir)).toEqual([]);
     await session.close();
   });

@@ -272,16 +272,17 @@ describe('R2 S3 client configuration', () => {
     } finally { send.mockRestore(); }
   });
 
-  it('shares three attempts across transport and partial-body failures', async () => {
+  it.each([true, false])('shares three attempts across transport and partial-body failures (metered: %s)', async metered => {
     const order: string[] = [], failed = Readable.from((async function* () { yield Uint8Array.of(99); throw Object.assign(new Error('aborted'), { code: 'ECONNRESET' }); })());
     const send = vi.spyOn(S3Client.prototype, 'send').mockImplementationOnce(async () => { order.push('send'); throw Object.assign(new Error('reset'), { code: 'ECONNRESET' }); })
       .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: failed } as never; })
       .mockImplementationOnce(async () => { order.push('send'); return { ContentLength: 2, ETag: 'etag', Body: Readable.from([Uint8Array.of(1, 2)]) } as never; });
-    const onRetry = vi.fn(() => { order.push('reserve'); });
+    const onRetry = metered ? () => { order.push('reserve'); } : undefined;
     try {
       const result = await withBackoff(() => r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', { offset: 0, length: 2 }, 2, undefined, onRetry));
       expect([...result!.bytes]).toEqual([1, 2]);
-      expect(order).toEqual(['send', 'reserve', 'send', 'reserve', 'send']);
+      expect(order).toEqual(metered ? ['send', 'reserve', 'send', 'reserve', 'send'] : ['send', 'send', 'send']);
+      expect(await (send.mock.contexts[0] as S3Client).config.maxAttempts()).toBe(1);
       expect(failed.destroyed).toBe(true);
     } finally { send.mockRestore(); }
   });
@@ -312,11 +313,9 @@ describe('R2 S3 client configuration', () => {
       this.config.requestHandler = { handle: async () => ({ response: { statusCode: 400, headers: kind === 'declared' ? { 'content-length': '32' } : {}, body } }) } as typeof this.config.requestHandler;
       return Reflect.apply(original, this, [command, options]) as never;
     } as typeof S3Client.prototype.send);
-    const onRetry = vi.fn();
     try {
-      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2, undefined, onRetry)).rejects.toThrow('read byte budget');
+      await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).get('tile', undefined, 2)).rejects.toThrow('read byte budget');
       expect(send).toHaveBeenCalledOnce();
-      expect(onRetry).not.toHaveBeenCalled();
       expect(body.destroyed).toBe(true);
     } finally { send.mockRestore(); }
   });
@@ -430,15 +429,12 @@ describe('R2 S3 client configuration', () => {
     } finally { send.mockRestore(); }
   });
 
-  it('leaves request failures to SDK retries and retains missing-object behavior', async () => {
-    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce(Object.assign(new Error('request timeout'), { name: 'TimeoutError' }))
-      .mockRejectedValueOnce({ $metadata: { httpStatusCode: 404 } });
+  it('returns missing objects without retrying', async () => {
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce({ $metadata: { httpStatusCode: 404 } });
     try {
       const store = r2Storage({ ...env, R2_BUCKET: 'test' });
-      await expect(store.get('tile')).rejects.toThrow('request timeout');
-      expect(send).toHaveBeenCalledTimes(1);
       await expect(store.get('missing')).resolves.toBeNull();
-      expect(send).toHaveBeenCalledTimes(2);
+      expect(send).toHaveBeenCalledOnce();
     } finally { send.mockRestore(); }
   });
 
