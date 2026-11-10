@@ -250,13 +250,13 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
 }
 
-export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask?: SamplingMask): Sample {
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask?: SamplingMask, useStoredMslNoLift = false): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
   if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
   if (!plan) return outside;
   validateSamplingField(grid, field, mask);
-  return sampleCells(plan, plan.contributors.map(c => { const i = fieldOffset(field, c.index, grid.width); return { value: field.values[i], flags: field.flags[i] }; }), layer);
+  return sampleCells(plan, plan.contributors.map(c => { const i = fieldOffset(field, c.index, grid.width); return { value: field.values[i], flags: field.flags[i] }; }), layer, useStoredMslNoLift);
 }
 
 /** Build-owned geometry for a Cartesian set of coordinates. No field values are retained. */

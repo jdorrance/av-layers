@@ -19,7 +19,7 @@ export interface RasterPatch<Mask extends SamplingMask = CoverageMask> {
 export type RasterPatchFields = Readonly<Record<string, GridField>>;
 
 /** Publish the same sampling rule that rasterization uses for this build. */
-export const RASTER_SAMPLING: { readonly useStoredMslNoLift?: true } = {};
+export const RASTER_SAMPLING = { useStoredMslNoLift: true } as const;
 
 /** Each declared layer has a complete field, including unavailable/no-lift cells. */
 export function validateRasterPatchFields(patches: readonly RasterPatch<SamplingMask>[], layer: LayerId, fields: RasterPatchFields = {}): void {

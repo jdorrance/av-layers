@@ -175,8 +175,8 @@ membership, snaps coordinates within $10^{-10}$ grid steps, wraps periodic
 longitudes, and ignores zero-weight neighbors. No-lift contributors store zero
 AGL and surface elevation in MSL. When no-lift weights exceed half the total,
 the result uses the public [no-lift values](data.md#layers-and-missing-values).
-Otherwise, known contributors interpolate bilinearly. Builds with
-`tool.useStoredMslNoLift` use the stored MSL elevations throughout. Earlier
+Otherwise, known contributors interpolate bilinearly. New builds mark
+`tool.useStoredMslNoLift` and use the stored MSL elevations throughout. Earlier
 builds renormalize the MSL weights over valid cells in a four-cell mix. If a
 contributor is unavailable or outside the domain, the nearest contributing cell
 supplies the value and status.

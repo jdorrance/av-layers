@@ -39,7 +39,7 @@ function referenceTileRgba(field: GridField, mask: CoverageMask, layer: LayerId,
     let r = 0, g = 0, b = 0, alpha = 0;
     for (const [dx, dy] of QUAD_OFFSETS) {
       const pt = mercatorPoint(z, x, y, px + 0.25 + dx * 0.5, py + 0.25 + dy * 0.5);
-      const sample = sampleGrid(mask.grid, field, pt.lat, pt.lon, layer, mask);
+      const sample = sampleGrid(mask.grid, field, pt.lat, pt.lon, layer, mask, true);
       const hex = paletteColor(layer, sample.status === STATUS_NO_LIFT ? 0 : sample.value, sample.status);
       if (!hex) continue;
       const opacity = hex.length === 9 ? parseInt(hex.slice(7, 9), 16) : 255;
