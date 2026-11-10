@@ -2,7 +2,7 @@ import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
 import { createProductDescriptors, CELL_BYTES, manifestV5Schema } from '@av/contracts';
-import type { PinnedBuild } from '@av/contracts/client';
+import type { PinnedBuild } from '@av/client';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
 afterEach(() => vi.useRealTimers());

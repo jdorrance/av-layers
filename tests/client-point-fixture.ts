@@ -1,7 +1,7 @@
 import { CELL_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, SAMPLE_BLOCK_SIZE,
   createRecipeIdentity, createWholeDomainDescriptors, getProduct, gridToGeographic, layerSurface, mapFrameCount,
   manifestV5Schema, publishedSampleResponseSchema, renderedLayers, sourceIntervalHours, type LayerId, type ManifestV5 } from '@av/contracts';
-import type { PinnedBuild, SamplePayload } from '@av/contracts/client';
+import type { PinnedBuild, SamplePayload } from '@av/client';
 import { profileResponseSchema, type ProfileResponse } from '@av/contracts';
 import { deriveSoaringViews } from '@av/soaring';
 import { fixtureBuild, fixtureManifest, fixturePatch } from './forecast-fixture';

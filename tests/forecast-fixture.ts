@@ -1,6 +1,6 @@
 import raw from '../scripts/fixtures/manifest.contract.json' with { type: 'json' };
 import { CELL_BYTES, computeFreshness, getProvenanceReference, latestSchema, manifestSchema, refinementPatchSchema, validateArtifactRecords, type Manifest, type RefinementPatch } from '@av/contracts';
-import type { PinnedBuild } from '@av/contracts/client';
+import type { PinnedBuild } from '@av/client';
 
 /** Start valid; tests corrupt individual fields only after constructing a fixture. */
 export function fixtureManifest(overrides: Partial<Manifest> = {}): Manifest {

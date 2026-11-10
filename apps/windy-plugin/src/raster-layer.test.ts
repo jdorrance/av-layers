@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { windyTileOptions } from '@av/contracts/client';
+import { windyTileOptions } from '@av/client';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { forecastStackZIndex, WindyRasterLayer, type NativeRasterMap, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
 

@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema, type ManifestV5 } from '@av/contracts';
-import { ApiClient, layerMaxZoom, previewRasterSource, windyTileOptions } from '@av/contracts/client';
+import { ApiClient, layerMaxZoom, previewRasterSource, windyTileOptions } from '@av/client';
 import { createApp } from '../src/index';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@av/client": "workspace:*",
     "@av/contracts": "workspace:*",
     "@av/windgram": "workspace:*",
     "maplibre-gl": "6.16.0"

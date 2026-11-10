@@ -1,4 +1,4 @@
-import { formatMapLiftCell, formatPointMapLift } from '@av/contracts/client';
+import { formatMapLiftCell, formatPointMapLift } from '@av/client';
 import { renderWindgramSvg } from './windgram-chart.ts';
 import { clamp, formatQuantity, svgNumber as fmt } from './windgram-format.ts';
 import { formatWindgramReading } from './windgram-readout.ts';

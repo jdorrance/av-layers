@@ -1,0 +1,18 @@
+{
+  "name": "@av/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./dom": "./src/dom.ts"
+  },
+  "dependencies": {
+    "@av/contracts": "workspace:*",
+    "@av/soaring": "workspace:*"
+  },
+  "devDependencies": {
+    "@av/forecast": "workspace:*"
+  }
+}

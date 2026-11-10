@@ -1,5 +1,5 @@
 import type { LayerId } from '@av/contracts';
-import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/contracts/client';
+import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/client';
 import { windFromComponents } from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 

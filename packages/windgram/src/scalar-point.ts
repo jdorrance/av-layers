@@ -1,4 +1,4 @@
-import { pointFrameView, seriesTable, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/contracts/client';
+import { pointFrameView, seriesTable, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/client';
 
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(

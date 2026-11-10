@@ -2,7 +2,7 @@
 
 Eliminate blank-canvas flicker during timeline scrubbing and layer switching (`usable-lift-agl`, `usable-lift-msl`, `precip-rate`), remove client and Worker tile-loading serialization bottlenecks, make live tile responses immutable at the browser and Cloudflare edge while preserving the expired-build safety contract, add viewport-aware prefetching and zoom pooling, and specify the follow-on multi-channel data-tile + WebGL colormapping path for `windy-av-layer`.
 
-This handoff is written against the active v5 whole-domain codebase ([apps/preview/src/main.ts](../apps/preview/src/main.ts), [apps/windy-plugin/src/raster-layer.ts](../apps/windy-plugin/src/raster-layer.ts), [apps/windy-plugin/src/controller.ts](../apps/windy-plugin/src/controller.ts), [packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts), [packages/contracts/src/client-view.ts](../packages/contracts/src/client-view.ts), [apps/api/src/index.ts](../apps/api/src/index.ts), [apps/api/src/http.ts](../apps/api/src/http.ts), [apps/api/src/pmtiles.ts](../apps/api/src/pmtiles.ts), [apps/api/src/publication.ts](../apps/api/src/publication.ts), and [apps/api/src/coverage.ts](../apps/api/src/coverage.ts)).
+This handoff is written against the active v5 whole-domain codebase ([apps/preview/src/main.ts](../apps/preview/src/main.ts), [apps/windy-plugin/src/raster-layer.ts](../apps/windy-plugin/src/raster-layer.ts), [apps/windy-plugin/src/controller.ts](../apps/windy-plugin/src/controller.ts), [packages/client/src/client-raster.ts](../packages/client/src/client-raster.ts), [packages/client/src/client-view.ts](../packages/client/src/client-view.ts), [apps/api/src/index.ts](../apps/api/src/index.ts), [apps/api/src/http.ts](../apps/api/src/http.ts), [apps/api/src/pmtiles.ts](../apps/api/src/pmtiles.ts), [apps/api/src/publication.ts](../apps/api/src/publication.ts), and [apps/api/src/coverage.ts](../apps/api/src/coverage.ts)).
 
 ```sh
 git status --short
@@ -35,8 +35,8 @@ Measure these client and Worker paths during panning, zooming, timeline scrubbin
 | # | Bottleneck | Exact Source Location | Root Cause & User-Visible Symptom |
 | :- | :--- | :--- | :--- |
 | **1** | **Destructive MapLibre source/layer teardown on every frame or layer switch** | [apps/preview/src/main.ts](../apps/preview/src/main.ts#L302) (`updateOverlay` → `removeOverlay`) | Every `input` event on the time slider or click on `AGL`/`MSL` calls `removeOverlay()`, which removes `OVERLAY_LAYER_ID`, removes `overlaySourceId`, disposes `overlayProtocol` (aborting all in-flight tile requests), unregisters the MapLibre protocol, and mounts a brand-new `overlaySourceId` from scratch. MapLibre immediately clears the overlay canvas to blank until the new tiles finish downloading and decoding—causing a 100% blank flash on every step. |
-| **2** | **Per-switch random UUID protocol scheme defeats MapLibre’s internal `TileCache`** | [packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts#L19) (`av-raster-${crypto.randomUUID()}`) | Each `createRasterTileProtocol()` call generates a new `av-raster-<uuid>://` scheme. Even if the user toggles `AGL → MSL → AGL` or scrubs `h002 → h003 → h002` within 1 second, the scheme prefix has changed, so neither MapLibre’s internal tile pyramid cache nor the disposed protocol instance can reuse a single decoded tile. |
-| **3** | **Client concurrency is throttled to `maxActive = 2` with FIFO queuing** | [packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts#L21) | Two active requests serve each overlay. FIFO scheduling places older queued tiles ahead of newer viewport requests. Measure viewport completion and cancellation before selecting concurrency and priority changes (§4.1). |
+| **2** | **Per-switch random UUID protocol scheme defeats MapLibre’s internal `TileCache`** | [packages/client/src/client-raster.ts](../packages/client/src/client-raster.ts#L19) (`av-raster-${crypto.randomUUID()}`) | Each `createRasterTileProtocol()` call generates a new `av-raster-<uuid>://` scheme. Even if the user toggles `AGL → MSL → AGL` or scrubs `h002 → h003 → h002` within 1 second, the scheme prefix has changed, so neither MapLibre’s internal tile pyramid cache nor the disposed protocol instance can reuse a single decoded tile. |
+| **3** | **Client concurrency is throttled to `maxActive = 2` with FIFO queuing** | [packages/client/src/client-raster.ts](../packages/client/src/client-raster.ts#L21) | Two active requests serve each overlay. FIFO scheduling places older queued tiles ahead of newer viewport requests. Measure viewport completion and cancellation before selecting concurrency and priority changes (§4.1). |
 | **4** | **Publication validation runs before the tile cache** | [apps/api/src/index.ts](../apps/api/src/index.ts), [apps/api/src/publication.ts](../apps/api/src/publication.ts) | Cold isolates load the pointer and manifest before a response-cache hit. Warm manifest loads still validate product descriptors and grid hashes. Pointer refreshes follow their own TTL. Memoize successful static validation while preserving admission before cache delivery (§6.1). |
 | **5** | **Uncoalesced PMTiles header/directory R2 reads & `MaterializedReads(4)` bottleneck** | [apps/api/src/pmtiles.ts](../apps/api/src/pmtiles.ts#L39), [apps/api/src/coverage.ts](../apps/api/src/coverage.ts#L92) | `tileReads` caps concurrent tile loads per isolate at **`4`** (`new MaterializedReads(4)`) and keys by `${key}:${z}:${x}:${y}`. When 12 tiles for a cold frame `h001.pmtiles` arrive at once, `PMTiles.getHeader()` and root/leaf directory reads inside `R2Source.getBytes(offset, length)` are **not** coalesced across different `(z, x, y)` keys—issuing duplicate R2 range reads for the exact same `16 KiB` PMTiles header and directory ranges. |
 | **6** | **Intermediate zoom requests compete with settled-camera work** | [apps/preview/src/main.ts](../apps/preview/src/main.ts), [apps/windy-plugin/src/raster-layer.ts](../apps/windy-plugin/src/raster-layer.ts) | Trace requested zoom levels, cancellations, and queue time during rapid zoom gestures in each map engine. Use those traces to choose idle-prefetch cancellation and any later zoom-step policy (§5.2). |
@@ -53,7 +53,7 @@ Every milestone in this handoff must preserve the following repository invariant
    - Fresh browser responses can be reused until their freshness deadline under [RFC 8246](https://www.rfc-editor.org/rfc/rfc8246.html). Emergency revocation before expiry requires a separate browser admission protocol; this plan preserves the current retention contract.
 2. **Bounded Worker & Client Memory Budgets:**
    - [Serving budgets](serving-budgets.md) and [resources.ts](../apps/api/src/resources.ts) own Worker limits. Keep the current directory-cache and tile-read defaults until the measurement gate in §6.2 passes.
-   - [createRasterTileProtocol](../packages/contracts/src/client-raster.ts) owns the client cache budget, including payload and estimated entry storage. Expiry and disposal purge the cache. Include decoded textures and staging slots in browser-memory measurements (§8).
+   - [createRasterTileProtocol](../packages/client/src/client-raster.ts) owns the client cache budget, including payload and estimated entry storage. Expiry and disposal purge the cache. Include decoded textures and staging slots in browser-memory measurements (§8).
 3. **Why Keep Lossless `VP8L` WebP for Pre-Colored Raster Tiles (Milestones 1–3):**
    - [webp.ts](../apps/batch/src/webp.ts) owns the existing lossless encoder; [palette-color.ts](../packages/contracts/src/palette-color.ts) owns palette quantization. Retain these outputs during Milestones 1–3.
    - Milestone 4 evaluates multi-channel data tiles and WebGL colormapping under the encoding and measurement gates in §7.
@@ -62,16 +62,16 @@ Every milestone in this handoff must preserve the following repository invariant
 
 Inspect these files before editing:
 
-- **Shared Client Protocol & View Helpers:** [packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts), [packages/contracts/src/client-raster.test.ts](../packages/contracts/src/client-raster.test.ts), [packages/contracts/src/client-view.ts](../packages/contracts/src/client-view.ts), [packages/contracts/src/client-view.test.ts](../packages/contracts/src/client-view.test.ts), [packages/contracts/src/client-api.ts](../packages/contracts/src/client-api.ts)
+- **Shared Client Protocol & View Helpers:** [packages/client/src/client-raster.ts](../packages/client/src/client-raster.ts), [packages/client/src/client-raster.test.ts](../packages/client/src/client-raster.test.ts), [packages/client/src/client-view.ts](../packages/client/src/client-view.ts), [packages/client/src/client-view.test.ts](../packages/client/src/client-view.test.ts), [packages/client/src/client-api.ts](../packages/client/src/client-api.ts)
 - **Preview Application (MapLibre GL):** [apps/preview/src/main.ts](../apps/preview/src/main.ts), [apps/preview/src/main.test.ts](../apps/preview/src/main.test.ts), [apps/preview/src/style.css](../apps/preview/src/style.css)
 - **Windy Plugin (LeafletGL / MapLibre):** [apps/windy-plugin/src/raster-layer.ts](../apps/windy-plugin/src/raster-layer.ts), [apps/windy-plugin/src/raster-layer.test.ts](../apps/windy-plugin/src/raster-layer.test.ts), [apps/windy-plugin/src/controller.ts](../apps/windy-plugin/src/controller.ts), [apps/windy-plugin/src/controller.test.ts](../apps/windy-plugin/src/controller.test.ts)
 - **Cloudflare Worker API & PMTiles Reader:** [apps/api/src/index.ts](../apps/api/src/index.ts), [apps/api/src/http.ts](../apps/api/src/http.ts), [apps/api/src/pmtiles.ts](../apps/api/src/pmtiles.ts), [apps/api/src/publication.ts](../apps/api/src/publication.ts), [apps/api/src/coverage.ts](../apps/api/src/coverage.ts), [apps/api/src/resources.ts](../apps/api/src/resources.ts), [apps/api/test/worker.test.ts](../apps/api/test/worker.test.ts)
 
-## 4. Milestone 1: Client Transport, Caching & Priority Scheduling (`@av/contracts/client`)
+## 4. Milestone 1: Client Transport, Caching & Priority Scheduling (`@av/client`)
 
-### 4.1 Upgrade `createRasterTileProtocol` (`packages/contracts/src/client-raster.ts`)
+### 4.1 Upgrade `createRasterTileProtocol` (`packages/client/src/client-raster.ts`)
 
-`createRasterTileProtocol` ([packages/contracts/src/client-raster.ts](../packages/contracts/src/client-raster.ts)) admits 4 requests, queues 64, and leaves interactive capacity while prefetch is active. `maxPrefetchActive` defaults to `Math.min(2, Math.max(1, maxActive - 2))`. One scheme lasts for the mounted map. Identical URLs coalesce, and compressed tiles stay in a 48 MiB cache until build expiry or pressure. Expired entries leave the cache when the next tile is admitted.
+`createRasterTileProtocol` ([packages/client/src/client-raster.ts](../packages/client/src/client-raster.ts)) admits 4 requests, queues 64, and leaves interactive capacity while prefetch is active. `maxPrefetchActive` defaults to `Math.min(2, Math.max(1, maxActive - 2))`. One scheme lasts for the mounted map. Identical URLs coalesce, and compressed tiles stay in a 48 MiB cache until build expiry or pressure. Expired entries leave the cache when the next tile is admitted.
 
 #### Required Changes
 1. **Concurrency, Queue Depth & Priority Scheduling:**
@@ -86,7 +86,7 @@ Inspect these files before editing:
      - Return a fast slice/copy (or shared immutable `ArrayBuffer` when the caller does not detach it; note MapLibre workers transfer `ArrayBuffer` across `postMessage`, so `load()` must return `entry.data.slice(0)` on cache hits so cached bytes are never detached!).
    - **Coalesce concurrent in-flight fetches** for the same canonical tile URL: if a prefetch for `(frame, z, x, y)` is already in flight when the user scrubs onto `frame`, promote the in-flight request to interactive priority and resolve both callers from the same response buffer (`data.slice(0)`).
 3. **Expose Prefetch, Build Expiry, Eviction & Cache Stats:**
-   - [RasterTileProtocol](../packages/contracts/src/client-raster.ts) owns the interface. Register each pinned build through `setBuildExpiry()` before loading or prefetching tiles; `evictBuild()` releases its queued, active, and cached work.
+   - [RasterTileProtocol](../packages/client/src/client-raster.ts) owns the interface. Register each pinned build through `setBuildExpiry()` before loading or prefetching tiles; `evictBuild()` releases its queued, active, and cached work.
    - `dispose()` aborts all in-flight and queued requests and clears the byte cache so expired builds release memory immediately.
 
 ## 5. Milestone 2: Flicker-Free Layer/Frame Swapping, Zoom Pooling & Viewport Prefetching (`apps/preview`, `apps/windy-plugin`)
@@ -108,7 +108,7 @@ Inspect these files before editing:
 3. **RAF-Coalesced Timeline Scrubbing (`apps/preview/src/main.ts:456`):**
    - On `timeInput` `input` events, update the timestamp label (`clockLabel`) and day-bar highlight immediately on every pointer move, and schedule the tile source switch via `requestAnimationFrame` (coalescing multiple pointer events within a 16 ms frame) with URL `history.replaceState` deferred to `change` / idle.
 
-### 5.2 Zoom Pooling & Coarse-to-Fine Anchor Tiles (`packages/contracts/src/client-view.ts`, `apps/preview/src/main.ts`)
+### 5.2 Zoom Pooling & Coarse-to-Fine Anchor Tiles (`packages/client/src/client-view.ts`, `apps/preview/src/main.ts`)
 
 1. **Bounded Coarse-Tile Warm-Up (`z = 4` and `z = 6`):**
    - When a build loads or the camera settles (`moveend`), compute covering coordinates at `z = Math.min(4, maxZoom)` and `z = Math.min(6, maxZoom)`. Deduplicate them and share the idle prefetch budget in §5.3.
@@ -119,7 +119,7 @@ Inspect these files before editing:
 
 ### 5.3 Viewport-Aware Idle Prefetcher (Adjacent Hours + Sibling Layer + Panning Ring)
 
-Use the shared `viewportTiles()` and pure `planViewportPrefetch()` in [client-view.ts](../packages/contracts/src/client-view.ts). Their types own the inputs and URL result for both map adapters.
+Use the shared `viewportTiles()` and pure `planViewportPrefetch()` in [client-view.ts](../packages/client/src/client-view.ts). Their types own the inputs and URL result for both map adapters.
 
 When the camera has settled and active viewport tiles have loaded, enqueue `overlayProtocol.prefetch(url)` in utility order, capped at 64 URLs per idle cycle including coarse warm-up. Use MapLibre's `idle` event or a debounced check of camera and source readiness:
 
@@ -189,12 +189,12 @@ Prototype lossless `VP8L` tiles that carry lift, precipitation, status, and supp
 ## 8. Verification & Acceptance Checklist
 
 1. **Automated Unit & Integration Tests (`pnpm verify`):**
-   - `packages/contracts/src/client-raster.test.ts`:
+   - `packages/client/src/client-raster.test.ts`:
      - Verify configured concurrency, queue bounds, deadlines, and prefetch caps.
      - Verify LIFO priority scheduling serves the newest interactive viewport tiles ahead of older queued tiles, and interactive requests preempt queued `prefetch` requests.
      - Verify in-memory tile LRU cache hits return non-detached `ArrayBuffer` copies (`cacheHits` increments, `fetchImpl` called once), respect `maxCacheBytes`, and stop serving expired builds. Test eviction and cancellation through `evictBuild()` / `dispose()`.
      - Verify concurrent `load()` and `prefetch()` calls for the same URL coalesce into a single `fetchImpl` call.
-   - `packages/contracts/src/client-view.test.ts`:
+   - `packages/client/src/client-view.test.ts`:
      - Verify `planViewportPrefetch` orders URLs as `frame+1` → `frame-1` → sibling lift layer → `frame+2` → 1-tile perimeter ring and filters out coordinates outside `bounds` or `[0, 2^z)`.
    - `apps/preview/src/main.test.ts` & `apps/windy-plugin/src/controller.test.ts`:
      - Verify successful staging-generation readiness before committing frame/layer changes. Delay loads beyond 150 ms, fail or abort tiles, change the camera, and supersede the selection; the live committed overlay remains visible with accurate loading/error labels. Expiry clears both slots and cancels work.

@@ -31,8 +31,9 @@ vi.mock('./validate.js', async importOriginal => {
 });
 
 import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
+import { forecastObjects, provenanceObjects } from './publication-objects.js';
 import { localPath, sha256 } from './validate.js';
-import { fixturePatch } from '../../../tests/forecast-fixture.js';
+import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 import { buildForecast } from './build.js';
 import { fixtureProvider, mask as fixtureMask, product as fixtureProduct } from '../parallel-fixtures.js';
 
@@ -107,6 +108,26 @@ async function addPatch(root: string, manifest: Manifest) {
 }
 
 describe('immutable publication', () => {
+  it('lists legacy numeric packs before tiles with the declared digests and media types', () => {
+    const manifest = fixtureManifest(), patch = fixturePatch(manifest);
+    const base = { key: manifest.samples.key, sha256: manifest.samples.sha256, bytes: manifest.samples.bytes, contentType: 'application/octet-stream' };
+    const refined = { key: patch.samples.key, sha256: patch.samples.sha256, bytes: patch.samples.bytes, contentType: 'application/octet-stream' };
+    const tiles = manifest.artifacts.map(tile => ({ key: tile.tilesKey, sha256: tile.tilesSha256, contentType: 'application/vnd.pmtiles' }));
+    expect(forecastObjects(manifest)).toEqual([base, ...tiles]);
+    expect(forecastObjects({ ...manifest, version: 4, patches: [patch] })).toEqual([base, refined, ...tiles]);
+  });
+
+  it('lists indexed provenance objects with their lengths and JSON media type', () => {
+    const manifest = fixtureManifest(), { model, buildId, cycle } = manifest;
+    const identity = { model, buildId, cycle };
+    const frames = [3, 6].map(hour => {
+      const frame = `f00${hour}`;
+      return { hour, frame, key: `builds/${model}/${buildId}/provenance/${frame}.json`, bytes: 100 + hour, sha256: 'a'.repeat(64) };
+    });
+    expect(provenanceObjects({ ...identity, version: 1, frames })).toEqual([]);
+    expect(provenanceObjects({ ...identity, version: 2, frames })).toEqual(frames.map(frame => ({ ...frame, contentType: 'application/json' })));
+  });
+
   it('validates a built v3 payload, publishes it, samples single and all frames, and rolls it back', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-publish-chain-')); temp.push(root);
     const product = { ...fixtureProduct, modelId: 'gfs', frameHours: [12, 24] };

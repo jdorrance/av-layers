@@ -2,12 +2,13 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { forecastObjectsV5, getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext } from '../apps/batch/src/authority.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
+import { forecastObjects } from '../apps/batch/src/publication-objects.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { isTransientStorageError, r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
@@ -347,7 +348,7 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       const deadlineSignal = deadlineAt ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Date.parse(deadlineAt) - Date.now()))]) : signal;
       const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
       let receiptsOnly = false;
-      if (grouped) for (const object of forecastObjectsV5(manifest)) {
+      if (grouped) for (const object of forecastObjects(manifest)) {
         try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
         catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
         if (receiptsOnly) break;

@@ -5,9 +5,10 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { coverageDescriptorSchema, forecastGrids, forecastObjects, forecastObjectsV5, getProvenanceReference, modelPointerSchema, parseProvenance, type ManifestV5, type ModelPointer, type ProductDefinition, type PublishedManifest } from '@av/contracts';
+import { coverageDescriptorSchema, forecastGrids, getProvenanceReference, modelPointerSchema, parseProvenance, type ManifestV5, type ModelPointer, type ProductDefinition, type PublishedManifest } from '@av/contracts';
 import { readGridCoverage, readSparseCoverage } from '../apps/batch/src/coverage.js';
 import { validateLocalBuild } from '../apps/batch/src/local-build.js';
+import { forecastObjects } from '../apps/batch/src/publication-objects.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
@@ -103,7 +104,7 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
   const provenance = getProvenanceReference(manifest), provenanceBytes = await readFile(join(outputRoot, provenance.key));
   invariant(sha256(provenanceBytes) === provenance.sha256, `Provenance hash mismatch: ${provenance.key}`);
   parseProvenance(JSON.parse(provenanceBytes.toString('utf8')), manifest);
-  dependencies.push({ ...provenance, contentType: 'application/json' }, ...(manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest)));
+  dependencies.push({ ...provenance, contentType: 'application/json' }, ...forecastObjects(manifest));
   const objects = [];
   for (const object of dependencies) {
     const file = join(outputRoot, object.key), info = await stat(file);

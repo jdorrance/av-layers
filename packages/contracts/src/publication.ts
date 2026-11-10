@@ -373,13 +373,6 @@ function assertPackedLayoutBindingV5(
   if (nextBlock !== binding.blockIds.length || totalCells !== pack.storedCells) throw new Error('Incomplete sample block ranges');
 }
 
-export function forecastObjectsV5(manifest: ManifestV5): { key: string; sha256: string; contentType: string }[] {
-  return [
-    ...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, contentType: 'application/octet-stream' }))),
-    ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256, contentType: 'application/vnd.pmtiles' }))
-  ];
-}
-
 /** One numerical surface; every surface inherits the parent model's frame axis. */
 export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'layers' | 'descriptors' | 'method'>;
 export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [manifest, ...(manifest.patches ?? [])]; }
@@ -390,14 +383,6 @@ export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: P
     || surface.coverage.maxZoom < 0 || descriptor.maxZoom < surface.coverage.maxZoom
     || !sameGrid(descriptor.grid, surface.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(surface.descriptors.bounds)
     || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Coverage descriptor binding mismatch');
-}
-
-/** The immutable forecast payloads; manifest and provenance are published separately. */
-export function forecastObjects(manifest: Manifest): { key: string; sha256: string; contentType: string }[] {
-  return [
-    ...forecastGrids(manifest).map(grid => ({ key: grid.samples.key, sha256: grid.samples.sha256, contentType: 'application/octet-stream' })),
-    ...manifest.artifacts.map(a => ({ key: a.tilesKey, sha256: a.tilesSha256, contentType: 'application/vnd.pmtiles' }))
-  ];
 }
 
 /** Every admitted alpha build has one immutable provenance sidecar. */
@@ -454,10 +439,6 @@ export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frame
   return sameInstant(value.profileTime, frame.validTime)
     && sameInstant(value.fluxWindow?.start, frame.intervalStart) && sameInstant(value.fluxWindow?.end, frame.intervalEnd)
     && (!requiresPrecipitation || (sameInstant(value.precipitationWindow?.start, frame.intervalStart) && sameInstant(value.precipitationWindow?.end, frame.intervalEnd)));
-}
-
-export function provenanceObjects(value: z.infer<typeof provenanceSchema>): (ProvenanceFrameReference & { contentType: 'application/json' })[] {
-  return value.version === 2 ? value.frames.map(frame => ({ ...frame, contentType: 'application/json' })) : [];
 }
 
 export function computeFreshness(

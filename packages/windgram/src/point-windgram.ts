@@ -1,4 +1,4 @@
-import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/contracts/client';
+import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/client';
 import { mountWindgram, type WindgramMount } from './dom.ts';
 import { createPointForecast } from './from-av-profile.ts';
 import { panelStyles } from './panel-styles.ts';

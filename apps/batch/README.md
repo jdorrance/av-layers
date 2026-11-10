@@ -53,6 +53,9 @@ elapsed time and memory have separate admission limits.
 - [src/indexed-grib](src/indexed-grib/README.md): indexed GRIB2 range acquisition and isobaric normalization.
 - [src/split-grib](src/split-grib/README.md): split GRIB2 acquisition and model-level normalization.
 - [src/render.ts](src/render.ts): WebP map tile rendering and PMTiles packaging.
+- [Publication](src/publication.ts) uploads immutable files and updates latest pointers.
+  [Artifact lists](src/publication-objects.ts) read object keys, digests, lengths,
+  and media types from manifests and provenance indexes.
 - [src/terrain](src/terrain/README.md): Copernicus GLO-90 DEM import, window reader, and grid preparation.
 - [src/whole-domain](src/whole-domain/prepare.ts): sparse coverage, packed terrain columns, bounded sample shards and frozen whole-domain inputs.
 - [src/refinement](src/refinement/README.md): regional polygon grids and legacy refinement evaluation.

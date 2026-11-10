@@ -41,7 +41,8 @@ Run `pnpm test` while working and `pnpm verify` before submitting a change.
 - [apps/api](apps/api/README.md): serves forecast manifests, tiles, and point samples.
 - [apps/preview](apps/preview/README.md): standalone map.
 - [apps/windy-plugin](apps/windy-plugin/README.md): Windy integration.
-- [packages/contracts](packages/contracts/README.md): shared types and API helpers.
+- [packages/contracts](packages/contracts/README.md): wire schemas and shared forecast definitions.
+- [packages/client](packages/client/README.md): pinned API requests and map transport.
 - [packages/forecast](packages/forecast/README.md): frame derivation, grid sampling, and sample-pack layout.
 - [packages/solar](packages/solar/README.md): solar position, sunrise/sunset, and grid daylight checks.
 - [packages/thermodynamics](packages/thermodynamics/README.md): dry-air thermodynamics and parcel equations.

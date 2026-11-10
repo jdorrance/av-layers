@@ -25,8 +25,10 @@ surfaces share each model's cycle, timeline, publication and URLs. See
 - [apps/api](../apps/api/README.md): HTTP routes, R2 reads, and caching.
 - [apps/preview](../apps/preview/README.md): standalone MapLibre map.
 - [apps/windy-plugin](../apps/windy-plugin/README.md): Windy map and time controls.
-- [packages/contracts](../packages/contracts/README.md): shared types, model and
-  layer definitions, grids, palettes, and client helpers.
+- [packages/contracts](../packages/contracts/README.md): wire schemas, model and
+  layer definitions, grids, and palettes.
+- [packages/client](../packages/client/README.md): pinned API requests, raster
+  transport, and shared map and point controls.
 - [packages/forecast](../packages/forecast/README.md): whole-frame calculations,
   grid sampling, and the numeric file format.
 - [packages/solar](../packages/solar/README.md): solar position, sunrise/sunset,
@@ -95,8 +97,9 @@ The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells
 used for edge interpolation; see [the data guide](data.md).
 
-Publication and rollback verify every grid's coverage and numeric pack plus the
-composited tile archives before changing the model's latest-build pointer with a
+The [batch publisher](../apps/batch/README.md) lists the objects to upload from
+the manifest and provenance. Publication and rollback verify coverage, numeric
+packs and tile archives before changing the model's latest-build pointer with a
 compare-and-swap write. Workflow concurrency locks
 are scoped per environment and model. After pointer commit, the publisher checks
 that the live API serves the new build. See [operations](operations.md) for
@@ -151,7 +154,8 @@ directories and coalescing identical reads within the
 configures the Worker and R2 bindings.
 
 Clients pin a build ID for tiles and point requests and read available layers,
-frames, units, and palettes from the build's manifest descriptors. Shared client
-helpers live in [`@av/contracts/client`](../packages/contracts/src/client.ts).
+frames, units, and palettes from the build's manifest descriptors.
+[`@av/client`](../packages/client/README.md) uses the same wire schemas as the
+batch and API apps.
 [Local development](development.md) seeds a synthetic build into a local Worker.
 See [extensions](extensions.md) to add a model, layer, or grid.

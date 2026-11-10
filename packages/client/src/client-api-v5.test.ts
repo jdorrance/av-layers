@@ -1,11 +1,11 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ExpiredBuildError, InvalidApiResponseError } from './client';
-import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD, type LayerId, type ManifestV5 } from './index';
-import { computeFreshness, latestSchema } from './publication';
+import { ApiClient, ExpiredBuildError, InvalidApiResponseError } from './index';
+import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD,
+  computeFreshness, latestSchema, profileResponseSchema, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES,
+  type LayerId, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import { deriveSoaringViews } from '@av/soaring';
 import { profileRecordBytes } from '@av/forecast';
-import { profileResponseSchema, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, type ProfileResponse } from './point-products';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 
 const expiresAt = '2026-11-02T00:00:00.000Z';

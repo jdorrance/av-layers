@@ -37,6 +37,7 @@
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check && pnpm build && git diff --check"
   },
   "devDependencies": {
+    "@av/client": "workspace:*",
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
     "@av/soaring": "workspace:*",

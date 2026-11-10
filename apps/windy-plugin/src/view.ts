@@ -1,4 +1,4 @@
-import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, selectPointFrame, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/contracts/client';
+import { DEFAULT_OPACITY, populateModelOptions, pointSeriesSelection, selectPointFrame, type PinnedBuild, type GeoPoint, type PointSeries, type PointHorizon, type UnitSystem } from '@av/client';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';

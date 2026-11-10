@@ -1,12 +1,10 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { expect, it } from 'vitest';
-import { CELL_BYTES } from './format';
-import { manifestV5Schema } from './publication';
+import { CELL_BYTES, manifestV5Schema, PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED,
+  SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema, TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors, type LayerId } from '@av/contracts';
 import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
 import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSupportFlags, layerMaxZoom, paletteLegend, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
-import { PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema } from './layers';
-import { TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors } from './index';
 
 function v5Build(): PinnedBuild {
   const base = fixtureBuild();
@@ -218,7 +216,7 @@ it('enumerates bounded viewport tiles across the antimeridian and at the poles',
 
 it('selects the shared diurnal fields independently of wire page size', () => {
   const build = v5Build();
-  const native: import('./product').LayerId[] = ['thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
+  const native: LayerId[] = ['thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
   build.manifest.layers.push(...native);
   const selected = pointSeriesSelection(build);
   expect(selected.layers).toHaveLength(10);

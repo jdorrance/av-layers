@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, forecastObjects, forecastObjectsV5, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
 
 function refined(): Manifest {
   const manifest = fixtureManifest();
@@ -48,9 +48,6 @@ describe('refined forecast publications', () => {
     expect(manifest.frames).toEqual(base.frames);
     expect(manifest.artifacts).toEqual(base.artifacts);
     expect(forecastGrids(manifest)).toEqual([manifest, manifest.patches![0]]);
-    expect(forecastObjects(manifest).map(object => object.key)).toEqual([
-      base.samples.key, manifest.patches![0].samples.key, ...base.artifacts.map(artifact => artifact.tilesKey)
-    ]);
   });
 
   it('requires a matching version and a nonempty, bounded patch list', () => {
@@ -167,10 +164,6 @@ describe('v5 forecast publications', () => {
     expect(manifestV5Schema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);
     expect(() => validateArtifactRecordsV5(manifest)).not.toThrow();
     expect(manifestSchema.safeParse(manifest).success).toBe(false);
-    expect(forecastObjectsV5(manifest).map(object => object.key)).toEqual([
-      ...manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => shard.key)),
-      ...manifest.artifacts.map(artifact => artifact.tilesKey)
-    ]);
     for (const surface of manifest.surfaces) expect(() => assertSampleLayoutBindingV5(surface, {
       grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3]
     })).not.toThrow();
@@ -314,7 +307,6 @@ it('binds native profile groups to the scalar coverage block geometry and codec 
   const binding = { grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3] };
   expect(() => manifestV5Schema.parse(manifest)).not.toThrow();
   expect(() => assertProfileLayoutBindingV5(surface, binding)).not.toThrow();
-  expect(forecastObjectsV5(manifest).filter(object => object.key.includes('/profiles/'))).toHaveLength(2);
   expect(() => assertProfileLayoutBindingV5(surface, { ...binding, blockIds: [0, 1, 3] })).toThrow('size mismatch');
   expect(() => assertProfileLayoutBindingV5(surface, { ...binding, coverageHash: 'f'.repeat(64) })).toThrow('identity mismatch');
   for (const mutate of [

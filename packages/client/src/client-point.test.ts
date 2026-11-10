@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client-api';
-import { MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from './index';
+import { MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from '@av/contracts';
 import { pointLiftExpectation, pointSeriesSelection } from './client-point';
 import type { PointSeries } from './client-types';
 import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './client';
+import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './index';
 import { fixtureManifest, fixtureLatest, fixturePatch } from '../../../tests/forecast-fixture';
 import type { SamplePayload } from './client-types';
-import { sampleResponseSchema } from './publication';
+import { sampleResponseSchema } from '@av/contracts';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';

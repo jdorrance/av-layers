@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampOpacity, frameTileUrl, previewRasterLayer, previewRasterSource, windyTileOptions } from './client';
+import { clampOpacity, frameTileUrl, previewRasterLayer, previewRasterSource, windyTileOptions } from './index';
 
 describe('tile template and options', () => {
   it('substitutes only the pinned frame into a server template', () => {

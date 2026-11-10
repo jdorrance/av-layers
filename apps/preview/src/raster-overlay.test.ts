@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { addProtocol, type Map } from 'maplibre-gl';
-import type { RasterTileProtocol } from '@av/contracts/client';
+import type { RasterTileProtocol } from '@av/client';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 

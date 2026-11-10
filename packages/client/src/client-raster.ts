@@ -1,4 +1,4 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from './format.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from '@av/contracts';
 
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }

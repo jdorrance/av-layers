@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
 import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
-import { type RasterTileProtocol } from '@av/contracts/client';
+import { type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
   children: Element[] = [];

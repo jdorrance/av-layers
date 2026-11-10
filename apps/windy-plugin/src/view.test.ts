@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedPointBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
-import { ApiClient, pointSeriesSelection } from '@av/contracts/client';
+import { ApiClient, pointSeriesSelection } from '@av/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 

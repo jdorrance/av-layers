@@ -2,7 +2,7 @@ import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { LIFT_METHOD, MODEL_LEVEL_LIFT_METHOD, canonicalGridJson, createProductDescriptors, createProductMethodId, createRecipeIdentity, gridSchema, sparseCoverageFromDense, type ForecastSurfaceV5, type Grid, type LayerId, type Manifest, type ProductDefinition, type VerticalCoordinateKind } from '@av/contracts';
-import type { SamplePayload } from '@av/contracts/client';
+import type { SamplePayload } from '@av/client';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { createApp } from '../src/index';
 import { resolveCoverage, resolveSparseCoverage } from '../src/coverage';

@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, forecastObjects, forecastObjectsV5, renderedFrames, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, provenanceObjects, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, renderedFrames, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -11,6 +11,7 @@ import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
 import { readLocalProvenance } from './frame-provenance.js';
+import { forecastObjects, provenanceObjects } from './publication-objects.js';
 
 const decode = parseBoundedJson;
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
@@ -98,7 +99,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   const uploadStarted = Date.now();
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
   const localProvenance = await readLocalProvenance(root, manifest);
-  const files = [...(manifest.version === 5 ? forecastObjectsV5(manifest) : forecastObjects(manifest)), ...provenanceObjects(localProvenance.value)];
+  const files = [...forecastObjects(manifest), ...provenanceObjects(localProvenance.value)];
   if (new Set(files.map(f => f.key)).size !== files.length || files.some(f => !f.key.startsWith(prefix))) throw new Error('Invalid artifact set');
   const sized = options.receiptsOnly ? [] : await Promise.all(files.map(async file => {
     const { size } = await stat(localPath(root, file.key));
@@ -277,8 +278,8 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
       await verifyRemoteHash(store, key, file.sha256, file.bytes, file.bytes, options.signal);
     }
   }
-  for (const { key, sha256: hash } of forecastObjects(manifest)) {
-    await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, grids.find(grid => key === grid.samples.key)?.samples.bytes, options.signal);
+  for (const { key, sha256: hash, bytes } of forecastObjects(manifest)) {
+    await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, bytes, options.signal);
   }
   }
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');

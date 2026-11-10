@@ -1,5 +1,5 @@
 import { DEFAULT_PROBE_TIMEOUT_MS, maxProfileFrames, renderedFrames, renderedLayers, type LayerId, type PublishedManifest } from '@av/contracts';
-import { ApiClient, type PinnedBuild } from '@av/contracts/client';
+import { ApiClient, type PinnedBuild } from '@av/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
