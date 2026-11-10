@@ -33,3 +33,9 @@ it('converts omega with dry density and an upward-positive sign', () => {
   expect(omegaFromGeometricWPaS(0, 850, 10)).toBe(0);
   expect(omegaFromGeometricWPaS(1, 0, 10)).toBeNaN();
 });
+
+it('uses virtual temperature in the hydrostatic pressure velocity estimate', () => {
+  expect(omegaFromGeometricWPaS(0.4, 850, 27, 0.02)).toBeCloseTo(-3.8234635271193884, 10);
+  expect(omegaFromGeometricWPaS(-0.4, 850, 27, 0.02)).toBeCloseTo(3.8234635271193884, 10);
+  expect(omegaFromGeometricWPaS(0.4, 850, 27, 1)).toBeNaN();
+});

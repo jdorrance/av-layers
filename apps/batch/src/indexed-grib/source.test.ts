@@ -643,7 +643,7 @@ describe('GFS idx and PDT admission', () => {
 });
 
 describe('GFS decoded field receipt and sampling', () => {
-  it('rejects affected decimal-scaled constants for all supported packing templates with metadata', async () => {
+  it('admits zero and rejects nonzero decimal-scaled constants across supported templates', async () => {
     const bytes = await fixture('gfs-shtfl-ave-0-6h.grib2');
     const original = parseFields(bytes)[0]!;
     const section5Offset = original.section5.byteOffset - bytes.byteOffset;
@@ -665,6 +665,12 @@ describe('GFS decoded field receipt and sampling', () => {
         } catch (error) {
           expect(error).toMatchObject({ code: 'unsupported-packing', details: { packing, decimalScaleFactor: decimal, referenceValue: 100, bitsPerValue: 0, numberOfGroups: packing === 2 || packing === 3 ? 0 : null, encodingSha256: expect.stringMatching(/^[a-f0-9]{64}$/) } });
         }
+        view.setFloat32(section5Offset + 11, 0);
+        const admitted = inspectIndexedGribField(profile, copy, options);
+        expect(admitted.receipt.packing).toBe(packing);
+        const samples = await sampleFieldValuesAsync(admitted.field, [0, 1]);
+        expect(Array.from(samples.values)).toEqual([0, 0]);
+        view.setFloat32(section5Offset + 11, 100);
         view.setUint16(section5Offset + 17, 0);
         expect(inspectIndexedGribField(profile, copy, options).receipt.packing).toBe(packing);
         view.setUint16(section5Offset + 17, decimal < 0 ? 0x8001 : 1);

@@ -196,8 +196,8 @@ export function r2ShardStorage(env: NodeJS.ProcessEnv, plan: ShardPlan, envelope
 export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   const { R2_BUCKET } = env;
   if (!R2_BUCKET) throw new Error('R2_BUCKET is required');
-  const client = new S3Client(r2ClientOptions(env));
-  let boundedClient: S3Client | undefined;
+  const config = r2ClientOptions(env), client = new S3Client(config);
+  let getClient: S3Client | undefined;
   return {
     async get(key, range, maxBytes = 256 * 1024 * 1024, signal, onRetry) {
       signal?.throwIfAborted();
@@ -206,10 +206,10 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
         for (let attempt = 0; ; attempt++) {
           signal?.throwIfAborted();
           if (attempt) onRetry?.();
-          const requestClient = onRetry ? (boundedClient ??= new S3Client({ ...r2ClientOptions(env), maxAttempts: 1 })) : client;
+          const requestClient = getClient ??= new S3Client({ ...config, maxAttempts: 1 });
           const maximum = Math.min(range?.length ?? maxBytes, maxBytes);
           const command = new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, Range: range ? `bytes=${range.offset}-${range.offset + range.length - 1}` : undefined });
-          if (onRetry) command.middlewareStack.add(next => async args => {
+          command.middlewareStack.add(next => async args => {
             const result = await next(args);
             const response = result.response as { statusCode?: number; headers?: Record<string, string>; body?: unknown };
             if ((response.statusCode ?? 0) >= 400) {
@@ -243,7 +243,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           try { result = await requestClient.send(command, { abortSignal: signal }); }
           catch (error) {
             signal?.throwIfAborted();
-            if (!onRetry || attempt >= R2_MAX_ATTEMPTS - 1 || !retryableRequestError(error)) throw error;
+            if (attempt >= R2_MAX_ATTEMPTS - 1 || !retryableRequestError(error)) throw error;
             await pause(250 * (attempt + 1), signal);
             continue;
           }

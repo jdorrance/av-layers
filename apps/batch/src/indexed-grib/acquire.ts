@@ -336,15 +336,25 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     for await (const loaded of prefetch(auxiliarySpecs, sourceGrid.gridKey)) {
       const spec = auxiliarySpecs[auxiliaryIndex++]!, sampled = loaded.sampled as SampledColumn<Float32Array>;
       if (spec.scale !== 1) for (let i = 0; i < sampled.values.length; i++) if (!sampled.missing[i]) sampled.values[i] *= spec.scale!;
-      if (spec.conversion) {
-        const level = source.pressureLevels.indexOf(spec.levelHpa!);
-        for (let i = 0; i < activeIndices.length; i++) {
-          const value = sampled.missing[i] || tempMissing[level]![i] ? NaN
-            : omegaFromGeometricWPaS(sampled.values[i]!, spec.levelHpa!, kelvinToCelsius(tempK[level]![i]!));
-          sampled.values[i] = value; if (!Number.isFinite(value)) sampled.missing[i] = 1;
-        }
-      }
       receipts.push(loaded.receipt); auxiliaryReceipts.set(spec.key, loaded.receipt);
+    }
+    // Complete the auxiliary reads before consuming same-level humidity.
+    for (const spec of auxiliarySpecs) {
+      if (!spec.conversion) continue;
+      context.signal.throwIfAborted();
+      const pressureHpa = spec.levelHpa!, level = source.pressureLevels.indexOf(pressureHpa);
+      const verticalWind = auxLevels.omegaPaS![level]!, humidity = auxLevels.spfhKgKg?.[level];
+      const temperature = tempK[level]!, temperatureMissing = tempMissing[level]!;
+      for (let i = 0; i < activeIndices.length; i++) {
+        let value = NaN;
+        if (!verticalWind.missing[i] && !temperatureMissing[i]) {
+          const q = humidity && !humidity.missing[i] ? humidity.values[i]! : 0;
+          value = omegaFromGeometricWPaS(verticalWind.values[i]!, pressureHpa, kelvinToCelsius(temperature[i]!), q >= 0 && q < 1 ? q : 0);
+        }
+        verticalWind.values[i] = value;
+        if (!Number.isFinite(value)) verticalWind.missing[i] = 1;
+      }
+      auxiliaryReceipts.get(spec.key)!.normalization!.density = 'same-level-specific-humidity-or-dry';
     }
     const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined, uKey: string, vKey: string) => {
       if (!u || !v) return;

@@ -149,7 +149,7 @@ export interface DecodedFieldReceipt {
   key: string;
   kind: IndexedGribFieldKind;
   role: 'current' | 'companion';
-  normalization?: { units: string; scale: number; conversion?: 'geometric-w-to-omega' };
+  normalization?: { units: string; scale: number; conversion?: 'geometric-w-to-omega'; density?: 'same-level-specific-humidity-or-dry' };
   variable: string;
   level: string;
   levelHpa: number | null;

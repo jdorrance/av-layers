@@ -312,10 +312,14 @@ describe('whole-domain v5 production', () => {
     await expect(publish(store, out, proof.manifest, { authority, validated: proof, receiptsOnly: true })).rejects.toThrow('does not cover this remote store');
     const manifest = await readV5(path), pointerKey = 'catalog/gfs/latest.json', pointer = store.objects.get(pointerKey)!.bytes.slice();
     await verifySampleServing(store, manifest, publishedProduct);
+    const gets = vi.spyOn(store, 'get');
     await rollback(store, 'gfs', manifest.buildId, authority);
     const fine = surface(manifest, 'fine'), terrain = fine.terrain!;
-    const terrainManifest = JSON.parse(Buffer.from(store.objects.get(terrain.key)!.bytes).toString()) as { files: { elevationM: Array<{ key: string }> } };
-    const keys = [fine.coverage.maskKey, fine.coverage.maskKey.replace('manifest.json', 'sparse.bin'), fine.coverage.maskKey.replace('manifest.json', 'tiles.bin'), terrain.key, terrainManifest.files.elevationM[0].key, fine.samples.shards[0].key, manifest.artifacts[0].tilesKey];
+    const terrainManifest = JSON.parse(Buffer.from(store.objects.get(terrain.key)!.bytes).toString()) as { files: { elevationM: Array<{ key: string }>; valid: Array<{ key: string }> } };
+    const dependencies = [fine.coverage.maskKey, fine.coverage.maskKey.replace('manifest.json', 'sparse.bin'), fine.coverage.maskKey.replace('manifest.json', 'tiles.bin'), terrain.key, terrainManifest.files.elevationM[0].key, terrainManifest.files.valid[0].key];
+    for (const key of dependencies) expect(gets.mock.calls.filter(([read]) => read === key)).toHaveLength(1);
+    gets.mockRestore();
+    const keys = [...dependencies, fine.samples.shards[0].key, manifest.artifacts[0].tilesKey];
     for (const key of keys) {
       const original = store.objects.get(key)!;
       store.objects.set(key, { ...original, bytes: Uint8Array.from(original.bytes, (value, index) => index === 0 ? value ^ 1 : value) });

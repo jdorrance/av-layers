@@ -157,7 +157,7 @@ export async function buildFrames(options: FrameBuildOptions & ForecastInputs & 
       elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024
     } };
   } catch (error) {
-    await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle, phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) });
+    await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle, phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }).catch(() => {});
     throw error;
   } finally {
     pack?.close();

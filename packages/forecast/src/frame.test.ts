@@ -19,6 +19,13 @@ function inversionFrame(): ModelLevelFrame {
   return { ...frame, pressureLevelsHpa: undefined, pressurePa, missing: { ...frame.missing, pressure: pressurePa.map(() => Uint8Array.of(0)) } };
 }
 
+it.each([undefined, 'invalid'])('rejects %s time for daylight-gated lift only', validAt => {
+  const frame = { ...inversionFrame(), validAt } as NormalizedFrame;
+  expect(() => deriveFrame(frame, mask, { layers })).toThrow('Daylight-gated lift requires a valid frame timestamp');
+  expect(deriveFrame(frame, mask, { layers, daylightOnly: false })['usable-lift-agl']).toBeDefined();
+  expect(deriveFrame(frame, mask, { layers: ['precip-rate'] })['precip-rate']).toBeDefined();
+});
+
 it.each([100, 500])('preserves a Float32-neutral column with its first level at %s m', firstLevel => {
   const frame = normalizedFixtureFrame(grid, Uint32Array.of(0), '2026-06-21T00:00:00Z', 12, 1);
   const heights = [firstLevel, ...[500, 1000, 1500, 2000, 2500, 3000, 3500, 4000].filter(height => height > firstLevel)];

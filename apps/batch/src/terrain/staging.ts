@@ -54,7 +54,7 @@ export async function stagePreparedTerrain({ ref, storage, out, grid, signal }: 
 
 export async function loadSparsePreparedTerrain({ ref, out, grid, coverage, coverageDescriptor, signal, collect = true }: { ref: SparseTerrainRef; out: string; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; signal?: AbortSignal; collect?: boolean }) {
   if (collect) return readSparsePreparedTerrain(ref, asset => readLocalFile(localPath(out, asset.key), asset.bytes, asset.bytes), grid, coverage, coverageDescriptor, signal);
-  const validated = await validateSparsePreparedTerrain(ref, asset => readLocalFile(localPath(out, asset.key), asset.bytes, asset.bytes), grid, coverage, coverageDescriptor, signal, false);
+  const validated = await validateSparsePreparedTerrain(ref, asset => readLocalFile(localPath(out, asset.key), asset.bytes, asset.bytes), grid, coverage, coverageDescriptor, signal);
   return { descriptor: validated.descriptor, elevationM: new Float32Array(0), valid: new Uint8Array(0) };
 }
 

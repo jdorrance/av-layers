@@ -113,7 +113,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
   } catch (error) {
     await writeFile(localPath(root, `${prefix}/failure.json`), JSON.stringify({ version: 1, state: 'failed', buildId, provider: provider.id,
       cycle: result.cycle, phase, failedFrameHour: null, completedFrames: result.frames.length, elapsedMs: Date.now() - started,
-      cancelled: options.signal?.aborted ?? false, error: failureReason(error) }));
+      cancelled: options.signal?.aborted ?? false, error: failureReason(error) })).catch(() => {});
     throw error;
   }
 }

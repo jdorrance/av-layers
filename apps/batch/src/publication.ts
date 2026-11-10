@@ -7,6 +7,7 @@ import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, 
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
 import { loadCoverage, readCoverage, readSparseCoverage } from './coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
+import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
@@ -171,7 +172,7 @@ async function publishV5Dependencies(store: ObjectStorage, root: string, manifes
     check(); await putImmutable(store, surface.coverage.maskKey, coverage.bytes, 'application/json', signal);
     if (surface.terrain) {
       const terrain = surface.terrain, { size } = await stat(localPath(root, terrain.key));
-      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: size, arrayBytes: coverage.mask.coverage.offsets[coverage.mask.coverage.blockIds.length] * 5 };
+      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: size, arrayBytes: coverage.mask.coverage.offsets[coverage.mask.coverage.blockIds.length] * PREPARED_TERRAIN_CELL_BYTES };
       const verified = await validateSparsePreparedTerrain(ref, asset => readLocalFile(localPath(root, asset.key), asset.bytes, asset.bytes), surface.grid, coverage.mask.coverage, coverage.bytes, signal);
       assertTerrainManifestBinding(manifest, terrain, verified.descriptor, ref.arrayBytes, product);
       for (const asset of [...verified.descriptor.files.elevationM, ...verified.descriptor.files.valid, ref]) {
@@ -191,15 +192,12 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     if (!object || sha256(object.bytes) !== surface.coverage.hash || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Rollback sparse coverage missing or corrupt');
     const descriptor = sparseCoverageDescriptorSchema.parse(decode(object.bytes));
     if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || sha256(Buffer.from(canonicalGridJson(descriptor.grid))) !== descriptor.gridHash || !sameGrid(descriptor.grid, surface.grid)) throw new Error('Rollback sparse coverage binding mismatch');
-    const values: Uint8Array[] = [];
-    for (const name of ['sparse', 'tiles'] as const) {
-      const file = descriptor.files[name], key = `${coveragePrefix(surface.coverage.hash)}/${name}.bin`, max = name === 'sparse' ? MAX_SPARSE_COVERAGE_BYTES : MAX_COVERAGE_BITSET_BYTES;
-      await verifyRemoteHash(store, key, file.sha256, max, file.bytes, signal);
-      const item = await store.get(key, undefined, max, signal);
-      if (!item || item.bytes.length !== file.bytes || sha256(item.bytes) !== file.sha256) throw new Error(`Rollback coverage corrupt: ${key}`);
-      values.push(item.bytes);
-    }
-    const coverage = decodeSparseCoverage(values[0], descriptor.gridHash);
+    const prefix = coveragePrefix(surface.coverage.hash), sparseKey = `${prefix}/sparse.bin`;
+    const sparse = await store.get(sparseKey, undefined, MAX_SPARSE_COVERAGE_BYTES, signal);
+    signal?.throwIfAborted();
+    if (!sparse || sparse.bytes.length !== descriptor.files.sparse.bytes || sha256(sparse.bytes) !== descriptor.files.sparse.sha256) throw new Error(`Rollback coverage missing or corrupt: ${sparseKey}`);
+    await verifyRemoteHash(store, `${prefix}/tiles.bin`, descriptor.files.tiles.sha256, MAX_COVERAGE_BITSET_BYTES, descriptor.files.tiles.bytes, signal);
+    const coverage = decodeSparseCoverage(sparse.bytes, descriptor.gridHash);
     if (coverage.width !== surface.grid.width || coverage.height !== surface.grid.height || coverage.wrapLongitude !== surface.grid.wrapLongitude) throw new Error('Rollback sparse grid mismatch');
     assertSparseCoverageHalo(coverage);
     const binding = { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds };
@@ -220,11 +218,11 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     }
     for (const shard of [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])]) await verifyRemoteHash(store, shard.key, shard.sha256, shard.bytes, shard.bytes, signal, true);
     if (surface.terrain) {
-      const terrain = surface.terrain, head = await store.head(terrain.key, signal);
-      if (!head) throw new Error('Rollback terrain descriptor missing');
-      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: head.size, arrayBytes: coverage.offsets[coverage.blockIds.length] * 5 };
+      const terrain = surface.terrain, terrainDescriptor = await store.get(terrain.key, undefined, PREPARED_DESCRIPTOR_MAX_BYTES, signal);
+      if (!terrainDescriptor) throw new Error('Rollback terrain descriptor missing');
+      const ref = { key: terrain.key, sha256: terrain.sha256, bytes: terrainDescriptor.bytes.length, arrayBytes: coverage.offsets[coverage.blockIds.length] * PREPARED_TERRAIN_CELL_BYTES };
       const verified = await validateSparsePreparedTerrain(ref, async asset => {
-        await verifyRemoteHash(store, asset.key, asset.sha256, asset.bytes, asset.bytes, signal);
+        if (asset.key === ref.key) return terrainDescriptor.bytes;
         const item = await store.get(asset.key, undefined, asset.bytes, signal);
         if (!item) throw new Error(`Rollback terrain missing: ${asset.key}`);
         return item.bytes;

@@ -139,12 +139,14 @@ export function geometricWFromOmegaMps(omegaPaS: number, pressureHpa: number, te
       (pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2) : NaN;
 }
 
-/** Pressure velocity in Pa/s from upward geometric velocity in m/s and dry density. */
-export function omegaFromGeometricWPaS(wMps: number, pressureHpa: number, temperatureC: number): number {
+/** Hydrostatic pressure velocity in Pa/s from upward geometric velocity and specific humidity. */
+export function omegaFromGeometricWPaS(wMps: number, pressureHpa: number, temperatureC: number, specificHumidityKgKg = 0): number {
   const temperatureK = temperatureC + ZERO_CELSIUS_K;
-  return Number.isFinite(wMps) && Number.isFinite(pressureHpa) && Number.isFinite(temperatureK) && pressureHpa > 0 && temperatureK > 0
-    ? wMps === 0 ? 0 : -wMps * pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2 /
-      (THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * temperatureK) : NaN;
+  if (!Number.isFinite(wMps) || !Number.isFinite(pressureHpa) || !Number.isFinite(temperatureK) || pressureHpa <= 0 || temperatureK <= 0
+      || !(specificHumidityKgKg >= 0 && specificHumidityKgKg < 1)) return NaN;
+  const virtualTemperatureK = temperatureK * (1 + (1 / WATER_DRY_AIR_MOLAR_MASS_RATIO - 1) * specificHumidityKgKg);
+  return wMps === 0 ? 0 : -wMps * pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2 /
+    (THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * virtualTemperatureK);
 }
 
 /**

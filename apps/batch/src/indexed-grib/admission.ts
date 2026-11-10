@@ -90,10 +90,13 @@ function packingMetadata(field: GribField): { packing: number; packingError: num
   if (field.section5.length < minimumLength) refuse('unsupported-packing', `Truncated Indexed GRIB packing template 5.${packing}`);
   const bitsPerValue = view.getUint8(19);
   const numberOfGroups = packing === 2 || packing === 3 ? view.getUint32(31) : null;
-  if (decimalScale !== 0 && (numberOfGroups === 0 || (numberOfGroups === null && bitsPerValue === 0))) {
+  const referenceValue = view.getFloat32(11);
+  const constant = numberOfGroups === 0 || (numberOfGroups === null && bitsPerValue === 0);
+  // Zero is invariant under decimal scaling, including in decoders that ignore it for constants.
+  if (decimalScale !== 0 && constant && referenceValue !== 0) {
     throw new IndexedGribError('unsupported-packing', `Indexed GRIB constant template 5.${packing} has unsupported decimal scaling`, {
       packing, decimalScaleFactor: decimalScale, binaryScaleFactor: binaryScale,
-      bitsPerValue, numberOfGroups, referenceValue: view.getFloat32(11),
+      bitsPerValue, numberOfGroups, referenceValue,
       encodingSha256: sha256(field.section5),
     });
   }
