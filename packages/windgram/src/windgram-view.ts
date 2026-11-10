@@ -49,6 +49,7 @@ export interface WindgramBarb {
   hourIndex: number;
   speedKt: number;
   directionDeg: number;
+  southernHemisphere: boolean;
   interpolated: boolean;
   surface: boolean;
 }
@@ -273,6 +274,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
         heightM: z,
         speedKt: mpsToKnots(wind.speedMps),
         directionDeg: wind.directionDeg ?? 0,
+        southernHemisphere: profile.site.latitude < 0,
         interpolated,
         surface,
       });

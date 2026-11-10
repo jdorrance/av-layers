@@ -57,7 +57,8 @@ export function hostTimestampMs(value: unknown): number | null {
     return hostTimestampMs(Number(trimmed));
   }
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  return Math.abs(value) < 1e12 ? value * 1000 : value;
+  const milliseconds = Math.abs(value) < 1e12 ? value * 1000 : value;
+  return Math.abs(milliseconds) <= 8.64e15 ? milliseconds : null;
 }
 
 /** Latest frame whose valid time is at or before the host instant, or the earliest frame when the host is earlier than all of them. */
@@ -109,9 +110,9 @@ export function frameBadge(selected: FrameLike | null, hostMatch: FrameLike | nu
   if (hostMatch && hostMatch.id === selected.id) {
     return { kind: 'in-frame', text: `Host frame ${selected.id} · ${selected.validTime}${interval}` };
   }
-  if (hostTimestampMs !== null && !hostMatch) {
+  if (hostTimestampMs !== null) {
     const time = new Date(hostTimestampMs).toISOString();
-    return { kind: 'off-frame', text: `Host time ${time} is off-frame — keeping ${selected.id} · ${selected.validTime}${interval}` };
+    return { kind: 'off-frame', text: `Windy time ${time} · showing ${selected.id} · ${selected.validTime}${interval}` };
   }
   return { kind: 'explicit', text: `Explicit frame ${selected.id} · ${selected.validTime}${interval}` };
 }

@@ -4,7 +4,7 @@ import { CELL_BYTES, manifestV5Schema, PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDE
   SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema, TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors, type LayerId } from '@av/contracts';
 import type { PinnedBuild } from './client-types';
 import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
-import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSupportFlags, layerMaxZoom, paletteLegend, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
+import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSupportFlags, layerMaxZoom, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
 
 function v5Build(): PinnedBuild {
   const base = fixtureBuild();
@@ -45,16 +45,6 @@ function v5Build(): PinnedBuild {
   };
 }
 
-it('keeps retained palette snapshots discrete when interpolation is absent', () => {
-  const { interpolation: _, ...retained } = PALETTES.lift;
-  const palette = paletteSchema.parse(retained);
-  const model = paletteLegend(palette);
-  expect(palette.interpolation).toBeUndefined();
-  expect(model.gradient).toBeUndefined();
-  expect(model.rows.slice(0, palette.colors.length).map(row => row.color)).toEqual(palette.colors);
-  expect(model.rows[0].label).toBe('0–300');
-});
-
 it('formats independent physical support and cloud regime flags', () => {
   expect(formatSupportFlags(SUPPORT_PARCEL_CROSSING | SUPPORT_CUMULUS | SUPPORT_OVERDEVELOPED | SUPPORT_CLOUD_CAPPED)).toBe('parcel+Cu+OD+capped');
   expect(formatSupportFlags(0)).toBe('—');
@@ -71,24 +61,10 @@ it('honors pinned sample-only delivery for legends and every prefetch path', () 
   expect(urls.some(url => url.includes('/usable-lift-msl/'))).toBe(false);
 });
 
-it('shows an encoded channel gradient with separate no-lift and endpoint units', () => {
-  const palette = paletteSchema.parse({
-    id: 'lift', units: 'm AGL', edges: [0, 300, 600], colors: ['#000000', '#ffffff'],
-    noLiftColor: '#00000000', interpolation: 'linear-rgb'
-  });
-  const model = paletteLegend(palette);
-  expect(model.gradient?.background).toContain('rgba(128,128,128,1) 50%');
-  expect(model.gradient?.background).toContain('rgba(0,0,0,1) 0%');
-  expect(model.gradient?.background).toContain('rgba(255,255,255,1) 100%');
-  expect(model.gradient?.minimum).toBe('0 m AGL');
-  expect(model.gradient?.maximum).toBe('≥ 300 m AGL');
-  expect(model.rows).toEqual([{ color: '#00000000', label: 'no usable lift (transparent)' }]);
-  expect(model.gradient!.background.length).toBeLessThan(1024);
-});
-
 it('serializes stepped interpolation without changing retained palette compatibility', () => {
   expect(paletteSchema.parse(JSON.parse(JSON.stringify(PALETTES.lift))).interpolation).toBe('step');
-  expect(paletteLegend(paletteSchema.parse(PALETTES.lift)).rows).toHaveLength(PALETTES.lift.colors.length + 1);
+  const { interpolation: _, ...retained } = PALETTES.lift;
+  expect(paletteSchema.parse(retained).interpolation).toBeUndefined();
   expect(paletteSchema.safeParse({ ...PALETTES.lift, interpolation: 'spline' }).success).toBe(false);
 });
 

@@ -7,15 +7,16 @@ interface WindBarbGeometry {
 }
 
 /** Wind-barb paths and vertices share the same geometry and speed quantization. */
-export function barbGeometry(speedKt: number, directionDeg: number, staffLength = 22): WindBarbGeometry {
+export function barbGeometry(speedKt: number, directionDeg: number, staffLength: number, southernHemisphere: boolean): WindBarbGeometry {
   if (!Number.isFinite(speedKt) || speedKt < 0 || !Number.isFinite(directionDeg)) return { staff: '', flags: [], calm: false, points: [] };
   if (speedKt < 2.5) return { staff: '', flags: [], calm: true, points: [] };
   const len = staffLength;
   const rad = (directionDeg * Math.PI) / 180;
   const ux = Math.sin(rad);
   const uy = -Math.cos(rad);
-  const px = -uy;
-  const py = ux;
+  const side = southernHemisphere ? -1 : 1;
+  const px = -uy * side;
+  const py = ux * side;
   const at = (d: number) => [ux * d, uy * d] as const;
   const points: (readonly [number, number])[] = [[0, 0]];
   const vertex = (x: number, y: number) => {

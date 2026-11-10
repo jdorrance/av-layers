@@ -14,7 +14,9 @@ sounding and later hours fill in as pages arrive. The chart uses MSL and labels
 native thermal tops and model ground separately. Later point times retain the
 map frame and show both UTC times. The scalar chart covers builds that publish
 no native profiles.
-Closing the pane ends point requests and leaves the overlay until build expiry.
+The pane shows the displayed frame's UTC time. The overlay hides when Windy's
+selected time falls outside the map forecast. Closing the pane ends point
+requests while the overlay continues following Windy's timeline until build expiry.
 For a standalone map, use [`@av/preview`](../preview/README.md).
 
 ## Source layout

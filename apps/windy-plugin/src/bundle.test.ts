@@ -138,7 +138,17 @@ it.each([
     getZoom: () => 7,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   } };
-  const store = { get: () => hostTime, set: vi.fn(), on: vi.fn(), off: vi.fn() };
+  let hostTimestamp = hostTime;
+  const timestampListeners = new Set<(value: unknown) => void>();
+  const store = {
+    get: () => hostTimestamp, set: vi.fn(),
+    on: vi.fn((_event: string, listener: (value: unknown) => void) => timestampListeners.add(listener)),
+    off: vi.fn((_event: string, listener: (value: unknown) => void) => timestampListeners.delete(listener))
+  };
+  function moveHostTime(timestamp: number): void {
+    hostTimestamp = timestamp;
+    for (const listener of [...timestampListeners]) listener(timestamp);
+  }
   let destroyApp: (() => void) | undefined;
   // Host unmount can happen after the request; Back must release resources immediately.
   const broadcast = { emit: vi.fn() };
@@ -208,6 +218,9 @@ it.each([
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;
   expect(horizonNotice.hidden).toBe(false);
   expect(horizonNotice.textContent).toContain('Map forecast ended at 2026-10-30T06:00:00.000Z');
+  const mapTime = elements.find(element => element.className === 'av-map-time')!;
+  await Promise.resolve();
+  expect(mapTime.textContent).toContain('Host frame f006 · 2026-10-30T06:00:00.000Z');
   const tileError = elements.find(element => element.className === 'av-error')!;
   const failed = { tile: {} }, successful = { tile: {} };
   tileListeners.get('dataloading')?.(failed);
@@ -296,6 +309,10 @@ it.each([
   expect(mobileHeader.hidden).toBe(true);
   expect(map.removeLayer).not.toHaveBeenCalled();
   expect(protocols.size).toBe(1);
+  moveHostTime(hostTime + 24 * 3600_000);
+  expect(map.removeLayer).toHaveBeenCalledTimes(2);
+  expect(mapTime.textContent).toContain('Overlay hidden');
+  expect(tileListeners.size).toBe(0);
 
   const pendingSignals: AbortSignal[] = [];
   fetchImpl.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
@@ -307,7 +324,7 @@ it.each([
   selects[0].value = otherModels[1].modelId; selects[0].dispatch('change');
   expect(pendingSignals[0].aborted).toBe(true);
   expect(pendingSignals[1].aborted).toBe(false);
-  expect(map.removeLayer).toHaveBeenCalledTimes(1); // Freezing releases the staged frame and retains the committed forecast.
+  expect(map.removeLayer).toHaveBeenCalledTimes(2);
 
   clock.mockReturnValue(expiresAtMs);
   win.dispatchEvent(new Event('pageshow'));

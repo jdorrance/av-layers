@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApiClient, ExpiredBuildError, InvalidApiResponseError, noLiftLabel, type LatestPayload } from './index';
+import { ApiClient, ExpiredBuildError, InvalidApiResponseError, type LatestPayload } from './index';
 import { fixtureManifest, fixtureLatest, fixturePatch } from '../../../tests/forecast-fixture';
 import type { SamplePayload } from './client-types';
 import { sampleResponseSchema } from '@av/contracts';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
-it('labels transparent and opaque no-lift legend swatches accurately', () => {
-  expect(noLiftLabel('#00000000')).toBe('no usable lift (transparent)');
-  expect(noLiftLabel('#55184d')).toBe('no usable lift');
-});
 const frames = fixtureManifest().frames;
 const layerIds = fixtureManifest().layers;
 function manifest() { return fixtureManifest({ buildId: '20261030T000000Z-abc', createdAt: created, expiresAt }); }

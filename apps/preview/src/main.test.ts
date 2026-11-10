@@ -464,10 +464,20 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
   expect(ui('point-card').hidden).toBe(true);
   expect(map().removed).toBe(true);
   expect(protocols.size).toBe(0);
+  const jumpTo = vi.spyOn(map(), 'jumpTo');
+  win.href = 'http://localhost:5173/?lat=41&lon=-8&z=7';
+  win.dispatchEvent(new Event('popstate'));
+  expect(jumpTo).not.toHaveBeenCalled();
   page('pageshow', true);
   map().emit('click', { lngLat: { lat: 33, lng: -117 } });
   expect(protocols.size).toBe(0);
   expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('labels the map clock as longitude time alongside UTC', async () => {
+  win.href = 'http://localhost:5173/?lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
+  await start();
+  expect(ui('timestamp').textContent).toBe('05:00 longitude time (UTC−01:00) · 06:00 UTC');
 });
 
 it('loads ICON hourly frames and keeps the AGL lift layer', async () => {
@@ -548,10 +558,13 @@ it('selects the v5 surface max zoom for each layer and renders scalar builds wit
   expect(nodes.some(child => child.className === 'av-windgram-host')).toBe(false);
 });
 
-it('uses Google terrain, remembers the view in the query string, and restores it from the back button', async () => {
+it('uses the attributed OpenStreetMap basemap and restores the view from the back button', async () => {
   await start();
-  const tiles = map().options.style?.sources?.basemap?.tiles ?? [];
-  expect(tiles[0]).toContain('lyrs=p');
+  expect(map().options.style?.sources?.basemap).toMatchObject({
+    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+    maxzoom: 19,
+    attribution: expect.stringContaining('href="https://www.openstreetmap.org/copyright"')
+  });
   expect(win.location.search).toContain('model=gfs');
   expect(win.location.search).toContain('ref=agl');
   expect(win.location.search).toContain('opacity=0.7');

@@ -75,6 +75,7 @@ export class WindyRasterLayer implements HostTileLayer {
   private status: 'loading' | 'ready' | 'error' = 'loading';
   private frozen = false;
   private retryEmpty = false;
+  private moving = false;
   private readonly render = (): void => {
     const next = this.staging;
     if (!next || (!next.successful && !next.failed.size) || !this.tilesSettled(next)) return;
@@ -82,7 +83,7 @@ export class WindyRasterLayer implements HostTileLayer {
     next.native.setOpacity(this.options.opacity);
     const previous = this.active, map = this.map;
     this.active = next; this.staging = null;
-    this.move();
+    this.cancelPrefetch();
     queueMicrotask(() => {
       this.drop(previous, map);
       if (this.active !== next || this.url !== next.url) return;
@@ -95,7 +96,10 @@ export class WindyRasterLayer implements HostTileLayer {
       this.prefetch();
     });
   };
-  private readonly move = (): void => { this.prefetchAbort?.abort(); this.prefetchAbort = null; };
+  private readonly move = (): void => {
+    this.moving = true;
+    this.cancelPrefetch();
+  };
   private readonly sourceData = (event?: SourceDataEvent): void => {
     const slot = this.staging;
     if (slot && event?.sourceDataType === 'idle' && event.isSourceLoaded && event.sourceId && event.sourceId === slot.source.id) {
@@ -108,7 +112,10 @@ export class WindyRasterLayer implements HostTileLayer {
     this.prefetch();
   };
   private readonly settled = (): void => {
-    if (this.retryEmpty && !this.map?.maplibreMap.isMoving() && (!this.build || this.build.expiresAtMs > Date.now())) this.setUrl(this.url);
+    if (!this.moving || this.map?.maplibreMap.isMoving()) return;
+    this.moving = false;
+    // A cached success from the previous viewport cannot prove this one has tiles.
+    if ((this.staging || this.retryEmpty) && (!this.build || this.build.expiresAtMs > Date.now())) this.stageOrReportError();
   };
 
   constructor(private readonly api: NativeRasterApi, baseUrl: string, private url: string, private options: WindyTileOptions, protocol?: RasterTileProtocol) {
@@ -126,7 +133,7 @@ export class WindyRasterLayer implements HostTileLayer {
     this.map = map;
     map.maplibreMap.on('render', this.render); map.maplibreMap.on('idle', this.idle);
     map.maplibreMap.on('sourcedata', this.sourceData);
-    map.maplibreMap.on('movestart', this.move); map.maplibreMap.on('zoomstart', this.move);
+    map.maplibreMap.on('movestart', this.move);
     map.maplibreMap.on('moveend', this.settled);
     try { this.stage(); } catch (error) { this.remove(); throw error; }
   }
@@ -141,13 +148,13 @@ export class WindyRasterLayer implements HostTileLayer {
   freeze(): void {
     this.frozen = true;
     this.retryEmpty = false;
-    this.move(); this.drop(this.staging); this.staging = null;
+    this.cancelPrefetch(); this.drop(this.staging); this.staging = null;
   }
   setUrl(url: string, maxNativeZoom = this.options.maxNativeZoom): void {
     if (this.frozen || !this.protocol || (url === this.url && this.status !== 'error')) return;
     this.url = url;
     this.options = { ...this.options, maxNativeZoom };
-    try { this.stage(); } catch { this.move(); this.setStatus('error'); }
+    this.stageOrReportError();
   }
   setOpacity(opacity: number): void {
     this.options = { ...this.options, opacity };
@@ -161,11 +168,11 @@ export class WindyRasterLayer implements HostTileLayer {
   off(event: HostTileEventName, listener: (event: HostTileEvent) => void): void { this.listeners.get(event)?.delete(listener); }
   remove(): void {
     const map = this.map; this.map = null;
-    this.move();
+    this.cancelPrefetch();
     if (map) {
       map.maplibreMap.off('render', this.render); map.maplibreMap.off('idle', this.idle);
       map.maplibreMap.off('sourcedata', this.sourceData);
-      map.maplibreMap.off('movestart', this.move); map.maplibreMap.off('zoomstart', this.move);
+      map.maplibreMap.off('movestart', this.move);
       map.maplibreMap.off('moveend', this.settled);
     }
     this.drop(this.staging, map); this.drop(this.active, map); this.staging = null; this.active = null;
@@ -174,8 +181,12 @@ export class WindyRasterLayer implements HostTileLayer {
     this.protocol = null; this.statusListener = null;
   }
 
+  private stageOrReportError(): void {
+    try { this.stage(); } catch { this.cancelPrefetch(); this.setStatus('error'); }
+  }
+
   private stage(): void {
-    if (!this.map || !this.protocol) return;
+    if (!this.map || !this.protocol || this.frozen) return;
     this.retryEmpty = false;
     this.drop(this.staging); this.staging = null;
     if (this.active?.url === this.url) { this.setStatus('ready'); return; }
@@ -216,7 +227,7 @@ export class WindyRasterLayer implements HostTileLayer {
     if (this.staging === slot && !slot.successful && slot.failed.size && this.tilesSettled(slot)) this.abandon(slot);
   }
   private tilesSettled(slot: Slot): boolean {
-    return !this.map?.maplibreMap.isMoving() && !slot.pending.size && !slot.native.isLoading()
+    return !this.moving && !this.map?.maplibreMap.isMoving() && !slot.pending.size && !slot.native.isLoading()
       && (!this.build || this.build.expiresAtMs > Date.now());
   }
   private abandonEmpty(slot: Slot): void {
@@ -226,7 +237,7 @@ export class WindyRasterLayer implements HostTileLayer {
   }
   private abandon(slot: Slot): void {
     if (this.staging !== slot) return;
-    this.staging = null; this.drop(slot); this.move(); this.setStatus('error');
+    this.staging = null; this.drop(slot); this.cancelPrefetch(); this.setStatus('error');
   }
   private setStatus(status: 'loading' | 'ready' | 'error'): void {
     this.status = status; this.statusListener?.(status, this.active?.url ?? '');
@@ -236,9 +247,10 @@ export class WindyRasterLayer implements HostTileLayer {
     for (const [event, listener] of slot.bindings) slot.source.off(event, listener);
     map?.removeLayer(slot.native);
   }
+  private cancelPrefetch(): void { this.prefetchAbort?.abort(); this.prefetchAbort = null; }
   private prefetch(): void {
     const build = this.build, active = this.active, map = this.map?.maplibreMap;
-    if (this.frozen || !build || !active || !map || !this.protocol || this.staging || this.prefetchAbort || map.isMoving() || build.expiresAtMs <= Date.now()) return;
+    if (this.frozen || !build || !active || !map || !this.protocol || this.staging || this.prefetchAbort || this.moving || map.isMoving() || build.expiresAtMs <= Date.now()) return;
     const parts = new URL(active.url).pathname.split('/'), layer = parts.at(-5) as LayerId, frame = parts.at(-4)!;
     if (!build.manifest.layers.includes(layer)) return;
     const z = Math.max(0, Math.min(layerMaxZoom(build.manifest, layer), Math.round(map.getZoom()) + 1)), bounds = map.getBounds();

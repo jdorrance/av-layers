@@ -10,6 +10,37 @@ import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
 
+import { barbGeometry } from './wind-barb.ts';
+import { hourSampling, sampleHeight } from './windgram-sampling.ts';
+
+it('mirrors the pennant and feathers south of the equator without reversing the staff', () => {
+  for (const [direction, x, y] of [[0, 0, -22], [90, 22, 0], [180, 0, 22], [270, -22, 0]]) {
+    const north = barbGeometry(65, direction, 22, false), south = barbGeometry(65, direction, 22, true);
+    expect(north.staff).toBe(south.staff);
+    expect(north.points[1]?.map(value => value || 0)).toEqual([x, y]);
+    for (const vertex of [3, 6, 8]) {
+      const side = ([px, py]: readonly [number, number]) => Math.sign(x * py - y * px);
+      expect(side(north.points[vertex]!)).toBe(1);
+      expect(side(south.points[vertex]!)).toBe(-1);
+    }
+  }
+});
+
+it('uses one temperature datum when a native level coincides with the 2 m observation', () => {
+  const { forecast, profile, sample } = fixture([1]);
+  const [hour] = forecast([sample.frames[0], profile.frames[0]]).hours;
+  const frame = {
+    ...hour, modelTerrainM: 500,
+    surface: { ...hour.surface, temperatureC: 20 },
+    levels: [{ ...hour.levels[0], heightM: 502, temperatureC: 19 }, { ...hour.levels[1], heightM: 602, temperatureC: 18 }],
+  };
+  const known = hourSampling(frame);
+  expect(known.temperatureC).toEqual([{ altitudeM: 502, value: 20 }, { altitudeM: 602, value: 18 }]);
+  expect(sampleHeight(known.lapseCPer1000Ft, 502)).toBeCloseTo(-6.096);
+  const missing = hourSampling({ ...frame, surface: { ...frame.surface, temperatureC: null } });
+  expect(sampleHeight(missing.temperatureC, 502)).toBe(19);
+});
+
 const point = { lat: 37.65, lon: -79.8 };
 
 function fixture(hours: readonly number[], mapFrameCount = hours.length) {

@@ -1,4 +1,4 @@
-import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, paletteBinLabel, renderedLayers, renderedFrames, compilePaletteColor, samplePaletteValueInto, type LayerId, type Manifest } from '@av/contracts';
+import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, renderedLayers, renderedFrames, type LayerId, type Manifest } from '@av/contracts';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
 
@@ -76,16 +76,6 @@ export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: Un
     regime ? `Native ${regime}` : 'Native cloud regime unknown', ...(nativeSupport & SUPPORT_CLOUD_CAPPED ? ['Native cloud capped'] : [])
   ].join(' · ');
   return { id: frame.id, validTime: frame.validTime, terrainM: lift.terrainM, mslM: lift.mslM, aglM: lift.aglM, lclM, thermalTopM, summary };
-}
-
-export function noLiftLabel(color: string): string {
-  return color.toLowerCase() === '#00000000' ? 'no usable lift (transparent)' : 'no usable lift';
-}
-
-export function paletteNoteText(palette: PaletteSummary): string | null {
-  if (!palette.provisional && palette.transparentBelow === undefined) return null;
-  if (palette.transparentBelow === undefined) return 'Provisional palette.';
-  return `Transparent below ${palette.transparentBelow} ${palette.units}; provisional palette.`;
 }
 
 export function activePalettes(palettes: readonly PaletteSummary[], layerId: string | null, descriptors: Manifest['descriptors']['layers']): readonly PaletteSummary[] {
@@ -188,41 +178,6 @@ export function formatSupportFlags(support: number): string {
   if (support & SUPPORT_OVERDEVELOPED) flags.push('OD');
   if (support & SUPPORT_CLOUD_CAPPED) flags.push('capped');
   return flags.join('+') || '—';
-}
-
-/** Pure presentation models shared by the two independent host controllers. */
-export function paletteLegend(palette: PaletteSummary): {
-  title: string;
-  rows: { color: string; label: string }[];
-  gradient?: { background: string; minimum: string; maximum: string };
-  note: string | null;
-} {
-  const rows: { color: string; label: string }[] = [];
-  let gradient: { background: string; minimum: string; maximum: string } | undefined;
-  if (palette.interpolation === 'linear-rgb' && palette.colors.length > 1) {
-    const compiled = compilePaletteColor(palette, 'linear-rgb'), color = new Uint8Array(4);
-    const first = compiled.edges[0], last = compiled.edges[compiled.colorCount - 1];
-    const stops: string[] = [];
-    for (let interval = 0; interval < compiled.colorCount - 1; interval++) {
-      for (let step = 0; step < 16; step++) {
-        const fraction = step / 16;
-        const value = compiled.edges[interval] + fraction * (compiled.edges[interval + 1] - compiled.edges[interval]);
-        samplePaletteValueInto(compiled, value, color);
-        stops.push(`rgba(${color[0]},${color[1]},${color[2]},${color[3] / 255}) ${100 * (value - first) / (last - first)}%`);
-      }
-    }
-    samplePaletteValueInto(compiled, last, color);
-    stops.push(`rgba(${color[0]},${color[1]},${color[2]},${color[3] / 255}) 100%`);
-    gradient = {
-      background: `linear-gradient(90deg,${stops.join(',')})`,
-      minimum: `${first} ${palette.units}`,
-      maximum: `≥ ${last} ${palette.units}`
-    };
-  } else {
-    rows.push(...palette.colors.map((color, index) => ({ color, label: paletteBinLabel(palette.edges, palette.colors.length, index) })));
-  }
-  if (palette.noLiftColor) rows.push({ color: palette.noLiftColor, label: noLiftLabel(palette.noLiftColor) });
-  return { title: `${palette.id} · ${palette.units}`, rows, ...(gradient ? { gradient } : {}), note: paletteNoteText(palette) };
 }
 
 export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}, patches: Manifest['patches'] = []): { headings: string[]; rows: string[][] } {

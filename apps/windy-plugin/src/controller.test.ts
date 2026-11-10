@@ -14,7 +14,7 @@ function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof fram
   return fixtureBuild({ buildId: 'build-1', createdAt: created, expiresAt, frames: frames(), ...overrides });
 }
 
-function v5Pinned(): PinnedBuild {
+function v5Pinned(mapFrameCount?: number): PinnedBuild {
   const base = fixtureManifest();
   const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
   if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
@@ -22,7 +22,8 @@ function v5Pinned(): PinnedBuild {
   const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
   const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
   const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
-    const blockCount = blocks(gridValue), channelCount = base.frames.length * layers.length;
+    const frameCount = kind === 'fine' ? mapFrameCount ?? base.frames.length : base.frames.length;
+    const blockCount = blocks(gridValue), channelCount = frameCount * layers.length;
     return {
       id, kind, grid: gridValue, gridHash,
       coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
@@ -38,8 +39,9 @@ function v5Pinned(): PinnedBuild {
       } } : {})
     };
   };
+  const mapFrames = new Set(base.frames.slice(0, mapFrameCount ?? base.frames.length).map(frame => frame.id));
   const manifest = manifestV5Schema.parse({
-    ...rest, version: 5,
+    ...rest, version: 5, mapFrameCount, artifacts: base.artifacts.filter(artifact => mapFrames.has(artifact.frame)),
     surfaces: [
       surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
       surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
@@ -142,8 +144,10 @@ describe('PluginController', () => {
     const state = await controller.start();
     expect(loadBuild).toHaveBeenCalledTimes(1);
     expect(state).toMatchObject({ phase: 'ready', buildId: 'build-1', frameId: 'f006', layerId: 'usable-lift-msl', opacity: 0.5 });
-    expect(state?.badge).toContain('Host frame f006');
+    expect(state?.badge).toBe('');
     expect(stub.added).toHaveLength(1);
+    stub.added[0].statusListener?.('ready', stub.added[0].url);
+    expect(controller.state().badge).toContain('Host frame f006 · 2026-10-30T06:00:00.000Z');
     expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.webp');
     expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 7, maxZoom: 18, opacity: 0.5 });
   });
@@ -324,12 +328,36 @@ describe('PluginController', () => {
     controller.selectFrame('f009', { syncHost: false });
     const state = controller.syncHost(Date.parse('2026-10-30T04:59:00.000Z'));
     expect(state.frameId).toBe('f003');
-    expect(state.badge).toContain('Host frame f003');
+    const layer = stub.added[0];
+    layer.statusListener?.('ready', layer.url);
+    expect(controller.state().badge).toContain('Windy time 2026-10-30T04:59:00.000Z · showing f003 · 2026-10-30T03:00:00.000Z');
     expect(stub.added[0].url).toContain('/f003/');
     const later = controller.syncHost(Date.parse('2026-10-30T09:00:00.000Z') / 1000);
     expect(later.frameId).toBe('f009');
     expect(stub.added[0].url).toContain('/f009/');
     expect(stub.added).toHaveLength(1);
+  });
+
+  it('hides the overlay for point-only times and restores it on re-entry to the map horizon', async () => {
+    const outside = Date.parse('2026-10-30T09:00:00.000Z');
+    const stub = stubHost(outside), build = v5Pinned(2);
+    expect(build.manifest.frames.some(frame => frame.id === 'f009')).toBe(true);
+    const controller = new PluginController({ model: 'gfs', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
+    await controller.start();
+    expect(controller.state()).toMatchObject({ phase: 'ready', frameId: null, displayedFrameId: null, badge: expect.stringContaining('Overlay hidden') });
+    controller.selectFrame('f006');
+    expect(stub.added).toHaveLength(0);
+    stub.host.store.set('timestamp', Date.parse('2026-10-30T06:00:00.000Z'));
+    const layer = stub.added[0];
+    layer.statusListener?.('ready', layer.url);
+    expect(controller.state().displayedFrameId).toBe('f006');
+    stub.host.store.set('timestamp', outside);
+    expect(stub.removed).toEqual([layer]);
+    layer.statusListener?.('ready', layer.url);
+    expect(controller.state().displayedFrameId).toBeNull();
+    stub.host.store.set('timestamp', Date.parse(created) - 1);
+    expect(stub.added).toHaveLength(1);
+    controller.dispose();
   });
 
   it('switches layers and changes opacity on the existing layer', async () => {
@@ -376,11 +404,15 @@ describe('PluginController', () => {
       expect(await controller.start()).toMatchObject({ frameId: 'f007' });
       const gap = controller.syncHost(Date.parse('2026-10-30T07:00:00.000Z'));
       expect(gap.frameId).toBe('f007');
-      expect(gap.badge).toContain('Host frame f007 · 2026-10-29T19:00:00.000Z');
+      const layer = stub.added[0];
+      layer.statusListener?.('ready', layer.url);
+      expect(controller.state().badge).toContain('Windy time 2026-10-30T07:00:00.000Z · showing f007 · 2026-10-29T19:00:00.000Z');
       expect(stub.added[0].url).toContain('/f007/');
       const next = controller.syncHost(Date.parse('2026-10-30T08:00:00.000Z'));
       expect(next.frameId).toBe('f020');
-      expect(next.badge).toContain('Host frame f020 · 2026-10-30T08:00:00.000Z');
+      expect(next.badge).toContain('Windy time 2026-10-30T08:00:00.000Z · showing f007 · 2026-10-29T19:00:00.000Z');
+      layer.statusListener?.('ready', layer.url);
+      expect(controller.state().badge).toContain('Host frame f020 · 2026-10-30T08:00:00.000Z');
       expect(stub.added[0].url).toContain('/f020/');
       expect(loadBuild).toHaveBeenCalledTimes(1);
       expect(stub.added).toHaveLength(1);
@@ -518,11 +550,15 @@ it('freezes host timeline changes during model handover while preserving expiry'
   await controller.start();
   const layer = stub.added[0], displayed = layer.url;
   controller.freeze();
-  expect(layer.frozen).toBe(true); expect(stub.listeners.size).toBe(0);
+  expect(layer.frozen).toBe(true); expect(stub.listeners.size).toBe(1);
   stub.host.store.set('timestamp', Date.parse('2026-10-30T09:00:00Z'));
   controller.refreshTime();
   expect(layer.url).toBe(displayed);
+  stub.host.store.set('timestamp', Date.parse('2026-10-30T09:01:00Z'));
+  expect(stub.removed).toEqual([layer]);
+  expect(controller.state()).toMatchObject({ frameId: null, displayedFrameId: null, badge: expect.stringContaining('Overlay hidden') });
   now = Date.parse(expiresAt); controller.refreshTime();
+  expect(stub.listeners.size).toBe(0);
   expect(stub.removed).toEqual([layer]);
   expect(controller.state().phase).toBe('expired');
 });

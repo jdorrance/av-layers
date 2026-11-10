@@ -8,6 +8,7 @@ import {
   frameTileUrl,
   layerMaxZoom,
   hostTimestampMs,
+  matchHostFrame,
   selectExplicitFrame,
   selectHostFrame,
   syncTimestampForFrame,
@@ -85,7 +86,7 @@ export interface ControllerOptions {
 const TILE_ERROR_MESSAGE = 'Overlay tile failed to load — forecast display may be incomplete.';
 
 export function forecastCommitted(state: ControllerState): boolean {
-  return state.phase === 'ready' && state.notice === null && (state.message === null || state.message === TILE_ERROR_MESSAGE);
+  return state.phase === 'ready' && state.displayedFrameId !== null && state.notice === null && (state.message === null || state.message === TILE_ERROR_MESSAGE);
 }
 
 function preferredLiftLayer(layers: readonly LayerId[]): LayerId | null {
@@ -107,7 +108,9 @@ export class PluginController {
   private frameId: string | null = null;
   private layerId: LayerId | null = null;
   private opacity: number;
-  private badge = 'No frame selected';
+  private frames: ReturnType<typeof renderedFrames> = [];
+  private mapRange: DatasetRange | null = null;
+  private hostTime: number | null = null;
   private phase: ControllerPhase = 'idle';
   private message: string | null = null;
   private notice: string | null = null;
@@ -156,28 +159,47 @@ export class PluginController {
 
   get displayedForecast(): string | null {
     const displayed = this.displayedSelection();
-    return displayed ? `${displayed.model} ${displayed.frame} ${displayed.layer}` : null;
+    return displayed ? `${this.options.model} ${displayed.frame.id} ${displayed.layer}` : null;
   }
 
   private displayedSelection() {
-    const parts = this.displayedUrl?.split('/');
-    return parts ? { model: parts.at(-7), buildId: parts.at(-6), layer: parts.at(-5), frame: parts.at(-4) } : null;
+    const parts = this.displayedUrl?.split('/'), manifest = this.build?.manifest;
+    if (!parts || !manifest || parts.at(-7) !== manifest.model || parts.at(-6) !== manifest.buildId) return null;
+    const frame = selectExplicitFrame(this.frames, parts.at(-4) ?? '');
+    return frame ? { frame, layer: parts.at(-5) } : null;
+  }
+
+  private outsideMapRange(): boolean {
+    return this.hostTime !== null && this.mapRange !== null
+      && (this.hostTime < this.mapRange.startMs || this.hostTime > this.mapRange.endMs);
+  }
+
+  private timeBadge(displayed: (typeof this.frames)[number] | null): string {
+    if (this.phase === 'expired') return frameBadge(null, null, null, true).text;
+    if (this.phase !== 'ready') return '';
+    if (this.outsideMapRange()) {
+      const time = new Date(this.hostTime!).toISOString();
+      return `Windy time ${time} is outside the map forecast. Overlay hidden.`;
+    }
+    if (!displayed) return '';
+    const hostMatch = this.hostTime === null ? null : matchHostFrame([displayed], this.hostTime);
+    return frameBadge(displayed, hostMatch, this.hostTime).text;
   }
 
   state(): ControllerState {
-    const displayed = this.displayedSelection(), manifest = this.build?.manifest;
+    const displayed = this.displayedSelection()?.frame ?? null;
     return {
       phase: this.phase,
       buildId: this.build?.manifest.buildId ?? null,
       model: this.options.model,
       frameId: this.frameId,
-      displayedFrameId: manifest && displayed?.model === manifest.model && displayed.buildId === manifest.buildId ? displayed.frame ?? null : null,
+      displayedFrameId: displayed?.id ?? null,
       layerId: this.layerId,
       opacity: this.opacity,
-      badge: this.badge,
+      badge: this.timeBadge(displayed),
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
       notice: this.notice,
-      horizonNotice: this.phase === 'ready' && this.build ? mapForecastHorizonNotice(this.build.manifest, this.now()) : null
+      horizonNotice: this.phase === 'ready' && this.build && this.frameId !== null ? mapForecastHorizonNotice(this.build.manifest, this.now()) : null
     };
   }
 
@@ -216,25 +238,28 @@ export class PluginController {
       }
       this.build = build;
       this.layerId = preferredLiftLayer(Object.keys(build.templates) as LayerId[]);
-      const hostValue = hostTimestampMs(this.host.store.get('timestamp'));
-      const first = hostValue === null
-        ? selectExplicitFrame(renderedFrames(build.manifest), renderedFrames(build.manifest)[0]?.id ?? '')
-        : selectHostFrame(renderedFrames(build.manifest), hostValue);
-      if (!first || !this.layerId) {
+      this.frames = renderedFrames(build.manifest);
+      this.hostTime = hostTimestampMs(this.host.store.get('timestamp'));
+      if (!this.frames.length || !this.layerId) {
         this.fail('Build has no usable frame or layer');
         return this.state();
       }
-      this.frameId = first.id;
-      const template = build.templates[this.layerId];
-      if (!template) {
+      this.mapRange = {
+        startMs: Math.min(...this.frames.map(frame => Date.parse(frame.intervalStart))),
+        endMs: Math.max(...this.frames.map(frame => Date.parse(frame.validTime)))
+      };
+      if (!build.templates[this.layerId]) {
         this.fail(`Build has no tile template for ${this.layerId}`);
         return this.state();
       }
-      this.badge = frameBadge(first, hostValue === null ? null : first, hostValue).text;
       // Subscribe before mounting so a host that throws never leaves a layer on the map.
       this.subscribed = true;
       this.host.store.on('timestamp', this.onTimestamp);
-      this.mountLayer(frameTileUrl(template, this.frameId), layerMaxZoom(build.manifest, this.layerId));
+      if (!this.outsideMapRange()) {
+        const first = this.hostTime === null ? this.frames[0] : selectHostFrame(this.frames, this.hostTime);
+        this.frameId = first?.id ?? null;
+        this.applyUrl();
+      }
       this.scheduleTimeCheck();
       this.phase = 'ready';
       this.emit();
@@ -248,8 +273,8 @@ export class PluginController {
   }
 
   selectFrame(id: string, options: { syncHost?: boolean } = {}): ControllerState {
-    if (!this.canUse()) return this.state();
-    const frame = selectExplicitFrame(renderedFrames(this.build!.manifest), id);
+    if (!this.canUse() || this.outsideMapRange()) return this.state();
+    const frame = selectExplicitFrame(this.frames, id);
     if (!frame) {
       this.message = `Unknown frame ${id}`;
       this.notice = null;
@@ -258,7 +283,6 @@ export class PluginController {
     }
     this.frameId = frame.id;
     this.applyUrl();
-    this.badge = frameBadge(frame, null, null).text;
     this.emit();
     if (options.syncHost !== false) {
       const timestamp = syncTimestampForFrame(frame, this.options.hostRange?.() ?? null);
@@ -299,14 +323,23 @@ export class PluginController {
   }
 
   syncHost(timestamp: unknown): ControllerState {
-    if (!this.canUse()) return this.state();
+    if (!this.build || this.disposed || this.phase === 'error' || this.checkExpiry()) return this.state();
     const hostValue = hostTimestampMs(timestamp);
     if (hostValue === null) return this.state();
-    const frame = selectHostFrame(renderedFrames(this.build!.manifest), hostValue);
-    if (!frame) return this.state();
-    this.frameId = frame.id;
-    this.applyUrl();
-    this.badge = frameBadge(frame, frame, hostValue).text;
+    this.hostTime = hostValue;
+    if (this.outsideMapRange()) {
+      this.frameId = null;
+      this.clearTileState();
+      this.message = null;
+      this.notice = null;
+      this.unmountLayer();
+    } else if (!this.frozen) {
+      this.frameId = selectHostFrame(this.frames, hostValue)?.id ?? null;
+      try { this.applyUrl(); } catch (error) {
+        this.releaseResources();
+        this.fail(error instanceof Error ? error.message : String(error));
+      }
+    }
     if (this.phase === 'ready') this.emit();
     return this.state();
   }
@@ -331,7 +364,7 @@ export class PluginController {
     if (this.frozen || this.disposed) return;
     this.frozen = true;
     this.loadAbort?.abort(); this.loadAbort = null;
-    if (this.subscribed) { this.subscribed = false; this.host.store.off?.('timestamp', this.onTimestamp); }
+    // A retained raster still needs host timestamps to hide outside its forecast window.
     this.layer?.freeze?.();
   }
 
@@ -339,7 +372,6 @@ export class PluginController {
     if (this.disposed) return;
     this.disposed = true;
     this.phase = 'disposed';
-    this.badge = 'Plugin closed';
     this.clearTileState();
     this.releaseResources();
     this.emit();
@@ -352,10 +384,14 @@ export class PluginController {
   }
 
   private applyUrl(): void {
-    if (!this.build || !this.frameId || !this.layerId || !this.layer) return;
+    if (!this.build || !this.frameId || !this.layerId) return;
     const template = this.build.templates[this.layerId];
     if (!template) return;
     const url = frameTileUrl(template, this.frameId);
+    if (!this.layer) {
+      this.mountLayer(url, layerMaxZoom(this.build.manifest, this.layerId));
+      return;
+    }
     if (url === this.tileUrl) return;
     this.clearTileState();
     this.tileUrl = url;
@@ -444,7 +480,6 @@ export class PluginController {
     if (this.phase === 'expired') return;
     this.phase = 'expired';
     this.clearTileState();
-    this.badge = 'Build expired — overlay removed';
     this.message = 'This build has expired. Cached tiles are not assembled as a current view.';
     this.notice = null;
     this.releaseResources();

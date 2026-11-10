@@ -210,8 +210,9 @@ export function renderWindgramSvg(
     ? new Intl.DateTimeFormat('en-US', { timeZone: view.timeZone, timeZoneName: 'short' })
       .formatToParts(new Date(referenceTime)).find(part => part.type === 'timeZoneName')?.value ?? view.timeZone
     : view.timeZone;
+  const clock = view.timeZone.startsWith('Etc/GMT') ? `${timeZoneLabel} (longitude)` : timeZoneLabel;
   parts.push(text(view.width / 2, view.bottom + 41,
-    `${timeZoneLabel} · Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
+    `${clock} · Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
     'text-anchor="middle" class="wg-axis-unit wg-footer"'));
   parts.push(
     '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true"><line data-cursor-vertical=""/><line data-cursor-horizontal=""/><circle data-cursor-point="" r="7"/><g data-cursor-readout=""><rect data-cursor-back="" height="47" rx="6" class="wg-inspector-back"/><text x="10" y="20" data-cursor-agl="" class="wg-inspector-agl"/><text x="10" y="36" data-cursor-msl="" class="wg-inspector-msl"/></g></g>',
