@@ -24,6 +24,7 @@ apply to the combined work across all grids selected by a request.
 - **Coverage cache:** 16 entries, 24 MiB max; 2 concurrent cold loads. Verifies
   descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
   and compact sample layouts. Tile requests load only descriptors and tile masks.
+  Each caller joining a cold load occupies a `MaterializedReads` waiter slot.
   Verified descriptor, sparse, tile, and legacy mask bytes also stay in the Cache
   API under their SHA-256. A new isolate reads those blobs before R2. The
   in-memory cache remains the hot path. Blob reads and background writes use the

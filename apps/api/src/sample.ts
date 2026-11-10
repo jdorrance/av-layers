@@ -6,7 +6,7 @@ import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObj
 import { artifact, servedSource, type PublishedManifest } from './publication';
 import { cached, ensureLive, fail, json, response } from './http';
 import { readPackedRanges, type PackedRange } from './packed-ranges';
-import { readCoordinatePair, readPointCoordinates, selectSampleFields } from './point-query';
+import { readCoordinatePair, readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface Point { lat: number; lon: number }
 
@@ -146,9 +146,8 @@ export async function serveSamples(request: Request, bucket: R2Bucket, ctx: Wait
 
 const pointKey = ({ lat, lon }: Point) => `${lat},${lon}`;
 
-type SampleJob = { frame: ManifestV5['frames'][number]; layer: LayerId; channel: number };
 interface V5Plan {
-  point: number; surface: ForecastSurfaceV5; jobs: SampleJob[];
+  point: number; surface: ForecastSurfaceV5; jobs: ReturnType<typeof sampleChannelGroups>[number]['jobs'];
   plan: ReturnType<typeof planSample>; packed: ReturnType<typeof planShardedPackedSample> | null;
   shard: ForecastSurfaceV5['samples']['shards'][number] | undefined;
   cells: Map<number, Cell[]>;
@@ -216,7 +215,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       pending.push((async () => {
         const lease = await resolveSparseCoverage(bucket, surface, ctx, m.descriptors.bounds, request.signal);
         releases.push(lease.release);
-        return { surface, selected, available, count, coverage: lease.coverage };
+        return { surface, selected, available, coverage: lease.coverage };
       })());
     }
     const loaded = [];
@@ -225,21 +224,16 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       loaded.push(result.value);
     }
     request.signal.throwIfAborted();
-    for (const { surface, selected, available, count, coverage } of loaded) {
-      const groups = coverage.groups ?? [{ firstFrame: 0, frameCount: count, channelCount: surface.samples.channelCount, shards: surface.samples.shards }];
-      const jobsByGroup = groups.map(group => available.filter(frame => {
-        const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount;
-      }).flatMap(frame => selected.map(layer => ({ frame, layer, channel: (m.frames.indexOf(frame) - group.firstFrame) * surface.layers.length + surface.layers.indexOf(layer) }))));
+    for (const { surface, selected, available, coverage } of loaded) {
+      const groups = sampleChannelGroups(m, surface, coverage, available, selected);
       for (const [point, { lat, lon }] of points.entries()) {
         const covered = samplingCovered(coverage.mask, lat, lon), plan = covered ? planSample(surface.grid, lat, lon) : null;
         if (covered && !plan) fail(503, 'publication-invalid', 'Surface coverage lacks sample support');
-        for (const [index, group] of groups.entries()) {
-          const jobs = jobsByGroup[index]!;
-          if (!jobs.length) continue;
+        for (const { jobs, layout, channels, shards } of groups) {
           let packed: ReturnType<typeof planShardedPackedSample> | null = null;
-          try { if (plan) packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, jobs.map(job => job.channel), group.shards); }
+          try { if (plan) packed = planShardedPackedSample(layout, plan, channels, shards); }
           catch { fail(503, 'publication-invalid', 'Invalid sample layout'); }
-          const shard = packed ? group.shards[packed.shard] : undefined;
+          const shard = packed ? shards[packed.shard] : undefined;
           if (packed && !shard) fail(503, 'publication-invalid', 'Invalid sample range');
           plans.push({ point, surface, jobs, plan, packed, shard, cells: new Map() });
         }
@@ -271,7 +265,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       if (packed && (!contributors || packed.contributorRanks.some((_, index) => !contributors[index]))) fail(503, 'publication-invalid', 'Sample range lacks a contributor');
       const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer], m.tool.useStoredMslNoLift)
         : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
-      values[point]!.set(`${job.frame.id}/${job.layer}`, { ...value, surfaceId: surface.id });
+      values[point]!.set(`${job.frameId}/${job.layer}`, { ...value, surfaceId: surface.id });
     }
     const source = servedSource(m, origin), surfaces = m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage }));
     return points.map(({ lat, lon }, point) => ({

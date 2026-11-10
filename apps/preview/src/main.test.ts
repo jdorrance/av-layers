@@ -671,6 +671,11 @@ it('pages the full native point forecast while later point times keep the raster
   const summary = nodes.find(child => child.className === 'av-windgram-lift-summary')!.textContent;
   expect(summary).toContain('MSL unavailable · AGL unavailable');
   expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.hidden).toBe(true);
+  const cameraOnly = new URL(win.href);
+  cameraOnly.searchParams.set('z', '5');
+  win.href = cameraOnly.href;
+  win.dispatchEvent(new Event('popstate'));
+  expect(nodes.find(child => child.className === 'av-point-time')!.textContent).toBe(time);
   const requests = fetchMock.mock.calls.length;
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
@@ -783,4 +788,13 @@ it('labels the displayed raster through pending, failed and successful point-tim
   expect(time.textContent).toBe(`Point: ${stamp(2)} UTC · Map: ${stamp(0)} UTC`);
   map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(2)} UTC`);
+  const previous = new URL(win.href);
+  previous.searchParams.set('t', published.frames[0].validTime);
+  win.href = previous.href;
+  win.dispatchEvent(new Event('popstate'));
+  expect(time.textContent).toBe(`Point: ${stamp(0)} UTC · Map: ${stamp(2)} UTC`);
+  await Promise.resolve();
+  const restored = [...map().layers.keys()].find(id => id !== replacement)!;
+  map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render');
+  expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
 });

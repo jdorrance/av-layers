@@ -21,6 +21,7 @@ export function forecastStackZIndex(order: ForecastLayerOrder | undefined): numb
 type SourceEventName = 'dataloading' | 'data' | 'error' | 'dataabort';
 export interface RasterSourceEvent { tile?: object }
 export interface NativeRasterSource {
+  readonly id: string;
   on(event: SourceEventName, listener: (event: RasterSourceEvent) => void): unknown;
   off(event: SourceEventName, listener: (event: RasterSourceEvent) => void): unknown;
 }
@@ -31,10 +32,11 @@ export interface NativeRasterLayer {
   alwaysLoadTiles: boolean;
   setOpacity(opacity: number): unknown;
 }
+interface SourceDataEvent { sourceId?: string; sourceDataType?: string; isSourceLoaded?: boolean }
 interface RenderMap {
   setPaintProperty(id: string, property: string, value: number | { duration: number; delay: number }): unknown;
-  on(event: string, listener: () => void): unknown;
-  off(event: string, listener: () => void): unknown;
+  on(event: string, listener: (event?: SourceDataEvent) => void): unknown;
+  off(event: string, listener: (event?: SourceDataEvent) => void): unknown;
   isMoving(): boolean;
   getBounds(): { getWest(): number; getEast(): number; getNorth(): number; getSouth(): number };
   getZoom(): number;
@@ -75,10 +77,8 @@ export class WindyRasterLayer implements HostTileLayer {
   private retryEmpty = false;
   private readonly render = (): void => {
     const next = this.staging;
-    if (!next || this.map?.maplibreMap.isMoving()) return;
-    if (this.build && this.build.expiresAtMs <= Date.now()) return;
-    if (next.pending.size || next.native.isLoading()) return;
-    if (!next.successful) { if (next.failed.size > 0) this.abandon(next); return; }
+    if (!next || (!next.successful && !next.failed.size) || !this.tilesSettled(next)) return;
+    if (!next.successful) { this.abandon(next); return; }
     next.native.setOpacity(this.options.opacity);
     const previous = this.active;
     this.active = next; this.staging = null;
@@ -96,14 +96,15 @@ export class WindyRasterLayer implements HostTileLayer {
     });
   };
   private readonly move = (): void => { this.prefetchAbort?.abort(); this.prefetchAbort = null; };
+  private readonly sourceData = (event?: SourceDataEvent): void => {
+    const slot = this.staging;
+    if (slot && event?.sourceDataType === 'idle' && event.isSourceLoaded && event.sourceId && event.sourceId === slot.source.id) {
+      queueMicrotask(() => this.abandonEmpty(slot));
+    }
+  };
   private readonly idle = (): void => {
     this.render();
-    const slot = this.staging;
-    if (slot && !this.map?.maplibreMap.isMoving() && !slot.successful && !slot.pending.size && !slot.native.isLoading()
-      && (!this.build || this.build.expiresAtMs > Date.now())) {
-      this.retryEmpty = slot.failed.size === 0;
-      this.abandon(slot);
-    }
+    if (this.staging) this.abandonEmpty(this.staging);
     this.prefetch();
   };
   private readonly settled = (): void => {
@@ -124,6 +125,7 @@ export class WindyRasterLayer implements HostTileLayer {
     if (!this.protocol) throw new Error('Forecast raster layer is disposed');
     this.map = map;
     map.maplibreMap.on('render', this.render); map.maplibreMap.on('idle', this.idle);
+    map.maplibreMap.on('sourcedata', this.sourceData);
     map.maplibreMap.on('movestart', this.move); map.maplibreMap.on('zoomstart', this.move);
     map.maplibreMap.on('moveend', this.settled);
     try { this.stage(); } catch (error) { this.remove(); throw error; }
@@ -162,6 +164,7 @@ export class WindyRasterLayer implements HostTileLayer {
     this.move();
     if (map) {
       map.maplibreMap.off('render', this.render); map.maplibreMap.off('idle', this.idle);
+      map.maplibreMap.off('sourcedata', this.sourceData);
       map.maplibreMap.off('movestart', this.move); map.maplibreMap.off('zoomstart', this.move);
       map.maplibreMap.off('moveend', this.settled);
     }
@@ -195,6 +198,7 @@ export class WindyRasterLayer implements HostTileLayer {
           else slot.pending.delete(value.tile);
           if (nativeEvent === 'data') { slot.successful = true; slot.failed.delete(value.tile); }
           if (nativeEvent === 'error') slot.failed.add(value.tile);
+          if (nativeEvent === 'dataabort') slot.failed.delete(value.tile);
           if (this.staging === slot && nativeEvent === 'error') { this.consider(slot); return; }
           this.listeners.get(event)?.forEach(callback => callback({ tile: value.tile! }));
           if (this.staging === slot) this.consider(slot);
@@ -209,8 +213,16 @@ export class WindyRasterLayer implements HostTileLayer {
     this.setStatus('loading');
   }
   private consider(slot: Slot): void {
-    if (this.staging !== slot || this.map?.maplibreMap.isMoving() || slot.pending.size || slot.native.isLoading()) return;
-    if (!slot.successful && slot.failed.size > 0) this.abandon(slot);
+    if (this.staging === slot && !slot.successful && slot.failed.size && this.tilesSettled(slot)) this.abandon(slot);
+  }
+  private tilesSettled(slot: Slot): boolean {
+    return !this.map?.maplibreMap.isMoving() && !slot.pending.size && !slot.native.isLoading()
+      && (!this.build || this.build.expiresAtMs > Date.now());
+  }
+  private abandonEmpty(slot: Slot): void {
+    if (this.staging !== slot || slot.successful || !this.tilesSettled(slot)) return;
+    this.retryEmpty = slot.failed.size === 0;
+    this.abandon(slot);
   }
   private abandon(slot: Slot): void {
     if (this.staging !== slot) return;

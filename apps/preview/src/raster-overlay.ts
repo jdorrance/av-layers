@@ -4,7 +4,7 @@ import type { LayerId } from '@av/contracts';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }
-interface Slot extends Selection { id: string; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean; ready: boolean }
+interface Slot extends Selection { id: string; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean }
 export interface OverlayState { displayed: Selection | null; requested: Selection | null; incomplete: boolean; replacementFailed: boolean }
 
 /** Owns two raster slots and one bounded transport for a mounted preview map. */
@@ -29,16 +29,16 @@ export class RasterOverlay {
     const slot = this.staging;
     if (!slot || event.sourceId !== slot.id) return;
     if (event.tile) { slot.pending.delete(event.tile); slot.failed.delete(event.tile); slot.successful = true; }
-    this.settle(slot);
+    if (event.sourceDataType === 'idle' && event.isSourceLoaded) queueMicrotask(() => this.abandonEmpty(slot));
   };
   private readonly loading = (event: MapSourceDataEvent): void => {
-    if (event.sourceId === this.staging?.id) {
-      this.staging.ready = false;
-      if (event.tile) this.staging.pending.add(event.tile);
-    }
+    if (event.sourceId === this.staging?.id && event.tile) this.staging.pending.add(event.tile);
   };
   private readonly abort = (event: MapSourceDataEvent): void => {
-    if (event.sourceId === this.staging?.id && event.tile) { this.staging.pending.delete(event.tile); this.settle(this.staging); }
+    if (event.sourceId === this.staging?.id && event.tile) {
+      this.staging.pending.delete(event.tile);
+      this.staging.failed.delete(event.tile);
+    }
     if (event.sourceId === this.active?.id && event.tile && this.active.failed.delete(event.tile)) { this.incomplete = this.problem(this.active); this.emit(); }
   };
   private readonly failed = (event: ErrorEvent & { sourceId?: string; tile?: object }): void => {
@@ -54,12 +54,16 @@ export class RasterOverlay {
     slot.failed.add(event.tile);
     slot.pending.delete(event.tile);
     if (slot === this.active) { this.incomplete = true; this.emit(); return; }
-    this.settle(slot);
+    if (!slot.successful && this.tilesSettled(slot)) this.abandon();
   };
   private readonly render = (): void => {
     this.refresh();
     const next = this.staging;
-    if (!next?.ready || this.moving || !this.map.isSourceLoaded(next.id) || next.build.expiresAtMs <= Date.now()) return;
+    if (!next || (!next.successful && !next.failed.size) || !this.tilesSettled(next)) return;
+    if (!next.successful) {
+      this.abandon();
+      return;
+    }
     const previous = this.active;
     this.map.setPaintProperty(next.id, 'raster-opacity', this.opacity);
     this.active = next; this.staging = null;
@@ -73,25 +77,18 @@ export class RasterOverlay {
   private readonly move = (): void => {
     this.moving = true;
     this.cancelPrefetch();
-    if (this.staging) this.staging.ready = false;
   };
   private readonly settled = (): void => {
     const moved = this.moving;
     this.moving = false;
-    if (this.staging) this.settle(this.staging);
-    else if (moved && this.retryEmpty && this.requested && this.requested.build.expiresAtMs > Date.now()) {
+    if (!this.staging && moved && this.retryEmpty && this.requested && this.requested.build.expiresAtMs > Date.now()) {
       const { build, layer, frame } = this.requested;
       try { this.select(build, layer, frame); } catch { /* select reports a failed replacement. */ }
     }
   };
   private readonly idle = (): void => {
-    if (this.staging && !this.moving) this.settle(this.staging);
     this.render();
-    const slot = this.staging;
-    if (slot && !this.moving && !slot.successful && !slot.pending.size && this.map.isSourceLoaded(slot.id)) {
-      this.retryEmpty = slot.failed.size === 0 && !slot.sourceFailed;
-      this.abandon();
-    }
+    if (this.staging) this.abandonEmpty(this.staging);
     this.prefetch();
   };
 
@@ -120,7 +117,7 @@ export class RasterOverlay {
     }
     this.protocol.setBuildExpiry(build.manifest.buildId, build.expiresAtMs);
     const id = `av-overlay-${++this.generation}`;
-    const next: Slot = { ...this.requested, id, successful: false, pending: new Set(), failed: new Set(), sourceFailed: false, ready: false };
+    const next: Slot = { ...this.requested, id, successful: false, pending: new Set(), failed: new Set(), sourceFailed: false };
     this.staging = next;
     try {
       const source = previewRasterSource(build.templates[layer], frame, layerMaxZoom(build.manifest, layer), build.manifest.descriptors.attribution);
@@ -170,10 +167,13 @@ export class RasterOverlay {
   }
 
   private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }
-  private settle(slot: Slot): void {
-    const settled = slot.pending.size === 0 && this.map.isSourceLoaded(slot.id);
-    slot.ready = settled && slot.successful && !slot.sourceFailed;
-    if (slot === this.staging && settled && !slot.successful && (slot.failed.size > 0 || slot.sourceFailed)) this.abandon();
+  private tilesSettled(slot: Slot): boolean {
+    return !this.moving && !slot.pending.size && slot.build.expiresAtMs > Date.now() && this.map.isSourceLoaded(slot.id);
+  }
+  private abandonEmpty(slot: Slot): void {
+    if (slot !== this.staging || slot.successful || !this.tilesSettled(slot)) return;
+    this.retryEmpty = slot.failed.size === 0;
+    this.abandon();
   }
   private abandon(): void {
     const slot = this.staging; this.staging = null;

@@ -486,11 +486,15 @@ function startPreview(): void {
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
-    pointFrameId = selectPointFrame(pointFrameIds, selectedFrame, pointFrameId);
-    updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
+    followMapFrame();
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
     if (history !== 'none') writeUrl(history);
+  }
+
+  function followMapFrame(): void {
+    pointFrameId = selectPointFrame(pointFrameIds, selectedFrame, pointFrameId);
+    updatePointSeries?.(pointFrameId, pointUnitSystem, displayedPointFrame());
   }
 
   function chooseFrame(value: PinnedBuild): void {
@@ -661,7 +665,9 @@ function startPreview(): void {
       return;
     }
     if (build) {
+      const previousFrame = selectedFrame;
       chooseFrame(build);
+      if (selectedFrame !== previousFrame) followMapFrame();
       updateOverlay();
     }
     applyingHistory = false;

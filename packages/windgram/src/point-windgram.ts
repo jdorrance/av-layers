@@ -90,6 +90,7 @@ function createPointWindgram(
   };
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
+  const usesDsm = build.manifest.version === 5 && build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
   const toForecast = createPointForecast(build, options.point);
   let grouped: Calendar | undefined;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {
@@ -305,7 +306,7 @@ function createPointWindgram(
       mounted.select(selectedValidAt);
     }
     mountedView = view;
-    if (keyUnits !== units) keyHost.innerHTML = renderWindgramKey(units);
+    if (keyUnits !== units) keyHost.innerHTML = renderWindgramKey(units, usesDsm);
     keyUnits = units;
   };
 

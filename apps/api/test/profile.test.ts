@@ -68,20 +68,24 @@ function splitLastNativePacks(f: Fixture) {
 
 describe('native profile API', () => {
   it.each([false, true])('honors declared scalar/profile partitions with grouped samples=%s', async grouped => {
-    const f = attachNativeProfiles(grouped ? createGroupedV5Fixture({ groups: [[1], [2]], nativeLayers: layers, nativeValue })
-      : createV5Fixture({ nativeLayers: layers, nativeValue }), { groupSize: grouped ? 1 : 2 });
+    const varyingTemperature = (layer: LayerId, frame: number, x: number) => layer === 'sfc-temp-c'
+      ? nativeValue(layer, frame, x)! + frame : nativeValue(layer, frame, x);
+    const options = { nativeLayers: layers, nativeValue: varyingTemperature };
+    const f = attachNativeProfiles(grouped ? createGroupedV5Fixture({ ...options, groups: [[1], [2, 3]] })
+      : createV5Fixture({ ...options, frameHours: [1, 2, 3] }), { groupSize: grouped ? 1 : 3 });
     splitLastNativePacks(f);
-    const point = nativePoint(20, 8), result = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=all`)));
+    const point = nativePoint(20, 8), result = await read(await f.request(path(f, `lat=${point.lat}&lon=${point.lon}&frame=h003,h001`)));
     expect(result.cell?.index).toBe(8 * 32 + 20);
+    expect(result.frames.map(frame => frame.id)).toEqual(['h001', 'h003']);
     for (const [index, frame] of result.frames.entries()) {
       expect(frame.profile.modelTerrainM).toBe(120);
-      expect(frame.profile.levels[0]!.temperatureC).toBe(15 + index);
+      expect(frame.profile.levels[0]!.temperatureC).toBe(15 + 2 * index);
       expect(frame.profile.levels[0]!.uWindMps).toBe(22);
-      expect(frame.layers['sfc-temp-c']!.value).toBeCloseTo(20.2);
+      expect(frame.layers['sfc-temp-c']!.value).toBeCloseTo(20.2 + 2 * index);
     }
     expect(profileReads(f).some(([key]) => key.endsWith('-b1.bin'))).toBe(true);
-    const scalar = sampleResponseV5Schema.parse(await (await f.sample(point.lat, point.lon, '&frame=h002&layers=sfc-temp-c')).json());
-    expect(scalar.frames[0]!.layers['sfc-temp-c']!.value).toBeCloseTo(20.2);
+    const scalar = sampleResponseV5Schema.parse(await (await f.sample(point.lat, point.lon, '&frame=h003&layers=sfc-temp-c')).json());
+    expect(scalar.frames[0]!.layers['sfc-temp-c']!.value).toBe(result.frames[1]!.layers['sfc-temp-c']!.value);
     assertReleased(f);
   });
 

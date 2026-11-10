@@ -55,7 +55,7 @@ export function formatPointMapLift(lift: ReturnType<typeof pointMapLift>, units:
   const regime = cloudRegime(support);
   return [
     `MSL ${formatMapLiftCell(lift.msl, units)}`, `AGL ${formatMapLiftCell(lift.agl, units)}`,
-    `Terrain ${lift.terrainM === null ? 'unknown' : formatAltitude(lift.terrainM, units)}`,
+    `Surface elevation ${lift.terrainM === null ? 'unknown' : formatAltitude(lift.terrainM, units)}`,
     ...(regime ? [`Map ${regime}`] : []), ...(support & SUPPORT_CLOUD_CAPPED ? ['Map cloud capped'] : [])
   ].join(' · ');
 }
@@ -140,7 +140,8 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
   ];
   if (manifest.version === 5) {
     for (const surface of manifest.surfaces) {
-      rows.push([`Surface ${surface.id}`, `${surface.grid.width} × ${surface.grid.height} · ${gridSpacing(surface.grid)} · ${surface.layers.join(', ')} · z0–${surface.coverage.maxZoom}`]);
+      const elevation = surface.terrain ? ` · ${surface.terrain.surface} · ${surface.terrain.verticalDatum}` : '';
+      rows.push([`Surface ${surface.id}`, `${surface.grid.width} × ${surface.grid.height} · ${gridSpacing(surface.grid)} · ${surface.layers.join(', ')} · z0–${surface.coverage.maxZoom}${elevation}`]);
     }
   } else {
     rows.push(

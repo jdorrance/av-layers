@@ -29,10 +29,10 @@ The [terrain example](docs/development.md#terrain-refinement) uses
 
 ## Development checks
 
+Complete [setup](docs/development.md#setup) in each new worktree.
 Run `pnpm test` while working and `pnpm verify` before submitting a change.
 `pnpm build` bundles the apps locally.
 
-pnpm installs the Node version declared in `package.json`.
 [Local development](docs/development.md) covers test data and server options.
 
 ## Project layout

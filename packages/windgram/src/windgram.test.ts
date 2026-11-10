@@ -95,7 +95,7 @@ describe('Windgram data', () => {
     const result = forecast(frames);
     expect(result.site.timeZone).toBe('Etc/GMT+5');
     const lift = result.hours.map(hour => hour.mapLift);
-    expect(formatPointMapLift(lift[0], 'metric')).toBe('MSL 1300 m · AGL 350 m · Terrain unknown · Map Cu');
+    expect(formatPointMapLift(lift[0], 'metric')).toBe('MSL 1300 m · AGL 350 m · Surface elevation unknown · Map Cu');
     expect(lift[0].agl).toMatchObject({ value: 350, interpolated: true, surfaceId: 'gfs-fine' });
     expect(lift[1].agl).toMatchObject({ value: 0, status: 'no-usable-lift' });
     expect(formatPointMapLift(lift[1], 'metric')).toContain('AGL no usable lift');
