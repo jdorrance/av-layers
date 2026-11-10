@@ -160,6 +160,17 @@ async function validateProduct(m: PublishedManifest, product: ProductDefinition 
   }
 }
 
+function sameDescriptorValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left)) {
+    return Array.isArray(right) && left.length === right.length && left.every((value, index) => sameDescriptorValue(value, right[index]));
+  }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(right)) return false;
+  const entries = Object.entries(left), fields = right as Record<string, unknown>;
+  return entries.length === Object.keys(fields).length &&
+    entries.every(([key, value]) => Object.hasOwn(fields, key) && sameDescriptorValue(value, fields[key]));
+}
+
 async function checkProduct(m: PublishedManifest, product: ProductDefinition): Promise<void> {
   if (m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
@@ -175,7 +186,7 @@ async function checkProduct(m: PublishedManifest, product: ProductDefinition): P
       expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
     }
     if (product.terrainSubdivisionFactor === undefined
-        || JSON.stringify(m.descriptors) !== JSON.stringify(expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+        || !sameDescriptorValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
     let plan: ReturnType<typeof planWholeDomainGrid>;
     try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
     catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }

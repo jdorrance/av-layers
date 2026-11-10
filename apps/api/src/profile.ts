@@ -92,12 +92,16 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             wind10mU: value('wind-10m-u'), wind10mV: value('wind-10m-v'),
             levels: column.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN, temperatureC: level.temperatureC ?? NaN,
               uMps: level.uWindMps, vMps: level.vWindMps })) };
-          const thermalTopM = value('thermal-top-msl'), terrainM = column.modelTerrainM;
+          const storedTopM = value('thermal-top-msl'), terrainM = column.modelTerrainM, thermalVelocityMps = value('thermal-velocity');
+          // V1 stores whole-metre terrain alongside the Float32 scalar top.
+          const thermalTopM = storedTopM !== null && Math.round(storedTopM) === terrainM && (thermalVelocityMps ?? 0) <= 0
+            ? terrainM : storedTopM;
           const layerTop = terrainM === null ? null : thermalTopM !== null && thermalTopM > terrainM ? thermalTopM
             : native.pblHeightM !== null && native.pblHeightM >= 0 ? terrainM + native.pblHeightM : thermalTopM === terrainM ? terrainM : null;
-          const thermalTopRhPercent = nativeColumnHumidityAtHeight(native, thermalTopM);
+          const thermalTopRhPercent = thermalTopM !== null && terrainM !== null && thermalTopM >= terrainM
+            ? nativeColumnHumidityAtHeight(native, thermalTopM) : null;
           const cloud = nativeColumnCloudDiagnostics(native, layerTop), wind = nativeColumnWindAtHeight(native, layerTop);
-          const derived = deriveSoaringViews({ terrainM, thermalTopM, thermalVelocityMps: value('thermal-velocity'),
+          const derived = deriveSoaringViews({ terrainM, thermalTopM, thermalVelocityMps,
             thermalTopRhPercent, surfaceLclM: value('surface-lcl-msl'), mixedLayerLclM: cloud.mixedLayerLclM,
             effectiveCloudLimitM: cloud.effectiveCloudLimitM, wind10mU: native.wind10mU, wind10mV: native.wind10mV,
             blMeanWindU: value('bl-mean-wind-u'), blMeanWindV: value('bl-mean-wind-v'), blTopWindU: wind.blTopWindU, blTopWindV: wind.blTopWindV });
@@ -108,5 +112,5 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       if (encoded.byteLength > MAX_POINT_RESPONSE_BYTES) fail(429, 'sample-limit', 'Profile response exceeds the byte budget');
       return response(encoded, 'application/json; charset=utf-8', m.expiresAt, await waitFor(sha256(encoded), request.signal));
     } finally { for (const release of releases) release(); }
-  }, 'profile-v1');
+  }, 'profile-v2');
 }

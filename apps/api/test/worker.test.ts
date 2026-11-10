@@ -287,7 +287,10 @@ describe('read-only worker', () => {
     await Promise.all(results.map(async response => {
       const body = await response.text();
       if (response.status === 200) expect(body).toBe(new TextDecoder().decode(receipt.bytes));
-      else { expect(JSON.parse(body).title).toBe('resource-limit'); expect(response.headers.get('cache-control')).toBe('no-store'); }
+      else {
+        expect(JSON.parse(body)).toMatchObject({ title: 'resource-limit', detail: 'Serving resource budget exceeded' });
+        expect(response.headers.get('cache-control')).toBe('no-store');
+      }
     }));
     expect((await call('/healthz')).status).toBe(200);
   });
@@ -328,6 +331,18 @@ describe('read-only worker', () => {
     }
     expect(bucket.reads).toHaveLength(0);
     expect(cache.matches).toBe(0);
+  });
+
+  it('serves pinned Swagger assets with integrity and a CSP matching the inline initializer', async () => {
+    const docs = await call('/docs');
+    expect(docs.status).toBe(200);
+    const html = await docs.text();
+    expect(html.match(/swagger-ui-dist@5\.34\.1\/swagger-ui(?:-bundle\.js|\.css)/g)).toHaveLength(2);
+    expect(html.match(/integrity="sha384-[^"]+" crossorigin="anonymous"/g)).toHaveLength(2);
+    const init = html.match(/<script>([^<]+)<\/script>/)?.[1] ?? '';
+    expect(init).toContain('validatorUrl:null');
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(init)));
+    expect(docs.headers.get('content-security-policy')).toContain(`'sha256-${btoa(String.fromCharCode(...digest))}'`);
   });
 
   it('routes metadata, palette suffixes, tilejson and generated OpenAPI', async () => {
@@ -558,7 +573,7 @@ describe('read-only worker', () => {
     expect((await call('/v1/models/gfs/runs')).status).toBe(200);
     expect(bucket.reads.filter(r => r.key === 'catalog/gfs/latest.json')).toHaveLength(2);
   });
-  it('advertises only admitted production products and returns 503 when a published manifest is invalid', async () => {
+  it('advertises only admitted production products and identifies a missing manifest', async () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
     expect(catalog.models.map(m => m.model)).toEqual(PRODUCTS.map(product => product.modelId));
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
@@ -566,7 +581,11 @@ describe('read-only worker', () => {
     const broken = publication('build-broken');
     bucket.install(broken);
     bucket.objects.delete(broken.retained.manifestKey);
-    expect((await call('/v1/catalog')).status).toBe(503);
+    const incomplete = await call('/v1/catalog');
+    expect(incomplete.status).toBe(200);
+    expect(await incomplete.json()).toMatchObject({ models: expect.arrayContaining([
+      expect.objectContaining({ model: 'gfs', available: false, error: 'publication-incomplete' })
+    ]) });
     bucket = new MemoryBucket();
     const unavailable = await call('/v1/catalog');
     expect(unavailable.status).toBe(200);

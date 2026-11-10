@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createApp } from '../src/index';
+import { reserveAllocation } from '../src/resources';
 import { NOW, createV5Fixture } from './v5-fixture';
 
 type Fixture = ReturnType<typeof createV5Fixture>;
@@ -144,7 +145,8 @@ it('caps runs at retained expiry and re-filters when cache lookup crosses that d
   expect((await crossed.json() as { retained: unknown[] }).retained).toHaveLength(1);
 });
 
-it.each(['/v1/models/gfs/latest', '/v1/catalog'])('rejects a build expiring during edge lookup: %s', async path => {
+it('rejects a pinned latest build expiring during edge lookup', async () => {
+  const path = '/v1/models/gfs/latest';
   const fixture = createV5Fixture();
   await call(fixture, path);
   const match = cache.match.bind(cache);
@@ -152,6 +154,61 @@ it.each(['/v1/models/gfs/latest', '/v1/catalog'])('rejects a build expiring duri
   const expired = await call(fixture, path);
   expect(expired.status).toBe(404);
   expect(expired.headers.get('cache-control')).toBe('no-store');
+});
+
+it.each(['publication-invalid', 'publication-incomplete', 'not-retained'] as const)('isolates and recovers a catalog model with %s', async error => {
+  const fixture = createV5Fixture(), other = createV5Fixture({ product: { ...fixture.product, modelId: 'rrfs' } });
+  for (const [key, value] of other.objects) fixture.objects.set(key, value);
+  const app = createApp({ products: { gfs: fixture.product, rrfs: other.product } });
+  const pointerKey = 'catalog/rrfs/latest.json', manifestKey = `builds/rrfs/${other.buildId}/manifest.json`;
+  if (error === 'publication-invalid') fixture.objects.set(pointerKey, new TextEncoder().encode('{}'));
+  else if (error === 'publication-incomplete') fixture.objects.delete(manifestKey);
+  else {
+    const current = JSON.parse(new TextDecoder().decode(other.objects.get(pointerKey)!));
+    current.retained[0].expiresAt = new Date(NOW).toISOString();
+    fixture.objects.set(pointerKey, new TextEncoder().encode(JSON.stringify(current)));
+  }
+  const first = await call(fixture, '/v1/catalog', { app });
+  expect(first.status).toBe(200);
+  expect(first.headers.get('x-av-response-cache')).toBe('bypass');
+  expect(await first.json()).toMatchObject({ models: [{ model: 'gfs', available: true }, { model: 'rrfs', available: false, error }] });
+  expect(cache.puts).toBe(0);
+  const latest = await call(fixture, '/v1/models/rrfs/latest', { app });
+  expect(latest.status).toBe(error === 'not-retained' ? 404 : 503);
+  expect(await latest.json()).toMatchObject({ title: error });
+
+  for (const key of [pointerKey, manifestKey]) fixture.objects.set(key, other.objects.get(key)!);
+  if (error === 'not-retained') vi.setSystemTime(NOW + 15_000);
+  const recovered = await call(fixture, '/v1/catalog', { app });
+  expect(recovered.headers.get('x-av-response-cache')).toBe('miss');
+  expect(await recovered.json()).toMatchObject({ models: [{ model: 'gfs', available: true }, { model: 'rrfs', available: true }] });
+});
+
+it('marks only the catalog build expiring during edge lookup unavailable', async () => {
+  const fixture = createV5Fixture(), other = createV5Fixture({ product: { ...fixture.product, modelId: 'rrfs' } });
+  const expiry = new Date(NOW + 2000).toISOString();
+  writePointer(fixture, { ...pointer(fixture), retained: [{ ...pointer(fixture).retained[0], expiresAt: expiry }] });
+  fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify({ ...fixture.manifest, expiresAt: expiry })));
+  for (const [key, value] of other.objects) fixture.objects.set(key, value);
+  const app = createApp({ products: { gfs: fixture.product, rrfs: other.product } });
+  expect((await call(fixture, '/v1/catalog', { app })).status).toBe(200);
+  const match = cache.match.bind(cache);
+  vi.spyOn(cache, 'match').mockImplementation(async request => { const response = await match(request); vi.setSystemTime(Date.parse(expiry)); return response; });
+  const expired = await call(fixture, '/v1/catalog', { app });
+  expect(expired.status).toBe(200);
+  expect(expired.headers.get('cache-control')).toBe('no-store');
+  expect(await expired.json()).toMatchObject({ models: [{ model: 'gfs', available: false, error: 'not-retained' }, { model: 'rrfs', available: true }] });
+});
+
+it('keeps Worker allocation exhaustion a whole-catalog error', async () => {
+  const fixture = createV5Fixture(), release = reserveAllocation(32 * 1024 * 1024);
+  try {
+    const result = await call(fixture, '/v1/catalog');
+    expect(result.status).toBe(503);
+    expect(result.headers.get('cache-control')).toBe('no-store');
+    expect(await result.json()).toMatchObject({ title: 'resource-limit', detail: 'Serving resource budget exceeded' });
+    expect(cache.puts).toBe(0);
+  } finally { release(); }
 });
 
 it('bypasses response cache when disabled and keeps health and errors uncached', async () => {
