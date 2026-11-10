@@ -24,10 +24,18 @@ export function pointLiftExpectation(build: PinnedBuild): { layers: readonly Lay
   return { layers, frames: new Set(manifest.frames.slice(0, surfaceFrameCount(manifest, fine)).map(frame => frame.id)) };
 }
 
+function nativeSurface({ manifest }: PinnedBuild) {
+  return manifest.version === 5 ? manifest.surfaces.find(surface => surface.kind === 'native') : undefined;
+}
+
+export function hasNativeProfiles(build: PinnedBuild): boolean {
+  return nativeSurface(build)?.profiles !== undefined;
+}
+
 function pointSelection(build: PinnedBuild) {
-  const { manifest } = build;
-  const native = manifest.version === 5 ? manifest.surfaces.find(surface => surface.kind === 'native') : undefined;
+  const native = nativeSurface(build);
   if (!native?.profiles) {
+    const { manifest } = build;
     const layers = scalarFields.filter(layer => manifest.layers.includes(layer));
     return { layers, sample: { layers, frames: undefined }, profile: null };
   }
@@ -53,6 +61,13 @@ function pointFrames(manifest: PublishedManifest, horizon: PointHorizon) {
 export function pointSeriesSelection(build: PinnedBuild, horizon: PointHorizon = 'day') {
   const { layers } = pointSelection(build);
   return { layers, frames: layers.length ? pointFrames(build.manifest, horizon) : [] };
+}
+
+/** Choose the first preferred frame in the requested point horizon. */
+export function selectPointFrame(frames: readonly string[], preferred: string | null, fallback: string | null): string | null {
+  if (preferred !== null && frames.includes(preferred)) return preferred;
+  if (fallback !== null && frames.includes(fallback)) return fallback;
+  return frames[0] ?? null;
 }
 
 type ReadPage = (frames: readonly string[], layers: readonly LayerId[], signal: AbortSignal) => Promise<{ frames: readonly PointFrame[] }>;
@@ -115,16 +130,23 @@ export function createPointSeriesLoader(
           assertActive();
         };
         let outstanding = plans.reduce((count, plan) => count + plan.requests.length, 0);
-        if (outstanding && cache.has(first)) progress(true);
+        // Fetch both sources in parallel, but give the selected map sample the first view.
+        let selectedLiftPending = sample.layers.length > 0 && sample.frames?.has(first) === true && !sampled.has(first);
+        if (outstanding && !selectedLiftPending && cache.has(first)) progress(true);
         let failure: { cause: unknown } | undefined;
         const settled = await Promise.allSettled(plans.map(async ({ source, requests }) => {
           for (const [index, ids] of requests.entries()) {
+            const selectsLift = selectedLiftPending && source.ready === sampled;
             let response;
             try { response = await source.read(ids, source.layers, controller.signal); }
             catch (cause) {
               assertActive();
               failure ??= { cause };
               outstanding -= requests.length - index;
+              if (selectsLift) {
+                selectedLiftPending = false;
+                if (outstanding && cache.has(first)) progress(true);
+              }
               return;
             }
             assertActive();
@@ -135,7 +157,8 @@ export function createPointSeriesLoader(
                 : frame);
               source.ready.add(frame.id);
             }
-            if (--outstanding > 0) progress(true);
+            if (selectsLift) selectedLiftPending = false;
+            if (--outstanding > 0 && !selectedLiftPending) progress(true);
           }
         }));
         for (const result of settled) if (result.status === 'rejected') throw result.reason;

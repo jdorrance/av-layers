@@ -2,13 +2,13 @@
 // Keeps the stability interval-field contract and temperature point-isotherm
 // contract distinct and returns connected contour components and label candidates.
 
-import type { FieldNode, HourSampling } from './internal-meteo.ts';
+import type { HourSampling } from './internal-meteo.ts';
 import {
   celsiusToFahrenheit,
   convertQuantity,
   type UnitSystem,
 } from './windgram-format.ts';
-import { crossings, sampleHeight, type Point } from './windgram-sampling.ts';
+import { crossings, sampleField, sampleHeight, type Point } from './windgram-sampling.ts';
 import { heightToY, yToHeight, type WindgramScale } from './windgram-scale.ts';
 import { hourX } from './windgram-time-axis.ts';
 
@@ -110,11 +110,9 @@ function buildContourComponentsFromSegments(
  * in one hour separate from adjacent hours.
  */
 export function buildStabilityFieldPaths(args: {
-  nodesByHour: readonly (readonly FieldNode[])[];
+  nodesByHour: readonly (readonly { distanceFromBottomPx: number; value: number }[])[];
   hours: readonly { x: number }[];
   columnWidth: number;
-  floorM: number;
-  topM: number;
   plotTop: number;
   plotBottom: number;
   banding: { breakpoints: readonly number[]; classNames: readonly string[] };
@@ -124,11 +122,10 @@ export function buildStabilityFieldPaths(args: {
   const columnsPerHour = 8;
   const rowHeightPx = 3;
 
-  const valueAt = (hourIndex: number, altitudeM: number): number | null => {
+  const valueAt = (hourIndex: number, distancePx: number): number | null => {
     const nodes = args.nodesByHour[hourIndex];
-    if (!nodes || nodes.length === 0 || altitudeM < nodes[0].altitudeM) return null;
-    const clampedAlt = Math.min(altitudeM, nodes[nodes.length - 1].altitudeM);
-    return sampleHeight(nodes, clampedAlt);
+    if (!nodes.length) return null;
+    return sampleField(nodes, Math.min(distancePx, nodes[nodes.length - 1].distanceFromBottomPx), 'distanceFromBottomPx');
   };
 
   const columns = hourCount * columnsPerHour;
@@ -141,8 +138,8 @@ export function buildStabilityFieldPaths(args: {
   const rows = Math.max(1, Math.ceil(plotHeight / rowHeightPx));
   const values: (number | null)[][] = [];
   for (let row = 0; row <= rows; row += 1) {
-    const altitudeM = args.topM - (row / rows) * (args.topM - args.floorM);
-    const atHour = args.nodesByHour.map((_, hourIndex) => valueAt(hourIndex, altitudeM));
+    const distancePx = plotHeight - (row / rows) * plotHeight;
+    const atHour = args.nodesByHour.map((_, hourIndex) => valueAt(hourIndex, distancePx));
     values.push(times.map(({ lower, upper, fraction }) => {
       const a = atHour[lower], b = atHour[upper];
       if (lower === upper) return a;

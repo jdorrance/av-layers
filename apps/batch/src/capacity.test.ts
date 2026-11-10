@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
-import { BUILD_BUDGETS, checkPerformance, estimateCapacity, normalizedFrameBytes, prepareBuild } from './capacity.js';
+import { BUILD_BUDGETS, checkPerformance, estimateCapacity, estimateRetention, normalizedFrameBytes, prepareBuild } from './capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,14 @@ it('counts auxiliary fields in the shared normalized-frame memory estimate', () 
   const { capacity, indices } = prepareBuild(mask, product, resources);
   expect(capacity.workingSet.normalizedFrame).toBe(normalizedFrameBytes(indices.active.length, product.capabilities.verticalCoordinate, resources));
   expect(() => normalizedFrameBytes(100, 'isobaric', { ...resources, auxiliaryLevelFields: -1 })).toThrow('dimensions');
+});
+
+it('bounds scheduled starts for stepped, overlapping and manual-only schedules', () => {
+  const schedules = ['*/30 1-5/2,5 * * 1-5', '15 8 * * *'];
+  expect(estimateRetention(schedules, { retentionDays: 1.5 })).toMatchObject({
+    cadenceHours: 24 / 7, retainedPerModel: 14, retentionBasis: 'schedule', violations: []
+  });
+  expect(estimateRetention([])).toMatchObject({ cadenceHours: null, retainedPerModel: 0, violations: [] });
 });
 
 it('admits aggregate scalar and profile bytes independently of the per-shard limit', () => {
@@ -72,13 +80,18 @@ describe('build capacity admission and performance budgets', () => {
     expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, product, { maxLevels: 1 })).toThrow('before acquisition');
   });
   it('counts selected frames and layers before acquisition', () => {
-    const { mask, product } = input(), { capacity, layout, indices } = prepareBuild(mask, product, { maxLevels: 1 });
+    const { mask, product: base } = input();
+    const product = { ...base, execution: { ...base.execution, schedule: ['25 0,6,12,18 * * *'] } };
+    const { capacity, layout, indices } = prepareBuild(mask, product, { maxLevels: 1 });
     expect(indices.active.length).toBe(4);
     expect(capacity).toMatchObject({
       tilesByZoom: TILES_BY_ZOOM,
       tiles: TOTAL_TILES,
       quarterSamples: TOTAL_TILES * 256 * 256 * 4,
       samplePackBytes: SAMPLE_PACK_BYTES,
+      cadenceHours: 6,
+      retainedPerModel: 28,
+      retainedSampleBytes: 28 * SAMPLE_PACK_BYTES,
       point: { reads: 1, worstCaseRangeBytes: 570, values: 6 },
       violations: []
     });

@@ -17,19 +17,24 @@ const round = (n: number) => Math.round(n * 100) / 100;
 
 /** Linear interpolation in physical height. Never bridge an explicitly missing level. */
 export function sampleHeight(nodes: readonly FieldNode[], heightM: number): number | null {
-  if (!nodes.length || heightM < nodes[0].altitudeM || heightM > nodes[nodes.length - 1].altitudeM) return null;
+  return sampleField(nodes, heightM, 'altitudeM');
+}
+
+/** Interpolate an ordered field along its declared axis, preserving gaps. */
+export function sampleField<Axis extends string>(nodes: readonly (Record<Axis, number> & { value: number })[], position: number, axis: Axis): number | null {
+  if (!nodes.length || position < nodes[0][axis] || position > nodes[nodes.length - 1][axis]) return null;
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
-    if (Math.abs(a.altitudeM - heightM) < 0.00001) {
+    if (Math.abs(a[axis] - position) < 0.00001) {
       if (Number.isFinite(a.value)) return a.value;
       const next = nodes[i + 1];
-      if (next && Math.abs(next.altitudeM - heightM) < 0.00001 && Number.isFinite(next.value)) return next.value;
+      if (next && Math.abs(next[axis] - position) < 0.00001 && Number.isFinite(next.value)) return next.value;
       return null;
     }
     const b = nodes[i + 1];
-    if (b && heightM > a.altitudeM && heightM < b.altitudeM) {
+    if (b && position > a[axis] && position < b[axis]) {
       if (!Number.isFinite(a.value) || !Number.isFinite(b.value)) return null;
-      return a.value + (b.value - a.value) * (heightM - a.altitudeM) / (b.altitudeM - a.altitudeM);
+      return a.value + (b.value - a.value) * (position - a[axis]) / (b[axis] - a[axis]);
     }
   }
   return null;

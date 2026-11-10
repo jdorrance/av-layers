@@ -1,14 +1,15 @@
 // Assemble time, altitude and profile geometry for a Windgram day.
 
 import { windFromComponents } from '@av/soaring';
+import { getProduct } from '@av/contracts';
 import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast } from './internal-meteo.ts';
 import type { WindgramLayout, WindgramHour as PublicHour, WindgramOptions } from './scene-types.ts';
 import {
   celsiusToFahrenheit,
   convertQuantity,
   finiteScalar,
+  gustNoun,
   mpsToKnots,
-  type GustSemantics,
   type UnitSystem,
 } from './windgram-format.ts';
 import {
@@ -71,8 +72,8 @@ export interface WindgramHour extends PublicHour {
   gustKt: number | null;
 }
 export interface WindgramView extends WindgramLayout {
-  /** The document's declared gust class; null when the document predates the tag. */
-  gustSemantics: GustSemantics | null;
+  gustLabel: string;
+  capeLabel: string;
   precipitationSemantics: 'instantRate' | 'windowMeanRate' | null;
   sourceHours: readonly ProfileHour[];
   presentation: WindgramPresentation;
@@ -114,6 +115,11 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
 
   const sampling = hours.map(hourSampling);
   const labelTime = new Intl.DateTimeFormat('en-US', { timeZone: options.timeZone, hour: 'numeric', minute: '2-digit', hour12: true });
+  const surface = getProduct(profile.model)?.upstream.auxSurface as
+    { capeJkg?: { field?: string; level?: string }; gust10mMps?: { field?: string; level?: string } } | undefined;
+  const cape = surface?.capeJkg;
+  const gust = surface?.gust10mMps;
+  const gustSource = gust?.field === 'VMAX_10M' ? '10 m ' : gust?.level === 'surface' ? 'Surface ' : '';
 
   const view: WindgramView = {
     unitSystem: system,
@@ -128,7 +134,8 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     columnWidth,
     floorM,
     topM,
-    gustSemantics: profile.semantics.gust,
+    gustLabel: `${gustSource}${gustNoun(profile.semantics.gust)}`,
+    capeLabel: cape?.field === 'CAPE_ML' ? 'Mixed-layer CAPE' : cape?.level === 'surface' ? 'Surface CAPE' : 'CAPE',
     precipitationSemantics: profile.semantics.precipitation,
     sourceHours: hours,
     timeZone: options.timeZone,
@@ -180,7 +187,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     const left = hourX(view.hours, i - 0.5, columnWidth);
     return { left, width: hourX(view.hours, i + 0.5, columnWidth) - left };
   });
-  const fieldNodes = sampling.map((s) => {
+  const stabilityPixelNodes = sampling.map((s) => {
     if (!s.lapseCPer1000Ft.some((n) => Number.isFinite(n.value))) return [];
     const displayNodes = stabilityDisplayNodes(s.lapseCPer1000Ft);
     const nodes = displayNodes.filter(n => n.altitudeM >= floorM && n.altitudeM <= topM);
@@ -190,14 +197,13 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     if (nodes.length && nodes.at(-1)!.altitudeM < topM && displayNodes.at(-1)!.altitudeM > topM) {
       nodes.push({ altitudeM: topM, value: sampleHeight(displayNodes, topM) ?? NaN });
     }
-    return nodes.map((n) => ({ altitudeM: bottom - y(n.altitudeM), value: n.value }));
+    // The stability raster interpolates along the chart's vertical scale in pixels.
+    return nodes.map((n) => ({ distanceFromBottomPx: bottom - y(n.altitudeM), value: n.value }));
   });
-  const fields = fieldNodes.some(nodes => nodes.length) ? buildStabilityFieldPaths({
-    nodesByHour: fieldNodes,
+  const fields = stabilityPixelNodes.some(nodes => nodes.length) ? buildStabilityFieldPaths({
+    nodesByHour: stabilityPixelNodes,
     hours: view.hours,
     columnWidth,
-    floorM: 0,
-    topM: plotHeight,
     plotTop: top,
     plotBottom: bottom,
     banding: {
@@ -206,19 +212,19 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     },
   }) : {};
   view.fields = Object.entries(fields).map(([className, path]) => ({ className, path }));
-  fieldNodes.forEach((nodes, i) => {
+  stabilityPixelNodes.forEach((nodes, i) => {
     const rawNodes = sampling[i].lapseCPer1000Ft;
     const { left, width } = bounds[i];
     const validNodes = nodes.filter((n) => Number.isFinite(n.value));
-    const highestValidAlt = validNodes.length ? validNodes[validNodes.length - 1].altitudeM : 0;
+    const highestValidPx = validNodes.at(-1)?.distanceFromBottomPx ?? 0;
     // Mask any missing internal intervals below the last valid measurement.
     let missingSpan: { baseY: number; topY: number } | null = null;
     for (let k = 0; k + 1 < rawNodes.length; k += 2) {
       const a = rawNodes[k], b = rawNodes[k + 1];
       if (Number.isFinite(a.value) && Number.isFinite(b.value)) continue;
-      const dispTop = bottom - y(b.altitudeM);
-      if (dispTop > highestValidAlt + 0.001) continue;
-      const baseY = y(a.altitudeM), topY = y(b.altitudeM);
+      const topY = y(b.altitudeM);
+      if (bottom - topY > highestValidPx + 0.001) continue;
+      const baseY = y(a.altitudeM);
       if (missingSpan && Math.abs(missingSpan.topY - baseY) < 0.05) missingSpan.topY = topY;
       else {
         if (missingSpan && missingSpan.baseY > missingSpan.topY) {
@@ -237,7 +243,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
       });
     }
     // Mask any truncated top extension above the highest valid node.
-    const missingHeight = validNodes.length ? bottom - highestValidAlt - top : plotHeight;
+    const missingHeight = validNodes.length ? bottom - highestValidPx - top : plotHeight;
     if (missingHeight > 0) {
       view.fields.push({
         className: 'windgram-missing',
@@ -294,7 +300,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
   for (const [key, label, color, dash, height] of [
     ['thermalTopM', 'Native thermal top (parcel)', '#a56800', '7 5', (hour: ProfileHour) => hour.thermalTopM],
     ['usableLiftTopM', 'Map usable lift', '#134ac4', null, (hour: ProfileHour) => hour.mapLift.mslM],
-    ['terrainM', 'Fine terrain', '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
+    ['terrainM', 'Fine surface elevation', '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
     ['surfaceLclM', 'Native potential cloud base (surface LCL)', '#426173', '2 5', (hour: ProfileHour) => hour.surfaceLclM],
     ['effectiveCloudLimitM', 'Native effective cloud limit', '#247e73', '5 2', (hour: ProfileHour) => {
       const { surfaceLclM: base, effectiveCloudLimitM: limit } = hour;

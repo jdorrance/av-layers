@@ -1,5 +1,5 @@
 // Format inspector readings; DOM interaction lives in windgram-dom.ts.
-import { fahrenheitToCelsius, formatQuantity, gustNoun, knotsToMps, type UnitSystem } from './windgram-format.ts';
+import { fahrenheitToCelsius, formatQuantity, knotsToMps, type UnitSystem } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import type { WindgramView } from './windgram-view.ts';
 import type { WindgramReading } from './scene-types.ts';
@@ -23,9 +23,9 @@ function surfaceDetails(view: WindgramView, reading: WindgramReading): string[] 
     : `${formatQuantity(speed, 'wind', undefined, system)}${direction === null || speed === 0 ? '' : ` from ${degrees(direction)}`}`;
   return [
     `Model surface wind ${wind(reading.surfaceWindSpeedMps, reading.surfaceWindDirectionDeg)}`,
-    reading.gustKt === null ? null : `Surface ${gustNoun(view.gustSemantics)} ${barbSpeed(reading.gustKt, system)}`,
+    reading.gustKt === null ? null : `${view.gustLabel} ${barbSpeed(reading.gustKt, system)}`,
     reading.precipitationMmHr === null ? 'Rain rate unavailable' : `${rainLabel} ${formatQuantity(reading.precipitationMmHr, 'rainRate', undefined, system)}`,
-    `CAPE ${reading.capeJkg === null ? 'unavailable' : `${Math.round(reading.capeJkg)} J/kg`}`,
+    `${view.capeLabel} ${reading.capeJkg === null ? 'unavailable' : `${Math.round(reading.capeJkg)} J/kg`}`,
     ...([['Model ground', reading.modelTerrainM], ['Native potential cloud base (surface LCL)', reading.cloudBaseM],
       ['Native effective cloud limit', reading.effectiveCloudLimitM],
       ['Native thermal top (parcel)', reading.nativeThermalTopM],

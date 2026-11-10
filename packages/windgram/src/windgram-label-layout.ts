@@ -7,14 +7,14 @@ import { cloudGlyphBounds, freezingGlyphBounds, windBarbGlyph } from './windgram
 import { resolveWindgramPresentation } from './windgram-presentation.ts';
 import type { WindgramBarb, WindgramCloud, WindgramView } from './windgram-view.ts';
 
-export interface LabelBox {
+interface LabelBox {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-export const overlaps = (a: LabelBox, b: LabelBox, padding = 0): boolean =>
+const overlaps = (a: LabelBox, b: LabelBox, padding = 0): boolean =>
   a.x < b.x + b.width + padding &&
   a.x + a.width > b.x - padding &&
   a.y < b.y + b.height + padding &&

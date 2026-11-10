@@ -3,20 +3,22 @@ import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
 import { formatPointMapLift, type PointFrame } from '@av/contracts/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
-import { pointSeriesToSiteForecast, timeZoneForLongitude } from './from-av-profile.ts';
+import { createPointForecast } from './from-av-profile.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
 import { buildWindgramView, readWindgram } from './scene.ts';
+import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
+import { formatWindgramReading } from './windgram-readout.ts';
 
 const point = { lat: 37.65, lon: -79.8 };
 
-function fixture(hours: readonly number[]) {
-  const build = fixtureProfileBuild({ frameHours: hours, mapFrameCount: hours.length });
+function fixture(hours: readonly number[], mapFrameCount = hours.length) {
+  const build = fixtureProfileBuild({ frameHours: hours, mapFrameCount });
   const expectedFrames = build.manifest.frames.map(frame => frame.id);
   const url = `https://api.test/point?lat=${point.lat}&lon=${point.lon}&frame=${expectedFrames.join(',')}&layers=`;
   const sample = fixturePointSample(build, url + 'usable-lift-msl,usable-lift-agl');
   const profile = fixtureProfileResponse(build, url + 'thermal-top-msl,pbl-height-agl,thermal-velocity,sfc-temp-c,wind-gust-10m');
-  const forecast = (frames: readonly PointFrame[]) => pointSeriesToSiteForecast({ frames }, build, { point, expectedFrames });
+  const forecast = (frames: readonly PointFrame[]) => createPointForecast(build, point)(build.manifest.frames, new Map(frames.map(frame => [frame.id, frame])));
   const view = (frames: readonly PointFrame[], compact = false) => {
     const site = forecast(frames);
     return buildWindgramView(site, { unitSystem: 'metric', compact, timeZone: site.site.timeZone, hours: site.hours });
@@ -44,7 +46,7 @@ class FakeElement {
   checked = false;
   tabIndex = -1;
   clientWidth = 420;
-  constructor(readonly tag: string) {}
+  constructor(readonly tag: string, readonly ownerDocument?: Document) {}
   append(...children: FakeElement[]): void {
     for (const child of children) child.parent = this;
     this.children.push(...children);
@@ -91,7 +93,7 @@ describe('Windgram data', () => {
       outside.layers[layer] = { ...outside.layers[layer], value: null, status: 'outside-domain' };
     }
     const result = forecast(frames);
-    expect(result.site.timeZone).toBe(timeZoneForLongitude(point.lon));
+    expect(result.site.timeZone).toBe('Etc/GMT+5');
     const lift = result.hours.map(hour => hour.mapLift);
     expect(formatPointMapLift(lift[0], 'metric')).toBe('MSL 1300 m · AGL 350 m · Terrain unknown · Map Cu');
     expect(lift[0].agl).toMatchObject({ value: 350, interpolated: true, surfaceId: 'gfs-fine' });
@@ -193,31 +195,72 @@ describe('Windgram data', () => {
     expect(renderWindgramKey('imperial')).toContain('Map usable lift');
   });
 
+  it.each([
+    ['gfs', 'instant', 'Surface CAPE', 'Surface gust sample'],
+    ['icon-eu', 'hourMax', 'Mixed-layer CAPE', '10 m hour-max gust'],
+    ['rrfs', 'instant', 'Surface CAPE', 'Surface gust sample'],
+  ] as const)('labels the %s surface inputs in the chart readout', (model, gust, capeLabel, gustLabel) => {
+    const { profile, forecast } = fixture([15]);
+    const site = forecast(profile.frames);
+    const scene = buildWindgramView({ ...site, model, semantics: { ...site.semantics, gust } }, { unitSystem: 'metric', timeZone: site.site.timeZone });
+    const reading = { ...readWindgram(scene, 0, 1800), capeJkg: 500, gustKt: 10 };
+    const text = formatWindgramReading(sceneData(scene), reading, 'surface').join(' · ');
+    expect(text).toContain(`${capeLabel} 500 J/kg`);
+    expect(text).toContain(gustLabel);
+  });
+
+  it('converts only changed hours as sample and profile pages arrive', () => {
+    const { build, sample, profile } = fixture(Array.from({ length: 120 }, (_, i) => i + 1), 24);
+    const convert = createPointForecast(build, point);
+    const frames = build.manifest.frames, first = sample.frames[0];
+    const loaded = new Map<string, PointFrame>([[first.id, first]]);
+    const before = convert(frames, loaded).hours;
+    loaded.set(first.id, { ...profile.frames[0], layers: { ...profile.frames[0].layers, ...first.layers } });
+    loaded.set(sample.frames[48].id, sample.frames[48]);
+    const after = convert(frames, loaded).hours;
+    expect(after.flatMap((hour, index) => hour === before[index] ? [] : [index])).toEqual([0, 48]);
+    expect(after[0].levels).toBe(profile.frames[0].profile.levels);
+    expect(convert(frames.slice(0, 24), loaded).hours[0]).toBe(after[0]);
+    expect(convert(frames, loaded).hours[48]).toBe(after[48]);
+  });
+
   it('reuses the mounted day chart across later-day progress pages and updates on resize or mode change', () => {
     const head = new FakeElement('head');
-    vi.stubGlobal('document', {
-      head,
-      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
-      createElement: (tag: string) => new FakeElement(tag)
-    });
+    const otherHead = new FakeElement('head');
+    vi.stubGlobal('document', { head: otherHead, createElement: (tag: string) => new FakeElement(tag) });
     let resizeCallback: (() => void) | null = null;
     const disconnected = vi.fn();
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: () => void) { resizeCallback = callback; }
-      observe(): void {}
-      disconnect(): void { disconnected(); }
-    });
-    const { build, sample, profile } = fixture([14, 15, 38, 39]);
+    let maxHeight = '58vh';
+    const owner = {
+      head,
+      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
+      createElement: (tag: string) => new FakeElement(tag, owner as unknown as Document),
+      defaultView: Object.assign(new EventTarget(), {
+        getComputedStyle: () => ({ maxHeight }),
+        ResizeObserver: class {
+          constructor(callback: () => void) { resizeCallback = callback; }
+          observe(): void {}
+          disconnect(): void { disconnected(); }
+        }
+      })
+    };
+    const { build, sample, profile } = fixture([14, 15, 29, 38, 39]);
     const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
-    const container = new FakeElement('div') as unknown as HTMLElement;
+    const root = owner.createElement('div');
+    const container = root as unknown as HTMLElement;
     const onFrame = vi.fn();
 
     renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 4, loading: true, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: true, onFrame
     });
-    const root = container as unknown as FakeElement;
     const host = visit(root).find(el => el.className === 'av-windgram-host')!;
-    expect(host.innerHTML).toContain('viewBox="0 0 420');
+    expect(host.ownerDocument).toBe(owner);
+    expect(head.children).toHaveLength(2);
+    expect(otherHead.children).toHaveLength(0);
+    expect(Number(/viewBox="0 0 420 (\d+)"/.exec(host.innerHTML)?.[1])).toBeGreaterThan(120);
+    maxHeight = '286px';
+    resizeCallback!();
+    expect(host.innerHTML).toContain('viewBox="0 0 420 286"');
     const htmlSpy = vi.fn();
     let currentHtml = host.innerHTML;
     Object.defineProperty(host, 'innerHTML', {
@@ -227,7 +270,7 @@ describe('Windgram data', () => {
 
     // Appending later-day frames keeps Day 1's mounted SVG untouched.
     renderPointWindgram(container, { frames }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 4, loading: false, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
     });
     expect(htmlSpy).not.toHaveBeenCalled();
 
@@ -243,6 +286,15 @@ describe('Windgram data', () => {
     resizeCallback!();
     expect(htmlSpy).toHaveBeenCalledOnce();
     expect(host.innerHTML).toContain('viewBox="0 0 640');
+
+    const laterDay = visit(root).filter(el => el.className === 'av-windgram-day').at(-1)!;
+    laterDay.dispatchEvent(new Event('click'));
+    expect(onFrame).toHaveBeenCalledExactlyOnceWith('f038');
+    renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
+      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 2, loading: false, onFrame
+    });
+    laterDay.dispatchEvent(new Event('click'));
+    expect(onFrame).toHaveBeenCalledTimes(1);
 
     disposePointWindgram(container);
     expect(disconnected).toHaveBeenCalledOnce();

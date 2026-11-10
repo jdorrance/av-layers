@@ -2,10 +2,10 @@ import { renderedFrames, type LayerId, type ModelId } from '@av/contracts';
 import {
   clampOpacity,
   DEFAULT_OPACITY,
-  forecastHorizonNotice,
+  mapForecastEnd,
+  mapForecastHorizonNotice,
   frameBadge,
   frameTileUrl,
-  frameTime,
   layerMaxZoom,
   hostTimestampMs,
   selectExplicitFrame,
@@ -177,7 +177,7 @@ export class PluginController {
       badge: this.badge,
       message: [this.message, this.failedTiles.size > 0 ? TILE_ERROR_MESSAGE : null].filter(Boolean).join('\n') || null,
       notice: this.notice,
-      horizonNotice: this.phase === 'ready' && this.build ? forecastHorizonNotice({ frames: renderedFrames(this.build.manifest) }, this.now()) : null
+      horizonNotice: this.phase === 'ready' && this.build ? mapForecastHorizonNotice(this.build.manifest, this.now()) : null
     };
   }
 
@@ -408,8 +408,8 @@ export class PluginController {
     if (!this.build) return;
     this.cancelTimeTimer();
     const now = this.now();
-    const horizonEnd = Math.max(...renderedFrames(this.build.manifest).map(frame => frameTime(frame.validTime)));
-    const nextChange = horizonEnd > now
+    const horizonEnd = mapForecastEnd(this.build.manifest);
+    const nextChange = horizonEnd !== null && horizonEnd > now
       ? Math.min(horizonEnd, this.build.expiresAtMs)
       : this.build.expiresAtMs;
     const delay = Math.max(0, nextChange - now) + 1;

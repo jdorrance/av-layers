@@ -5,6 +5,7 @@ import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from '.
 import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, binaryRead, countRead, readObjectBytes, waitFor, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 import { artifact, servedSource, type PublishedManifest } from './publication';
 import { cached, ensureLive, fail, json, response } from './http';
+import { readPackedRanges, type PackedRange } from './packed-ranges';
 import { readCoordinatePair, readPointCoordinates, selectSampleFields } from './point-query';
 
 interface Point { lat: number; lon: number }
@@ -79,7 +80,7 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
       }
       for (const job of jobs) {
         const value = plan && packed
-          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer])
+          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer], m.tool.useStoredMslNoLift)
           : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
         values.set(`${job.frame.id}/${job.layer}`, { ...value, ...(patchId ? { patchId } : {}) });
       }
@@ -153,7 +154,7 @@ interface V5Plan {
   cells: Map<number, Cell[]>;
 }
 interface V5Part { plan: V5Plan; packed: PackedSamplePlan; contributors: number[] }
-interface V5Range { shard: NonNullable<V5Plan['shard']>; offset: number; length: number; parts: V5Part[] }
+interface V5Range extends PackedRange { parts: V5Part[] }
 
 function sampleParts(plan: V5Plan, mode: 'span' | 'rows' | 'records'): V5Part[] {
   const packed = plan.packed!;
@@ -239,10 +240,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
           try { if (plan) packed = planShardedPackedSample(coverage.layouts.get(group.channelCount)!, plan, jobs.map(job => job.channel), group.shards); }
           catch { fail(503, 'publication-invalid', 'Invalid sample layout'); }
           const shard = packed ? group.shards[packed.shard] : undefined;
-          if (packed) {
-            const { offset, length } = packed.byteRange;
-            if (!shard || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length <= 0 || !Number.isSafeInteger(offset + length) || offset + length > shard.bytes) fail(503, 'publication-invalid', 'Invalid sample range');
-          }
+          if (packed && !shard) fail(503, 'publication-invalid', 'Invalid sample range');
           plans.push({ point, surface, jobs, plan, packed, shard, cells: new Map() });
         }
       }
@@ -256,44 +254,22 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
           || rows.length <= MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST && rangeBytes(ranges) - rangeBytes(rows) >= 4096) ranges = rows;
     }
     if (rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) ranges = sampleRanges(plans, 'records');
-    if (rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) fail(429, 'sample-limit', 'Selected sample ranges exceed the byte budget');
-    let next = 0, failed = false, failure: unknown;
-    const work = async () => {
-      while (!failed && next < ranges.length) {
-        const range = ranges[next++]!, record = range.shard;
-        try {
-          const bytes = await binaryRead(bucket, `${record.key}:${record.sha256}:${range.offset}:${range.length}`, async signal => {
-            countRead(ctx);
-            const object = await bucket.get(record.key, { range: { offset: range.offset, length: range.length } });
-            if (!object || !('body' in object)) fail(503, 'publication-incomplete', 'Sample shard missing or invalid');
-            if (object.size !== record.bytes || object.customMetadata?.sha256 !== record.sha256 || !object.range || !('offset' in object.range) || object.range.offset !== range.offset || !('length' in object.range) || object.range.length !== range.length) {
-              void object.body.cancel().catch(() => {});
-              fail(503, 'publication-incomplete', 'Sample shard metadata or range mismatch');
-            }
-            return readObjectBytes(object, range.length, true, ctx, signal);
-          }, ctx, request.signal);
-          ensureLive(m.expiresAt);
-          if (bytes.byteLength !== range.length) fail(503, 'publication-incomplete', 'Incomplete sample range');
-          for (const part of range.parts) {
-            const selected = part.packed.byteRange, offset = selected.offset - range.offset;
-            const contents = bytes.subarray(offset, offset + selected.length);
-            for (const channel of part.packed.channels) {
-              let cells = part.plan.cells.get(channel);
-              if (!cells) { cells = new Array(part.plan.plan!.contributors.length); part.plan.cells.set(channel, cells); }
-              const decoded = packedCellsFromRange(part.packed, contents, channel);
-              for (const [index, contributor] of part.contributors.entries()) cells[contributor] = decoded[index]!;
-            }
-          }
-        } catch (error) { if (!failed) { failed = true; failure = error; } }
+    await readPackedRanges(bucket, ctx, request.signal, m.expiresAt, 'sample', ranges, (range, bytes) => {
+      for (const part of range.parts) {
+        const selected = part.packed.byteRange, offset = selected.offset - range.offset;
+        const contents = bytes.subarray(offset, offset + selected.length);
+        for (const channel of part.packed.channels) {
+          let cells = part.plan.cells.get(channel);
+          if (!cells) { cells = new Array(part.plan.plan!.contributors.length); part.plan.cells.set(channel, cells); }
+          const decoded = packedCellsFromRange(part.packed, contents, channel);
+          for (const [index, contributor] of part.contributors.entries()) cells[contributor] = decoded[index]!;
+        }
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(ranges.length, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST) }, work));
-    if (failed) throw failure;
-    request.signal.throwIfAborted();
+    });
     for (const { point, surface, jobs, plan, packed, cells } of plans) for (const job of jobs) {
       const contributors = cells.get(job.channel);
       if (packed && (!contributors || packed.contributorRanks.some((_, index) => !contributors[index]))) fail(503, 'publication-invalid', 'Sample range lacks a contributor');
-      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer])
+      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer], m.tool.useStoredMslNoLift)
         : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
       values[point]!.set(`${job.frame.id}/${job.layer}`, { ...value, surfaceId: surface.id });
     }

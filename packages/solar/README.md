@@ -18,8 +18,8 @@ milliseconds.
 ## Entry points
 
 - [`@av/solar`](src/index.ts): `solarPosition`, `sunriseSunset` (returns UTC
-  sunrise/sunset timestamps, day length, and polar day/night `kind`), and
-  `solarFluxFactor`.
+  sunrise/sunset timestamps, day length, and polar day/night `kind`),
+  `sunriseSunsetInRange` for UTC window crossings, and `solarFluxFactor`.
 - [`@av/solar/grid`](src/grid.ts): `createGridDaylightTester` for regular
   lat/lon and projected grids.
 - [`@av/solar/parameters`](src/parameters.ts): `DEFAULT_HORIZON_DEG` (`-0.833°`).

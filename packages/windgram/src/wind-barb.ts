@@ -1,4 +1,4 @@
-export interface WindBarbGeometry {
+interface WindBarbGeometry {
   staff: string;
   flags: string[];
   calm: boolean;

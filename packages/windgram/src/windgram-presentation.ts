@@ -36,7 +36,7 @@ export interface WindgramPresentation {
   glyphs: typeof WINDGRAM_PRESENTATION.glyphs & { barbStaff: number };
 }
 
-export interface WindgramPresentationOptions {
+interface WindgramPresentationOptions {
   widthPx?: number;
   heightPx?: number;
   compact: boolean;

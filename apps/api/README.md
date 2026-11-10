@@ -31,9 +31,10 @@ pnpm --filter @av/api build
    and `GET /v1/models/:model/runs/:buildId/sample` requests.
 
 `/samples?points=lat,lon;lat,lon` batches coordinates in request order.
-`/profile?lat=...&lon=...` returns the nearest covered native cell's full levels,
-measured surface pressure and point-derived cloud/wind diagnostics. `frame`
-selects times; `layers` selects scalar inputs. Omitted dependencies produce null derived values.
+`/profile?lat=...&lon=...` reports the requested coordinate and the nearest
+covered native cell. Scalars, vertical levels, and derived cloud and wind
+diagnostics share that cell. `frame` selects times and `layers` selects scalar
+inputs. Omitted dependencies produce null derived values.
 V5 point routes default to the first frame; callers select bounded frame pages for
 complete timelines. See the [OpenAPI spec](../../docs/reference/openapi.json)
 for request limits and response schemas.
@@ -41,7 +42,8 @@ for request limits and response schemas.
 `/provenance` serves the run receipt or frame index; `?frame=f001` selects a
 verified source receipt from an indexed run.
 
-Catalog, latest and retained-run lists use short edge caching within the
+Latest and retained-run freshness describe the rendered map prefix. Catalog,
+latest and retained-run lists use short edge caching within the
 [pointer freshness budget](../../docs/serving-budgets.md); browsers revalidate.
 Build-specific responses cache through their expiry bound. Health and error
 responses use `no-store`.

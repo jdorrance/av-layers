@@ -216,7 +216,7 @@ describe('PluginController', () => {
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse('2026-10-30T10:00:00.000Z') });
     await controller.start();
     expect(controller.state().phase).toBe('ready');
-    expect(controller.state().horizonNotice).toContain('Forecast ended at 2026-10-30T09:00:00.000Z');
+    expect(controller.state().horizonNotice).toContain('Map forecast ended at 2026-10-30T09:00:00.000Z');
     expect(controller.state().message).toBeNull();
     expect(stub.added).toHaveLength(1);
     expect(controller.selectFrame('f006').frameId).toBe('f006');
@@ -237,7 +237,7 @@ describe('PluginController', () => {
     await vi.advanceTimersByTimeAsync(1001);
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({
       phase: 'ready',
-      horizonNotice: expect.stringContaining('Forecast ended'),
+      horizonNotice: expect.stringContaining('Map forecast ended'),
       message: expect.stringContaining('Overlay tile failed to load')
     }));
     expect(stub.removed).toHaveLength(0);
@@ -263,7 +263,7 @@ describe('PluginController', () => {
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: null }));
     controller.refreshTime();
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({
-      phase: 'ready', horizonNotice: expect.stringContaining('Forecast ended')
+      phase: 'ready', horizonNotice: expect.stringContaining('Map forecast ended')
     }));
     expect(stub.removed).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(1);
@@ -275,7 +275,7 @@ describe('PluginController', () => {
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: null }));
     expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(1001);
-    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: expect.stringContaining('Forecast ended') }));
+    expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ horizonNotice: expect.stringContaining('Map forecast ended') }));
 
     vi.setSystemTime(Date.parse(expiresAt));
     controller.refreshTime();

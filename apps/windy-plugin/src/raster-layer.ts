@@ -72,6 +72,7 @@ export class WindyRasterLayer implements HostTileLayer {
   private prefetchAbort: AbortController | null = null;
   private status: 'loading' | 'ready' | 'error' = 'loading';
   private frozen = false;
+  private retryEmpty = false;
   private readonly render = (): void => {
     const next = this.staging;
     if (!next || this.map?.maplibreMap.isMoving()) return;
@@ -95,7 +96,19 @@ export class WindyRasterLayer implements HostTileLayer {
     });
   };
   private readonly move = (): void => { this.prefetchAbort?.abort(); this.prefetchAbort = null; };
-  private readonly idle = (): void => { this.render(); this.prefetch(); };
+  private readonly idle = (): void => {
+    this.render();
+    const slot = this.staging;
+    if (slot && !this.map?.maplibreMap.isMoving() && !slot.successful && !slot.pending.size && !slot.native.isLoading()
+      && (!this.build || this.build.expiresAtMs > Date.now())) {
+      this.retryEmpty = slot.failed.size === 0;
+      this.abandon(slot);
+    }
+    this.prefetch();
+  };
+  private readonly settled = (): void => {
+    if (this.retryEmpty && !this.map?.maplibreMap.isMoving() && (!this.build || this.build.expiresAtMs > Date.now())) this.setUrl(this.url);
+  };
 
   constructor(private readonly api: NativeRasterApi, baseUrl: string, private url: string, private options: WindyTileOptions, protocol?: RasterTileProtocol) {
     this.ownsProtocol = !protocol;
@@ -112,6 +125,7 @@ export class WindyRasterLayer implements HostTileLayer {
     this.map = map;
     map.maplibreMap.on('render', this.render); map.maplibreMap.on('idle', this.idle);
     map.maplibreMap.on('movestart', this.move); map.maplibreMap.on('zoomstart', this.move);
+    map.maplibreMap.on('moveend', this.settled);
     try { this.stage(); } catch (error) { this.remove(); throw error; }
   }
 
@@ -124,6 +138,7 @@ export class WindyRasterLayer implements HostTileLayer {
   }
   freeze(): void {
     this.frozen = true;
+    this.retryEmpty = false;
     this.move(); this.drop(this.staging); this.staging = null;
   }
   setUrl(url: string, maxNativeZoom = this.options.maxNativeZoom): void {
@@ -148,6 +163,7 @@ export class WindyRasterLayer implements HostTileLayer {
     if (map) {
       map.maplibreMap.off('render', this.render); map.maplibreMap.off('idle', this.idle);
       map.maplibreMap.off('movestart', this.move); map.maplibreMap.off('zoomstart', this.move);
+      map.maplibreMap.off('moveend', this.settled);
     }
     this.drop(this.staging, map); this.drop(this.active, map); this.staging = null; this.active = null;
     if (this.build) this.protocol?.evictBuild(this.build.manifest.buildId);
@@ -157,6 +173,7 @@ export class WindyRasterLayer implements HostTileLayer {
 
   private stage(): void {
     if (!this.map || !this.protocol) return;
+    this.retryEmpty = false;
     this.drop(this.staging); this.staging = null;
     if (this.active?.url === this.url) { this.setStatus('ready'); return; }
     const native = this.api.tileLayer(this.protocol.url(this.url), { ...this.options, opacity: 0 });

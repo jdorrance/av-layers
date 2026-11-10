@@ -34,14 +34,17 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
-    const [{ loadCoverage }, { estimateCapacity, prepareBuild }, { getForecastProvider }, { planRefinementCoverage }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js'), import('./refinement/coverage.js')]);
+    const [{ loadCoverage }, { estimateCapacity, estimateRetention, prepareBuild }, { getForecastProvider }, { planRefinementCoverage }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js'), import('./refinement/coverage.js')]);
+    const number = (value: string | undefined) => value === undefined ? undefined : Number(value);
+    const retentionScenario = { cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']) };
     const mask = await loadCoverage(product);
     const { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport, nativeSparseMask } = await import('./whole-domain/coverage.js');
     const plan = wholeDomainPlan(product);
     if (plan) {
-      if ((['frames', 'layers', 'models', 'native-zoom', 'cadence-hours', 'retention-days'] as const).some(key => values[key] !== undefined)) {
-        throw new Error('Whole-domain capacity reports the configured product; scenario overrides are unsupported');
+      if ((['frames', 'layers', 'models', 'native-zoom'] as const).some(key => values[key] !== undefined)) {
+        throw new Error('Whole-domain capacity accepts only retention overrides');
       }
+      const { violations: retentionViolations, ...retention } = estimateRetention(product.execution.schedule, retentionScenario);
       const provider = getForecastProvider(product.modelId), fine = await loadBundledFineCoverage(product, plan);
       const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
       const { packedTerrainColumnBudget } = await import('@av/forecast/refinement');
@@ -53,15 +56,16 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
         auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
         nativeLayers: product.layers.filter(layer => layerSurface(layer) === 'native').length,
         fineLayers: product.layers.filter(layer => layerSurface(layer) === 'fine').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });
-      const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity, violations: capacity.violations };
+      const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity,
+        retention: { ...retention, retainedNumericBytes: retention.retainedPerModel * capacity.numericBytes },
+        violations: [...capacity.violations, ...retentionViolations] };
       console.log(JSON.stringify(report, null, 2));
-      if (capacity.violations.length) process.exitCode = 1;
+      if (report.violations.length) process.exitCode = 1;
       return;
     }
     const refinements = planRefinementCoverage({ product, mask });
     const { layout, capacity } = prepareBuild(mask, product, { ...getForecastProvider(product.modelId), refinements });
-    const number = (value: string | undefined) => value === undefined ? undefined : Number(value);
-    const report = estimateCapacity(mask, product, layout.storedCells, { frames: number(values.frames), layers: number(values.layers), models: number(values.models), nativeZoom: number(values['native-zoom']), cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']) }, capacity.refinement);
+    const report = estimateCapacity(mask, product, layout.storedCells, { frames: number(values.frames), layers: number(values.layers), models: number(values.models), nativeZoom: number(values['native-zoom']), ...retentionScenario }, capacity.refinement);
     console.log(JSON.stringify({ ...report, currentProductAdmission: { model: product.modelId, frames: product.frameHours.length, layers: product.layers.length, nativeZoom: product.maxNativeZoom, rasterWorkers: capacity.rasterWorkers, workingSet: capacity.workingSet, estimatedPeakBytes: capacity.estimatedPeakBytes, budgetBytes: capacity.budgets.peakRssBytes, scope: 'Configured refinement grids included. Scenario changes need their own memory estimate.' } }, null, 2));
     if (report.violations.length) process.exitCode = 1;
   } else if (command === 'input-proof') {

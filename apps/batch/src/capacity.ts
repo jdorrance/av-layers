@@ -1,4 +1,4 @@
-import { CELL_BYTES, coverageAtZoom, coverageIndices, expectedTiles, forecastGrids, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, coverageAtZoom, coverageIndices, expectedTiles, forecastGrids, forecastStartsPerDay, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { prepareTerrainColumns } from '@av/forecast/refinement';
 import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
@@ -39,12 +39,28 @@ export interface CapacityScenario {
   retentionDays?: number;
 }
 
+/** Project scheduled builds, or use an explicit interval for an operator's scenario. */
+export function estimateRetention(schedule: readonly string[], { cadenceHours, retentionDays = RETENTION_DAYS }: Pick<CapacityScenario, 'cadenceHours' | 'retentionDays'> = {}) {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0 ||
+    (cadenceHours !== undefined && (!Number.isFinite(cadenceHours) || cadenceHours <= 0))) throw new RangeError('Invalid capacity scenario');
+  const scheduledStartsPerDay = cadenceHours === undefined ? forecastStartsPerDay(schedule) : 0;
+  const retainedPerModel = cadenceHours === undefined
+    ? Math.ceil(retentionDays) * scheduledStartsPerDay
+    : Math.ceil(retentionDays * 24 / cadenceHours);
+  if (!Number.isSafeInteger(retainedPerModel)) throw new RangeError('Invalid capacity scenario');
+  return {
+    cadenceHours: cadenceHours ?? (scheduledStartsPerDay ? 24 / scheduledStartsPerDay : null), retentionDays,
+    retainedPerModel, retentionBasis: cadenceHours === undefined ? 'schedule' : 'cadence-override',
+    violations: retainedPerModel >= MAX_RETAINED_BUILDS ? ['retention leaves no room for a replacement build'] : []
+  };
+}
+
 /** Count v3/v4 single-pack storage and project coverage for an explicit scenario. */
 export function estimateCapacity(mask: CoverageMask, product: ProductDefinition, storedCells: number, scenario: CapacityScenario = {}, refinement: { gridCells: number; storedCells: number } = { gridCells: 0, storedCells: 0 }) {
   const frames = scenario.frames ?? product.frameHours.length, layers = scenario.layers ?? product.layers.length;
   const models = scenario.models ?? 1, nativeZoom = scenario.nativeZoom ?? product.maxNativeZoom;
-  const cadenceHours = scenario.cadenceHours ?? 12, retentionDays = scenario.retentionDays ?? RETENTION_DAYS;
-  if ([frames, layers, models, nativeZoom].some(n => !Number.isSafeInteger(n)) || frames < 1 || layers < 1 || models < 1 || nativeZoom < 0 || nativeZoom > 24 || !Number.isFinite(cadenceHours) || cadenceHours <= 0 || !Number.isFinite(retentionDays) || retentionDays <= 0) throw new RangeError('Invalid capacity scenario');
+  const { violations: retentionViolations, ...retention } = estimateRetention(product.execution.schedule, scenario);
+  if ([frames, layers, models, nativeZoom].some(n => !Number.isSafeInteger(n)) || frames < 1 || layers < 1 || models < 1 || nativeZoom < 0 || nativeZoom > 24) throw new RangeError('Invalid capacity scenario');
   if (Object.values(refinement).some(value => !Number.isSafeInteger(value) || value < 0)) throw new RangeError('Invalid refinement capacity');
   if (mask.maxZoom > MAX_NATIVE_ZOOM) throw new Error('Coverage exceeds the admitted native zoom');
   const tilesByZoom = Array.from({ length: nativeZoom + 1 }, (_, z) => z <= mask.maxZoom
@@ -53,7 +69,6 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   const channels = frames * layers, tiles = tilesByZoom.reduce((sum, n) => sum + n, 0) * channels * models;
   const refinementChannels = frames * TERRAIN_COLUMN_METHOD.outputs.length;
   const samplePackBytes = (storedCells * channels + refinement.storedCells * refinementChannels) * CELL_BYTES;
-  const retainedPerModel = Math.ceil(retentionDays * 24 / cadenceHours);
   // A two-by-two neighborhood spans at most B + 3 cell records in a (B + 1)-wide block.
   const pointRangeBytes = (SAMPLE_BLOCK_SIZE + 3) * (channels + (refinement.storedCells ? refinementChannels : 0)) * CELL_BYTES;
   const violations: string[] = [];
@@ -63,13 +78,13 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   if (!Number.isSafeInteger(samplePackBytes) || samplePackBytes > BUILD_BUDGETS.samplePackBytes) violations.push('sample-pack budget exceeded');
   if (channels > MAX_SAMPLE_VALUES) violations.push('all-frame point response exceeds the result budget; define bounded products before adding channels');
   if (pointRangeBytes > MAX_SAMPLE_RANGE_BYTES) violations.push('point range exceeds the byte budget');
-  if (retainedPerModel >= MAX_RETAINED_BUILDS) violations.push('retention leaves no room for a replacement build');
+  violations.push(...retentionViolations);
   return {
-    frames, layers, models, nativeZoom, cadenceHours, retentionDays, channels, tilesByZoom, tiles,
+    frames, layers, models, nativeZoom, ...retention, channels, tilesByZoom, tiles,
     quarterSamples: tiles * 256 * 256 * 4,
     samplePackBytes, totalSamplePackBytes: samplePackBytes * models,
     point: { reads: refinement.storedCells ? 2 : 1, worstCaseRangeBytes: pointRangeBytes, values: channels },
-    retainedPerModel, retainedSampleBytes: retainedPerModel * samplePackBytes * models,
+    retainedSampleBytes: retention.retainedPerModel * samplePackBytes * models,
     archiveObjectsPerBuild: channels * models,
     bounds: { projectedZooms: nativeZoom > mask.maxZoom, excludesArchiveBytes: true },
     refinement, budgets: BUILD_BUDGETS, violations
@@ -177,9 +192,11 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
     if (!Number.isSafeInteger(tiles)) failures.push('unsafe tile count');
   }
   if (manifest.version === 5) {
-    let samplePackBytes = 0, emittedSampleBytes = 0, profileBytes = 0, gridCells = 0;
+    let samplePackBytes = 0, emittedSampleBytes = 0, profileBytes = 0, gridCells = 0, fineGridCells = 0;
     for (const surface of manifest.surfaces) {
-      if (surface.kind === 'native') gridCells += surface.grid.width * surface.grid.height;
+      const cells = surface.grid.width * surface.grid.height;
+      if (surface.kind === 'native') gridCells += cells;
+      else fineGridCells += cells;
       const shardBytes = surface.samples.storedCells * surface.samples.channelCount * CELL_BYTES;
       if (!Number.isSafeInteger(shardBytes) || !Number.isSafeInteger(surface.samples.storedCells) || !Number.isSafeInteger(surface.samples.channelCount)) failures.push('unsafe v5 sample size');
       for (const shard of surface.samples.shards) {
@@ -199,7 +216,7 @@ export function checkPerformance(manifest: Manifest | ManifestV5) {
     }
     const numericBytes = emittedSampleBytes + profileBytes;
     if (!Number.isSafeInteger(numericBytes)) failures.push('unsafe v5 numeric bytes');
-    const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes, profileBytes, numericBytes, gridCells };
+    const observed = { elapsedMs, peakRssBytes, tiles, samplePackBytes, emittedSampleBytes, profileBytes, numericBytes, gridCells, fineGridCells };
     for (const key of ['gridCells', 'tiles', 'elapsedMs', 'peakRssBytes', 'numericBytes'] as const) {
       if (observed[key] > BUILD_BUDGETS[key]) failures.push(`${key}: ${observed[key]} exceeds ${BUILD_BUDGETS[key]}`);
     }

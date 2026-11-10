@@ -32,6 +32,11 @@ See the [CLI reference](../../docs/reference.md#batch-cli) for all options and
 [operations](../../docs/operations.md) for publication, rollback, and cleanup.
 Run batch tests with `pnpm test apps/batch`.
 
+The capacity report projects retention from configured UTC starts. Use
+`--cadence-hours` to model a different publishing interval. V5 performance
+reports count native and fine grid geometry separately. Fine work is bounded by
+packed cell storage, raster work, and memory in [whole-domain admission](src/whole-domain/capacity.ts).
+
 The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
 surfaces. Each additional zoom level adds about four times the previous level's
 tiles. [Forecast settings](../../packages/contracts/config/models.json) select

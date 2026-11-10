@@ -28,11 +28,11 @@ bounded frame receipts; retained version-1 receipts stay inline.
 
 `ApiClient` point requests default to the first v5 frame. Select frame pages for
 complete timelines; explicit `all` selections retain the serving budgets.
-`ApiClient.pointSeries(build, point)` caches scalar samples and native profiles
-independently for the pinned point. Its loader publishes the selected map sample
-as soon as it arrives and merges profiles by frame ID. `onProgress` reports
-loading separately from the frame count. [client-point.ts](src/client-point.ts)
-owns paging and cancellation.
+`ApiClient.pointSeries(build, point)` loads and caches scalar samples and native
+profiles independently for the pinned point. When the selected frame has map
+lift, progress starts after its sample request settles. Profiles merge by frame
+ID. `onProgress` reports loading separately from the frame count.
+[client-point.ts](src/client-point.ts) owns paging and cancellation.
 Point day views use an explicit v5 `mapFrameCount`; older builds retain 24 hours.
 
 [whole-domain-grid.ts](src/whole-domain-grid.ts) derives subdivided grids and
@@ -43,11 +43,11 @@ encoded coverage to its grid and validates its halo.
 ## Entry points
 
 - [`@av/contracts`](src/index.ts): manifest/pointer/sample schemas, `getProduct`,
-  grid projections, layer descriptors, and palettes.
-- [`@av/contracts/client`](src/client.ts): `ApiClient`, frame matching, tile URL
-  builders, and sample formatting.
+  grid projections, layer descriptors, palettes, and publication validation.
+- [`@av/contracts/client`](src/client.ts): pinned API and raster transport,
+  frame matching, tile URL builders, and sample formatting.
 - [`@av/contracts/client/dom`](src/client-dom.ts): DOM renderers for legends and
-  build diagnostics.
+  build diagnostics. Point presentation lives in [windgram](../windgram/README.md).
 - [`@av/contracts/refinement`](src/refinement.ts): polygon validation, 1 km Lambert grids,
   and per-layer patch lookup.
 - [`@av/contracts/fixture-product`](src/fixture-product.ts): synthetic product

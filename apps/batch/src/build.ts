@@ -6,6 +6,7 @@ import { getForecastProvider } from './providers.js';
 import { buildIdentity } from './identity.js';
 import { loadCoverage, writeCoverage } from './coverage.js';
 import { WEBP_ENCODER } from './webp.js';
+import { RASTER_SAMPLING } from './raster.js';
 import pmtiles from '../pmtiles.json' with { type: 'json' };
 import { BUILD_BUDGETS, estimateCapacity, prepareBuild, type PreparedBuild } from './capacity.js';
 import { failureReason } from './failure.js';
@@ -121,7 +122,7 @@ export async function finishForecast(options: Pick<BuildOptions, 'out' | 'signal
         provenanceSha256: sha256(provenanceBytes),
         ...(options.terrain ? { terrain: options.terrain } : {})
       },
-      tool: { components: identity.components, node: process.version, pmtiles: pmtiles.version, tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: liftRenderStyle(PALETTES.lift.interpolation) },
+      tool: { components: identity.components, node: process.version, pmtiles: pmtiles.version, tileFormat: 'webp', tileEncoder: WEBP_ENCODER, liftRenderStyle: liftRenderStyle(PALETTES.lift.interpolation), ...RASTER_SAMPLING },
       palettes: descriptors.palettes.map(p => p.id)
     };
     const tValidate = Date.now();

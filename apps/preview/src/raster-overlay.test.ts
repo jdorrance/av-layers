@@ -121,6 +121,34 @@ it('keeps partial staging imagery when one tile fails and commits it with the re
   f.overlay.destroy();
 });
 
+it.each([false, true])('settles a stationary viewport with no tiles and retries on movement (old raster: %s)', async committed => {
+  const f = fixture(), b = build();
+  if (committed) { f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete(); }
+  const previous = committed ? f.stage() : null;
+  f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
+  const empty = f.stage(), tile = {};
+  f.markLoaded(empty);
+  f.emit('render');
+  expect(f.sources.has(empty)).toBe(true);
+  f.emit('movestart');
+  f.emit('sourcedataloading', { sourceId: empty, tile });
+  f.emit('sourcedataabort', { sourceId: empty, tile });
+  f.emit('idle');
+  expect(f.sources.has(empty)).toBe(true);
+  f.emit('moveend');
+  f.emit('idle');
+  expect([...f.sources.keys()]).toEqual(previous ? [previous] : []);
+  expect(f.states.at(-1)?.replacementFailed).toBe(true);
+  f.emit('idle');
+  expect(f.sources.has(empty)).toBe(false);
+  f.emit('movestart'); f.emit('moveend');
+  expect(f.stage()).not.toBe(empty);
+  await f.complete();
+  expect(f.states.at(-1)?.displayed?.frame).toBe(b.manifest.frames[1].id);
+  expect(f.states.at(-1)?.replacementFailed).toBe(false);
+  f.overlay.destroy();
+});
+
 it('rechecks camera readiness and expires old imagery while a new model is loading', async () => {
   const f = fixture(), b = build();
   b.expiresAtMs = Date.now() + 1000;

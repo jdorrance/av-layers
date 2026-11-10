@@ -18,6 +18,9 @@ export interface RasterPatch<Mask extends SamplingMask = CoverageMask> {
 }
 export type RasterPatchFields = Readonly<Record<string, GridField>>;
 
+/** Publish the same sampling rule that rasterization uses for this build. */
+export const RASTER_SAMPLING: { readonly useStoredMslNoLift?: true } = {};
+
 /** Each declared layer has a complete field, including unavailable/no-lift cells. */
 export function validateRasterPatchFields(patches: readonly RasterPatch<SamplingMask>[], layer: LayerId, fields: RasterPatchFields = {}): void {
   const expected = patches.filter(patch => patch.layers.includes(layer));
@@ -177,12 +180,12 @@ function samplePixel(
 function raster(field: GridField, mask: SamplingMask, prepared: TileGeometry, layer: LayerId, palette: PaletteColorTable, patches: readonly RasterPatch<SamplingMask>[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
   const rgba = new Uint8Array(256 * 256 * 4);
   const base = 'base' in prepared ? prepared.base : prepared;
-  const baseInto = base.bind(field, layer);
+  const baseInto = base.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift);
   let sampleInto = baseInto, composite = false;
   if ('base' in prepared) {
     const samplers: (undefined | ReturnType<PreparedGridSampling['bind']>)[] = [];
     for (const item of prepared.patches) if (patches[item.index].layers.includes(layer)) {
-      samplers[item.index + 1] = item.sampling.bind(patchFields[patches[item.index].id], layer);
+      samplers[item.index + 1] = item.sampling.bind(patchFields[patches[item.index].id], layer, RASTER_SAMPLING.useStoredMslNoLift);
       composite = true;
     }
     if (composite) sampleInto = (x, y, out) => {

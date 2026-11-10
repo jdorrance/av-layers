@@ -17,6 +17,7 @@ export class RasterOverlay {
   private opacity: number;
   private incomplete = false;
   private replacementFailed = false;
+  private retryEmpty = false;
   private moving = false;
   private prefetchAbort: AbortController | null = null;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -74,8 +75,25 @@ export class RasterOverlay {
     this.cancelPrefetch();
     if (this.staging) this.staging.ready = false;
   };
-  private readonly settled = (): void => { this.moving = false; if (this.staging) this.settle(this.staging); };
-  private readonly idle = (): void => { this.render(); this.prefetch(); };
+  private readonly settled = (): void => {
+    const moved = this.moving;
+    this.moving = false;
+    if (this.staging) this.settle(this.staging);
+    else if (moved && this.retryEmpty && this.requested && this.requested.build.expiresAtMs > Date.now()) {
+      const { build, layer, frame } = this.requested;
+      try { this.select(build, layer, frame); } catch { /* select reports a failed replacement. */ }
+    }
+  };
+  private readonly idle = (): void => {
+    if (this.staging && !this.moving) this.settle(this.staging);
+    this.render();
+    const slot = this.staging;
+    if (slot && !this.moving && !slot.successful && !slot.pending.size && this.map.isSourceLoaded(slot.id)) {
+      this.retryEmpty = slot.failed.size === 0 && !slot.sourceFailed;
+      this.abandon();
+    }
+    this.prefetch();
+  };
 
   constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void) {
     this.opacity = opacity;
@@ -87,6 +105,7 @@ export class RasterOverlay {
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (build.expiresAtMs <= Date.now()) { this.clear(); return; }
+    this.retryEmpty = false;
     this.requested = { build, layer, frame };
     if (this.active?.build === build && this.active.layer === layer && this.active.frame === frame) {
       this.drop(this.staging); this.staging = null; this.replacementFailed = false; this.incomplete = this.problem(this.active); this.emit(); return;
@@ -139,7 +158,7 @@ export class RasterOverlay {
     if (dispose && this.protocol) {
       this.protocol.dispose(); removeProtocol(this.protocol.scheme); this.protocol = null;
     }
-    this.incomplete = false; this.replacementFailed = false; this.emit();
+    this.incomplete = false; this.replacementFailed = false; this.retryEmpty = false; this.emit();
   }
 
   destroy(): void {
@@ -157,8 +176,9 @@ export class RasterOverlay {
     if (slot === this.staging && settled && !slot.successful && (slot.failed.size > 0 || slot.sourceFailed)) this.abandon();
   }
   private abandon(): void {
-    this.drop(this.staging); this.staging = null; this.cancelPrefetch();
-    this.replacementFailed = true; this.incomplete = this.problem(this.active); this.emit();
+    const slot = this.staging; this.staging = null;
+    this.drop(slot); this.cancelPrefetch();
+    this.replacementFailed = true; this.incomplete = this.problem(this.active); this.armExpiry(); this.emit();
   }
   private cancelPrefetch(): void { this.prefetchAbort?.abort(); this.prefetchAbort = null; }
   private drop(slot: Slot | null): void {
