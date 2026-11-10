@@ -17,7 +17,7 @@ and [serving budgets](serving-budgets.md):
    free for regime flags such as `SUPPORT_CUMULUS` ($z_{\text{LCL}} < z_i$) and
    `SUPPORT_OVERDEVELOPED` (high top-of-lift relative humidity and deep cloud
    depth), exposed automatically in `/sample` and
-   [`formatSupportFlags`](../packages/contracts/src/client-view.ts).
+   [`formatSupportFlags`](../packages/client/src/client-view.ts).
 2. **Tier 2 — 2D scalar channels (`samples.bin` + optional `.pmtiles`):**
    `MAX_SAMPLE_VALUES = 256` supports up to 10 scalar layers across 24 frames
    (`240 <= 256` channels; ~`2.1 KiB` per layer per 18-cell block read, well
@@ -147,13 +147,13 @@ and [serving budgets](serving-budgets.md):
   cells (and `msl - agl` on valid cells) in
   [`serveSample`](../apps/api/src/sample.ts) so the client always knows exact
   model/DEM ground elevation at the clicked point without extra channels.
-- **Single-click point readout and diurnal bar chart (`@av/contracts/client`):**
+- **Single-click point readout and diurnal bar chart (`@av/client`):**
   auto-fetch `/sample` on map click to show an immediate callout (`MSL`, `AGL`,
   `Terrain`, and `Cu`/`Blue` badge for the active frame) plus a clickable
   daytime bar chart (ground floor + usable lift column) alongside the table.
 - **Units (`m` / `ft`) and local solar/timezone time formatting:** round
   displayed heights to whole meters/feet in
-  [`client-view.ts`](../packages/contracts/src/client-view.ts) (instead of raw
+  [`client-view.ts`](../packages/client/src/client-view.ts) (instead of raw
   `Float32` decimals), add a client `m` / `ft` toggle for legends and readouts,
   and display local time alongside UTC.
 - **Basemap hillshade, roads/labels above overlay, and patch outline:** place

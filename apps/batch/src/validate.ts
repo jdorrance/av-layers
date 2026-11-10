@@ -4,7 +4,7 @@ import { open, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
-import { CELL_BYTES, STATUS_OUTSIDE, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, expectedTiles, getBit, getProduct, layerSurface, renderedLayers, sourceIntervalHours, mapFrameCount, sameGrid, publishedManifestSchema, provenanceObjects, matchesFrameIntervals, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
+import { CELL_BYTES, STATUS_OUTSIDE, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, expectedTiles, getBit, getProduct, layerSurface, renderedLayers, sourceIntervalHours, mapFrameCount, sameGrid, publishedManifestSchema, matchesFrameIntervals, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, validateProfileRecord, type ShardedSampleBlock } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
@@ -13,6 +13,7 @@ import { forecastGrids, type ForecastGrid } from '@av/contracts';
 import { validateRefinementCoverage } from './refinement/coverage.js';
 import { localPath, readLocalFile, type createLocalFileReader } from './local-file.js';
 import { readLocalProvenance, readFrameProvenance } from './frame-provenance.js';
+import { forecastObjects, provenanceObjects } from './publication-objects.js';
 export { localPath } from './local-file.js';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './whole-domain/coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
@@ -274,12 +275,11 @@ async function validateBuildV5(root: string, manifest: ManifestV5, mask: Coverag
     await validateArchive(localPath(root, artifact.tilesKey), view);
   }
   if (remote) {
-    const expected = [...provenanceObjects(provenance.value), ...manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])].map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes }))),
-      ...manifest.artifacts.map(artifact => ({ key: artifact.tilesKey, sha256: artifact.tilesSha256 }))];
+    const expected = [...provenanceObjects(provenance.value), ...forecastObjects(manifest)];
     const byKey = new Map(remote.objects.map(object => [object.key, object]));
     if (byKey.size !== remote.objects.length || byKey.size !== expected.length || expected.some(item => {
       const object = byKey.get(item.key);
-      return !object || object.sha256 !== item.sha256 || ('bytes' in item && object.bytes !== item.bytes);
+      return !object || object.sha256 !== item.sha256 || (item.bytes !== undefined && object.bytes !== item.bytes);
     })) throw new Error('Remote receipt artifact set mismatch');
     await verifyObjectReceipts(remote.store, remote.objects, remote.signal);
   }

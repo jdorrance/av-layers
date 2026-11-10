@@ -1,8 +1,7 @@
-import type { z } from 'zod';
-import type { latestSchema, paletteSchema, publishedSampleResponseSchema, LayerId, ProfileResponse, PublishedManifest } from './index.ts';
+import type { latestSchema, paletteSchema, publishedSampleResponseSchema, LayerId, ProfileResponse, PublishedManifest } from '@av/contracts';
 
-export type PaletteSummary = z.infer<typeof paletteSchema>;
-export type SamplePayload = z.infer<typeof publishedSampleResponseSchema>;
+export type PaletteSummary = ReturnType<typeof paletteSchema.parse>;
+export type SamplePayload = ReturnType<typeof publishedSampleResponseSchema.parse>;
 export type FrameSample = SamplePayload['frames'][number];
 export type FrameSampleLayer = FrameSample['layers'][string];
 export type PointFrame = FrameSample & Partial<Pick<ProfileResponse['frames'][number], 'profile' | 'derived'>>;
@@ -36,4 +35,4 @@ export interface PointSeriesLoader {
   dispose(): void;
 }
 
-export type LatestPayload = z.infer<typeof latestSchema>;
+export type LatestPayload = ReturnType<typeof latestSchema.parse>;

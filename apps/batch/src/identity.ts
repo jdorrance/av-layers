@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
-import { basename, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, terrainColumnMethodForProduct, type ProductDefinition } from '@av/contracts';
@@ -67,14 +67,12 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
     contracts: { directories: ['packages/contracts/src'], settings: [MODEL_CONFIG_PATH] }
   };
   const components = {} as Record<'adapter' | 'science' | 'contracts', string>;
+  const fixtureProduct = join(root, 'packages/contracts/src/fixture-product.ts');
   for (const group of ['adapter', 'science', 'contracts'] as const) {
     const { directories, settings } = groups[group];
     const hash = createHash('sha256');
-    const files = [...(await Promise.all(directories.map(dir => sourceFiles(join(root, dir))))).flat(), ...settings.map(path => join(root, path))].filter(path => {
-      if (group !== 'contracts') return true;
-      const name = basename(path);
-      return name !== 'client.ts' && !name.startsWith('client-') && name !== 'fixture-product.ts';
-    }).sort();
+    const files = [...(await Promise.all(directories.map(dir => sourceFiles(join(root, dir))))).flat(), ...settings.map(path => join(root, path))]
+      .filter(path => path !== fixtureProduct).sort();
     for (const path of files) hash.update(relative(root, path)).update('\0').update(await readFile(path)).update('\0');
     components[group] = hash.digest('hex');
   }

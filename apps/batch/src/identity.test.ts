@@ -107,6 +107,25 @@ it('changes the render recipe for a lift interpolation source change while scien
   } finally { await Promise.all([rm(step, { recursive: true, force: true }), rm(linear, { recursive: true, force: true })]); }
 });
 
+it('keeps client source out of the recipe and pins the full workspace lockfile', async () => {
+  const root = await sourceFixture('linear-rgb'), coverageHash = 'a'.repeat(64);
+  try {
+    const before = await buildIdentity(INDEXED_PRODUCT, coverageHash, undefined, [], root);
+    const client = join(root, 'packages/client/src');
+    await mkdir(client, { recursive: true });
+    await writeFile(join(client, 'client-api.ts'), 'export const browserChange = true;\n');
+    expect(await buildIdentity(INDEXED_PRODUCT, coverageHash, undefined, [], root)).toEqual(before);
+
+    const lock = 'updated workspace lockfile\n';
+    await writeFile(join(root, 'pnpm-lock.yaml'), lock);
+    const after = await buildIdentity(INDEXED_PRODUCT, coverageHash, undefined, [], root);
+    expect(after.components).toEqual(before.components);
+    expect(after.recipe.lockHash).toBe(sha256(lock));
+    expect(after.recipe.hash).not.toBe(before.recipe.hash);
+    expect(after.recipe.sourceDirty).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it('binds global forecast settings into the recipe independently of science', async () => {
   const root = await sourceFixture('linear-rgb');
   try {

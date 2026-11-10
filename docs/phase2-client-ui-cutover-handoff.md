@@ -14,14 +14,14 @@ independently deployable.
 
 ## Milestone 2A: Shared client and raster delivery
 
-Extend [`ApiClient`](../packages/contracts/src/client-api.ts) with multi-point
+Extend [`ApiClient`](../packages/client/src/client-api.ts) with multi-point
 samples and point profiles. Reuse its injected fetch, deadline, retry,
 cancellation, expiry and response-validation paths. Validate each response
 against the pinned model, build, source, expiry, requested coordinates, frames
 and fields. Keep legacy version-3/version-4/version-5 readers covered.
 
 Expose optional rendered tile templates in
-[`PinnedBuild`](../packages/contracts/src/client-types.ts). Filter server
+[`PinnedBuild`](../packages/client/src/client-types.ts). Filter server
 latest templates, tile routes, picker choices and prefetch plans by the layer's
 delivery descriptor. Existing manifests retain their tile-backed defaults.
 Use one descriptor helper for this decision.
@@ -59,7 +59,7 @@ remain available through the profile API without additional scalar channels.
 On click, load the selected hour first. The point loader requests map lift and
 available native profiles independently, then pages through the remaining
 hours and reuses completed frames. See
-[`client-point.ts`](../packages/contracts/src/client-point.ts) for field selection.
+[`client-point.ts`](../packages/client/src/client-point.ts) for field selection.
 The [Windgram panel](../packages/windgram/README.md) shows the native chart when
 profiles are available and a scalar chart otherwise. Mark elapsed gaps between
 adjacent published times and identify incomplete series after failed pages.

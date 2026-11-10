@@ -1,5 +1,5 @@
 /** Load a point's selected sample first, with bounded pages for the remaining forecast. */
-import { maxProfileFrames, renderedFrames, surfaceFrameCount, type LayerId, type PublishedManifest } from './index.ts';
+import { maxProfileFrames, renderedFrames, surfaceFrameCount, type LayerId, type PublishedManifest } from '@av/contracts';
 import type { PinnedBuild, PointFrame, PointHorizon, PointSeries, PointSeriesLoader } from './client-types.ts';
 
 const MAX_PAGES = 16;

@@ -1,4 +1,4 @@
-import { renderBuildDiagnostics } from '@av/contracts/client/dom';
+import { renderBuildDiagnostics } from '@av/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -21,7 +21,7 @@ import {
   type PointSeriesLoader,
   type PointHorizon,
   type UnitSystem
-} from '@av/contracts/client';
+} from '@av/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 

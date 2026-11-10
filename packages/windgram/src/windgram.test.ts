@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
-import { formatPointMapLift, type PointFrame } from '@av/contracts/client';
+import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
 import { createPointForecast } from './from-av-profile.ts';

@@ -37,5 +37,5 @@ publish no native profiles. Legacy builds offer a 24-hour point view.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.
 
-Shared client helpers live in [`@av/contracts/client`](../../packages/contracts/README.md).
+Shared client helpers live in [`@av/client`](../../packages/client/README.md).
 See [the data guide](../../docs/data.md) for units and coverage.

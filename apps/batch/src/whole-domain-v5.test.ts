@@ -26,6 +26,7 @@ import { buildWholeDomainFrames } from './whole-domain/frames.js';
 import { assertValidatedBuild, sha256, validateBuild, validateSampleGroup, type ValidatedBuild } from './validate.js';
 import { workflowAuthority } from './authority.js';
 import { assertUsefulHorizon, cleanup, publish, rollback, type CleanupSummary } from './publication.js';
+import { forecastObjects } from './publication-objects.js';
 import { createLocalFileReader, readLocalFile } from './local-file.js';
 import type { ArchiveTarget } from './render.js';
 import type { ObjectStorage } from './storage.js';
@@ -1263,6 +1264,11 @@ it('emits all native channels and profiles with serial/parallel parity and close
   const parallel = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
   const grouped = surface(parallel, 'native').profiles!;
   expect(grouped.groups).toHaveLength(2);
+  const numeric = [...surface(parallel, 'native').samples.shards, ...grouped.groups.flatMap(group => group.shards), ...surface(parallel, 'fine').samples.shards];
+  expect(forecastObjects(parallel)).toEqual([
+    ...numeric.map(shard => ({ key: shard.key, sha256: shard.sha256, bytes: shard.bytes, contentType: 'application/octet-stream' })),
+    ...parallel.artifacts.map(tile => ({ key: tile.tilesKey, sha256: tile.tilesSha256, contentType: 'application/vnd.pmtiles' }))
+  ]);
   let firstFrame = 0;
   for (const group of grouped.groups) {
     const shard = group.shards[0];

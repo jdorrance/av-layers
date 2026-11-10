@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './client';
+import { mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './index';
 
 afterEach(() => vi.useRealTimers());
 

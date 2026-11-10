@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
 import { DEFAULT_REQUEST_TIMEOUT_MS, latestSchema } from '@av/contracts';
-import { createRasterTileProtocol } from '@av/contracts/client';
+import { createRasterTileProtocol } from '@av/client';
 
 const api = new URL(process.argv[2] ?? 'http://127.0.0.1:8798');
 if (api.hostname !== '127.0.0.1' || !['http:', 'https:'].includes(api.protocol)) throw new Error('Benchmark requires a local fixture API');

@@ -1,4 +1,4 @@
-import type { PointFrame, pointMapLift } from '@av/contracts/client';
+import type { PointFrame, pointMapLift } from '@av/client';
 import type { WindgramReading } from './scene-types.ts';
 import { METRES_PER_THOUSAND_FEET } from './windgram-format.ts';
 

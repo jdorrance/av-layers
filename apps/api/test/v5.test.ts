@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { canonicalGridJson, gridSchema, gridToGeographic, MAX_NATIVE_ZOOM, MAX_SAMPLE_RANGE_BYTES, PRECIPITATION_ALL_HOURS_METHOD, PRECIPITATION_METHOD, sampleResponseV5Schema } from '@av/contracts';
-import { ApiClient } from '@av/contracts/client';
+import { ApiClient } from '@av/client';
 import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
 import { NOW, commonPoint, createV5Fixture, createGroupedV5Fixture, finePoint, nativePoint } from './v5-fixture';

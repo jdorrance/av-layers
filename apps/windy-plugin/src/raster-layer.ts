@@ -1,5 +1,5 @@
 import type { HostTileEvent, HostTileEventName, HostTileLayer, WindyTileOptions } from './controller';
-import { createRasterTileProtocol, layerMaxZoom, planViewportPrefetch, type PinnedBuild, type RasterTileProtocol, viewportTiles } from '@av/contracts/client';
+import { createRasterTileProtocol, layerMaxZoom, planViewportPrefetch, type PinnedBuild, type RasterTileProtocol, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts';
 
 export interface ForecastLayerOrder {

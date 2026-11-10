@@ -15,8 +15,8 @@ import {
   type DatasetRange,
   type PinnedBuild,
   type WindyTileOptions
-} from '@av/contracts/client';
-export type { WindyTileOptions } from '@av/contracts/client';
+} from '@av/client';
+export type { WindyTileOptions } from '@av/client';
 
 export interface HostTileEvent {
   /** Leaflet's tile element identifies a displayed tile across load, error and unload events. */

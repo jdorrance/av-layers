@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PRODUCT, createWholeDomainDescriptors, estimateProfileResponseBytes, layerSurface, MAX_POINT_RESPONSE_BYTES, manifestSchema, type PublishedManifest, type ProfileResponse } from '@av/contracts';
-import { ApiClient, type PinnedBuild } from '@av/contracts/client';
+import { ApiClient, type PinnedBuild } from '@av/client';
 import { verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });

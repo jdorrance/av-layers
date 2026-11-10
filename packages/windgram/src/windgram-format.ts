@@ -1,7 +1,7 @@
 // Unit conversions and formatting shared by the charts and readouts.
 
-export type { UnitSystem } from '@av/contracts/client';
-import type { UnitSystem } from '@av/contracts/client';
+export type { UnitSystem } from '@av/client';
+import type { UnitSystem } from '@av/client';
 import { FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
 
 const METRES_PER_FOOT = 0.3048;

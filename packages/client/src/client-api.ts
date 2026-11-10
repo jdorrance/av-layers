@@ -1,7 +1,7 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, renderedLayers, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId, type ProfileResponse, type MultiPointSampleResponse, profileResponseSchema, multiPointSampleResponseSchema, MAX_SAMPLE_POINTS, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, gridToGeographic } from './index.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, renderedLayers, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId, type ProfileResponse, type MultiPointSampleResponse, profileResponseSchema, multiPointSampleResponseSchema, MAX_SAMPLE_POINTS, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, gridToGeographic } from '@av/contracts';
+import { refinementCandidate } from '@av/contracts/refinement';
 import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
 import { createPointSeriesLoader } from './client-point.ts';
-import { refinementCandidate } from './refinement.ts';
 
 export interface RequestOptions {
   signal?: AbortSignal;

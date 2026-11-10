@@ -1,6 +1,4 @@
-import type { Manifest } from './index.ts';
-import { normalizeLon } from './coverage.ts';
-import { renderedFrames } from './publication.ts';
+import { normalizeLon, renderedFrames, type Manifest } from '@av/contracts';
 
 export interface FrameLike {
   id: string;

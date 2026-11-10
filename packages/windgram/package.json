@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@av/client": "workspace:*",
     "@av/contracts": "workspace:*",
     "@av/soaring": "workspace:*",
     "@av/solar": "workspace:*",
