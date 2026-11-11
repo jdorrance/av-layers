@@ -18,12 +18,20 @@ it('counts auxiliary fields in the shared normalized-frame memory estimate', () 
   expect(() => normalizedFrameBytes(100, 'isobaric', { ...resources, auxiliaryLevelFields: -1 })).toThrow('dimensions');
 });
 
-it('bounds scheduled starts for stepped, overlapping and manual-only schedules', () => {
+it('bounds scheduled starts for stepped and overlapping schedules', () => {
   const schedules = ['*/30 1-5/2,5 * * 1-5', '15 8 * * *'];
   expect(estimateRetention(schedules, { retentionDays: 1.5 })).toMatchObject({
     cadenceHours: 24 / 7, retainedPerModel: 14, retentionBasis: 'schedule', violations: []
   });
-  expect(estimateRetention([])).toMatchObject({ cadenceHours: null, retainedPerModel: 0, violations: [] });
+});
+
+it('projects retention for event-driven runs without inventing a zero-run budget', () => {
+  expect(estimateRetention([], { expectedRunsPerDay: 4 })).toEqual({
+    cadenceHours: 6, retentionDays: 7, retainedPerModel: 28, retentionBasis: 'expected-runs', violations: []
+  });
+  expect(estimateRetention([], { cadenceHours: 12 }).retentionBasis).toBe('cadence-override');
+  expect(() => estimateRetention([])).toThrow('Retention requires positive runs per day');
+  expect(() => estimateRetention([], { expectedRunsPerDay: 0 })).toThrow('Retention requires positive runs per day');
 });
 
 it('admits aggregate scalar and profile bytes independently of the per-shard limit', () => {

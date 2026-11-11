@@ -63,8 +63,8 @@ surface's status. Missing advertised assets fail the request.
 - `createdAt` / `ageSeconds`: build creation timestamp and elapsed seconds since
   the build started.
 
-[Forecast windows](../packages/contracts/src/forecast-windows.ts) select hours;
-[model settings](../packages/contracts/config/models.json) own source intervals.
+[Model settings](../packages/contracts/config/models.json) own forecast windows
+and source intervals.
 Current products emit native weather and profiles through the complete
 selected horizon, including night. Precipitation retains its trailing interval
 at night. `mapFrameCount` selects the tiles and fine-lift

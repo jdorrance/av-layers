@@ -8,8 +8,9 @@ Follow [development](development.md) for setup and
 [models.json](../packages/contracts/config/models.json) owns each model's source
 profile, grid, coverage, capabilities, schedule and zoom, with
 shared job and worker defaults. Model parallelism is its fixed job cap; the sum
-must fit the shared job budget. Set its window and frames per shard in
-[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts), then run:
+must fit the shared job budget. Set `forecast.window` in the model settings.
+An event-driven model uses an empty `execution.schedule` and sets
+`forecast.expectedRunsPerDay` for capacity planning. Then run:
 
 ```sh
 pnpm docs:generate

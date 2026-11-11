@@ -10,28 +10,31 @@ import { selectWorkflowModels } from './workflow-models.js';
 it('selects registered models with their fixed configured caps', () => {
   const all = PRODUCTS.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
   expect(selectWorkflowModels()).toEqual(all);
-  for (const model of all) expect(selectWorkflowModels(model.model)).toEqual([model]);
+  for (const model of all) expect(selectWorkflowModels({ selection: model.model })).toEqual([model]);
   for (const value of ['', 'unknown', 'constructor', 'toString', all.map(model => model.model).join(',')]) {
-    expect(() => selectWorkflowModels(value)).toThrow('Unknown forecast model');
+    expect(() => selectWorkflowModels({ selection: value })).toThrow('Unknown forecast model');
   }
 });
 
-it('uses literal cron triggers for distinct/shared schedules and keeps manual selection complete', () => {
+it('uses literal cron triggers for distinct/shared schedules and keeps health and explicit selection complete', () => {
   const models = [
     { modelId: 'first', execution: { parallelism: 3, schedule: ['17 5 * * *', '31 12 * * *'] } },
     { modelId: 'second', execution: { parallelism: 2, schedule: ['23 6 * * *', '31 12 * * *'] } },
     { modelId: 'manual', execution: { parallelism: 1, schedule: [] } }
   ];
-  const all = selectWorkflowModels('all', undefined, models);
+  const all = selectWorkflowModels({ products: models });
   vi.useFakeTimers();
   try {
     vi.setSystemTime(new Date('2026-11-05T10:00:00Z'));
-    expect(selectWorkflowModels('all', '17 5 * * *', models)).toEqual([all[0]]);
-    expect(selectWorkflowModels('all', '23 6 * * *', models)).toEqual([all[1]]);
-    expect(selectWorkflowModels('all', '31 12 * * *', models)).toEqual(all.slice(0, 2));
-    expect(selectWorkflowModels('first', '', models)).toEqual([all[0]]);
-    expect(all.map(model => model.model)).toEqual(['first', 'second', 'manual']);
-    expect(() => selectWorkflowModels('all', '59 23 * * *', models)).toThrow('Unknown forecast schedule');
+    expect(selectWorkflowModels({ schedule: '17 5 * * *', products: models })).toEqual([all[0]]);
+    expect(selectWorkflowModels({ schedule: '23 6 * * *', products: models })).toEqual([all[1]]);
+    expect(selectWorkflowModels({ schedule: '31 12 * * *', products: models })).toEqual(all.slice(0, 2));
+    expect(selectWorkflowModels({ selection: 'first', products: models })).toEqual([all[0]]);
+    expect(all.map(model => model.model)).toEqual(['first', 'second']);
+    expect(selectWorkflowModels({ selection: 'manual', products: models })).toEqual([{ model: 'manual', parallelism: 1 }]);
+    expect(selectWorkflowModels({ products: models, kind: 'health' }).map(model => model.model)).toEqual(['first', 'second', 'manual']);
+    expect(() => selectWorkflowModels({ products: [models[2]!] })).toThrow('No scheduled forecast models');
+    expect(() => selectWorkflowModels({ schedule: '59 23 * * *', products: models })).toThrow('Unknown forecast schedule');
   } finally { vi.useRealTimers(); }
 });
 
@@ -42,7 +45,7 @@ it.each([undefined, '', ...new Set(PRODUCTS.flatMap(product => product.execution
     execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), ...(forecast ? ['--forecast'] : [])], {
       env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', GITHUB_OUTPUT: output }
     });
-    const models = selectWorkflowModels('all', schedule);
+    const models = selectWorkflowModels({ schedule, kind: forecast ? 'forecast' : 'health' });
     expect(readFileSync(output, 'utf8')).toBe(forecast
       ? `matrix=${JSON.stringify({ include: models })}\nmodel-parallelism=${schedule ? models.length : 1}\n`
       : `models=${JSON.stringify(models.map(model => model.model))}\n`);

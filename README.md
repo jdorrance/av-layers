@@ -7,7 +7,6 @@ clients and Windgrams.
 The forecast workflow runs the [configured models](packages/contracts/config/models.json)
 in parallel; their source profiles select NOAA or DWD inputs. Whole-domain
 terrain columns derive MSL and AGL lift; see [science](docs/science.md#terrain-columns).
-Tune per-model forecast windows in [forecast-windows.ts](packages/contracts/src/forecast-windows.ts).
 Coverage excludes Africa, Russia, China, Antarctica and Greenland. See
 [deployments](docs/status.md) for live applications and runs.
 
