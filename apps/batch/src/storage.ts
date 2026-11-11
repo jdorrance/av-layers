@@ -76,7 +76,7 @@ export function r2ClientOptions(env: NodeJS.ProcessEnv = process.env): NonNullab
   };
 }
 
-type ShardPlan = Pick<BuildPlan, 'model' | 'buildId' | 'createdAt' | 'deadlineAt' | 'sourcePin'>;
+type ShardPlan = Pick<BuildPlan, 'model' | 'buildId' | 'createdAt' | 'deadlineAt' | 'cycle' | 'sourcePin'>;
 type ShardCredential = { accessKeyId: string; secretAccessKey: string; sessionToken: string };
 type ShardCredentials = { read: ShardCredential; write: ShardCredential };
 
@@ -133,15 +133,15 @@ function shardDeadline(plan: ShardPlan): number {
   return deadline;
 }
 
-function shardContext(env: NodeJS.ProcessEnv, plan: ShardPlan): { bucket: string; key: Buffer; aad: Buffer; deadline: number } {
+function shardContext(env: NodeJS.ProcessEnv, plan: ShardPlan) {
   const bucket = env.R2_BUCKET, hex = env.FORECAST_SHARD_CREDENTIAL_KEY;
   if (!bucket) throw new Error('R2_BUCKET is required');
   if (!hex || !/^[a-f0-9]{64}$/i.test(hex)) throw new Error('FORECAST_SHARD_CREDENTIAL_KEY must be 32 bytes encoded as hex');
   const deadline = shardDeadline(plan);
   const deadlineAt = plan.deadlineAt ?? new Date(deadline).toISOString();
-  const source = plan.sourcePin;
+  const source = plan.sourcePin, sourcePrefix = source && pinnedSourcePrefix(plan.model, plan.cycle, source.key);
   const identity = [bucket, plan.model, plan.buildId, deadlineAt, ...(source ? [source.key, source.bytes, source.sha256] : [])];
-  return { bucket, key: Buffer.from(hex, 'hex'), aad: Buffer.from(JSON.stringify(identity)), deadline };
+  return { bucket, key: Buffer.from(hex, 'hex'), aad: Buffer.from(JSON.stringify(identity)), deadline, sourcePrefix };
 }
 
 export function sealShardCredentials(env: NodeJS.ProcessEnv, plan: ShardPlan): string {
@@ -159,7 +159,7 @@ export function sealShardCredentials(env: NodeJS.ProcessEnv, plan: ShardPlan): s
     return { accessKeyId: access, secretAccessKey: createHash('sha256').update(jwt).digest('hex'), sessionToken: Buffer.from(`jwt/${jwt}`).toString('base64') };
   };
   const readPrefixes = [prefix, 'coverage/', 'terrain/prepared/'];
-  if (plan.sourcePin) readPrefixes.push(pinnedSourcePrefix(plan.model, plan.sourcePin.key));
+  if (context.sourcePrefix) readPrefixes.push(context.sourcePrefix);
   const credentials: ShardCredentials = { read: scoped(['GetObject', 'HeadObject'], readPrefixes), write: scoped(['PutObject'], [prefix]) };
   const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', context.key, iv);
   cipher.setAAD(context.aad);

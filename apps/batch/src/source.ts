@@ -1,10 +1,12 @@
 import { sourceIntervalHours, type ProductDefinition } from '@av/contracts';
 
 /** Configured source clocks, URLs and copied index ownership. */
-export function sourceCycle(value: string, hours: readonly number[]): string {
+export function sourceCycle(value: string, hours?: readonly number[]): string {
   const date = new Date(value);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:00:00(?:\.000)?Z$/.test(value) || !Number.isFinite(date.getTime())
-      || date.toISOString() !== value.replace(/(?:\.000)?Z$/, '.000Z') || !hours.includes(date.getUTCHours())) throw new RangeError('Cycle must identify a configured exact ISO UTC source hour');
+      || date.toISOString() !== value.replace(/(?:\.000)?Z$/, '.000Z') || (hours && !hours.includes(date.getUTCHours()))) {
+    throw new RangeError('Cycle must identify a configured exact ISO UTC source hour');
+  }
   return date.toISOString();
 }
 
@@ -35,12 +37,21 @@ export function isPrivateUpstreamKey(key: string, prefix: string): boolean {
     /^[a-zA-Z0-9._-]+$/.test(segment) && segment !== '.' && segment !== '..');
 }
 
-export function pinnedSourcePrefix(model: string, key: string): string {
+export function sourceCycleParts(cycle: string): { date: string; cycleHour: string } {
+  return { date: cycle.slice(0, 10).replaceAll('-', ''), cycleHour: cycle.slice(11, 13) };
+}
+
+export function privateUpstreamPrefix(model: string, cycle?: ReturnType<typeof sourceCycleParts>): string {
   const root = `upstream/${model}/`;
-  if (!isPrivateUpstreamKey(key, root) || !/^\d{8}\/\d{2}\/_ready\.json$/.test(key.slice(root.length))) {
+  return cycle ? `${root}${cycle.date}/${cycle.cycleHour}/` : root;
+}
+
+export function pinnedSourcePrefix(model: string, cycle: string, key: string): string {
+  const prefix = privateUpstreamPrefix(model, sourceCycleParts(sourceCycle(cycle)));
+  if (key !== `${prefix}_ready.json`) {
     throw new Error('Pinned upstream receipt must identify the model cycle');
   }
-  return key.slice(0, -'_ready.json'.length);
+  return prefix;
 }
 
 export function copySourceIndices(input: Uint32Array, cells: number): Uint32Array {

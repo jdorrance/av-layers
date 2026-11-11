@@ -207,7 +207,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   if (source && Date.parse(source.cycle) !== Date.parse(options.cycle)) throw new Error('Pinned upstream cycle differs from the planned cycle');
   const sourcePin = options.sourcePin ?? source?.sourcePin;
   if (!!provider.resolveRun !== !!sourcePin) throw new Error('Forecast plan must pin its private source');
-  if (sourcePin) pinnedSourcePrefix(product.modelId, sourcePin.key);
+  if (sourcePin) pinnedSourcePrefix(product.modelId, options.cycle, sourcePin.key);
   const frozen = frozenWholeDomain(prepared);
   const identity = await buildIdentity(product, prepared.native.hash, { wholeDomain:
     { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain } });
@@ -242,7 +242,7 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   if (!parsed.success) throw new Error('Invalid forecast plan', { cause: parsed.error });
   plan = parsed.data;
   if (!!provider.resolveRun !== !!plan.sourcePin) throw new Error('Forecast plan must pin its private source');
-  if (plan.sourcePin) pinnedSourcePrefix(plan.model, plan.sourcePin.key);
+  if (plan.sourcePin) pinnedSourcePrefix(plan.model, plan.cycle, plan.sourcePin.key);
   if (plan.execution) product = { ...product, maxNativeZoom: plan.execution.zoom,
     execution: { ...product.execution, workers: plan.execution.workers } };
   assertForecastInputs(mask, product);

@@ -2,7 +2,7 @@ import z from 'zod';
 import { MAX_JSON_CONTAINER_ENTRIES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, parseBoundedJson, sourceIntervalHours } from '@av/contracts';
 import { runConcurrent } from '../concurrent.js';
 import type { ForecastSourcePin, ForecastSourceStore } from '../provider.js';
-import { isPrivateUpstreamKey } from '../source.js';
+import { isPrivateUpstreamKey, privateUpstreamPrefix, sourceCycleParts } from '../source.js';
 import { IndexedGribError } from './errors.ts';
 import { indexedGribCompanionSpecs, indexedGribFileUrl, validateCycle } from './fields.ts';
 import type { IndexedSource } from './source.js';
@@ -57,17 +57,17 @@ export async function readIndexedR2Run(source: IndexedSource, options: {
   const { store, sourcePin, signal } = options;
   if (!store) throw new IndexedGribError('invalid-option', 'Private Indexed GRIB requires R2 storage');
   if (sourcePin && !options.cycle) throw new IndexedGribError('invalid-option', 'Pinned Indexed GRIB receipt requires a cycle');
-  const model = source.model.modelId, root = `upstream/${model}/`;
+  const model = source.model.modelId;
   let latest: z.infer<typeof latestSchema> | undefined;
   if (options.cycle === undefined) {
-    const key = `${root}latest.json`, object = await store.get(key, undefined, 4096, signal);
+    const key = `${privateUpstreamPrefix(model)}latest.json`, object = await store.get(key, undefined, 4096, signal);
     if (!object) unavailable(key);
     if (object.bytes.byteLength > 4096) conflict('Private Indexed GRIB latest pointer exceeds its byte budget');
     latest = latestSchema.parse(parseBoundedJson(object.bytes));
     if (latest.model !== model) conflict('Private Indexed GRIB latest pointer has a different model');
   }
   const cycle = validateCycle(source, options.cycle ?? latest!.cycle);
-  const prefix = `${root}${cycle.slice(0, 10).replaceAll('-', '')}/${cycle.slice(11, 13)}/`;
+  const prefix = privateUpstreamPrefix(model, sourceCycleParts(cycle));
   const key = `${prefix}_ready.json`;
   if ((sourcePin && sourcePin.key !== key) || (latest && latest.readyKey !== key)) conflict('Private Indexed GRIB receipt key differs from its cycle');
   const maxBytes = sourcePin?.bytes ?? MAX_MANIFEST_BYTES;
@@ -98,8 +98,7 @@ export async function verifyIndexedR2Objects(run: IndexedR2Run, signal?: AbortSi
     signal?.throwIfAborted();
     const head = await run.store.head(expected.key, signal);
     if (!head) unavailable(expected.key);
-    if (head.size !== expected.bytes || head.etag !== expected.etag || head.metadata?.sha256 !== expected.sha256
-        || (head.computedSha256 !== undefined && head.computedSha256 !== expected.sha256)) {
+    if (head.size !== expected.bytes || head.etag !== expected.etag || head.metadata?.sha256 !== expected.sha256) {
       conflict(`Private Indexed GRIB object identity differs from its receipt: ${expected.key}`);
     }
   });

@@ -8,7 +8,7 @@ import { putImmutable } from './immutable-upload';
 import { BUILD_BUDGETS } from './capacity';
 
 const env = { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
-const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: '2026-11-04T19:00:00.000Z', deadlineAt: '2026-11-04T19:50:00.000Z' };
+const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', cycle: '2026-11-04T18:00:00.000Z', createdAt: '2026-11-04T19:00:00.000Z', deadlineAt: '2026-11-04T19:50:00.000Z' };
 const issuer = { ...env, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: 'ab'.repeat(32) };
 const shard = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: 'bucket', FORECAST_SHARD_CREDENTIAL_KEY: issuer.FORECAST_SHARD_CREDENTIAL_KEY };
 const makeStore = (value: typeof plan | (Omit<typeof plan, 'deadlineAt'> & { deadlineAt: string | undefined })) => r2ShardStorage(shard, value, Buffer.from(sealShardCredentials(issuer, value)));
@@ -119,7 +119,13 @@ describe('R2 shard credentials', () => {
       expect(credentials[0]).not.toEqual(credentials[2]);
       const prefix = `builds/${plan.model}/${plan.buildId}/`;
       const upstream = sourcePin ? ['upstream/gfs/20261104/18/'] : [];
-      if (sourcePin) expect(() => r2ShardStorage(shard, { ...activePlan, sourcePin: { ...sourcePin, sha256: 'b'.repeat(64) } }, envelope)).toThrow('unauthenticated');
+      if (sourcePin) {
+        expect(() => r2ShardStorage(shard, { ...activePlan, sourcePin: { ...sourcePin, sha256: 'b'.repeat(64) } }, envelope)).toThrow('unauthenticated');
+        const wrongCycle = { ...activePlan, cycle: '2026-11-05T18:00:00.000Z' };
+        expect(() => sealShardCredentials(issuer, wrongCycle)).toThrow('must identify the model cycle');
+        expect(() => r2ShardStorage(shard, wrongCycle, envelope)).toThrow('must identify the model cycle');
+        expect(() => sealShardCredentials(issuer, { ...activePlan, cycle: '2026-11-04T18:30:00.000Z' })).toThrow('exact ISO UTC source hour');
+      }
       for (const [index, actions, prefixPaths] of [[0, ['GetObject', 'HeadObject'], [prefix, 'coverage/', 'terrain/prepared/', ...upstream]], [2, ['PutObject'], [prefix]]] as const) {
         const credential = credentials[index]!;
         expect(credential.accessKeyId).toBe(env.R2_ACCESS_KEY_ID);

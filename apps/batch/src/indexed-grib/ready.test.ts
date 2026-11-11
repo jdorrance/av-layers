@@ -68,6 +68,13 @@ it('admits a complete private cycle from latest, pins it, and reads only bounded
   } finally { await rm(cacheDir, { recursive: true, force: true }); }
 });
 
+it('requires producer SHA-256 metadata before reading index or GRIB bytes', async () => {
+  const { provider, store, files, readyKey } = fixture(), file = files[0]!;
+  store.head.mockResolvedValueOnce({ size: file.bytes, etag: file.etag, metadata: { sha256: '0'.repeat(64) } });
+  await expect(provider.resolveRun!({ cycle, store, cacheDir: '' })).rejects.toThrow('object identity differs from its receipt');
+  expect(store.get.mock.calls.map(([key]) => key)).toEqual([readyKey]);
+});
+
 it('uses the pinned final record size and ETag on ranges and reuses matching disk cache entries', async () => {
   const { source, store, files, set } = fixture();
   const r2 = await readIndexedR2Run(source, { cycle, store }), file = files[0]!;
