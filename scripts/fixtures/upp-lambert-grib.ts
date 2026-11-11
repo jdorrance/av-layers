@@ -65,6 +65,7 @@ function message(model: ModelDefinition, cycle: string, hour: number, field: Ind
   geometry[64] = 64;
   geometry.writeUInt32BE(microdegrees(grid.standardParallel1Deg), 65);
   geometry.writeUInt32BE(microdegrees(grid.standardParallel2Deg), 69);
+  geometry.writeUInt32BE(microdegrees(source.upstream.lambertSouthPoleLatitude ?? -90), 73);
 
   const instant = field.statistic === 'instant';
   const product = section(4, instant ? 34 : 58);

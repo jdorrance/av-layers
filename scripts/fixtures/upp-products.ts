@@ -2,7 +2,9 @@ import { gridToGeographic, type Grid } from '@av/contracts';
 import { getProduct, type ModelDefinition } from '@av/contracts/models';
 
 const base = getProduct('rrfs')!;
-const forecastHours = [1, 2];
+// The second frame keeps the window live until the next local daylight cycle.
+const mapEndHour = 26;
+const forecastHours = [1, mapEndHour];
 export const UPP_PRESSURE_LEVELS = [950, 900, 850] as const;
 
 function uppProduct(region: string, grid: Extract<Grid, { kind: 'lambert-conformal' }>, terrainSubdivisionFactor: number): ModelDefinition {
@@ -16,12 +18,12 @@ function uppProduct(region: string, grid: Extract<Grid, { kind: 'lambert-conform
     source: { modelFamily: 'wrf', configurationId: `${modelId}-source`, domainId: region }, tier: 'high', expectedRunsPerDay: 4,
     bounds: [lower(longitudes), lower(latitudes), upper(longitudes), upper(latitudes)],
     attribution: 'Synthetic indexed GRIB2', coverageDescription: 'Synthetic Lambert coverage', grid,
-    maxNativeZoom: 0, nominalDxMeters: Math.abs(grid.dxM), terrainSubdivisionFactor, frameHours: forecastHours, mapEndHour: 2,
+    maxNativeZoom: 0, nominalDxMeters: Math.abs(grid.dxM), terrainSubdivisionFactor, frameHours: forecastHours, mapEndHour,
     capabilities: { ...base.capabilities, maxVerticalLevels: UPP_PRESSURE_LEVELS.length },
-    freshness: { maxCycleAgeHours: 2, minHorizonHours: 0 },
+    freshness: { maxCycleAgeHours: 25, minHorizonHours: 0 },
     execution: { ...base.execution, schedule: [], shards: 2, workers: 1 },
-    forecast: { hours: forecastHours, intervalHours: 1, mapEndHour: 2, cycleHoursUtc: Array.from({ length: 24 }, (_, i) => i), statisticsResetHours: 1 },
-    upstream: { ...base.upstream, provider: 'Synthetic UPP', subCentre: 0,
+    forecast: { hours: forecastHours, intervalHours: 1, mapEndHour, cycleHoursUtc: Array.from({ length: 24 }, (_, i) => i), statisticsResetHours: 1 },
+    upstream: { ...base.upstream, provider: 'Synthetic UPP', subCentre: 0, lambertSouthPoleLatitude: 0,
       urlTemplate: `r2://upstream/${modelId}/{date}/{cycleHour}/wrf.t{cycleHour}z.{product}.f{hour}.grib2`,
       pressureLevelsHpa: { profile: [...UPP_PRESSURE_LEVELS] } }
   };

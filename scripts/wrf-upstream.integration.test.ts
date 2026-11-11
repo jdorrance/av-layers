@@ -21,7 +21,10 @@ vi.mock('@av/contracts/models', async importOriginal => {
   const actual = await importOriginal<typeof import('@av/contracts/models')>();
   return { ...actual, getProduct: (id: string) => fixtureRegistry.get(id) ?? actual.getProduct(id) };
 });
-const products = [UPP_ARMENIA, UPP_NEW_ZEALAND];
+const fixtureRuns = [
+  { product: UPP_ARMENIA, cycleHourUtc: 8 },
+  { product: UPP_NEW_ZEALAND, cycleHourUtc: 0 }
+];
 
 const config = fileURLToPath(new URL('../apps/api/wrangler.json', import.meta.url));
 const contractDir = fileURLToPath(new URL('../packages/contracts/', import.meta.url));
@@ -84,7 +87,6 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
   });
   const { getPlatformProxy, unstable_dev } = await import('wrangler');
   const root = await mkdtemp(join(tmpdir(), 'av-upp-upstream-')), persistTo = join(root, 'r2');
-  const cycle = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000).toISOString().replace('.000Z', 'Z');
   try {
     enterPhase('open R2 proxy');
     const proxy = await withWranglerDeadline(phase, getPlatformProxy<{ BUCKET: R2Bucket }>({ configPath: config,
@@ -92,9 +94,11 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
     const pins = new Map<string, string>();
     try {
       const store = boundStorage(proxy.env.BUCKET);
-      for (const fixture of products) {
+      for (const { product: fixture, cycleHourUtc } of fixtureRuns) {
         testSignal.throwIfAborted();
         enterPhase(`prepare ${fixture.modelId}`);
+        const todayCycle = new Date(startedAt).setUTCHours(cycleHourUtc, 0, 0, 0);
+        const cycle = new Date(todayCycle > startedAt ? todayCycle - 86_400_000 : todayCycle).toISOString().replace('.000Z', 'Z');
         const out = join(root, fixture.modelId), bundled = join(out, 'bundled');
         const product = { ...fixture, coverageDir: relative(contractDir, bundled) };
         fixtureRegistry.set(product.modelId, product);
@@ -109,7 +113,7 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
         const plan = await createBuildPlan({ ...inputs, cycle: resolved.cycle, sourcePin: resolved.sourcePin, signal: testSignal,
           wholeDomain: await syntheticWholeDomain(out, product) });
         await cp(join(out, 'coverage', plan.wholeDomain.fineCoverage.hash), join(bundled, 'fine'), { recursive: true });
-        expect(plan.groups).toEqual([[1], [2]]);
+        expect(plan.groups).toEqual([[1], [26]]);
         testSignal.throwIfAborted();
         await uploadForecastControlPlan(store, out, plan);
         const signal = forecastPlanSignal(plan, testSignal);
@@ -154,7 +158,7 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
         expect(response.status, response.ok ? path : await response.clone().text()).toBe(200);
         return response;
       };
-      for (const product of products) {
+      for (const { product } of fixtureRuns) {
         enterPhase(`probe ${product.modelId}`);
         const model = product.modelId, buildId = pins.get(model)!, endpoint = `/v1/models/${model}`;
         expect(await (await read(`${endpoint}/latest?expand=manifest`)).json()).toMatchObject({
@@ -163,14 +167,11 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
         const point = gridToGeographic(product.grid, 14, 8)!, query = `lat=${point.lat}&lon=${point.lon}&frame=f001`;
         const pinned = `${endpoint}/runs/${buildId}`;
         const sample = sampleResponseV5Schema.parse(await (await read(`${pinned}/sample?${query}&layers=precip-rate,usable-lift-msl,usable-lift-agl`)).json());
-        expect(sample.frames[0]!.layers['precip-rate']).toMatchObject({ value: 2, status: 'valid', surfaceId: 'native' });
-        for (const layer of ['usable-lift-msl', 'usable-lift-agl']) {
-          const lift = sample.frames[0]!.layers[layer]!;
-          expect(lift.surfaceId).toBe('fine');
-          // The fixture uses the current UTC cycle, so either domain can be dark.
-          expect(['valid', 'no-usable-lift']).toContain(lift.status);
-          if (lift.status === 'valid') expect(Number.isFinite(lift.value)).toBe(true);
-        }
+        expect(sample.frames[0]!.layers).toMatchObject({
+          'precip-rate': { value: 2, status: 'valid', surfaceId: 'native' },
+          'usable-lift-msl': { value: expect.closeTo(1253.8462, 2), status: 'valid', surfaceId: 'fine' },
+          'usable-lift-agl': { value: expect.closeTo(1153.8462, 2), status: 'valid', surfaceId: 'fine' }
+        });
         const profile = profileResponseSchema.parse(await (await read(`${pinned}/profile?${query}`)).json());
         expect(profile.cell?.index).toBe(8 * product.grid.width + 14);
         const column = profile.frames[0]!.profile;
@@ -191,7 +192,7 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
       }
       enterPhase('probe catalog');
       const catalog = await (await read('/v1/catalog')).json();
-      expect(catalog).toMatchObject({ models: expect.arrayContaining(products.map(product => expect.objectContaining({ model: product.modelId, available: true }))) });
+      expect(catalog).toMatchObject({ models: expect.arrayContaining(fixtureRuns.map(({ product }) => expect.objectContaining({ model: product.modelId, available: true }))) });
     } finally {
       enterPhase('stop local Worker');
       await withWranglerDeadline(phase, worker.stop());
