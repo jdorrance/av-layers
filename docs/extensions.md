@@ -92,3 +92,22 @@ control points. [support.ts](../packages/forecast/src/support.ts) resolves
 neighboring cells for stencil operations, and
 [coverage.ts](../apps/batch/src/coverage.ts) separates public output cells from
 halo cells. Finish with `pnpm docs:generate` and `pnpm verify`.
+
+## Publish an external indexed GRIB2 cycle
+
+Configure an event-driven indexed GRIB2 product with the producer's grid and
+field identities. Commit the inputs as described in the
+[private producer guide](../apps/batch/src/indexed-grib/README.md#private-producer-storage).
+
+Dispatch `upstream-cycle-ready` after the input commit. Send `environment`,
+`model`, and the UTC `cycle` in `client_payload`.
+
+```sh
+gh api repos/OWNER/REPO/dispatches --input - <<'JSON'
+{"event_type":"upstream-cycle-ready","client_payload":{"environment":"staging","model":"MODEL","cycle":"2026-11-11T06:00:00Z"}}
+JSON
+```
+
+In staging, verify the pinned source receipt and the forecast's live serving
+receipt before enabling production. Retain inputs while a build can read or
+retry the cycle.
