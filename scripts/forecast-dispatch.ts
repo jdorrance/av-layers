@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { PRODUCTS } from '@av/contracts/models';
+import { sourceCycle } from '../apps/batch/src/source.js';
 
 type DispatchModel = Pick<(typeof PRODUCTS)[number], 'modelId' | 'execution' | 'forecast'>;
 
@@ -10,14 +11,8 @@ export function forecastDispatch(payload: unknown, products: readonly DispatchMo
   if (environment !== 'staging' && environment !== 'production') throw new Error('External forecast dispatch requires a valid environment');
   const product = products.find(item => item.modelId === model);
   if (!product || product.execution.schedule.length !== 0) throw new Error('External forecast dispatch requires a registered event-driven model');
-  if (typeof cycle !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:00:00Z$/.test(cycle) || !Number.isFinite(Date.parse(cycle))) {
-    throw new Error('External forecast dispatch requires a canonical UTC cycle');
-  }
-  const date = new Date(cycle);
-  if (date.toISOString().replace('.000Z', 'Z') !== cycle || !product.forecast.cycleHoursUtc.includes(date.getUTCHours())) {
-    throw new Error('External forecast dispatch cycle is outside the model schedule');
-  }
-  return { environment, model: product.modelId, cycle };
+  if (typeof cycle !== 'string') throw new Error('External forecast dispatch requires an explicit UTC cycle');
+  return { environment, model: product.modelId, cycle: sourceCycle(cycle, product.forecast.cycleHoursUtc) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
