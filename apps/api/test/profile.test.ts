@@ -195,8 +195,17 @@ describe('native profile API', () => {
     assertReleased(f);
   });
 
-  it('retains all profile levels and derived soaring diagnostics when selecting fewer scalar channels', async () => {
-    const f = fixture(), body = await read(await f.request(path(f, 'lat=8.8&lon=-115.3125&frame=h002&layers=wind-10m-v,wind-10m-u')));
+  it('serves complete diagnostics for a layer subset even when the old representation is cached', async () => {
+    const f = fixture(), query = 'lat=8.8&lon=-115.3125&frame=h002';
+    const staleKey = new URL(`https://api.test${path(f, `${query}&layers=wind-10m-u,wind-10m-v`)}`);
+    staleKey.searchParams.set('__representation', 'profile-v2');
+    const stale = JSON.stringify({ frames: [{ id: 'h002', derived: { usableLiftTopV2M: null } }] });
+    const cache = {
+      match: vi.fn(async (request: Request) => request.url === staleKey.href ? new Response(stale, { headers: { etag: '"old-profile"' } }) : undefined),
+      put: vi.fn(async (_request: Request, response: Response) => { await response.arrayBuffer(); })
+    };
+    vi.stubGlobal('caches', { default: cache });
+    const body = await read(await f.request(path(f, `${query}&layers=wind-10m-v,wind-10m-u`)));
     expect(body.frames.map(frame => frame.id)).toEqual(['h002']);
     expect(Object.keys(body.frames[0]!.layers)).toEqual(['wind-10m-u', 'wind-10m-v']);
     expect(body.frames[0]!.profile.levels).toHaveLength(2);

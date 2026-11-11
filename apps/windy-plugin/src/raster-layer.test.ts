@@ -34,7 +34,11 @@ function fixture() {
   const layer = new WindyRasterLayer(api, 'https://tiles.example', url('f003'), windyTileOptions(7, 0.5, 'NOAA'));
   const emit = (event: string, value?: Parameters<RenderListener>[0]) => { for (const listener of handlers.get(event) ?? []) listener(value); };
   const complete = (native = natives.at(-1)!) => { native.loading = false; native.listeners.get('data')?.({ tile: {} }); emit('render'); };
-  return { layer, map, api, create, natives, handlers, emit, complete, move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'moveend'); } };
+  return {
+    layer, map, api, create, natives, handlers, emit, complete,
+    setMoving: (value: boolean) => { moving = value; },
+    move: (value: boolean) => { moving = value; emit(value ? 'movestart' : 'moveend'); }
+  };
 }
 
 it('loads hidden staging tiles and commits only successful render readiness', async () => {
@@ -337,14 +341,15 @@ it('commits a viewport that loaded some tiles and reports the tiles that failed'
   f.layer.remove();
 });
 
-it('waits until moveend when mounted while the map is already moving', async () => {
+it.each(['moveend', 'idle'] as const)('restages on %s when mounted during a zoom', async event => {
   const f = fixture(), statuses = vi.fn();
-  f.move(true);
+  f.setMoving(true);
   f.layer.onStatus(statuses); f.layer.addTo(f.map);
   const midMove = f.natives[0];
   f.complete(midMove);
   expect(midMove.setOpacity).not.toHaveBeenCalled();
-  f.move(false);
+  f.setMoving(false);
+  f.emit(event);
   const settled = f.natives.at(-1)!;
   expect(settled).not.toBe(midMove);
   f.complete(settled);

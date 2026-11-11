@@ -3,6 +3,7 @@ import { splitSource } from './source.js';
 const profile = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 2, height: 2 } });
 import { execFileSync } from 'node:child_process';
 import { expect, it } from 'vitest';
+import { recoverSplitGribFlux } from './acquire.js';
 import { decodeCcsdsSamples } from './codec/ccsds.js';
 import { decodeSplitGribField } from './grib.js';
 
@@ -176,7 +177,7 @@ it('ignores unused bitmap padding bits when validating coverage', () => {
   expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
 });
 
-it('retains Float64 precision on statistical template 4.8 fields for late-lead window recovery', () => {
+it('recovers late-lead statistical windows from one Float64 array per field', () => {
   const makeStat = (endHour: number, reference: number, delta: number): Uint8Array => {
     const base = simpleField(8, 0, [250 + delta, 250, 250, 250]);
     const s4 = new Uint8Array(58), v4 = new DataView(s4.buffer);
@@ -198,7 +199,9 @@ it('retains Float64 precision on statistical template 4.8 fields for late-lead w
   const reference = 134_217_728; // 2^27: exact in Float32, while +123 loses low bits in Float32.
   const prev = decodeSplitGribField(profile, makeStat(71, reference, 0), Uint32Array.of(0));
   const curr = decodeSplitGribField(profile, makeStat(72, reference, 123), Uint32Array.of(0));
-  expect(curr.values[0]! - prev.values[0]!).not.toBe(123);
-  expect(curr.preciseValues).toBeInstanceOf(Float64Array);
-  expect(curr.preciseValues![0]! * 72 - prev.preciseValues![0]! * 71).toBe(reference + 72 * 123);
+  expect(curr.values).toBeInstanceOf(Float64Array);
+  expect(curr.values[0]! - prev.values[0]!).toBe(123);
+  const recovered = recoverSplitGribFlux(profile, 'sensibleHeatFlux', curr, prev, 72);
+  expect(recovered.values).toBeInstanceOf(Float32Array);
+  expect(recovered.values[0]).toBe(Math.fround((reference + 72 * 123) * profile.upstream.fields.sensibleHeatFlux.scale));
 });

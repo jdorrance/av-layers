@@ -143,7 +143,7 @@
         }
       },
       "terrainSubdivisionFactor": 10,
-      "execution": {"zoom": 9, "parallelism": 20, "schedule": ["0 5,11,17,23 * * *"]}
+      "execution": {"zoom": 9, "parallelism": 20, "schedule": ["35 4,10,16,22 * * *"]}
     },
     {
       "modelId": "icon-eu",

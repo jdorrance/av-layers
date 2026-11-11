@@ -1,5 +1,4 @@
 import type { Context } from 'hono';
-import { MAX_PROVENANCE_BYTES } from '@av/contracts';
 import { CoverageError } from './coverage';
 import { countCacheHit, reserveAllocation, boundCachedResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, waitFor, type WaitContext } from './resources';
 
@@ -56,11 +55,17 @@ export function response(body: BodyInit | null, type: string, expiresAt?: string
     'content-type': type,
     'cache-control': cacheControl(expiresAt, undefined, immutable)
   });
-  if (typeof body === 'string' && body.length > MAX_PROVENANCE_BYTES) throw new ResourceLimitError('Outgoing response byte budget exceeded');
-  const payload = typeof body === 'string' ? new TextEncoder().encode(body) : body;
-  const size = payload instanceof ArrayBuffer || ArrayBuffer.isView(payload) ? payload.byteLength : 1024 * 1024;
+  let size = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? body.byteLength : 1024 * 1024;
+  if (typeof body === 'string') {
+    size = 0;
+    for (const character of body) {
+      const codePoint = character.codePointAt(0)!;
+      size += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    }
+  }
   if (etag) headers.set('etag', `"${etag}"`);
   return createBoundedResponse(size, () => {
+    const payload = typeof body === 'string' ? new TextEncoder().encode(body) : body;
     if (payload instanceof ArrayBuffer || ArrayBuffer.isView(payload)) headers.set('content-length', String(payload.byteLength));
     return new Response(payload, { headers });
   });
@@ -154,8 +159,7 @@ export function handleError(error: Error, c: Context): Response {
       error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error)
     });
   }
-  const runtimeBug = error instanceof TypeError || error instanceof ReferenceError || error instanceof SyntaxError || error instanceof RangeError;
-  const problem = error instanceof Problem ? error : error instanceof CoverageError ? new Problem(503, 'coverage-unavailable', error.message) : error instanceof ResourceLimitError ? new Problem(503, 'resource-limit', 'Serving resource budget exceeded') : runtimeBug ? new Problem(500, 'internal-error', 'Internal server error') : new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
+  const problem = error instanceof Problem ? error : error instanceof CoverageError ? new Problem(503, 'coverage-unavailable', error.message) : error instanceof ResourceLimitError ? new Problem(503, 'resource-limit', 'Serving resource budget exceeded') : new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
   const result = response(JSON.stringify({ type: `urn:windy-av:${problem.code}`, title: problem.code, status: problem.status, detail: problem.message }), 'application/problem+json; charset=utf-8');
   const out = new Response(result.body, { status: problem.status, headers: result.headers });
   transferBodyLease(result.body, out.body);

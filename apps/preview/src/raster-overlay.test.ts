@@ -247,6 +247,27 @@ it('waits until moveend when first selected while the map is already moving', as
   } finally { overlay.destroy(); }
 });
 
+it('restages on idle when a clamped zoom emits no movement events', async () => {
+  const f = fixture(), b = build();
+  try {
+    const [previous, next] = b.manifest.frames;
+    f.overlay.select(b, 'usable-lift-agl', previous.id);
+    await f.complete();
+    f.setMoving(true);
+    f.overlay.select(b, 'usable-lift-agl', next.id);
+    const midZoom = f.stage();
+    await f.complete(midZoom);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(previous.id);
+    f.setMoving(false);
+    f.emit('idle');
+    const settled = f.stage();
+    expect(settled).not.toBe(midZoom);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(previous.id);
+    await f.complete(settled);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(next.id);
+  } finally { f.overlay.destroy(); }
+});
+
 it('allows a healthy replacement to finish after the displayed source reports an error', async () => {
   const f = fixture(), b = build();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();

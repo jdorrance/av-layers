@@ -121,5 +121,5 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       if (encoded.byteLength > MAX_POINT_RESPONSE_BYTES) fail(429, 'sample-limit', 'Profile response exceeds the byte budget');
       return response(encoded, 'application/json; charset=utf-8', m.expiresAt, await waitFor(sha256(encoded), request.signal));
     } finally { for (const release of releases) release(); }
-  }, 'profile-v2');
+  }, 'profile-v3');
 }

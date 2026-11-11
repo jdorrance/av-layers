@@ -40,8 +40,8 @@ export interface DecodedSplitGribField {
     readonly packingError: number;
   };
   readonly expandedBytes: number;
-  readonly values: Float32Array;
-  readonly preciseValues?: Float64Array;
+  /** Unnormalized statistical windows retain Float64 values through interval recovery. */
+  readonly values: Float32Array | Float64Array;
   readonly missing: Uint8Array;
 }
 
@@ -325,8 +325,7 @@ export function decodeSplitGribField(source: SplitSource,
     fullValues = decodeFieldValues(field, { missingValue: NaN }).values;
   }
 
-  const outValues = target?.values ?? new Float32Array(activeIndices.length);
-  const outPrecise = retainPrecise ? new Float64Array(activeIndices.length) : undefined;
+  const outValues = target?.values ?? allocValues(activeIndices.length);
   const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
   if (outValues.length !== activeIndices.length || outMissing.length !== activeIndices.length) throw new RangeError('Split GRIB target length mismatch');
 
@@ -342,11 +341,9 @@ export function decodeSplitGribField(source: SplitSource,
     const value = fullValues[sourceIdx]!;
     if (Number.isFinite(value)) {
       outValues[i] = value;
-      if (outPrecise) outPrecise[i] = value;
       outMissing[i] = 0;
     } else {
       outValues[i] = NaN;
-      if (outPrecise) outPrecise[i] = NaN;
       outMissing[i] = 1;
     }
   }
@@ -371,7 +368,6 @@ export function decodeSplitGribField(source: SplitSource,
     },
     expandedBytes: gribBytes.byteLength,
     values: outValues,
-    ...(outPrecise ? { preciseValues: outPrecise } : {}),
     missing: outMissing
   };
 }

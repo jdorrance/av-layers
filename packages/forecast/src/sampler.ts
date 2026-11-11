@@ -1,4 +1,4 @@
-import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
+import { CELL_BYTES, getBit, gridSchema, isCovered, lambertConformalGridSchema, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
 export interface PackedGridField extends GridField { coverage: SparseCoverage }
@@ -185,11 +185,15 @@ function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: num
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
-const lambertGeometries = new WeakMap<Grid, GridGeometry>();
+const lambertGridFields = lambertConformalGridSchema.keyof().options;
+const lambertGeometries = new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
 function lambertGeometry(grid: Grid): GridGeometry | null {
   if (grid.kind !== 'lambert-conformal') return null;
-  let geometry = lambertGeometries.get(grid);
-  if (!geometry) { geometry = prepareGridGeometry(grid); lambertGeometries.set(grid, geometry); }
+  const cached = lambertGeometries.get(grid);
+  if (cached && lambertGridFields.every(field => grid[field] === cached.snapshot[field])) return cached.geometry;
+  const snapshot = Object.fromEntries(lambertGridFields.map(field => [field, grid[field]])) as LambertConformalGrid;
+  const geometry = prepareGridGeometry(snapshot);
+  lambertGeometries.set(grid, { snapshot, geometry });
   return geometry;
 }
 
