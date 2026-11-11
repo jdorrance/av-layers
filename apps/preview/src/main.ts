@@ -7,6 +7,7 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
   ApiClient,
+  AUTO_MODEL_ID,
   activePalettes,
   assertNotExpired,
   pointSeriesSelection,
@@ -15,7 +16,9 @@ import {
   longitudeOffsetHours,
   normalizePoint,
   PointSeriesController,
+  resolveAutoBuild,
   watchBuildExpiry,
+  type AutoForecastSelection,
   type GeoPoint,
   type PinnedBuild,
   type PointSeries,
@@ -64,8 +67,6 @@ const pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label');
 const meta = element<HTMLDListElement>('meta');
 
 const ARMENIA: [[number, number], [number, number]] = [[43.45, 38.84], [46.63, 41.3]];
-const EUROPE: [[number, number], [number, number]] = [[-23.5, 29.5], [62.5, 70.5]];
-const NORTH_AMERICA: [[number, number], [number, number]] = [[-134.12, 21.12], [-60.89, 52.63]];
 const LIFT: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
@@ -110,7 +111,7 @@ function startPreview(): void {
   modelButtons.length = 0;
   const choices = offlineFixture
     ? [{ modelId: initialModel, label: 'Synthetic fixture' }]
-    : MODEL_OPTIONS;
+    : [...MODEL_OPTIONS, { modelId: AUTO_MODEL_ID, label: 'Auto' }];
   for (const choice of choices) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -121,9 +122,10 @@ function startPreview(): void {
     modelBar.append(button);
   }
 
+  const armeniaStart = initialModel === 'icon-eu' || initialModel === AUTO_MODEL_ID;
   const center: [number, number] = startup.camera?.center ??
-    (initialModel === 'rrfs' ? [-97.5, 39] : initialModel === 'icon-eu' ? [45.04, 40.07] : [0, 20]);
-  const zoom = startup.camera?.zoom ?? (initialModel === 'icon-eu' ? 7 : initialModel === 'rrfs' ? 3.2 : 2);
+    (initialModel === 'rrfs' ? [-97.5, 39] : armeniaStart ? [45.04, 40.07] : [0, 20]);
+  const zoom = startup.camera?.zoom ?? (armeniaStart ? 7 : initialModel === 'rrfs' ? 3.2 : 2);
   const map = new maplibregl.Map({
     container: 'map',
     center,
@@ -153,6 +155,7 @@ function startPreview(): void {
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
   let loadAbort: AbortController | null = null;
+  let autoAbort: AbortController | null = null;
   const pointSeries = new PointSeriesController(api);
   let pointUnitSystem: UnitSystem = 'metric';
   let pointHorizon: PointHorizon = 'day';
@@ -195,7 +198,7 @@ function startPreview(): void {
   function writeUrl(mode: 'push' | 'replace'): void {
     if (applyingHistory || !urlReady || pendingModel) return;
     const camera = map.getCenter();
-    const validTime = build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
+    const validTime = currentModel === AUTO_MODEL_ID ? requestedTime ?? undefined : build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
     const next = previewUrl(window.location.pathname, {
       model: currentModel, reference, opacity, lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime
     });
@@ -252,7 +255,8 @@ function startPreview(): void {
     const notice = mapForecastHorizonNotice(build.manifest, now);
     horizonNotice.textContent = notice ?? '';
     horizonNotice.hidden = notice === null;
-    freshness.textContent = formatBuildFreshness(build.manifest, build.expiresAtMs, now);
+    const actual = currentModel === AUTO_MODEL_ID ? `${build.manifest.model} · ` : '';
+    freshness.textContent = actual + formatBuildFreshness(build.manifest, build.expiresAtMs, now);
   }
 
   function renderRibbon(layer: LayerId, displayedBuild = build): void {
@@ -371,6 +375,7 @@ function startPreview(): void {
     timestamp.textContent = 'Build expired — overlay removed';
     freshness.textContent = 'Expired immutable build';
     showError('This build has expired. Reload to discover the latest retained build.');
+    if (currentModel === AUTO_MODEL_ID) void loadAuto();
   }
 
   function ensureLive(): boolean {
@@ -399,13 +404,17 @@ function startPreview(): void {
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
     const frame = build ? renderedFrames(build.manifest)[index] : undefined;
     if (!frame) return;
+    if (currentModel === AUTO_MODEL_ID && requestedTime !== frame.validTime) autoAbort?.abort();
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
     followMapFrame();
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
     timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
-    if (history !== 'none') writeUrl(history);
+    if (history !== 'none') {
+      writeUrl(history);
+      if (currentModel === AUTO_MODEL_ID) void loadAuto();
+    }
   }
 
   function followMapFrame(): void {
@@ -421,8 +430,63 @@ function startPreview(): void {
     if (frame) requestedTime = frame.validTime;
   }
 
-  async function loadModel(model: ModelId): Promise<void> {
+  async function loadAuto(): Promise<void> {
+    if (currentModel !== AUTO_MODEL_ID || mapFailed || lifecycle.signal.aborted) return;
+    autoAbort?.abort();
+    const request = new AbortController();
+    autoAbort = request;
+    const { lat, lng } = map.getCenter();
+    const time = Date.parse(requestedTime ?? '');
+    const layers = reference === 'agl' ? LIFT : [...LIFT].reverse();
+    if (!build) freshness.textContent = 'Finding a forecast for this location…';
+    try {
+      const next = await resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal,
+        ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
+      if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
+      if (next) {
+        if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
+          selectedFrame = next.frame.id;
+          followMapFrame();
+          updateOverlay();
+          updateFreshness();
+          if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
+          writeUrl('replace');
+        } else await loadModel(AUTO_MODEL_ID, next);
+        return;
+      }
+      disposeExpiry();
+      if (expiryTimer !== null) window.clearInterval(expiryTimer);
+      expiryTimer = null;
+      build = null;
+      selectedFrame = null;
+      closePoint();
+      removeOverlay();
+      updateTimeUi();
+      setControlsEnabled(false);
+      showError('No forecast covers this location and time.');
+      freshness.textContent = 'No viewable build';
+      urlReady = true;
+      writeUrl('replace');
+    } catch (error) {
+      if (!request.signal.aborted) showError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (autoAbort === request) autoAbort = null;
+    }
+  }
+
+  async function loadModel(model: ModelId, resolved?: AutoForecastSelection): Promise<void> {
     if (mapFailed) return;
+    if (model === AUTO_MODEL_ID && !resolved) {
+      loadAbort?.abort();
+      loadAbort = null;
+      pendingModel = null;
+      currentModel = model;
+      syncModels();
+      setControlsEnabled(build !== null && !expired);
+      await loadAuto();
+      return;
+    }
+    if (model !== AUTO_MODEL_ID) autoAbort?.abort();
     const replaceUrl = applyingHistory === null;
     const revision = historyRevision;
     disposeExpiry();
@@ -453,12 +517,13 @@ function startPreview(): void {
     timestamp.textContent = 'No frame selected';
     updateOverlayStatus();
     try {
-      const next = await api.latest(model, { signal: requestAbort.signal });
+      const next = resolved?.build ?? await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
       pointHorizonSelect.children[0].textContent = next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
-      chooseFrame(next);
+      if (resolved) selectedFrame = resolved.frame.id;
+      else chooseFrame(next);
       updateOverlay();
       updateFreshness();
       setControlsEnabled(true);
@@ -485,8 +550,10 @@ function startPreview(): void {
   }
 
   function focusRegion(model: ModelId): void {
-    if (model === 'icon-eu') map.fitBounds(EUROPE, { padding: 32, duration: 0 });
-    else if (model === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
+    const bounds = MODEL_OPTIONS.find(choice => choice.modelId === model)?.bounds;
+    if (!bounds) return;
+    const [west, south, east, north] = bounds;
+    if (east - west < 360) map.fitBounds([[west, south], [west <= east ? east : east + 360, north]], { padding: 32, duration: 0 });
   }
 
   function showPoint(context: PointSeriesContext, payload: PointSeries, totalFrames: number, loading: boolean): void {
@@ -549,12 +616,13 @@ function startPreview(): void {
         opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
         overlay.setOpacity(opacity);
       }
-      if (state.camera) map.jumpTo(state.camera);
+      if (state.camera) map.jumpTo(state.camera, { previewHistory: true });
       requestedTime = state.validTime;
       if (state.model && state.model !== currentModel) {
         await loadModel(state.model);
         return;
       }
+      if (currentModel === AUTO_MODEL_ID) { await loadAuto(); return; }
       if (build) {
         const previousFrame = selectedFrame;
         chooseFrame(build);
@@ -569,6 +637,7 @@ function startPreview(): void {
   for (const button of modelButtons) {
     button.addEventListener('click', () => {
       if (button.disabled || mapFailed) return;
+      if (currentModel === AUTO_MODEL_ID) applyingHistory = null;
       const model = button.value as ModelId;
       void loadModel(model);
       focusRegion(model);
@@ -579,12 +648,14 @@ function startPreview(): void {
     syncReference();
     updateOverlay();
     writeUrl('push');
+    if (currentModel === AUTO_MODEL_ID) void loadAuto();
   });
   refMsl.addEventListener('click', () => {
     reference = 'msl';
     syncReference();
     updateOverlay();
     writeUrl('push');
+    if (currentModel === AUTO_MODEL_ID) void loadAuto();
   });
   opacityInput.addEventListener('pointerdown', () => { opacityCommitted = false; });
   opacityInput.addEventListener('input', () => {
@@ -596,7 +667,10 @@ function startPreview(): void {
   });
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
   timeInput.addEventListener('input', () => { selectIndex(Number(timeInput.value), 'none'); });
-  timeInput.addEventListener('change', () => { writeUrl('replace'); });
+  timeInput.addEventListener('change', () => {
+    writeUrl('replace');
+    if (currentModel === AUTO_MODEL_ID) void loadAuto();
+  });
   pointUnits.value = pointUnitSystem;
   pointUnits.addEventListener('change', () => {
     pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
@@ -638,8 +712,14 @@ function startPreview(): void {
     if (mapFailed) return;
     void openPoint(normalizePoint(event.lngLat.lat, event.lngLat.lng));
   });
+  map.on('movestart', event => {
+    if (currentModel !== AUTO_MODEL_ID || 'previewHistory' in event) return;
+    applyingHistory = null;
+    autoAbort?.abort();
+  });
   map.on('moveend', () => {
     if (build && !expired) updateTimeUi();
+    if (currentModel === AUTO_MODEL_ID && !applyingHistory) void loadAuto();
     if (!urlReady || applyingHistory) return;
     writeUrl('push');
   });
@@ -648,6 +728,7 @@ function startPreview(): void {
     if (mapFailed || !(event.error instanceof maplibregl.GPUInitializationError)) return;
     mapFailed = true;
     lifecycle.abort();
+    autoAbort?.abort();
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
@@ -657,8 +738,9 @@ function startPreview(): void {
 
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
-    resumeModel = event.persisted ? pendingModel : null;
+    resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
     loadAbort?.abort();
+    autoAbort?.abort();
     const pointInterrupted = event.persisted && pointSeries.pending;
     if (pointInterrupted) {
       pointCard.hidden = false;
@@ -700,8 +782,8 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    if (!startup.camera && initialModel === 'icon-eu') map.fitBounds(ARMENIA, { padding: 36, duration: 0 });
-    else if (!startup.camera && initialModel === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
+    if (!startup.camera && armeniaStart) map.fitBounds(ARMENIA, { padding: 36, duration: 0 });
+    else if (!startup.camera) focusRegion(initialModel);
     void loadModel(initialModel);
   });
 }

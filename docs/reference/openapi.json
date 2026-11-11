@@ -1774,6 +1774,25 @@
                           "available": {
                             "type": "boolean"
                           },
+                          "bounds": {
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "maximum": 180,
+                                  "minimum": -180,
+                                  "type": "number"
+                                },
+                                {
+                                  "maximum": 90,
+                                  "minimum": -90,
+                                  "type": "number"
+                                }
+                              ]
+                            },
+                            "maxItems": 4,
+                            "minItems": 4,
+                            "type": "array"
+                          },
                           "cycle": {
                             "type": "string"
                           },
@@ -1823,7 +1842,13 @@
                             "type": "string"
                           },
                           "model": {
+                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
                             "type": "string"
+                          },
+                          "nominalDxMeters": {
+                            "exclusiveMinimum": true,
+                            "minimum": 0,
+                            "type": "integer"
                           },
                           "surfaces": {
                             "items": {
@@ -1924,6 +1949,7 @@
                         ],
                         "type": "object"
                       },
+                      "maxItems": 256,
                       "type": "array"
                     }
                   },

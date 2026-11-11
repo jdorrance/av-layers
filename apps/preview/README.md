@@ -22,6 +22,9 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
+Choose **Auto** to use the finest available forecast that covers the map center
+and selected time. The URL preserves Auto and the requested time as you pan.
+
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
 [Build checks](vite.config.ts) bound startup and lazy JavaScript transfer and

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
+import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
 import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
@@ -104,9 +105,11 @@ class MapMock {
     const [[west, south], [east, north]] = bounds;
     this.center = { lng: (west + east) / 2, lat: (south + north) / 2 };
   }
-  jumpTo(camera: { center: [number, number]; zoom: number }): void {
+  jumpTo(camera: { center: [number, number]; zoom: number }, event: Record<string, unknown> = {}): void {
+    this.emit('movestart', event);
     this.center = { lng: camera.center[0], lat: camera.center[1] };
     this.zoom = camera.zoom;
+    this.emit('moveend', event);
   }
   setPaintProperty(id: string, property: string, value: number): void { const layer = this.layers.get(id); if (layer) { layer.paint ??= {}; layer.paint[property] = value; } }
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
@@ -557,6 +560,130 @@ it('keeps the latest history URL when a prior model request is aborted', async (
   } finally { finishIcon(); }
   await Promise.resolve();
   expect(win.href).toBe(restored);
+});
+
+it('preserves Auto and its requested time when a map move overtakes an earlier regional build', async () => {
+  const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+  const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [1, 18, 36]);
+  const builds = new Map([armenia, nz].map(build => [build.manifest.model, build]));
+  const models = [autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
+  let releaseArmenia!: () => void;
+  const pending = new Promise<void>(resolve => { releaseArmenia = resolve; });
+  let armeniaSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    const build = builds.get(url.pathname.split('/')[3])!;
+    if (url.pathname.endsWith('/latest')) {
+      if (build === armenia) { armeniaSignal = init?.signal; await pending; }
+      return Response.json(fixtureLatest(build.manifest));
+    }
+    return sample(input, build.manifest);
+  });
+  const t = autoTime(18);
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  const expectedTile = `/tiles/${nz.manifest.model}/${nz.manifest.buildId}/usable-lift-agl/f018/`;
+  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&z=9&t=${encodeURIComponent(t)}`;
+  await import('./main');
+  map().emit('load');
+  try {
+    await vi.waitFor(() => expect(armeniaSignal?.aborted).toBe(false));
+    map().jumpTo({ center: [AUCKLAND.lon, AUCKLAND.lat], zoom: 9 });
+    await vi.waitFor(() => expect(tile()).toContain(expectedTile));
+    expect(armeniaSignal?.aborted).toBe(true);
+  } finally { releaseArmenia(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toContain(expectedTile);
+  const state = new URL(win.href).searchParams;
+  expect(state.get('model')).toBe('auto');
+  expect(state.get('t')).toBe(t);
+});
+
+it('keeps a held Auto timeline change when a prior map lookup finishes', async () => {
+  const build = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+  const models = [autoCatalogRow(build.manifest, 1000)];
+  let catalog = Promise.resolve(models);
+  let catalogSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) {
+      catalogSignal = init?.signal;
+      return Response.json({ models: await catalog });
+    }
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return sample(input, build.manifest);
+  });
+  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&t=${encodeURIComponent(autoTime(18))}`;
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  await import('./main');
+  map().emit('load');
+  await vi.waitFor(() => expect(tile()).toContain('/f018/'));
+
+  let finishLookup!: (result: typeof models) => void;
+  catalog = new Promise(resolve => { finishLookup = resolve; });
+  map().emit('moveend');
+  const staleLookup = catalogSignal;
+  await selectFrame(2);
+  try {
+    expect(staleLookup?.aborted).toBe(true);
+  } finally { finishLookup([]); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toContain('/f036/');
+  expect(ui('time').disabled).toBe(false);
+
+  catalog = Promise.resolve(models);
+  ui('time').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([input]) => {
+    const url = new URL(String(input));
+    return url.pathname.endsWith('/sample') && url.searchParams.get('frame') === 'f036';
+  })).toBe(true));
+  expect(new URL(win.href).searchParams.get('t')).toBe(autoTime(36));
+});
+
+it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto history restore', async action => {
+  const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [18, 36]);
+  const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [18, 36]);
+  const gfs = autoBuild('gfs', ARMENIA_BOUNDS, [18, 36]);
+  const builds = new Map([armenia, nz, gfs].map(build => [build.manifest.model, build]));
+  const models = [autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
+  let releaseNz!: () => void;
+  const pending = new Promise<void>(resolve => { releaseNz = resolve; });
+  let nzSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    const build = builds.get(url.pathname.split('/')[3])!;
+    if (url.pathname.endsWith('/latest')) {
+      if (build === nz) { nzSignal = init?.signal; await pending; }
+      return Response.json(fixtureLatest(build.manifest));
+    }
+    return sample(input, build.manifest);
+  });
+  const autoUrl = (point: typeof YEREVAN, hour: number) =>
+    `http://localhost:5173/?model=auto&lat=${point.lat}&lon=${point.lon}&z=9&t=${encodeURIComponent(autoTime(hour))}`;
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  win.href = autoUrl(YEREVAN, 18);
+  await import('./main');
+  map().emit('load');
+  await vi.waitFor(() => expect(tile()).toContain('/f018/'));
+
+  win.href = autoUrl(AUCKLAND, 36);
+  win.dispatchEvent(new Event('popstate'));
+  try {
+    await vi.waitFor(() => expect(nzSignal?.aborted).toBe(false));
+    if (action === 'map movement') map().jumpTo({ center: [YEREVAN.lon, YEREVAN.lat], zoom: 9 });
+    else modelButton('gfs').dispatchEvent(new Event('click'));
+    expect(nzSignal?.aborted).toBe(true);
+    await vi.waitFor(() => {
+      expect(tile()).toContain('/f036/');
+      const state = new URL(win.href).searchParams;
+      expect(state.get('model')).toBe(action === 'map movement' ? 'auto' : 'gfs');
+      if (action === 'map movement') expect(Number(state.get('lat'))).toBe(YEREVAN.lat);
+      expect(state.get('t')).toBe(autoTime(36));
+    });
+  } finally { releaseNz(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toContain(action === 'map movement' ? '/wrf-armenia-1km/' : '/gfs/');
 });
 
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {

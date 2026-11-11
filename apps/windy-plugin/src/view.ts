@@ -159,13 +159,23 @@ export class PluginPanel {
     this.error.textContent = message ?? '';
   }
 
-  renderBuild(build: PinnedBuild): void {
+  renderBuild(build: PinnedBuild, model = build.manifest.model): void {
+    this.modelSelect.value = model;
     const key = `${build.manifest.model}:${build.manifest.buildId}`;
     if (this.renderedBuildId === key) return;
     this.renderedBuildId = key;
-    this.modelSelect.value = build.manifest.model;
     this.pointHorizonLabel.hidden = this.pointHorizon.hidden = pointSeriesSelection(build).frames.length === build.manifest.frames.length;
     this.pointHorizon.children[0].textContent = build.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
+  }
+
+  renderUnavailable(message: string): void {
+    this.setMapTime('');
+    this.setNotice(null);
+    this.setStatus('No viewable build');
+    this.setError(message);
+    this.horizonNotice.hidden = true;
+    this.modelSelect.disabled = false;
+    this.opacityInput.disabled = false;
   }
 
   renderState(state: ControllerState): void {

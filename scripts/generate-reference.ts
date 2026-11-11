@@ -138,7 +138,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   const schedules = [...new Set(PRODUCTS.flatMap(product => product.execution.schedule))];
   if (schedules.length) workflow.setIn(['on', 'schedule'], schedules.map(cron => ({ cron })));
   else workflow.deleteIn(['on', 'schedule']);
-  const modelOptions = PRODUCTS.map(({ modelId, label }) => ({ modelId, label }));
+  const modelOptions = PRODUCTS.map(({ modelId, label, nominalDxMeters, bounds }) => ({ modelId, label, nominalDxMeters, bounds }));
   return {
     'docs/reference.md': `${lines.join('\n')}\n`,
     'docs/reference/openapi.json': `${JSON.stringify(stable(api), null, 2)}\n`,

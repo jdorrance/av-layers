@@ -140,6 +140,26 @@ export const sampleResponseV5Schema = z.strictObject({
     if (owners.get(layer) !== value.surfaceId) ctx.addIssue({ code: 'custom', message: 'Sample surface does not own layer' });
   }
 });
+const catalogBoundsSchema = z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90),
+  z.number().min(-180).max(180), z.number().min(-90).max(90)]).refine(([, south, , north]) => south <= north);
+
+export const catalogModelSchema = z.object({
+  model: modelIdSchema,
+  label: z.string().optional(),
+  nominalDxMeters: z.number().int().positive().optional(),
+  bounds: catalogBoundsSchema.optional(),
+  available: z.boolean(),
+  latest: z.string().optional(),
+  cycle: z.string().optional(),
+  expiresAt: z.string().optional(),
+  surfaces: sampleResponseV5Schema.shape.surfaces.optional(),
+  ageSeconds: z.number().optional(),
+  freshness: freshnessSchema.optional(),
+  error: z.string().optional()
+});
+export const catalogSchema = z.object({ models: z.array(catalogModelSchema).max(256) });
+export type CatalogModelEntry = z.infer<typeof catalogModelSchema>;
+
 export function validateArtifactRecordsV5(manifest: ManifestV5): void {
   validateV5Records(manifestV5BaseSchema.parse(manifest));
 }

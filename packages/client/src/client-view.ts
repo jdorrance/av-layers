@@ -6,6 +6,7 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ManifestV5 } from '@av/contracts/publication';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
+import { AUTO_MODEL_ID } from './client-auto.js';
 
 export type UnitSystem = 'metric' | 'imperial';
 export { pointSeriesSelection } from './client-point.ts';
@@ -346,4 +347,5 @@ export function populateModelOptions(select: { add(option: unknown): void }): vo
     option.disabled = false;
     select.add(option);
   }
+  select.add(new OptionCtor('Auto', AUTO_MODEL_ID));
 }

@@ -3,14 +3,35 @@ export const DEFAULT_MODEL = "gfs";
 export const MODEL_OPTIONS = [
   {
     "modelId": "gfs",
-    "label": "GFS"
+    "label": "GFS",
+    "nominalDxMeters": 27800,
+    "bounds": [
+      -180,
+      -55,
+      180,
+      65
+    ]
   },
   {
     "modelId": "icon-eu",
-    "label": "ICON-EU"
+    "label": "ICON-EU",
+    "nominalDxMeters": 6950,
+    "bounds": [
+      -23.5,
+      29.5,
+      62.5,
+      70.5
+    ]
   },
   {
     "modelId": "rrfs",
-    "label": "RRFS (CONUS)"
+    "label": "RRFS (CONUS)",
+    "nominalDxMeters": 2999,
+    "bounds": [
+      -134.121428,
+      21.122192,
+      -60.891244,
+      52.628704
+    ]
   }
 ] as const;

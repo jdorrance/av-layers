@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
-import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, type GeoPoint, type RasterTileProtocol } from '@av/client';
+import { ApiClient, AUTO_MODEL_ID, createRasterTileProtocol, formatBuildFreshness, hostTimestampMs, normalizePoint,
+  resolveAutoBuild, type AutoForecastSelection, type GeoPoint, type RasterTileProtocol } from '@av/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -15,10 +16,15 @@ let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
 let mountedIn: HTMLElement | null = null;
 let selectedModel: ModelId = DEFAULT_MODEL;
+let opacity: number | undefined;
 let rasterProtocol: RasterTileProtocol | null = null;
 let previousController: PluginController | null = null;
 let paneOpen = false;
 let pointListening = false;
+let automaticController = false;
+let autoListeners = false;
+let autoAbort: AbortController | null = null;
+let autoTimer: ReturnType<typeof setTimeout> | null = null;
 const pointClick = (point: GeoPoint): void => { void loadPoint(normalizePoint(point.lat, point.lon)); };
 
 function pointListener(enabled: boolean): void {
@@ -56,17 +62,86 @@ function refreshTime(): void {
   previousController?.refreshTime();
 }
 
+function cancelAuto(): void {
+  if (autoTimer !== null) clearTimeout(autoTimer);
+  autoTimer = null;
+  autoAbort?.abort();
+}
+
+function queueAuto(): void {
+  cancelAuto();
+  autoTimer = setTimeout(() => { autoTimer = null; void loadAuto(); }, 120);
+}
+
+function listenAuto(enabled: boolean): void {
+  if (autoListeners === enabled) return;
+  autoListeners = enabled;
+  if (enabled) {
+    map.maplibreMap.on('movestart', cancelAuto);
+    map.maplibreMap.on('moveend', queueAuto);
+    store.on('timestamp', queueAuto);
+  } else {
+    cancelAuto();
+    map.maplibreMap.off('movestart', cancelAuto);
+    map.maplibreMap.off('moveend', queueAuto);
+    store.off?.('timestamp', queueAuto);
+  }
+}
+
+function clearAutoForecast(message: string): void {
+  const active = controller, previous = previousController;
+  controller = previousController = null;
+  active?.dispose();
+  previous?.dispose();
+  panel?.clearPoint();
+  panel?.renderUnavailable(message);
+}
+
+async function loadAuto(): Promise<void> {
+  if (selectedModel !== AUTO_MODEL_ID) return;
+  cancelAuto();
+  const center = map.maplibreMap.getCenter?.();
+  if (!center) { clearAutoForecast('Map location is unavailable.'); return; }
+  const request = new AbortController();
+  autoAbort = request;
+  const time = hostTimestampMs(store.get('timestamp'));
+  try {
+    const selection = await resolveAutoBuild(api, { ...normalizePoint(center.lat, center.lng),
+      layers: ['usable-lift-msl', 'usable-lift-agl'], signal: request.signal,
+      ...(time === null ? {} : { validTimeMs: time }) });
+    if (request.signal.aborted || autoAbort !== request || selectedModel !== AUTO_MODEL_ID) return;
+    if (!selection) { clearAutoForecast('No forecast covers this location and time.'); return; }
+    const current = controller?.currentBuild?.manifest;
+    if (automaticController && current?.model === selection.build.manifest.model && current.buildId === selection.build.manifest.buildId && controller?.state().phase === 'ready') {
+      controller.refreshTime();
+    } else await startController(selection.build.manifest.model, selection);
+  } catch (error) {
+    if (!request.signal.aborted) clearAutoForecast(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (autoAbort === request) autoAbort = null;
+  }
+}
+
+async function loadSelectedModel(): Promise<void> {
+  listenAuto(selectedModel === AUTO_MODEL_ID);
+  if (selectedModel === AUTO_MODEL_ID) {
+    if (controller?.state().phase === 'loading') { controller.dispose(); controller = null; }
+    await loadAuto();
+  } else await startController(selectedModel);
+}
+
 function bindHostListeners(): void {
   if (listenersBound) return;
   window.addEventListener('focus', refreshTime);
   document.addEventListener('visibilitychange', refreshTime);
   window.addEventListener('pagehide', () => {
+    listenAuto(false);
     pointListener(false); panel?.clearPoint();
     controller?.dispose(); controller = null;
     previousController?.dispose(); previousController = null;
     if (rasterProtocol) { rasterProtocol.dispose(); L.removeProtocol(rasterProtocol.scheme); rasterProtocol = null; }
   });
-  window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) { pointListener(paneOpen); void startController(selectedModel); } });
+  window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) { pointListener(paneOpen); void loadSelectedModel(); } });
   listenersBound = true;
 }
 
@@ -76,11 +151,12 @@ function ensurePanel(): PluginPanel {
     panel = new PluginPanel(api, {
       onModel: model => {
         selectedModel = model as ModelId;
-        void startController(selectedModel);
+        void loadSelectedModel();
       },
-      onOpacity: opacity => {
-        controller?.setOpacity(opacity);
-        previousController?.setOpacity(opacity);
+      onOpacity: value => {
+        opacity = value;
+        controller?.setOpacity(value);
+        previousController?.setOpacity(value);
       },
       canRenderPoint: build => {
         const active = controller;
@@ -110,7 +186,7 @@ function ensurePanel(): PluginPanel {
 
 function renderController(ui: PluginPanel, active: PluginController): void {
   const state = active.state();
-  if (state.phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild);
+  if (state.phase === 'ready' && active.currentBuild) ui.renderBuild(active.currentBuild, selectedModel);
   ui.renderState(state);
   if (previousController?.displayedForecast) {
     const base = state.notice ?? (state.phase === 'loading' ? `Loading ${state.model}.` : null);
@@ -118,13 +194,14 @@ function renderController(ui: PluginPanel, active: PluginController): void {
     ui.setMapTime(previousController.state().badge);
   }
   if (state.phase === 'ready' && state.buildId && active.currentBuild) {
-    ui.setStatus(formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
+    const actual = selectedModel === AUTO_MODEL_ID ? `${state.model} · ` : '';
+    ui.setStatus(actual + formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
   }
 }
 
 function showCurrent(ui: PluginPanel): boolean {
   const active = controller;
-  if (!active || active.state().model !== selectedModel) return false;
+  if (!active || (selectedModel === AUTO_MODEL_ID ? !automaticController : active.state().model !== selectedModel)) return false;
   const phase = active.state().phase;
   if (phase !== 'ready' && phase !== 'loading') return false;
   ui.setVisible(true);
@@ -132,24 +209,24 @@ function showCurrent(ui: PluginPanel): boolean {
   return true;
 }
 
-async function startController(model: ModelId): Promise<void> {
+async function startController(model: ModelId, selection?: AutoForecastSelection): Promise<void> {
   panel?.clearPoint();
-  const opacity = controller?.state().opacity;
   const previous = previousController ?? controller;
   if (previousController) controller?.dispose();
   previous?.freeze();
   previousController = previous;
   controller = null;
-  const ui = ensurePanel();
+  const ui = panel ?? ensurePanel();
   ui.setVisible(paneOpen);
   ui.setError(null);
   ui.setNotice(null);
   ui.setStatus('Loading latest immutable build…');
   const activeController = new PluginController({
     model,
+    ...(selection ? { automaticFrameId: selection.frame.id } : {}),
     opacity,
     host,
-    loadBuild: (requested, options) => api.latest(requested, { signal: options.signal }),
+    loadBuild: (requested, options) => selection ? Promise.resolve(selection.build) : api.latest(requested, { signal: options.signal }),
     onState: state => {
       if (controller !== activeController) {
         if (previousController === activeController && controller) {
@@ -167,10 +244,11 @@ async function startController(model: ModelId): Promise<void> {
         if (oldBuildId && oldBuildId !== activeController.currentBuild?.manifest.buildId) rasterProtocol?.evictBuild(oldBuildId);
       }
       renderController(ui, activeController);
+      if (state.phase === 'expired' && selectedModel === AUTO_MODEL_ID) queueAuto();
     }
   });
   controller = activeController;
-  selectedModel = model;
+  automaticController = selection !== undefined;
   await activeController.start();
 }
 
@@ -180,7 +258,7 @@ export const onopen = (): void => {
   pointListener(true);
   const ui = ensurePanel();
   if (showCurrent(ui)) return;
-  void startController(selectedModel);
+  void loadSelectedModel();
 };
 
 export function onclose(): void {

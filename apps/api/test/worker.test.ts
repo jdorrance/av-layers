@@ -2,7 +2,7 @@ import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as contracts from '@av/contracts';
-import { PRODUCTS } from '@av/contracts/models';
+import { nominalGridSpacingMeters, PRODUCTS } from '@av/contracts/models';
 import { layerSurface, renderedLayers, mapFrameCount, sourceIntervalHours, createRecipeIdentity, createWholeDomainDescriptors, encodeSparseCoverage, gridToGeographic, isCovered, manifestV5Schema, SAMPLE_BLOCK_SIZE, MAX_MANIFEST_BYTES, MAX_SAMPLE_VALUES, type ForecastSurfaceV5, type ManifestV5, type ProductDefinition } from '@av/contracts';
 
 import worker, { createApp } from '../src/index';
@@ -551,7 +551,10 @@ describe('read-only worker', () => {
   });
   it('advertises only admitted production products and identifies a missing manifest', async () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
-    expect(catalog.models.map(m => m.model)).toEqual(PRODUCTS.map(product => product.modelId));
+    const synthetic = publication(primary).product;
+    expect(catalog.models).toMatchObject(PRODUCTS.map(product => product.modelId === 'gfs'
+      ? { model: synthetic.modelId, bounds: synthetic.bounds, nominalDxMeters: nominalGridSpacingMeters(synthetic.grid, synthetic.bounds) }
+      : { model: product.modelId, bounds: product.bounds, nominalDxMeters: product.nominalDxMeters }));
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
     bucket = new MemoryBucket();
     const broken = publication(bad);
