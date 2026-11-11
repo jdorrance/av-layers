@@ -100,7 +100,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const outputIndices = indicesOf(mask);
     const hours = options.hours ?? resolveProductFrameHours(product, mask, cycle, { ...deriveOptions, outputIndices });
     const mapFrames = mapFrameCount({ ...product, frameHours: hours });
-    const { capacity, layouts, profileLayout } = hours.length === capacityInput.frames && mapFrames === capacityInput.mapFrames
+    const { capacity, layouts, profileLayout, assemblyBufferBytes } = hours.length === capacityInput.frames && mapFrames === capacityInput.mapFrames
       ? admission : planWholeDomainCapacity(wholeDomainCapacityInput(product, provider, prepared, [hours]));
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
     const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
@@ -230,7 +230,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     }
     frameHour = null; phase = 'finalize-pack';
     const tPack = Date.now();
-    const shards = { native: await nativeWriter?.finish(), fine: await fineWriter?.finish(), profiles: await profileWriter?.finish() };
+    const assembly = Buffer.allocUnsafe(assemblyBufferBytes);
+    const shards = { native: await nativeWriter?.finish(assembly), fine: await fineWriter?.finish(assembly), profiles: await profileWriter?.finish(assembly) };
     const packFinishWallMs = Date.now() - tPack;
     const surfaces: WholeDomainSurfaceResult[] = [];
     const coverageFor = (surface: 'native' | 'fine') => {

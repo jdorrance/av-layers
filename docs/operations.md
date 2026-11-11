@@ -93,8 +93,10 @@ forecast's native and fine render work before weather acquisition.
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the run revision remains current main, the plan meets the
 [build elapsed budget](../apps/batch/src/capacity.ts),
-its scoped credentials and the environment sealing key remain valid. After a main change, expiry or rotation, start
-a new build.
+its scoped credentials and the environment sealing key remain valid. Start a
+new build after a main change, expiry, or rotation. Also start a new build
+when a failed shard uploaded frame provenance without completing its receipt.
+Reacquisition can change the immutable provenance timestamp.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
