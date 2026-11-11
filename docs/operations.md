@@ -161,9 +161,8 @@ Resume downloads the compact forecast artifact, verifies the source run on
 commits the pointer within the original build deadline. After the deadline,
 resume completes maintenance and serving checks for the committed latest build.
 
-Refined builds retain `plan.json` with their full artifacts. Resume checks its
-original grid and terrain references against the manifest and recipe; it does
-not resolve current catalog defaults or prepare terrain again.
+The compact artifact includes the frozen `plan.json`, coverage files and terrain
+descriptor used to verify the publication.
 
 ## Deploy the API and clients
 
