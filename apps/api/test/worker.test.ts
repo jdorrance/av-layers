@@ -553,10 +553,8 @@ describe('read-only worker', () => {
     const catalog = await (await call('/v1/catalog')).json() as { models: { model: string; available: boolean }[] };
     const synthetic = publication(primary).product;
     expect(catalog.models).toMatchObject(PRODUCTS.map(product => product.modelId === 'gfs'
-      ? { model: synthetic.modelId, domainId: synthetic.source.domainId, bounds: synthetic.bounds,
-        tier: synthetic.tier, nominalDxMeters: nominalGridSpacingMeters(synthetic.grid, synthetic.bounds) }
-      : { model: product.modelId, domainId: product.source.domainId, bounds: product.bounds,
-        tier: product.tier, nominalDxMeters: product.nominalDxMeters }));
+      ? { model: synthetic.modelId, bounds: synthetic.bounds, nominalDxMeters: nominalGridSpacingMeters(synthetic.grid, synthetic.bounds) }
+      : { model: product.modelId, bounds: product.bounds, nominalDxMeters: product.nominalDxMeters }));
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
     bucket = new MemoryBucket();
     const broken = publication(bad);

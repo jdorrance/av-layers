@@ -1796,9 +1796,6 @@
                           "cycle": {
                             "type": "string"
                           },
-                          "domainId": {
-                            "type": "string"
-                          },
                           "error": {
                             "type": "string"
                           },
@@ -1944,14 +1941,6 @@
                             "maxItems": 2,
                             "minItems": 1,
                             "type": "array"
-                          },
-                          "tier": {
-                            "enum": [
-                              "low",
-                              "medium",
-                              "high"
-                            ],
-                            "type": "string"
                           }
                         },
                         "required": [

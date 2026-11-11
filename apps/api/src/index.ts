@@ -154,7 +154,7 @@ registerJsonRoute('/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: 
   json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
 
 const catalogMetadata = new Map(Object.entries(products).map(([model, product]) => [model, {
-  model, label: product.label, domainId: product.source.domainId, tier: product.tier,
+  model, label: product.label,
   nominalDxMeters: nominalGridSpacingMeters(product.grid, product.bounds),
   bounds: [...product.bounds] as [number, number, number, number]
 }]));

@@ -1,5 +1,4 @@
 import { withinGeographicBounds } from '@av/contracts/geometry';
-import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
 import type { LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type CatalogModelEntry } from '@av/contracts/publication';
@@ -51,9 +50,7 @@ export async function resolveAutoBuild(api: Pick<ApiClient, 'catalog' | 'latest'
   layers: readonly LayerId[];
   signal: AbortSignal;
 }): Promise<AutoForecastSelection | null> {
-  const { lat, lon, validTimeMs, layers } = options;
-  const signal = typeof AbortSignal.any === 'function' && typeof AbortSignal.timeout === 'function'
-    ? AbortSignal.any([options.signal, AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS)]) : options.signal;
+  const { lat, lon, validTimeMs, layers, signal } = options;
   let models: CatalogModelEntry[];
   try { models = await api.catalog({ signal }); }
   catch {

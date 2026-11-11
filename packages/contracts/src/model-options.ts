@@ -4,8 +4,6 @@ export const MODEL_OPTIONS = [
   {
     "modelId": "gfs",
     "label": "GFS",
-    "domainId": "global",
-    "tier": "low",
     "nominalDxMeters": 27800,
     "bounds": [
       -180,
@@ -17,8 +15,6 @@ export const MODEL_OPTIONS = [
   {
     "modelId": "icon-eu",
     "label": "ICON-EU",
-    "domainId": "europe",
-    "tier": "medium",
     "nominalDxMeters": 6950,
     "bounds": [
       -23.5,
@@ -30,8 +26,6 @@ export const MODEL_OPTIONS = [
   {
     "modelId": "rrfs",
     "label": "RRFS (CONUS)",
-    "domainId": "conus",
-    "tier": "medium",
     "nominalDxMeters": 2999,
     "bounds": [
       -134.121428,

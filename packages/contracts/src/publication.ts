@@ -3,7 +3,7 @@ import { LAYER_IDS, layerSurface, renderedLayers, type LayerId } from './layers.
 import { layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layer-schemas.js';
 import { methodDescriptorSchema, methodIdSchema } from './method-schemas.js';
 import { gridSchema, sameGrid } from './grid-schema.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS, RESOLUTION_TIERS } from './format.js';
+import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS } from './format.js';
 import { MAX_JSON_CONTAINER_ENTRIES, MAX_PROVENANCE_BYTES } from './json.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -146,8 +146,6 @@ const catalogBoundsSchema = z.tuple([z.number().min(-180).max(180), z.number().m
 export const catalogModelSchema = z.object({
   model: modelIdSchema,
   label: z.string().optional(),
-  domainId: z.string().optional(),
-  tier: z.enum(RESOLUTION_TIERS).optional(),
   nominalDxMeters: z.number().int().positive().optional(),
   bounds: catalogBoundsSchema.optional(),
   available: z.boolean(),

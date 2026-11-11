@@ -581,17 +581,19 @@ it('preserves Auto and its requested time when a map move overtakes an earlier r
     return sample(input, build.manifest);
   });
   const t = autoTime(18);
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  const expectedTile = `/tiles/${nz.manifest.model}/${nz.manifest.buildId}/usable-lift-agl/f018/`;
   win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&z=9&t=${encodeURIComponent(t)}`;
   await import('./main');
   map().emit('load');
   try {
     await vi.waitFor(() => expect(armeniaSignal?.aborted).toBe(false));
     map().jumpTo({ center: [AUCKLAND.lon, AUCKLAND.lat], zoom: 9 });
-    await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/wrf-nz-3km/'));
+    await vi.waitFor(() => expect(tile()).toContain(expectedTile));
     expect(armeniaSignal?.aborted).toBe(true);
   } finally { releaseArmenia(); }
-  await Promise.resolve();
-  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/f018/');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toContain(expectedTile);
   const state = new URL(win.href).searchParams;
   expect(state.get('model')).toBe('auto');
   expect(state.get('t')).toBe(t);
