@@ -30,6 +30,19 @@ export function sourceUrl(template: string, values: Record<string, string>): str
   });
 }
 
+export function isPrivateUpstreamKey(key: string, prefix: string): boolean {
+  return key.length <= 1024 && key.startsWith(prefix) && key.slice(prefix.length).split('/').every(segment =>
+    /^[a-zA-Z0-9._-]+$/.test(segment) && segment !== '.' && segment !== '..');
+}
+
+export function pinnedSourcePrefix(model: string, key: string): string {
+  const root = `upstream/${model}/`;
+  if (!isPrivateUpstreamKey(key, root) || !/^\d{8}\/\d{2}\/_ready\.json$/.test(key.slice(root.length))) {
+    throw new Error('Pinned upstream receipt must identify the model cycle');
+  }
+  return key.slice(0, -'_ready.json'.length);
+}
+
 export function copySourceIndices(input: Uint32Array, cells: number): Uint32Array {
   if (!(input instanceof Uint32Array) || !input.length || input.length > cells) throw new RangeError('activeIndices must identify source cells');
   const result = new Uint32Array(input), seen = new Uint8Array(Math.ceil(cells / 8));

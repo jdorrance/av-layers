@@ -12,6 +12,7 @@ import { failureReason } from '../apps/batch/src/failure.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
 import { forecastObjects } from '../apps/batch/src/publication-objects.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
+import { isPrivateUpstreamKey, pinnedSourcePrefix } from '../apps/batch/src/source.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { isTransientStorageError, r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/validate.js';
@@ -208,7 +209,9 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
   return publicationWorkflow('plan', async ({ root, signal, store, model, identifyBuild }) => {
     const cacheDir = `.cache/${model}`;
     console.error(JSON.stringify({ phase: 'cycle-discovery', model, state: 'started' }));
-    const cycle = await getForecastProvider(model).resolveCycle({ cycle: process.env.CYCLE || undefined, cacheDir, signal });
+    const provider = getForecastProvider(model), request = { cycle: process.env.CYCLE || undefined, cacheDir, signal };
+    const pinned = provider.resolveRun ? await provider.resolveRun({ ...request, store }) : undefined;
+    const cycle = pinned?.cycle ?? await provider.resolveCycle(request);
     console.error(JSON.stringify({ phase: 'cycle-discovery', model, state: 'complete', cycle }));
     const { pointer } = await readPointer(store, model, signal);
     signal.throwIfAborted();
@@ -223,7 +226,8 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
     const wholeDomain = configuredWholeDomain(model, process.env, store);
-    const plan = await createForecastPlan(model, { out: root, cycle, signal, store, wholeDomain: { ...wholeDomain, cacheOnly: true } });
+    const plan = await createForecastPlan(model, { out: root, cycle, signal, store,
+      ...(pinned ? { sourcePin: pinned.sourcePin } : {}), wholeDomain: { ...wholeDomain, cacheOnly: true } });
     identifyBuild(plan.buildId);
     await writeFile(join(root, 'plan-metrics.json'), JSON.stringify({ planWallMs: Date.now() - Date.parse(plan.createdAt), rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
     return plan;
@@ -248,9 +252,11 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
     const plan = await readBuildPlan('output/plan.json');
     buildId = plan.buildId;
     const prefix = `builds/${authority.model}/${plan.buildId}/`;
+    const sourcePrefix = plan.sourcePin ? pinnedSourcePrefix(authority.model, plan.sourcePin.key) : undefined;
     const assertReadable = (key: string): void => {
       if (!key.startsWith(prefix) && !/^coverage\/[a-f0-9]{64}\/(manifest\.json|sparse\.bin|tiles\.bin)$/.test(key)
-          && !/^terrain\/prepared\/[a-f0-9]{64}\/[a-z0-9.-]+$/.test(key)) throw new Error('Shard storage cannot read this key');
+          && !/^terrain\/prepared\/[a-f0-9]{64}\/[a-z0-9.-]+$/.test(key)
+          && !(sourcePrefix && isPrivateUpstreamKey(key, sourcePrefix))) throw new Error('Shard storage cannot read this key');
     };
     const scopedStore: ObjectStorage | undefined = store && {
       get: (key, ...args) => { assertReadable(key); return store.get(key, ...args); },

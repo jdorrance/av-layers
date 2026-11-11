@@ -1,12 +1,14 @@
 import type { CoverageMask, ManifestV5, ProductDefinition } from '@av/contracts';
 import type { DeriveFrameOptions } from '@av/forecast';
-import type { ForecastProvider } from './provider.js';
+import type { ForecastProvider, ForecastSourcePin, ForecastSourceStore } from './provider.js';
 
 export interface FrameBuildOptions {
   out: string;
   cycle?: string;
   cacheDir?: string;
   signal?: AbortSignal;
+  sourceStore?: ForecastSourceStore;
+  sourcePin?: ForecastSourcePin;
   deriveOptions?: Pick<DeriveFrameOptions, 'daylightOnly'>;
 }
 export interface ForecastInputs { product: ProductDefinition; mask: CoverageMask; provider: ForecastProvider }

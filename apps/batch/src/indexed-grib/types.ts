@@ -2,16 +2,19 @@ import type { IsobaricFrame } from '@av/forecast';
 import type { IdxRecord } from '@azohra/meteo.grib';
 import type { IndexedGribTransportStats } from './transport.ts';
 import type { FieldSamplingStats } from './sampling.ts';
-import type { NormalizedFrameTarget } from '../provider.js';
+import type { ForecastSourcePin, ForecastSourceStore, NormalizedFrameTarget } from '../provider.js';
 
 export interface IndexedGribFetchOptions {
   fetchImpl?: typeof fetch;
   offline?: boolean;
   signal?: AbortSignal;
+  store?: ForecastSourceStore;
+  sourcePin?: ForecastSourcePin;
   retry?: { maxAttempts?: number; deadlineMs?: number; attemptTimeoutMs?: number; baseDelayMs?: number; maxDelayMs?: number };
 }
 
 export interface DiscoverIndexedGribRunOptions extends IndexedGribFetchOptions {
+  cycle?: string;
   now?: Date;
   cacheDir?: string;
 }
@@ -107,6 +110,7 @@ export interface SourceAssetReceipt {
   sha256: string;
   size: number;
   file: string | null;
+  object?: { etag: string; bytes: number; sha256: string };
 }
 
 export interface IndexedGribDuplicateVerification {
@@ -215,6 +219,7 @@ export interface IndexedGribFrameAcquisition extends IsobaricFrame {
     hour: number;
     validAt: string;
     capturedAt: string;
+    sourcePin?: ForecastSourcePin;
     sourceGrid: {
       ni: number;
       nj: number;

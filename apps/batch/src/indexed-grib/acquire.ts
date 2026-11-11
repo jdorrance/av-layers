@@ -2,6 +2,7 @@ import { copySourceIndices } from '../source.js';
 import type { IndexedSource } from './source.js';
 import { IndexedGribError } from './errors.ts';
 import { discoverIndexedGribRunWithTransport } from './discover.ts';
+import { readIndexedR2Run } from './ready.ts';
 import { prefetchFields } from './prefetch.ts';
 import { loadAndInspectIndexedGribField, type AdmittedIndexedGribField } from './load.ts';
 import {
@@ -21,7 +22,7 @@ import {
 } from './intervals.ts';
 import { IndexedGribTransport, indexedGribRecordWorkingBytes, type IndexedGribTransportStats } from './transport.ts';
 import { IndexedGribFieldSampler } from './sampling.ts';
-import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
+import { createAuxiliaryTargets, type ForecastSourcePin, type NormalizedFrameTarget } from '../provider.js';
 import { sourceIntervalHours, gridVectorToEarth } from '@av/contracts';
 import { omegaFromGeometricWPaS, kelvinToCelsius } from '@av/thermodynamics';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
@@ -88,7 +89,7 @@ function hoursInWindow(receipt: DecodedFieldReceipt): number {
 
 interface AcquisitionContext {
   source: IndexedSource;
-  cycle: string; activeIndices: Uint32Array; nativeIndices: Uint32Array;
+  cycle: string; sourcePin?: ForecastSourcePin; activeIndices: Uint32Array; nativeIndices: Uint32Array;
   transport: IndexedGribTransport; sampler: IndexedGribFieldSampler; signal: AbortSignal;
   fail: (reason: unknown) => void; fetchConcurrency: number; prefetchBytes: number;
   stats: IndexedGribAcquisitionStats; raw: Map<string, Omit<LoadedField, 'inspected'>>;
@@ -104,16 +105,18 @@ export async function createIndexedGribAcquisitionSession(source: IndexedSource,
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   signal.throwIfAborted();
-  const transport = new IndexedGribTransport({ ...options, signal, stats: transportStats });
+  if (!source.privateR2 && options.sourcePin) invalid('A private source receipt requires a private Indexed GRIB source');
+  const r2 = source.privateR2 ? await readIndexedR2Run(source, { ...options, signal }) : undefined;
+  const transport = new IndexedGribTransport({ ...options, signal, stats: transportStats, r2 });
   const sampler = new IndexedGribFieldSampler(decodeConcurrency);
   const cancelDecoder = () => { void sampler.close().catch(() => {}); };
   signal.addEventListener('abort', cancelDecoder, { once: true });
   let cycle: string;
-  try { cycle = validateCycle(source, options.cycle ?? (await discoverIndexedGribRunWithTransport(source, { ...options, signal }, transport)).cycle); }
+  try { cycle = validateCycle(source, r2?.cycle ?? options.cycle ?? (await discoverIndexedGribRunWithTransport(source, { ...options, signal }, transport)).cycle); }
   catch (error) { controller.abort(error); signal.removeEventListener('abort', cancelDecoder); await sampler.close(); throw error; }
   const stats: IndexedGribAcquisitionStats = { transport: transport.stats, byPacking: sampler.stats, loadMs: 0, admitMs: 0, rawCompanionHits: 0, peakPrefetchBytes: 0 };
   const context: AcquisitionContext = {
-    source, cycle, activeIndices, nativeIndices: Uint32Array.from(activeIndices, index => contractIndexToNativeIndex(source, index)), transport, sampler, signal,
+    source, cycle, sourcePin: r2?.pin, activeIndices, nativeIndices: Uint32Array.from(activeIndices, index => contractIndexToNativeIndex(source, index)), transport, sampler, signal,
     fail: reason => controller.abort(reason), fetchConcurrency, prefetchBytes, stats, raw: new Map(),
   };
   let closed = false, active: Promise<IndexedGribFrameAcquisition> | undefined, closing: Promise<void> | undefined;
@@ -452,6 +455,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
         hour,
         validAt: validAt(cycle, hour),
         capturedAt,
+        ...(context.sourcePin ? { sourcePin: context.sourcePin } : {}),
         sourceGrid: {
           ni: sourceGrid.ni,
           nj: sourceGrid.nj,

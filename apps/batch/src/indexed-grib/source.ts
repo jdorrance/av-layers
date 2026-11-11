@@ -1,6 +1,7 @@
 import z from 'zod';
 import { gridSchema, normalizeLon, prepareGridGeometry, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
+import { isPrivateUpstreamKey, sourceUrl } from '../source.js';
 
 const levels = z.array(z.number().int().positive()).min(1).max(256);
 const field = z.tuple([z.string().min(1), z.string().min(1)]);
@@ -26,6 +27,16 @@ const upstreamSchema = z.object({
 export function indexedSource(model: ModelDefinition) {
   if (model.capabilities.verticalCoordinate !== 'isobaric' || model.forecast.statisticsResetHours === null) throw new Error('Indexed GRIB input requires isobaric levels and a statistical reset interval');
   const upstream = upstreamSchema.parse(model.upstream), grid = gridSchema.parse(model.grid);
+  const privateR2 = upstream.urlTemplate.startsWith('r2:');
+  if (privateR2) {
+    const modelPrefix = `upstream/${model.modelId}/`;
+    const template = upstream.urlTemplate;
+    if (!template.startsWith(`r2://${modelPrefix}{date}/{cycleHour}/`) || !template.includes('{product}') || !template.includes('{hour}')
+        || Object.values(upstream.products).some(product => !isPrivateUpstreamKey(
+          sourceUrl(template, { date: '20260101', cycleHour: '00', product, hour: '001' }).slice('r2://'.length), modelPrefix))) {
+      throw new Error('Private Indexed GRIB template must identify its model, cycle, product and hour');
+    }
+  }
   let columnOffset = 0;
   if (grid.kind === 'regular-latlon') {
     if (upstream.nativeLongitudeOrigin === undefined) throw new Error('Regular indexed GRIB input requires a native longitude origin');
@@ -57,6 +68,6 @@ export function indexedSource(model: ModelDefinition) {
   }
   const fields = { ...upstream.fields, sensibleHeatFlux: upstream.fields.sensibleHeatFlux.slice(0, 2) as [string, string], latentHeatFlux: upstream.fields.latentHeatFlux.slice(0, 2) as [string, string] };
   const fluxScales = { sensibleHeatFlux: upstream.fields.sensibleHeatFlux[2], latentHeatFlux: upstream.fields.latentHeatFlux[2] };
-  return { model, upstream, grid, geometry: prepareGridGeometry(grid), columnOffset, pressureLevels, levelProducts, fields, fluxScales };
+  return { model, upstream, privateR2, grid, geometry: prepareGridGeometry(grid), columnOffset, pressureLevels, levelProducts, fields, fluxScales };
 }
 export type IndexedSource = ReturnType<typeof indexedSource>;

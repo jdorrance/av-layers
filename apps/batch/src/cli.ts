@@ -23,8 +23,12 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const [{ readLocalFile }, { parseJson, terrainAssetSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js')]);
     const catalogRef = parseJson(await readLocalFile(catalog, 16 * 1024), terrainAssetSchema, 16 * 1024);
     const directory = values['terrain-store-dir'];
-    const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : (await import('./storage.js')).r2Storage();
-    console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], wholeDomain: { catalogRef, storage } }));
+    const { getForecastProvider } = await import('./providers.js');
+    const privateSource = !!getForecastProvider(product.modelId).resolveRun;
+    const sourceStore = !directory || privateSource ? (await import('./storage.js')).r2Storage() : undefined;
+    const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : sourceStore!;
+    console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle,
+      cacheDir: values['cache-dir'], ...(privateSource ? { sourceStore } : {}), wholeDomain: { catalogRef, storage } }));
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
@@ -53,7 +57,9 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
     const { getForecastProvider } = await import('./providers.js');
-    console.log(JSON.stringify(await getForecastProvider(product.modelId).proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'] }), null, 2));
+    const provider = getForecastProvider(product.modelId);
+    const store = provider.resolveRun ? (await import('./storage.js')).r2Storage() : undefined;
+    console.log(JSON.stringify(await provider.proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'], ...(store ? { store } : {}) }), null, 2));
   } else if (command === 'validate') {
     if (!values.manifest) throw new Error('--manifest is required');
     const remote = values['receipts-only'] ? { store: (await import('./storage.js')).r2Storage() } : undefined;

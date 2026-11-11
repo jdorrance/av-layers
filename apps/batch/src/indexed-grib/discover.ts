@@ -5,6 +5,7 @@ import type { IndexedSource } from './source.js';
 import { IndexedGribError } from './errors.ts';
 import { cycleStamp, indexedGribCompanionSpecs, indexedGribCurrentSpecs, indexedGribFileUrl, indexedGribWindowNeedsCompanion } from './fields.ts';
 import { IndexedGribTransport, selectIndexedGribRecord, type IndexResult, type IndexedGribTransportStats } from './transport.ts';
+import { readIndexedR2Run, verifyIndexedR2Objects } from './ready.ts';
 import type { DiscoveredIndexedGribRun, DiscoverIndexedGribRunOptions, IndexedGribFieldSpec } from './types.ts';
 
 function unavailableRun(error: unknown): boolean {
@@ -73,7 +74,16 @@ async function checkRun(source: IndexedSource, cycle: string, transport: Indexed
   };
 }
 
+export async function discoverPrivateIndexedGribRun(source: IndexedSource, options: DiscoverIndexedGribRunOptions, stats?: IndexedGribTransportStats) {
+  const r2 = await readIndexedR2Run(source, options);
+  await verifyIndexedR2Objects(r2, options.signal);
+  const transport = new IndexedGribTransport({ ...options, stats, r2 });
+  const run = await checkRun(source, r2.cycle, transport);
+  return { run, sourcePin: r2.pin };
+}
+
 export async function discoverIndexedGribRun(source: IndexedSource, options: DiscoverIndexedGribRunOptions = {}, stats?: IndexedGribTransportStats): Promise<DiscoveredIndexedGribRun> {
+  if (source.privateR2) return (await discoverPrivateIndexedGribRun(source, options, stats)).run;
   const transport = new IndexedGribTransport({ ...options, stats });
   return discoverIndexedGribRunWithTransport(source, options, transport);
 }

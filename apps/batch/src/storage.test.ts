@@ -97,14 +97,17 @@ describe('R2 bucket lock preflight', () => {
 });
 
 describe('R2 shard credentials', () => {
-  it('signs separate action and path scoped credentials used by the SDK', async () => {
+  it.each([undefined, { key: 'upstream/gfs/20261104/18/_ready.json', bytes: 55, sha256: 'a'.repeat(64) }])(
+    'signs action and path scoped credentials with upstream receipt %j', async sourcePin => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
     const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async command => {
       if (command.constructor.name === 'GetObjectCommand') return { ContentLength: 1, ETag: 'etag', Body: Readable.from([Uint8Array.of(1)]) } as never;
       return { ContentLength: 1, ETag: 'etag' } as never;
     });
     try {
-      const store = makeStore(plan);
+      const activePlan = { ...plan, ...(sourcePin ? { sourcePin } : {}) };
+      const envelope = Buffer.from(sealShardCredentials(issuer, activePlan));
+      const store = r2ShardStorage(shard, activePlan, envelope);
       await store.get('coverage/test');
       await store.head('coverage/test');
       await store.put('builds/test', Uint8Array.of(1), {});
@@ -115,7 +118,9 @@ describe('R2 shard credentials', () => {
       expect(credentials[0]).toEqual(credentials[1]);
       expect(credentials[0]).not.toEqual(credentials[2]);
       const prefix = `builds/${plan.model}/${plan.buildId}/`;
-      for (const [index, actions, prefixPaths] of [[0, ['GetObject', 'HeadObject'], [prefix, 'coverage/', 'terrain/prepared/']], [2, ['PutObject'], [prefix]]] as const) {
+      const upstream = sourcePin ? ['upstream/gfs/20261104/18/'] : [];
+      if (sourcePin) expect(() => r2ShardStorage(shard, { ...activePlan, sourcePin: { ...sourcePin, sha256: 'b'.repeat(64) } }, envelope)).toThrow('unauthenticated');
+      for (const [index, actions, prefixPaths] of [[0, ['GetObject', 'HeadObject'], [prefix, 'coverage/', 'terrain/prepared/', ...upstream]], [2, ['PutObject'], [prefix]]] as const) {
         const credential = credentials[index]!;
         expect(credential.accessKeyId).toBe(env.R2_ACCESS_KEY_ID);
         const token = Buffer.from(credential.sessionToken!, 'base64').toString();

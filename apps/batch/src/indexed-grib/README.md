@@ -26,3 +26,23 @@ reset-window consistency before shared trailing-window recovery.
 
 Checked-in `fixtures/` retain their actual upstream names and provenance.
 See [science](../../../../docs/science.md) for interval calculations.
+
+## Private producer storage
+
+Configure an indexed source template under
+`r2://upstream/{model}/{date}/{cycleHour}/` with product and hour tokens.
+Upload each GRIB file and its `.idx` to the forecast environment bucket as
+immutable objects with `sha256` metadata. Put `_ready.json` with `If-None-Match: *`
+after both object types are complete for every configured and companion hour.
+The [receipt schema](ready.ts) binds their keys, byte lengths, digests and quoted
+R2 ETags. Use one index row per GRIB message with increasing byte offsets.
+
+An explicit cycle uses its `_ready.json`. Discovery without a cycle follows
+`upstream/{model}/latest.json` and verifies the ready receipt digest. Advance the
+pointer with `If-Match` and the current ETag, or `If-None-Match: *` on the first
+cycle. After a conflict, read the pointer again and keep the newest cycle.
+
+Planning verifies object metadata and complete inventories and stores the ready
+receipt hash in the build plan. Shards verify that receipt, hash the downloaded
+index bytes and request bounded GRIB ranges with `If-Match`. The committed
+GRIB byte length supplies the last record's end offset.
