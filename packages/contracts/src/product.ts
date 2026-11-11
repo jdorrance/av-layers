@@ -143,7 +143,8 @@ const identifier = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const productConfigSchema = z.object({
   modelId: identifier.refine(id => id !== 'all', 'Model ID is reserved for workflow selection'), id: identifier,
   coverageDir: z.string().regex(/^coverage(?:\/[a-z0-9-]+)*$/),
-  source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier, tier: z.enum(RESOLUTION_TIERS).optional() }),
+  source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier }),
+  tier: z.enum(RESOLUTION_TIERS).optional(),
   label: z.string().min(1), attribution: z.string().min(1),
   layers: z.array(z.enum(LAYER_IDS)).min(1).max(LAYER_IDS.length).refine(
     layers => new Set(layers).size === layers.length, 'Product requires unique scalar layers'
@@ -182,8 +183,8 @@ const productConfigSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['forecast', 'expectedRunsPerDay'], message: 'Event-driven models require expected runs per day' });
     return z.NEVER;
   }
-  if (scheduledRuns && expectedRunsPerDay !== undefined && expectedRunsPerDay !== scheduledRuns) {
-    ctx.addIssue({ code: 'custom', path: ['forecast', 'expectedRunsPerDay'], message: 'Expected runs per day must match the forecast schedule' });
+  if (scheduledRuns && expectedRunsPerDay !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['forecast', 'expectedRunsPerDay'], message: 'Scheduled models derive runs per day from their forecast schedule' });
     return z.NEVER;
   }
   return { ...config, forecast, expectedRunsPerDay: expectedRunsPerDay ?? scheduledRuns };
@@ -193,11 +194,10 @@ const productConfigSchema = z.object({
 export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
   const config = productConfigSchema.parse(resolveWindow(raw));
   const { zoom, ...execution } = config.execution;
-  const { tier, ...source } = config.source;
   return Object.freeze({
     modelId: config.modelId, id: config.id,
-    coverageDir: config.coverageDir, source: Object.freeze(source), label: config.label,
-    ...(tier === undefined ? {} : { tier }),
+    coverageDir: config.coverageDir, source: Object.freeze(config.source), label: config.label,
+    ...(config.tier === undefined ? {} : { tier: config.tier }),
     attribution: config.attribution,
     bounds: Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const),
     coverageDescription: config.coverage.description, freshness: config.freshness,

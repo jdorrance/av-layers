@@ -20,7 +20,7 @@ describe('model configuration', () => {
         ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)
       ]);
       expect(product.expectedRunsPerDay).toBe(4);
-      const { tier, ...source } = settings.source;
+      const { source, tier } = settings;
       expect(product.tier).toBe(tier);
       expect(product.source).toEqual(source);
       expect(product.frameHours).toBe(product.forecast.hours);
@@ -84,9 +84,10 @@ describe('model configuration', () => {
     }
   });
 
-  it('requires scheduled expectations to match the configured cron starts', () => {
-    expect(defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 4 } }).expectedRunsPerDay).toBe(4);
-    expect(() => defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 3 } })).toThrow('must match the forecast schedule');
+  it('derives scheduled run counts solely from the configured cron starts', () => {
+    expect(defineProduct(configured).expectedRunsPerDay).toBe(4);
+    expect(() => defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 4 } }))
+      .toThrow('Scheduled models derive runs per day');
   });
 
   it('keeps the map prefix and source intervals independent of sparse output hours', () => {

@@ -6,7 +6,8 @@
       "modelId": "gfs",
       "id": "gfs-soaring",
       "coverageDir": "coverage",
-      "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global", "tier": "low"},
+      "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global"},
+      "tier": "low",
       "label": "GFS",
       "attribution": "NOAA GFS · Aviation Forecast Layers",
       "layers": [
@@ -150,7 +151,8 @@
       "modelId": "icon-eu",
       "id": "icon-eu-soaring",
       "coverageDir": "coverage/icon-eu-land-v1",
-      "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe", "tier": "medium"},
+      "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe"},
+      "tier": "medium",
       "label": "ICON-EU",
       "attribution": "DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers",
       "layers": [
@@ -273,7 +275,8 @@
       "modelId": "rrfs",
       "id": "rrfs-conus-soaring",
       "coverageDir": "coverage/rrfs-conus-land-v1",
-      "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus", "tier": "medium"},
+      "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus"},
+      "tier": "medium",
       "label": "RRFS (CONUS)",
       "attribution": "NOAA RRFS · Aviation Forecast Layers",
       "layers": [
