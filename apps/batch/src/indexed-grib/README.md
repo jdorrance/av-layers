@@ -26,3 +26,16 @@ reset-window consistency before shared trailing-window recovery.
 
 Checked-in `fixtures/` retain their actual upstream names and provenance.
 See [science](../../../../docs/science.md) for interval calculations.
+
+## Private producer storage
+
+Configure an indexed source template under
+`r2://upstream/{model}/{date}/{cycleHour}/` with `{product}` and `{hour}` tokens.
+Upload each GRIB file and its `.idx` to the forecast environment bucket with
+`sha256` object metadata and `If-None-Match: *`. Use one index row per GRIB
+message in byte order. Create `_ready.json` with the same write condition after
+all configured and companion hours are complete. [Receipt schema](ready.ts).
+
+Discovery without an explicit cycle reads `upstream/{model}/latest.json`.
+Publish the pointer with `If-Match` and the current ETag or `If-None-Match: *`
+for the first cycle. On conflict, reread the pointer and keep the newest cycle.

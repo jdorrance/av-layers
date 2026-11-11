@@ -1,3 +1,6 @@
+import z from 'zod';
+import { MAX_MANIFEST_BYTES } from '@av/contracts';
+import type { ObjectStorage } from './storage.js';
 import type { AuxField, AuxSurfaceId, AuxLevelId, AuxSurface, AuxLevels, NormalizedFrame } from '@av/forecast/inputs';
 
 export type NormalizedFrameTarget = Pick<NormalizedFrame, 'terrainM' | 'surfacePressurePa' | 'temp2mK' | 'specificHumidity2mKgKg' | 'sensibleHeatFluxWm2' | 'latentHeatFluxWm2' | 'precipitationMmPerHour' | 'hgtM' | 'tempK' | 'pressurePa' | 'missing' | 'auxSurface' | 'auxLevels'>;
@@ -32,6 +35,12 @@ export interface ForecastSession {
   acquire(hour: number, target?: NormalizedFrameTarget): Promise<NormalizedFrame>;
   close(): Promise<void>;
 }
+export const forecastSourcePinSchema = z.strictObject({ key: z.string().min(1).max(1024), bytes: z.number().int().positive().max(MAX_MANIFEST_BYTES),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/) });
+export type ForecastSourcePin = z.infer<typeof forecastSourcePinSchema>;
+export type ForecastSourceStore = Pick<ObjectStorage, 'get' | 'head'>;
+interface ForecastRunOptions { cycle?: string; cacheDir: string; signal?: AbortSignal; store?: ForecastSourceStore }
+
 export interface ForecastProvider {
   id: string;
   provider: string;
@@ -41,10 +50,11 @@ export interface ForecastProvider {
   retainedGeometryFields?: number;
   auxiliarySurfaceFields?: number;
   auxiliaryLevelFields?: number;
-  open(options: { cycle?: string; activeIndices: Uint32Array; cacheDir: string; signal?: AbortSignal; readOnlyCache?: boolean; offline?: boolean }): Promise<ForecastSession>;
+  resolveRun?(options: ForecastRunOptions): Promise<{ cycle: string; sourcePin: ForecastSourcePin }>;
+  open(options: ForecastRunOptions & { activeIndices: Uint32Array; sourcePin?: ForecastSourcePin; readOnlyCache?: boolean; offline?: boolean }): Promise<ForecastSession>;
 }
 
 export type ResolvableForecastProvider = ForecastProvider & {
-  resolveCycle(options: { cycle?: string; cacheDir: string; signal?: AbortSignal }): Promise<string>;
-  proveInputs(options: { cycle?: string; cacheDir?: string; signal?: AbortSignal }): Promise<unknown>;
+  resolveCycle(options: ForecastRunOptions): Promise<string>;
+  proveInputs(options: Omit<ForecastRunOptions, 'cacheDir'> & { cacheDir?: string }): Promise<unknown>;
 };

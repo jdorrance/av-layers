@@ -1,6 +1,6 @@
 import { sourceIntervalHours } from '@av/contracts';
 import type { IndexedSource } from './source.js';
-import { sourceCycle, sourceUrl } from '../source.js';
+import { sourceCycle, sourceCycleParts, sourceUrl } from '../source.js';
 import { IndexedGribError } from './errors.ts';
 import { indexedGribWindowStart } from './intervals.ts';
 import type { IndexedGribFieldSpec } from './types.ts';
@@ -30,8 +30,7 @@ export function indexedGribFileUrl(source: IndexedSource,
   hour: number,
   productName: string,
 ): string {
-  return sourceUrl(source.upstream.urlTemplate, { date: cycle.slice(0, 10).replaceAll('-', ''),
-    cycleHour: cycle.slice(11, 13), product: productName, hour: String(hour).padStart(3, '0') });
+  return sourceUrl(source.upstream.urlTemplate, { ...sourceCycleParts(cycle), product: productName, hour: String(hour).padStart(3, '0') });
 }
 
 export function indexedGribProductName(source: IndexedSource, product: IndexedGribFieldSpec['product']): string {

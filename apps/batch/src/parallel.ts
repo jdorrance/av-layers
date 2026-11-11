@@ -12,6 +12,8 @@ import { forecastFrame, type ForecastInputs } from './frame-build.js';
 import { buildIdentity } from './identity.js';
 import { createLocalFileReader, readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
+import { forecastSourcePinSchema, type ForecastSourcePin } from './provider.js';
+import { pinnedSourcePrefix } from './source.js';
 import { localPath, sha256, validateArchive, validateSampleGroup } from './validate.js';
 import { failureReason } from './failure.js';
 import { sparseTerrainRefSchema, validateSparsePreparedTerrain } from './terrain/sparse.js';
@@ -42,7 +44,7 @@ const buildPlanBase = z.strictObject({
   version: z.literal(2), model: manifestV5Schema.shape.model,
   buildId: z.string().regex(/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/),
   createdAt: timestampSchema, deadlineAt: timestampSchema.optional(), cycle: timestampSchema, coverageHash: digestSchema,
-  providerId: z.string().min(1), wholeDomain: wholeDomainPlanSchema,
+  providerId: z.string().min(1), wholeDomain: wholeDomainPlanSchema, sourcePin: forecastSourcePinSchema.optional(),
   dependencies: z.array(objectReceiptSchema).min(1).optional(),
   preparation: preparationSchema,
   recipe: manifestV5Schema.shape.recipe.strict().extend({ source: manifestV5Schema.shape.recipe.shape.source.strict() }),
@@ -57,6 +59,7 @@ export type BuildPlan = z.infer<typeof planSchema>;
 interface PlanOptions {
   out: string; cycle: string; shards?: number; signal?: AbortSignal;
   store?: ObjectStorage;
+  sourcePin?: ForecastSourcePin;
   wholeDomain?: WholeDomainOptions;
 }
 const nonnegativeNumber = z.number().nonnegative();
@@ -144,6 +147,8 @@ async function assertWholeDomainProvenance(root: string, plan: BuildPlan, shard:
     if (reference.hour !== hours[index] || reference.frame !== frames[index]!.id) throw new Error('Forecast shard provenance frame mismatch');
     const value = await readFrameProvenance(root, plan, frames[index]!, reference);
     if (!matchesFrameIntervals(value.intervals, frames[index]!, product.layers.includes('precip-rate'))) throw new Error('Forecast shard provenance interval mismatch');
+    if (plan.sourcePin && (!value.receipt || typeof value.receipt !== 'object' || !('sourcePin' in value.receipt)
+        || !same(value.receipt.sourcePin, plan.sourcePin))) throw new Error('Forecast shard provenance differs from its pinned upstream receipt');
   }
   return frames;
 }
@@ -197,6 +202,12 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
   const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
+  const source = !options.sourcePin && provider.resolveRun ? await provider.resolveRun({ cycle: options.cycle,
+    cacheDir: localPath(root, '.cache/source'), store: options.store, signal: options.signal }) : undefined;
+  if (source && Date.parse(source.cycle) !== Date.parse(options.cycle)) throw new Error('Pinned upstream cycle differs from the planned cycle');
+  const sourcePin = options.sourcePin ?? source?.sourcePin;
+  if (!!provider.resolveRun !== !!sourcePin) throw new Error('Forecast plan must pin its private source');
+  if (sourcePin) pinnedSourcePrefix(product.modelId, options.cycle, sourcePin.key);
   const frozen = frozenWholeDomain(prepared);
   const identity = await buildIdentity(product, prepared.native.hash, { wholeDomain:
     { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain } });
@@ -217,7 +228,8 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
     }, prepared.plan.fine, prepared.fine.mask.coverage, prepared.fine.bytes, options.signal);
   }
   const plan = planSchema.parse({ version: 2, model: product.modelId, ...stamp, deadlineAt, cycle: new Date(options.cycle).toISOString(),
-    coverageHash: prepared.native.hash, providerId: provider.id, recipe: identity.recipe, execution, groups, wholeDomain: frozen, preparation, ...(dependencies.length ? { dependencies } : {}) });
+    coverageHash: prepared.native.hash, providerId: provider.id, recipe: identity.recipe, execution, groups, wholeDomain: frozen, preparation,
+    ...(sourcePin ? { sourcePin } : {}), ...(dependencies.length ? { dependencies } : {}) });
   options.signal?.throwIfAborted();
   await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
   return plan;
@@ -229,6 +241,8 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) throw new Error('Invalid forecast plan', { cause: parsed.error });
   plan = parsed.data;
+  if (!!provider.resolveRun !== !!plan.sourcePin) throw new Error('Forecast plan must pin its private source');
+  if (plan.sourcePin) pinnedSourcePrefix(plan.model, plan.cycle, plan.sourcePin.key);
   if (plan.execution) product = { ...product, maxNativeZoom: plan.execution.zoom,
     execution: { ...product.execution, workers: plan.execution.workers } };
   assertForecastInputs(mask, product);
@@ -280,7 +294,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
     const whole = prepared;
     if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
     const result = await buildWholeDomainFrames({ ...options, prepared: whole, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
-      hours: plan.groups[shard], journalPrefix: prefix, sampleGroup: shard });
+      sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], journalPrefix: prefix, sampleGroup: shard });
     const numericReader = createLocalFileReader(MAX_V5_SHARD_BYTES), validation = { reader: numericReader, signal: options.signal };
     for (const surface of result.surfaces) {
       const coverage = surface.id === 'native' ? whole.native : whole.fine;

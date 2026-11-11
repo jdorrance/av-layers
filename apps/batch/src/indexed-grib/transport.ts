@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { byteRange, parseIdx, type IdxRecord } from '@azohra/meteo.grib';
 import { IndexedGribError } from './errors.ts';
+import type { IndexedR2Object, IndexedR2Run } from './ready.ts';
 import type { IndexedGribDuplicateVerification, SelectedIdxRecord, SourceAssetReceipt, IndexedGribFetchOptions } from './types.ts';
 
 export function sha256(bytes: Uint8Array | string | readonly Uint8Array[]): string {
@@ -90,16 +91,18 @@ export class IndexedGribTransport {
   private readonly cacheDir?: string;
   private readonly signal?: AbortSignal;
   private readonly offline: boolean;
+  private readonly r2?: IndexedR2Run;
   private readonly indexes = new Map<string, IndexResult>();
   private readonly pendingIndexes = new Map<string, Promise<IndexResult>>();
   readonly stats: IndexedGribTransportStats;
   private readonly retry: Required<NonNullable<IndexedGribFetchOptions['retry']>>;
 
-  constructor(options: IndexedGribFetchOptions & { cacheDir?: string; stats?: IndexedGribTransportStats }) {
+  constructor(options: IndexedGribFetchOptions & { cacheDir?: string; stats?: IndexedGribTransportStats; r2?: IndexedR2Run }) {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.cacheDir = options.cacheDir;
     this.signal = options.signal;
     this.offline = options.offline === true;
+    this.r2 = options.r2;
     this.stats = options.stats ?? { networkRequests: 0, cacheReads: 0, memoryIndexHits: 0 };
     this.retry = { maxAttempts: 3, deadlineMs: 120_000, attemptTimeoutMs: 90_000, baseDelayMs: 250, maxDelayMs: 5_000, ...options.retry };
     const r = this.retry;
@@ -140,13 +143,29 @@ export class IndexedGribTransport {
       const lines = buffer.toString('utf8').trim().split('\n').filter(Boolean);
       if (!lines.length) throw new IndexedGribError('transport', `Empty NOAA index: ${url}`);
       for (const line of lines) {
-        if (line.split(':')[2] !== `d=${expectedStamp}`) {
+        const columns = line.split(':');
+        if (this.r2 && (columns.length < 6 || !/^(0|[1-9]\d*)$/.test(columns[1] ?? ''))) {
+          throw new IndexedGribError('source-conflict', `Invalid private Indexed GRIB inventory row in ${url}`);
+        }
+        if (columns[2] !== `d=${expectedStamp}`) {
           throw new IndexedGribError('source-conflict', `NOAA index run mismatch in ${url}`, { line });
         }
       }
     }, refresh);
     const text = bytes.bytes.toString('utf8');
-    const result = { records: parseIdx(text), text, asset: bytes.asset };
+    const records = parseIdx(text);
+    if (this.r2) {
+      const object = this.r2.objects.get(url.slice('r2://'.length, -'.idx'.length));
+      if (!object || records[0]?.offset !== 0) throw new IndexedGribError('source-conflict', `Invalid private Indexed GRIB inventory origin in ${url}`);
+      for (const [index, record] of records.entries()) {
+        const end = records[index + 1]?.offset ?? object.bytes;
+        if (!Number.isSafeInteger(record.offset) || !Number.isSafeInteger(end) || end <= record.offset || end > object.bytes) {
+          throw new IndexedGribError('source-conflict', `Private Indexed GRIB record exceeds object bounds in ${url}`);
+        }
+        record.length = end - record.offset;
+      }
+    }
+    const result = { records, text, asset: bytes.asset };
     prepareIndex(result);
     return result;
   }
@@ -200,17 +219,68 @@ export class IndexedGribTransport {
   ): Promise<{ bytes: Buffer; asset: SourceAssetReceipt }> {
     this.abort();
     const rangeHeader = record ? byteRange(record) : null;
-    const key = sha256(`${url}\n${rangeHeader}`);
+    const object = url.startsWith('r2:') ? this.privateObject(url, record) : undefined;
+    const key = sha256(`${url}\n${rangeHeader}${object ? `\n${object.etag}\n${object.sha256}\n${object.bytes}` : ''}`);
     const receiptPath = this.cacheDir ? join(this.cacheDir, `${key}.json`) : null;
     if (receiptPath && !refresh) {
       const cached = await this.readFromCache(url, rangeHeader, record, receiptPath);
       if (cached) {
         validate(cached.bytes);
+        if (object && (cached.asset.object?.etag !== object.etag || cached.asset.object?.sha256 !== object.sha256
+            || cached.asset.object?.bytes !== object.bytes || (object.index && cached.asset.sha256 !== object.sha256))) {
+          throw new IndexedGribError('source-conflict', `Cached Indexed GRIB object differs from its receipt: ${url}`);
+        }
         this.stats.cacheReads++;
         return cached;
       }
     }
     if (this.offline) throw new IndexedGribError('transport', `NOAA offline cache miss for ${url}`);
+    const bytes = object ? await this.readPrivate(object, record) : await this.readHttp(url, record, rangeHeader);
+    validate(bytes);
+    const digest = sha256(bytes);
+    if (object?.index && digest !== object.sha256) throw new IndexedGribError('source-conflict', `Private Indexed GRIB index SHA-256 mismatch: ${url}`);
+    const asset: SourceAssetReceipt = {
+      url,
+      range: rangeHeader,
+      sha256: digest,
+      size: bytes.length,
+      file: this.cacheDir ? `${digest}.bin` : null,
+      ...(object ? { object: { etag: object.etag, bytes: object.bytes, sha256: object.sha256 } } : {}),
+    };
+    if (this.cacheDir) {
+      await mkdir(this.cacheDir, { recursive: true });
+      await atomicWrite(join(this.cacheDir, asset.file!), bytes);
+      await atomicWrite(receiptPath!, `${JSON.stringify(asset)}\n`);
+    }
+    return { bytes, asset };
+  }
+
+  private privateObject(url: string, record: IdxRecord | null) {
+    const object = url.startsWith('r2://') ? this.r2?.objects.get(url.slice('r2://'.length)) : undefined;
+    if (!object || object.index !== (record === null) || (record && record.offset + record.length! > object.bytes)) {
+      throw new IndexedGribError('source-conflict', `Private Indexed GRIB request is outside its admitted receipt: ${url}`);
+    }
+    return object;
+  }
+
+  private async readPrivate(object: IndexedR2Object, record: IdxRecord | null): Promise<Buffer> {
+    const range = record ? { offset: record.offset, length: record.length! } : undefined;
+    const expectedLength = range?.length ?? object.bytes;
+    const signal = this.signal ? AbortSignal.any([this.signal, AbortSignal.timeout(this.retry.deadlineMs)]) : AbortSignal.timeout(this.retry.deadlineMs);
+    this.stats.networkRequests++;
+    const result = await this.r2!.store.get(object.key, range, expectedLength, signal, () => {
+      this.stats.networkRequests++;
+      this.stats.retries = (this.stats.retries ?? 0) + 1;
+    }, object);
+    this.abort();
+    if (!result) throw new IndexedGribError('transport', `Private Indexed GRIB source is unavailable: ${object.key}`, { reason: 'upstream-not-ready', status: 404 });
+    if (result.etag !== object.etag || result.bytes.byteLength !== expectedLength) {
+      throw new IndexedGribError('source-conflict', `Private Indexed GRIB object changed after admission: ${object.key}`);
+    }
+    return Buffer.from(result.bytes.buffer, result.bytes.byteOffset, result.bytes.byteLength);
+  }
+
+  private async readHttp(url: string, record: IdxRecord | null, rangeHeader: string | null): Promise<Buffer> {
     const deadline = Date.now() + this.retry.deadlineMs;
     let bytes: Buffer | undefined;
     for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt++) {
@@ -252,22 +322,9 @@ export class IndexedGribTransport {
       }
     }
     if (!bytes) throw new IndexedGribError('transport', `NOAA request produced no bytes for ${url}`);
-    validate(bytes);
-    const digest = sha256(bytes);
-    const asset: SourceAssetReceipt = {
-      url,
-      range: rangeHeader,
-      sha256: digest,
-      size: bytes.length,
-      file: this.cacheDir ? `${digest}.bin` : null,
-    };
-    if (this.cacheDir) {
-      await mkdir(this.cacheDir, { recursive: true });
-      await atomicWrite(join(this.cacheDir, asset.file!), bytes);
-      await atomicWrite(receiptPath!, `${JSON.stringify(asset)}\n`);
-    }
-    return { bytes, asset };
+    return bytes;
   }
+
 }
 
 export function selectUniqueRecord(

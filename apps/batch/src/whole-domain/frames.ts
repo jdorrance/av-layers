@@ -93,7 +93,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const terrainData = capacityInput.mapFrames ? await loadWholeDomainTerrain({ ref: prepared.terrain, out: root, grid: prepared.plan.fine,
       coverage: prepared.fine.mask.coverage, coverageDescriptor: prepared.fine.bytes, signal }) : undefined;
     phase = 'open-provider';
-    acquisition = await provider.open({ cycle: options.cycle, activeIndices: prepared.acquisitionActive, cacheDir, signal });
+    acquisition = await provider.open({ cycle: options.cycle, activeIndices: prepared.acquisitionActive, cacheDir, signal,
+      ...(options.sourceStore ? { store: options.sourceStore } : {}), ...(options.sourcePin ? { sourcePin: options.sourcePin } : {}) });
     const cycle = new Date(acquisition.cycle).toISOString();
     if (options.cycle && Date.parse(cycle) !== Date.parse(options.cycle)) throw new Error('Provider cycle differs from requested cycle');
     const outputIndices = indicesOf(mask);
