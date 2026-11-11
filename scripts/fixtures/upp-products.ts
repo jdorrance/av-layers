@@ -16,7 +16,7 @@ function uppProduct(region: string, grid: Extract<Grid, { kind: 'lambert-conform
     source: { modelFamily: 'wrf', configurationId: `${modelId}-source`, domainId: region }, tier: 'high', expectedRunsPerDay: 4,
     bounds: [lower(longitudes), lower(latitudes), upper(longitudes), upper(latitudes)],
     attribution: 'Synthetic indexed GRIB2', coverageDescription: 'Synthetic Lambert coverage', grid,
-    maxNativeZoom: 2, nominalDxMeters: Math.abs(grid.dxM), terrainSubdivisionFactor, frameHours: forecastHours, mapEndHour: 2,
+    maxNativeZoom: 0, nominalDxMeters: Math.abs(grid.dxM), terrainSubdivisionFactor, frameHours: forecastHours, mapEndHour: 2,
     capabilities: { ...base.capabilities, maxVerticalLevels: UPP_PRESSURE_LEVELS.length },
     freshness: { maxCycleAgeHours: 2, minHorizonHours: 0 },
     execution: { ...base.execution, schedule: [], shards: 2, workers: 1 },

@@ -25,6 +25,19 @@ const products = [UPP_ARMENIA, UPP_NEW_ZEALAND];
 
 const config = fileURLToPath(new URL('../apps/api/wrangler.json', import.meta.url));
 const contractDir = fileURLToPath(new URL('../packages/contracts/', import.meta.url));
+const WRANGLER_LIFECYCLE_MS = 30_000;
+
+async function withWranglerDeadline<T>(phase: string, operation: Promise<T>, disposeLate?: (value: T) => Promise<void>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      if (disposeLate) void operation.then(disposeLate, () => {}).catch(error => console.error(`WRF fixture late ${phase} cleanup failed`, error));
+      reject(new Error(`WRF fixture ${phase} timed out after ${WRANGLER_LIFECYCLE_MS} ms`));
+    }, WRANGLER_LIFECYCLE_MS).unref();
+  });
+  try { return await Promise.race([operation, deadline]); }
+  finally { clearTimeout(timer); }
+}
 
 function boundStorage(bucket: R2Bucket): ObjectStorage {
   return {
@@ -55,38 +68,57 @@ function boundStorage(bucket: R2Bucket): ObjectStorage {
   };
 }
 
-it('builds and serves committed private UPP runs in both hemispheres', async () => {
+it('builds and serves committed private UPP runs in both hemispheres', async ({ signal: testSignal, onTestFailed }) => {
+  const startedAt = Date.now();
+  let phase = 'load Wrangler', phaseStartedAt = startedAt;
+  const completedPhases: Record<string, number> = {};
+  const enterPhase = (next: string) => {
+    const now = Date.now();
+    completedPhases[phase] = now - phaseStartedAt;
+    phase = next;
+    phaseStartedAt = now;
+  };
+  onTestFailed(() => {
+    const now = Date.now();
+    console.error('WRF fixture timing', { phase, phaseMs: now - phaseStartedAt, totalMs: now - startedAt, completedPhases });
+  });
   const { getPlatformProxy, unstable_dev } = await import('wrangler');
   const root = await mkdtemp(join(tmpdir(), 'av-upp-upstream-')), persistTo = join(root, 'r2');
   const cycle = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000).toISOString().replace('.000Z', 'Z');
   try {
-    const proxy = await getPlatformProxy<{ BUCKET: R2Bucket }>({ configPath: config,
-      persist: { path: join(persistTo, 'v3') }, remoteBindings: false, envFiles: [] });
+    enterPhase('open R2 proxy');
+    const proxy = await withWranglerDeadline(phase, getPlatformProxy<{ BUCKET: R2Bucket }>({ configPath: config,
+      persist: { path: join(persistTo, 'v3') }, remoteBindings: false, envFiles: [] }), late => late.dispose());
     const pins = new Map<string, string>();
     try {
       const store = boundStorage(proxy.env.BUCKET);
       for (const fixture of products) {
+        testSignal.throwIfAborted();
+        enterPhase(`prepare ${fixture.modelId}`);
         const out = join(root, fixture.modelId), bundled = join(out, 'bundled');
         const product = { ...fixture, coverageDir: relative(contractDir, bundled) };
         fixtureRegistry.set(product.modelId, product);
         await publishUppFixture(store, product, cycle);
         const provider = createIndexedGribProvider(product);
-        const resolved = await provider.resolveRun!({ cacheDir: join(root, 'source'), store });
+        const resolved = await provider.resolveRun!({ cacheDir: join(root, 'source'), store, signal: testSignal });
         expect(resolved.cycle).toBe(cycle);
         const mask = denseFixtureMask(product, product.grid);
         const nativeHash = await writeCoverage(out, mask, product);
         await cp(join(out, 'coverage', nativeHash), bundled, { recursive: true });
         const inputs = { product, provider, mask, out, store };
-        const plan = await createBuildPlan({ ...inputs, cycle: resolved.cycle, sourcePin: resolved.sourcePin,
+        const plan = await createBuildPlan({ ...inputs, cycle: resolved.cycle, sourcePin: resolved.sourcePin, signal: testSignal,
           wholeDomain: await syntheticWholeDomain(out, product) });
         await cp(join(out, 'coverage', plan.wholeDomain.fineCoverage.hash), join(bundled, 'fine'), { recursive: true });
         expect(plan.groups).toEqual([[1], [2]]);
+        testSignal.throwIfAborted();
         await uploadForecastControlPlan(store, out, plan);
-        const signal = forecastPlanSignal(plan);
+        const signal = forecastPlanSignal(plan, testSignal);
         for (const shard of [0, 1]) {
+          enterPhase(`build ${fixture.modelId} shard ${shard}`);
           await completeForecastControlShard(store, plan, shard, join(out, 'shards', String(shard), 'receipt.json'),
             () => buildShard({ ...inputs, plan, shard, cacheDir: join(root, 'source'), signal }), signal);
         }
+        enterPhase(`publish ${fixture.modelId}`);
         const assembly = join(root, product.modelId + '-publish');
         await mkdir(assembly);
         await cp(join(out, 'plan.json'), join(assembly, 'plan.json'));
@@ -96,25 +128,34 @@ it('builds and serves committed private UPP runs in both hemispheres', async () 
           GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main',
           GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: product.modelId });
         await finalizeBuild({ ...inputs, out: assembly, plan, signal, onValidated: async validated => {
-          await publish(store, assembly, validated.manifest, { authority, validated, receiptsOnly: true, deadlineAt: plan.deadlineAt });
+          await publish(store, assembly, validated.manifest, { authority, validated, receiptsOnly: true, deadlineAt: plan.deadlineAt, signal });
         } });
         pins.set(product.modelId, plan.buildId);
       }
-    } finally { await proxy.dispose(); }
+    } finally {
+      enterPhase('close R2 proxy');
+      await withWranglerDeadline(phase, proxy.dispose());
+    }
 
-    const worker = await unstable_dev(fileURLToPath(new URL('../apps/api/test/upp-fixture-worker.ts', import.meta.url)), {
+    testSignal.throwIfAborted();
+    enterPhase('start local Worker');
+    const worker = await withWranglerDeadline(phase, unstable_dev(fileURLToPath(new URL('../apps/api/test/upp-fixture-worker.ts', import.meta.url)), {
       config, local: true, ip: '127.0.0.1', port: 0, inspectorPort: 0, persist: true, persistTo,
       vars: { AV_LOCAL_DEVELOPMENT: 'true' }, envFiles: [], logLevel: 'error',
       experimental: { disableExperimentalWarning: true, disableDevRegistry: true, watch: false, enableContainers: false }
-    });
+    }), late => late.stop());
     try {
       const origin = `http://${worker.address}:${worker.port}`;
       const read = async (path: string) => {
-        const response = await fetch(origin + path, { signal: AbortSignal.timeout(5000) });
+        const signal = AbortSignal.any([testSignal, AbortSignal.timeout(5_000)]);
+        const response = await fetch(origin + path, { signal }).catch(error => {
+          throw new Error(`WRF fixture request failed for ${path}`, { cause: error });
+        });
         expect(response.status, response.ok ? path : await response.clone().text()).toBe(200);
         return response;
       };
       for (const product of products) {
+        enterPhase(`probe ${product.modelId}`);
         const model = product.modelId, buildId = pins.get(model)!, endpoint = `/v1/models/${model}`;
         expect(await (await read(`${endpoint}/latest?expand=manifest`)).json()).toMatchObject({
           manifest: { buildId, version: 5, tool: { useStoredMslNoLift: true } }
@@ -148,8 +189,12 @@ it('builds and serves committed private UPP runs in both hemispheres', async () 
         expect(Number(tile.headers.get('x-av-r2-reads'))).toBeGreaterThan(1);
         expect(Buffer.from(await tile.arrayBuffer()).subarray(8, 12).toString()).toBe('WEBP');
       }
+      enterPhase('probe catalog');
       const catalog = await (await read('/v1/catalog')).json();
       expect(catalog).toMatchObject({ models: expect.arrayContaining(products.map(product => expect.objectContaining({ model: product.modelId, available: true }))) });
-    } finally { await worker.stop(); }
+    } finally {
+      enterPhase('stop local Worker');
+      await withWranglerDeadline(phase, worker.stop());
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
-});
+}, 90_000);
