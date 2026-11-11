@@ -3,7 +3,7 @@ import { LAYER_IDS, layerSurface, renderedLayers, type LayerId } from './layers.
 import { layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layer-schemas.js';
 import { methodDescriptorSchema, methodIdSchema } from './method-schemas.js';
 import { gridSchema, sameGrid } from './grid-schema.js';
-import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS } from './format.js';
+import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS, RESOLUTION_TIERS } from './format.js';
 import { MAX_JSON_CONTAINER_ENTRIES, MAX_PROVENANCE_BYTES } from './json.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -140,6 +140,28 @@ export const sampleResponseV5Schema = z.strictObject({
     if (owners.get(layer) !== value.surfaceId) ctx.addIssue({ code: 'custom', message: 'Sample surface does not own layer' });
   }
 });
+const catalogBoundsSchema = z.tuple([z.number().min(-180).max(180), z.number().min(-90).max(90),
+  z.number().min(-180).max(180), z.number().min(-90).max(90)]).refine(([, south, , north]) => south <= north);
+
+export const catalogModelSchema = z.object({
+  model: modelIdSchema,
+  label: z.string().optional(),
+  domainId: z.string().optional(),
+  tier: z.enum(RESOLUTION_TIERS).optional(),
+  nominalDxMeters: z.number().int().positive().optional(),
+  bounds: catalogBoundsSchema.optional(),
+  available: z.boolean(),
+  latest: z.string().optional(),
+  cycle: z.string().optional(),
+  expiresAt: z.string().optional(),
+  surfaces: sampleResponseV5Schema.shape.surfaces.optional(),
+  ageSeconds: z.number().optional(),
+  freshness: freshnessSchema.optional(),
+  error: z.string().optional()
+});
+export const catalogSchema = z.object({ models: z.array(catalogModelSchema).max(256) });
+export type CatalogModelEntry = z.infer<typeof catalogModelSchema>;
+
 export function validateArtifactRecordsV5(manifest: ManifestV5): void {
   validateV5Records(manifestV5BaseSchema.parse(manifest));
 }

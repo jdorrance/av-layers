@@ -1,7 +1,7 @@
 import z from 'zod';
 import { gridSchema } from './grid-schema.js';
-import { type Grid } from './geometry.js';
-import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, MAX_FORECAST_SHARDS } from './format.js';
+import { normalizeLon, prepareGridGeometry, type Grid } from './geometry.js';
+import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, MAX_FORECAST_SHARDS, RESOLUTION_TIERS } from './format.js';
 import { LAYER_IDS, type LayerId } from './layers.js';
 
 const capabilitiesSchema = z.object({
@@ -13,7 +13,7 @@ export type ProductCapabilities = z.infer<typeof capabilitiesSchema>;
 export type VerticalCoordinateKind = ProductCapabilities['verticalCoordinate'];
 export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
 
-export const RESOLUTION_TIERS = ['low', 'medium', 'high'] as const;
+export { RESOLUTION_TIERS } from './format.js';
 export type ResolutionTier = (typeof RESOLUTION_TIERS)[number];
 
 export const MAX_MODEL_WORKERS = 3;
@@ -92,6 +92,7 @@ export interface ProductDefinition {
 }
 
 export interface ModelDefinition extends ProductDefinition {
+  readonly nominalDxMeters: number;
   readonly expectedRunsPerDay: number;
   readonly upstream: Readonly<Record<string, unknown>>;
   readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number; readonly intervalChange?: ProductDefinition['intervalChange']; readonly mapEndHour?: number;
@@ -194,12 +195,13 @@ const productConfigSchema = z.object({
 export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
   const config = productConfigSchema.parse(resolveWindow(raw));
   const { zoom, ...execution } = config.execution;
+  const bounds = Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const);
   return Object.freeze({
     modelId: config.modelId, id: config.id,
     coverageDir: config.coverageDir, source: Object.freeze(config.source), label: config.label,
     ...(config.tier === undefined ? {} : { tier: config.tier }),
     attribution: config.attribution,
-    bounds: Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const),
+    bounds, nominalDxMeters: nominalGridSpacingMeters(config.grid, bounds),
     coverageDescription: config.coverage.description, freshness: config.freshness,
     grid: config.grid, coverageId: config.coverage.id,
     maxNativeZoom: zoom,
@@ -212,6 +214,13 @@ export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
     execution: Object.freeze({ ...execution, workers: workerLimit.parse(execution.workers ?? workers) }),
     forecast: config.forecast, upstream: config.upstream, expectedRunsPerDay: config.expectedRunsPerDay
   });
+}
+
+export function nominalGridSpacingMeters(grid: Grid, [west, south, east, north]: ProductDefinition['bounds']): number {
+  const lon = normalizeLon((west + east + (west > east ? 360 : 0)) / 2);
+  const metrics = prepareGridGeometry(grid).rotationAndMetrics((south + north) / 2, lon);
+  if (!metrics) throw new RangeError('Cannot measure grid spacing at the coverage midpoint');
+  return Math.max(1, Math.round(Math.max(metrics.metersPerColumn, metrics.metersPerRow)));
 }
 
 /** Source support is independent of the selected output schedule. */

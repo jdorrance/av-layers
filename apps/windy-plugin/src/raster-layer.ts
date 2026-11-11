@@ -38,6 +38,7 @@ interface RenderMap {
   on(event: string, listener: (event?: SourceDataEvent) => void): unknown;
   off(event: string, listener: (event?: SourceDataEvent) => void): unknown;
   isMoving(): boolean;
+  getCenter?(): { lat: number; lng: number };
   getBounds(): { getWest(): number; getEast(): number; getNorth(): number; getSouth(): number };
   getZoom(): number;
 }

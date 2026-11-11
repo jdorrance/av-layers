@@ -10,6 +10,7 @@ import {
   layerMaxZoom,
   hostTimestampMs,
   matchHostFrame,
+  selectAutoFrame,
   selectExplicitFrame,
   selectHostFrame,
   syncTimestampForFrame,
@@ -74,6 +75,7 @@ export interface ControllerState {
 
 export interface ControllerOptions {
   model: ModelId;
+  automaticFrameId?: string;
   loadBuild(model: ModelId, options: { signal: AbortSignal }): Promise<PinnedBuild>;
   host: WindyHost;
   opacity?: number;
@@ -171,8 +173,13 @@ export class PluginController {
   }
 
   private outsideMapRange(): boolean {
-    return this.hostTime !== null && this.mapRange !== null
-      && (this.hostTime < this.mapRange.startMs || this.hostTime > this.mapRange.endMs);
+    if (this.hostTime === null || this.mapRange === null) return false;
+    if (this.options.automaticFrameId) return selectAutoFrame(this.frames, this.hostTime) === null;
+    return this.hostTime < this.mapRange.startMs || this.hostTime > this.mapRange.endMs;
+  }
+
+  private hostFrame(timestamp: number) {
+    return this.options.automaticFrameId ? selectAutoFrame(this.frames, timestamp) : selectHostFrame(this.frames, timestamp);
   }
 
   private timeBadge(displayed: (typeof this.frames)[number] | null): string {
@@ -257,7 +264,7 @@ export class PluginController {
       this.subscribed = true;
       this.host.store.on('timestamp', this.onTimestamp);
       if (!this.outsideMapRange()) {
-        const first = this.hostTime === null ? this.frames[0] : selectHostFrame(this.frames, this.hostTime);
+        const first = this.hostTime === null ? (selectExplicitFrame(this.frames, this.options.automaticFrameId ?? '') ?? this.frames[0]) : this.hostFrame(this.hostTime);
         this.frameId = first?.id ?? null;
         this.applyUrl();
       }
@@ -335,7 +342,7 @@ export class PluginController {
       this.notice = null;
       this.unmountLayer();
     } else if (!this.frozen) {
-      this.frameId = selectHostFrame(this.frames, hostValue)?.id ?? null;
+      this.frameId = this.hostFrame(hostValue)?.id ?? null;
       try { this.applyUrl(); } catch (error) {
         this.releaseResources();
         this.fail(error instanceof Error ? error.message : String(error));

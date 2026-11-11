@@ -1,13 +1,13 @@
 import { OpenAPIHono, createRoute, z, type RouteConfig } from '@hono/zod-openapi';
 import type { Context, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
-import { PRODUCTS } from '@av/contracts/models';
+import { nominalGridSpacingMeters, PRODUCTS } from '@av/contracts/models';
 import {
   type ProductDefinition,
   LAYER_IDS,
   PALETTES,
+  catalogSchema,
   computeFreshness,
-  freshnessSchema,
   isPaletteId,
   isTileCovered,
   latestV5Schema,
@@ -20,6 +20,7 @@ import {
   multiPointSampleResponseSchema,
   profileResponseSchema,
   renderedLayers,
+  type CatalogModelEntry,
   type LayerId,
   type ModelId,
   type ModelPointer } from '@av/contracts';
@@ -152,31 +153,24 @@ function registerJsonRoute(
 registerJsonRoute('/healthz', {}, {}, z.object({ ok: z.boolean(), deploymentId: z.string().optional() }), c =>
   json({ ok: true, deploymentId: c.env.AV_DEPLOYMENT_ID }));
 
-const catalogModelSchema = z.object({
-  model: z.string(),
-  label: z.string().optional(),
-  available: z.boolean(),
-  latest: z.string().optional(),
-  cycle: z.string().optional(),
-  expiresAt: z.string().optional(),
-  surfaces: sampleResponseV5Schema.shape.surfaces.optional(),
-  ageSeconds: z.number().optional(),
-  freshness: freshnessSchema.optional(),
-  error: z.string().optional()
-});
+const catalogMetadata = new Map(Object.entries(products).map(([model, product]) => [model, {
+  model, label: product.label, domainId: product.source.domainId, tier: product.tier,
+  nominalDxMeters: nominalGridSpacingMeters(product.grid, product.bounds),
+  bounds: [...product.bounds] as [number, number, number, number]
+}]));
 
-function unavailableCatalogModel(model: string, label: string, error: string) {
-  return { model, label, available: false, error };
+function unavailableCatalogModel(model: string, error: string): CatalogModelEntry {
+  return { ...catalogMetadata.get(model)!, available: false, error };
 }
 
 registerJsonRoute(
   '/v1/catalog',
   {},
   {},
-  z.object({ models: z.array(catalogModelSchema) }),
+  catalogSchema,
   async c => {
     const results = await Promise.all(
-      Object.entries(products).map(async ([model, product]): Promise<{ row: z.infer<typeof catalogModelSchema>; observed: ModelPointer | Problem }> => {
+      Object.entries(products).map(async ([model, product]): Promise<{ row: CatalogModelEntry; observed: ModelPointer | Problem }> => {
         try {
           const signal = c.req.raw.signal;
           const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx, signal);
@@ -184,8 +178,7 @@ registerJsonRoute(
           const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, product, signal);
           const freshness = computeFreshness(m);
           return { observed: ptr, row: {
-            model,
-            label: product.label,
+            ...catalogMetadata.get(model)!,
             available: true,
             latest: `/v1/models/${model}/latest`,
             cycle: m.cycle,
@@ -197,7 +190,7 @@ registerJsonRoute(
         } catch (error) {
           if (error instanceof Problem && ['publication-unavailable', 'publication-invalid', 'publication-incomplete', 'not-retained'].includes(error.code)) {
             if (error.code === 'publication-invalid' || error.code === 'publication-incomplete') console.warn('Catalog publication unavailable', { model, code: error.code });
-            return { observed: error, row: unavailableCatalogModel(model, product.label, error.code) };
+            return { observed: error, row: unavailableCatalogModel(model, error.code) };
           }
           throw error;
         }
@@ -211,7 +204,7 @@ registerJsonRoute(
       if (!(error instanceof Problem) || error.code !== 'not-retained') throw error;
       const now = Date.now();
       const models = results.map(({ row }) => row.expiresAt !== undefined && Date.parse(row.expiresAt) <= now
-        ? unavailableCatalogModel(row.model, products[row.model].label, 'not-retained') : row);
+        ? unavailableCatalogModel(row.model, 'not-retained') : row);
       return finish(c.req.raw, json({ models }));
     }
   }

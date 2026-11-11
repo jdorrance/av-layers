@@ -1,4 +1,5 @@
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
+import { AUTO_MODEL_ID } from '@av/client';
 
 export type AltitudeReference = 'agl' | 'msl';
 
@@ -17,7 +18,7 @@ export function previewQuery(search: string, offline: boolean) {
   const opacity = finiteParam(params.get('opacity'));
   const reference: AltitudeReference = params.get('ref') === 'msl' ? 'msl' : 'agl';
   return {
-    model: model && (offline || MODEL_OPTIONS.some(option => option.modelId === model)) ? model : null,
+    model: model && (model === AUTO_MODEL_ID ? !offline : offline || MODEL_OPTIONS.some(option => option.modelId === model)) ? model : null,
     reference,
     opacity: opacity === null ? null : Math.min(1, Math.max(0, opacity)),
     validTime: params.get('t'),

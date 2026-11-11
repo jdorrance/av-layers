@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
 import { fixtureLatest, fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
+import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures.js';
+import { fixturePointSample } from '../../../tests/client-point-fixture.js';
 
 class FakeElement {
   children: FakeElement[] = [];
@@ -127,11 +129,13 @@ it.each([
     source: () => source, layer: () => ({ id: 'windy-forecast' }), isLoading: () => false, alwaysLoadTiles: false
   };
   const renderListeners = new Map<string, Set<() => void>>();
+  let center = { lat: point.lat, lng: point.lon };
   const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn(), maplibreMap: {
     setPaintProperty: vi.fn(),
     on: (name: string, listener: () => void) => { const listeners = renderListeners.get(name) ?? new Set(); listeners.add(listener); renderListeners.set(name, listeners); },
     off: (name: string, listener: () => void) => renderListeners.get(name)?.delete(listener),
     isMoving: () => false,
+    getCenter: () => center,
     getZoom: () => 7,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   } };
@@ -242,7 +246,9 @@ it.each([
   expect(horizonNotice.hidden).toBe(false);
   const selects = elements.filter(element => element.tag === 'select');
   expect(selects).toHaveLength(3);
-  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual(PRODUCTS.map(product => [product.modelId, false, product.label]));
+  expect(selects[0].children.map(option => [option.value, option.disabled, option.textContent])).toEqual([
+    ...PRODUCTS.map(product => [product.modelId, false, product.label]), ['auto', false, 'Auto']
+  ]);
   const opacity = elements.find(element => element.id === 'av-opacity')!;
   opacity.value = '0.4';
   opacity.dispatch('input');
@@ -337,4 +343,38 @@ it.each([
   win.dispatchEvent(new Event('pagehide'));
   expect(pendingSignals[1].aborted).toBe(true);
   expect(protocols.size).toBe(0);
+
+  if (_name === 'configured') {
+    const gfs = autoBuild('gfs', [-180, -55, 180, 65], [1, 18, 36, 60, 72]);
+    const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+    const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [1, 18, 36]);
+    const builds = new Map([gfs, armenia, nz].map(build => [build.manifest.model, build]));
+    const models = [autoCatalogRow(gfs.manifest, 27_800), autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
+    fetchImpl.mockImplementation(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+      const build = builds.get(url.pathname.split('/').at(url.pathname.endsWith('/latest') ? -2 : -4)!);
+      if (!build) return new Response(null, { status: 404 });
+      if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest, base));
+      return Response.json(fixturePointSample(build, String(input)));
+    });
+    center = { lat: YEREVAN.lat, lng: YEREVAN.lon };
+    hostTimestamp = Date.parse(autoTime(18));
+    clock.mockReturnValue(Date.parse(autoTime(0)));
+    const automatic = new loaded.default({ target });
+    automatic.onopen();
+    selects[0].value = 'auto'; selects[0].dispatch('change');
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${armenia.manifest.model}/${armenia.manifest.buildId}/usable-lift-msl/f018/`));
+    center = { lat: AUCKLAND.lat, lng: AUCKLAND.lon };
+    for (const listener of renderListeners.get('movestart') ?? []) listener();
+    for (const listener of renderListeners.get('moveend') ?? []) listener();
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${nz.manifest.model}/${nz.manifest.buildId}/usable-lift-msl/f018/`));
+    moveHostTime(Date.parse(autoTime(60)));
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/gfs/${gfs.manifest.buildId}/usable-lift-msl/f060/`));
+    expect(selects[0].value).toBe('auto');
+    expect(store.set).not.toHaveBeenCalled();
+    automatic.$destroy();
+    win.dispatchEvent(new Event('pagehide'));
+    expect(timestampListeners.size).toBe(0);
+  }
 });

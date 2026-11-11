@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
+import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
 import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
@@ -557,6 +558,43 @@ it('keeps the latest history URL when a prior model request is aborted', async (
   } finally { finishIcon(); }
   await Promise.resolve();
   expect(win.href).toBe(restored);
+});
+
+it('preserves Auto and its requested time when a map move overtakes an earlier regional build', async () => {
+  const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+  const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [1, 18, 36]);
+  const builds = new Map([armenia, nz].map(build => [build.manifest.model, build]));
+  const models = [autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
+  let releaseArmenia!: () => void;
+  const pending = new Promise<void>(resolve => { releaseArmenia = resolve; });
+  let armeniaSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    const build = builds.get(url.pathname.split('/')[3])!;
+    if (url.pathname.endsWith('/latest')) {
+      if (build === armenia) { armeniaSignal = init?.signal; await pending; }
+      return Response.json(fixtureLatest(build.manifest));
+    }
+    return sample(input, build.manifest);
+  });
+  const t = autoTime(18);
+  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&z=9&t=${encodeURIComponent(t)}`;
+  await import('./main');
+  map().emit('load');
+  try {
+    await vi.waitFor(() => expect(armeniaSignal?.aborted).toBe(false));
+    map().emit('movestart');
+    map().jumpTo({ center: [AUCKLAND.lon, AUCKLAND.lat], zoom: 9 });
+    map().emit('moveend');
+    await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/wrf-nz-3km/'));
+    expect(armeniaSignal?.aborted).toBe(true);
+  } finally { releaseArmenia(); }
+  await Promise.resolve();
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/f018/');
+  const state = new URL(win.href).searchParams;
+  expect(state.get('model')).toBe('auto');
+  expect(state.get('t')).toBe(t);
 });
 
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {

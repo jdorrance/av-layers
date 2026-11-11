@@ -1,7 +1,7 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
 import { gridToGeographic } from '@av/contracts/geometry';
 import { renderedLayers, SUPPORT_MASK, type LayerId } from '@av/contracts/layers';
-import { getProvenanceReference, latestV5Schema, sampleResponseV5Schema, type ModelId } from '@av/contracts/publication';
+import { catalogSchema, getProvenanceReference, latestV5Schema, sampleResponseV5Schema, type CatalogModelEntry, type ModelId } from '@av/contracts/publication';
 import { estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, MAX_SAMPLE_POINTS, multiPointSampleResponseSchema,
   profileResponseSchema, type MultiPointSampleResponse, type ProfileResponse } from '@av/contracts/point-products';
 import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
@@ -60,7 +60,7 @@ export interface ApiClientOptions {
 }
 
 export interface ApiClientMetric {
-  route: 'latest' | 'sample' | 'samples' | 'profile';
+  route: 'catalog' | 'latest' | 'sample' | 'samples' | 'profile';
   elapsedMs: number;
   attempts: number;
   outcome: 'success' | 'failure' | 'aborted';
@@ -217,6 +217,12 @@ export class ApiClient {
           outcome: signal?.aborted && outcome === 'failure' ? 'aborted' : outcome });
       } catch { /* Observer failures leave the request result intact. */ }
     }
+  }
+
+  async catalog(options: RequestOptions = {}): Promise<CatalogModelEntry[]> {
+    const parsed = catalogSchema.safeParse(await this.getJson('catalog', '/v1/catalog', options.signal));
+    if (!parsed.success) throw new InvalidApiResponseError('catalog response does not match contract schema');
+    return parsed.data.models;
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
