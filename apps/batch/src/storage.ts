@@ -19,7 +19,7 @@ function retryableRequestError(error: unknown, depth = 0, includeBody = false): 
   if (!error || typeof error !== 'object' || depth > 10) return false;
   const value = error as { name?: string; code?: string; $metadata?: { httpStatusCode?: number }; $retryable?: unknown; cause?: unknown };
   const status = value.$metadata?.httpStatusCode;
-  if (status === 403 || status === 404) return false;
+  if (status === 403 || status === 404 || status === 412) return false;
   if (value.name === 'AbortError') return includeBody && retryableRequestError(value.cause, depth + 1, includeBody);
   return (includeBody && retryableBodyError(error)) || status === 429 || [500, 502, 503, 504].includes(status ?? 0) || value.$retryable !== undefined
     || ['TimeoutError', 'RequestTimeout', 'RequestTimeoutException', 'SlowDown', 'Throttling', 'ThrottlingException', 'TooManyRequestsException'].includes(value.name ?? '')
@@ -51,8 +51,10 @@ async function readBody(body: Readable, maximum: number, key: string, signal?: A
   } finally { clearTimeout(timer); }
 }
 
+interface ObjectReadIdentity { etag: string; bytes: number }
+
 export interface ObjectStorage {
-  get(key: string, range?: { offset: number; length: number }, maxBytes?: number, signal?: AbortSignal, onRetry?: () => void): Promise<{ bytes: Uint8Array; etag: string } | null>;
+  get(key: string, range?: { offset: number; length: number }, maxBytes?: number, signal?: AbortSignal, onRetry?: () => void, identity?: ObjectReadIdentity): Promise<{ bytes: Uint8Array; etag: string } | null>;
   head(key: string, signal?: AbortSignal): Promise<{ size: number; etag: string; metadata?: Record<string, string>; computedSha256?: string } | null>;
   put(key: string, bytes: Uint8Array, condition: { ifMatch?: string; ifNoneMatch?: '*' }, contentType?: string, contentMd5?: string, metadata?: Record<string, string>): Promise<void>;
   list(prefix: string, signal?: AbortSignal): Promise<Array<{ key: string; lastModified: Date; size?: number }>>;
@@ -199,7 +201,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   const config = r2ClientOptions(env), client = new S3Client(config);
   let getClient: S3Client | undefined;
   return {
-    async get(key, range, maxBytes = 256 * 1024 * 1024, signal, onRetry) {
+    async get(key, range, maxBytes = 256 * 1024 * 1024, signal, onRetry, identity) {
       signal?.throwIfAborted();
       if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid read budget');
       try {
@@ -208,7 +210,8 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           if (attempt) onRetry?.();
           const requestClient = getClient ??= new S3Client({ ...config, maxAttempts: 1 });
           const maximum = Math.min(range?.length ?? maxBytes, maxBytes);
-          const command = new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, Range: range ? `bytes=${range.offset}-${range.offset + range.length - 1}` : undefined });
+          const command = new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, IfMatch: identity?.etag,
+            Range: range ? `bytes=${range.offset}-${range.offset + range.length - 1}` : undefined });
           command.middlewareStack.add(next => async args => {
             const result = await next(args);
             const response = result.response as { statusCode?: number; headers?: Record<string, string>; body?: unknown };
@@ -254,6 +257,11 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           if (result.ContentLength === undefined || result.ContentLength > maximum) {
             result.Body.destroy();
             throw new Error(`Object exceeds read byte budget: ${key}`);
+          }
+          if (identity && (result.ETag !== identity.etag || result.ContentLength !== (range?.length ?? identity.bytes)
+              || (range && result.ContentRange !== `bytes ${range.offset}-${range.offset + range.length - 1}/${identity.bytes}`))) {
+            result.Body.destroy();
+            throw new Error(`Object changed after admission: ${key}`);
           }
           let bytes: Uint8Array;
           try { bytes = await readBody(result.Body, maximum, key, signal); }

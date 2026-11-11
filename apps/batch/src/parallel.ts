@@ -85,8 +85,13 @@ const wholeDomainReceiptSchema = z.strictObject({
 type WholeDomainReceipt = z.infer<typeof wholeDomainReceiptSchema>;
 const same = sameJsonValue;
 const planHash = (plan: BuildPlan) => sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES));
-function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, shard: number, product: ForecastInputs['product'], whole: WholeDomainPrepared, maxLevels: number) {
+export function parseForecastShardReceipt(bytes: Uint8Array, plan: BuildPlan, shard: number): WholeDomainReceipt {
+  const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(bytes, MAX_PROVENANCE_JSON_TOKENS));
   if (receipt.planHash !== planHash(plan) || receipt.shard !== shard) throw new Error('Forecast shard receipt identity mismatch');
+  return receipt;
+}
+
+function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, shard: number, product: ForecastInputs['product'], whole: WholeDomainPrepared, maxLevels: number) {
   const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(product, hour))), layers = wholeDomainSurfaceLayers(product);
   if (receipt.provenance.length !== frames.length || receipt.provenance.some((entry, index) => entry.hour !== hours[index] || entry.frame !== frames[index]!.id
     || entry.key !== `builds/${plan.model}/${plan.buildId}/provenance/${entry.frame}.json`)) throw new Error('Forecast shard provenance frame mismatch');
@@ -334,7 +339,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const receipts: WholeDomainReceipt[] = [];
   for (let shard = 0; shard < plan.groups.length; shard++) {
     const bytes = await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES);
-    const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(bytes, MAX_PROVENANCE_JSON_TOKENS));
+    const receipt = parseForecastShardReceipt(bytes, plan, shard);
     assertWholeDomainReceipt(receipt, plan, shard, options.product, whole, options.provider.maxLevels);
     receipts.push(receipt);
   }
@@ -427,7 +432,7 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
   await stagePlanTerrain(root, plan, whole, store, signal);
   const receipts: WholeDomainReceipt[] = [];
   for (let shard = 0; shard < plan.groups.length; shard++) {
-    const receipt = wholeDomainReceiptSchema.parse(parseBoundedJson(await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES), MAX_PROVENANCE_JSON_TOKENS));
+    const receipt = parseForecastShardReceipt(await readLocalFile(localPath(root, `shards/${shard}/receipt.json`), MAX_PROVENANCE_BYTES), plan, shard);
     assertWholeDomainReceipt(receipt, plan, shard, admitted.product, whole, inputs.provider.maxLevels);
     if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
     receipts.push(receipt);

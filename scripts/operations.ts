@@ -2,12 +2,12 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
 import { getProduct, MODEL_IDS } from '@av/contracts/models';
 import { MAX_FORECAST_SHARDS, readBuildPlan, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { assertBuildBucketLock, r2ShardStorage, r2Storage, sealShardCredentials } from '../apps/batch/src/storage.js';
 import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, prepareForecastTerrain, resumePublication, runForecastShard } from './publication-workflow.js';
+import { uploadForecastControlPlan } from './forecast-control.js';
 import { probeApi, readResponseBytes, retryProbe, validateApiBaseUrl, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
@@ -62,10 +62,15 @@ export function validatePublicationEnvironment(env: NodeJS.ProcessEnv, config = 
     r2AccessKeyId: required(env, 'R2_ACCESS_KEY_ID'), r2SecretAccessKey: required(env, 'R2_SECRET_ACCESS_KEY') };
 }
 
+function forecastCredentialKey(env: NodeJS.ProcessEnv): string {
+  const key = required(env, 'FORECAST_SHARD_CREDENTIAL_KEY');
+  if (!/^[a-f0-9]{64}$/i.test(key)) throw new Error('FORECAST_SHARD_CREDENTIAL_KEY must be 32 bytes encoded as hex');
+  return key;
+}
+
 export function validateShardEnvironment(env: NodeJS.ProcessEnv, config = loadWranglerConfig()): { targetEnv: EnvironmentName; accountId: string; r2Bucket: string; credentialKey: string } {
   const common = environment(env);
-  const credentialKey = required(env, 'FORECAST_SHARD_CREDENTIAL_KEY');
-  if (!/^[a-f0-9]{64}$/i.test(credentialKey)) throw new Error('FORECAST_SHARD_CREDENTIAL_KEY must be 32 bytes encoded as hex');
+  const credentialKey = forecastCredentialKey(env);
   for (const name of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...Object.keys(env).filter(name => /^FORECAST_.+_SHARD_CREDENTIAL_KEY$/.test(name))]) {
     if (env[name]) throw new Error(`${name} must not be present in shard environment`);
   }
@@ -120,7 +125,7 @@ export function forecastPlanReport(plan: Pick<BuildPlan, 'model' | 'cycle' | 'gr
   if (!plan) return { shards: [], summary: `## ${model}\n\nThe selected cycle is already published; no batches needed.\n` };
   const shards = plan.groups.map((hours, id) => ({ id, hours: hours.map(hour => `f${String(hour).padStart(3, '0')}`).join(', ') }));
   const rows = plan.groups.map((hours, id) => `| ${id} | ${shards[id].hours} | ${hours.map(hour => new Date(Date.parse(plan.cycle) + hour * 3_600_000).toISOString()).join(', ')} |`);
-  return { shards, credentialSecret: shardCredentialSecret(plan.model), summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
+  return { shards, summary: `## ${plan.model}\n\nCycle: ${plan.cycle}\n\n| Batch | Forecast hours | Valid times (UTC) |\n| --- | --- | --- |\n${rows.join('\n')}\n` };
 }
 
 const OPERATIONS = ['deploy', 'forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance'] as const;
@@ -162,43 +167,6 @@ async function pnpm(args: string[], env: NodeJS.ProcessEnv = process.env): Promi
   }
 }
 
-async function issueShardKey(model: string, targetEnv: EnvironmentName): Promise<string> {
-  const issuerToken = required(process.env, 'GH_CREDENTIAL_ISSUER_TOKEN');
-  const repository = required(process.env, 'GITHUB_REPOSITORY');
-  const key = randomBytes(32).toString('hex');
-  const name = shardCredentialSecret(model);
-  await new Promise<void>((resolve, reject) => {
-    let child: ReturnType<typeof spawn>;
-    try {
-      child = spawn('gh', ['secret', 'set', name, '--env', targetEnv, '--repo', repository], {
-        env: { ...process.env, GH_TOKEN: issuerToken }, stdio: ['pipe', 'ignore', 'pipe']
-      });
-    } catch { reject(new Error('Shard key issuance failed')); return; }
-    let stderr = Buffer.alloc(0), settled = false;
-    const finish = (error?: string): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) { child.kill('SIGKILL'); reject(new Error(error)); }
-      else resolve();
-    };
-    const timer = setTimeout(() => finish('Shard key issuance timed out'), 15_000);
-    child.stderr!.on('data', (chunk: Buffer) => {
-      if (stderr.length < 16 * 1024) stderr = Buffer.concat([stderr, chunk.subarray(0, 16 * 1024 - stderr.length)]);
-    });
-    child.stderr!.on('error', () => finish('Shard key issuance failed'));
-    child.stdin!.on('error', () => finish('Shard key issuance failed'));
-    child.once('error', () => finish('Shard key issuance failed'));
-    child.once('close', code => finish(code === 0 ? undefined : 'Shard key issuance failed'));
-    child.stdin!.end(key);
-  });
-  return key;
-}
-
-function shardCredentialSecret(model: string): string {
-  return `FORECAST_${model.toUpperCase().replaceAll('-', '_')}_SHARD_CREDENTIAL_KEY`;
-}
-
 export async function runOperation(command: string): Promise<void> {
   validateOperationInputs(command);
   await assertCurrentMain();
@@ -221,7 +189,8 @@ export async function runOperation(command: string): Promise<void> {
     } finally { await file.close(); }
     const store = r2ShardStorage({ CLOUDFLARE_ACCOUNT_ID: config.accountId, R2_BUCKET: config.r2Bucket,
       FORECAST_SHARD_CREDENTIAL_KEY: config.credentialKey }, plan, envelope);
-    await pnpm(['tools:pmtiles'], { ...process.env, FORECAST_SHARD_CREDENTIAL_KEY: undefined });
+    delete process.env.FORECAST_SHARD_CREDENTIAL_KEY;
+    await pnpm(['tools:pmtiles']);
     await runForecastShard(Number(process.env.SHARD_ID), store);
     return;
   }
@@ -233,19 +202,20 @@ export async function runOperation(command: string): Promise<void> {
       await prepareForecastTerrain(store);
     } else if (command === 'forecast-plan') {
       validateApiBaseUrl(process.env.API_BASE_URL);
+      const key = forecastCredentialKey(process.env);
       const plan = await planForecast(store);
       if (plan) {
         if (plan.model !== model) throw new Error('Forecast plan differs from the workflow model');
         const issuer = { ...process.env, R2_BUCKET: config.r2Bucket };
         await assertBuildBucketLock(issuer, plan);
-        const key = await issueShardKey(model, config.targetEnv);
+        await uploadForecastControlPlan(store, 'output', plan);
         await writeFile('output/shard-credentials.json', sealShardCredentials({ ...issuer, FORECAST_SHARD_CREDENTIAL_KEY: key }, plan), { mode: 0o600 });
       }
-      const { shards, summary, credentialSecret } = forecastPlanReport(plan, model);
+      const { shards, summary } = forecastPlanReport(plan, model);
       if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
       if (process.env.GITHUB_OUTPUT) {
         const artifact = `forecast-plan-${model}-${required(process.env, 'GITHUB_RUN_ID')}-${required(process.env, 'GITHUB_RUN_ATTEMPT')}`;
-        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\ncredential-secret=${credentialSecret ?? ''}\n`);
+        appendFileSync(process.env.GITHUB_OUTPUT, `ready=${plan !== null}\nshards=${JSON.stringify(shards)}\nartifact=${artifact}\n`);
       }
     } else if (command === 'forecast') {
       const downloadStarted = process.env.FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT ? Number(process.env.FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT) : Date.now();

@@ -563,6 +563,7 @@ describe('immutable publication', () => {
     store.objects.get(`builds/gfs/${stale}/part`)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000);
     expect(await cleanup(store, 'gfs', authority, now)).toBe(1);
     expect(await store.get(`builds/gfs/${fresh}/part`)).not.toBeNull();
+  expect(await store.get(`builds/gfs/${stale}/_control/plan.json`)).toBeNull();
     expect(await store.get(`builds/gfs/${id}/manifest.json`)).not.toBeNull();
   });
   it('rolls back a complete build with mandatory external provenance', async () => {
@@ -737,7 +738,7 @@ it('reports protected and orphan costs without treating missing object sizes as 
   const protectedObjects = await store.list('builds/gfs/');
   const protectedBytes = protectedObjects.reduce((sum, item) => sum + item.size!, 0);
   const stale = '20261020T000000Z-12345678-1234-4234-8234-123456789abc', fresh = '20261030T053000Z-12345678-1234-4234-8234-123456789abc';
-  for (const [key, bytes] of [[`builds/gfs/${stale}/known`, 'abc'], [`builds/gfs/${stale}/unknown`, 'four'], [`builds/gfs/${fresh}/part`, 'fresh']]) {
+  for (const [key, bytes] of [[`builds/gfs/${stale}/_control/plan.json`, 'abc'], [`builds/gfs/${stale}/unknown`, 'four'], [`builds/gfs/${fresh}/part`, 'fresh']]) {
     await store.put(key, Buffer.from(bytes), { ifNoneMatch: '*' });
     if (key.includes(stale)) store.objects.get(key)!.lastModified = new Date(now - (RETENTION_DAYS + 1) * 86400000);
   }
@@ -753,6 +754,7 @@ it('reports protected and orphan costs without treating missing object sizes as 
     deleted: { objects: 2, knownBytes: 3, unknownSizeObjects: 1 }
   });
   expect(await store.get(`builds/gfs/${fresh}/part`)).not.toBeNull();
+  expect(await store.get(`builds/gfs/${stale}/_control/plan.json`)).toBeNull();
 });
 
 it('reports unknown deletion progress after partial provider failure and unknown costs after listing failure', async () => {

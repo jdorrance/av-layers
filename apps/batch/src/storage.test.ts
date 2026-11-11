@@ -1,7 +1,7 @@
 import { createCipheriv, createHash, createHmac } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { DeleteObjectsCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
 import { assertBuildBucketLock, r2ClientOptions, r2ShardStorage, r2Storage, sealShardCredentials } from './storage';
 import { putImmutable } from './immutable-upload';
@@ -29,6 +29,25 @@ async function withBackoff<T>(start: () => Promise<T>): Promise<T> {
     return result.value;
   } finally { vi.useRealTimers(); }
 }
+
+it('uses S3 If-Match and validates the pinned object length and range response', async () => {
+  const input = { etag: '"aa"', bytes: 17 };
+  const key = 'upstream/test/20261105/00/data.grib2', range = { offset: 5, length: 3 };
+  const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async command => {
+    expect(command).toBeInstanceOf(GetObjectCommand);
+    expect((command as GetObjectCommand).input).toMatchObject({ Key: key, IfMatch: input.etag, Range: 'bytes=5-7' });
+    return { ETag: input.etag, ContentLength: 3, ContentRange: 'bytes 5-7/17', Body: Readable.from([Uint8Array.of(5, 6, 7)]) } as never;
+  });
+  try {
+    const store = r2Storage({ ...env, R2_BUCKET: 'bucket' });
+    await expect(store.get(key, range, 3, undefined, undefined, input)).resolves.toMatchObject({ etag: input.etag, bytes: Buffer.from([5, 6, 7]) });
+    send.mockResolvedValueOnce({ ETag: input.etag, ContentLength: 3, ContentRange: 'bytes 5-7/18', Body: Readable.from([Uint8Array.of(5, 6, 7)]) } as never);
+    await expect(store.get(key, range, 3, undefined, undefined, input)).rejects.toThrow('Object changed after admission');
+    send.mockRejectedValueOnce(Object.assign(new Error('Precondition failed'), { $metadata: { httpStatusCode: 412 } }));
+    await expect(store.get(key, range, 3, undefined, undefined, input)).rejects.toThrow('Precondition failed');
+    expect(send).toHaveBeenCalledTimes(3);
+  } finally { send.mockRestore(); }
+});
 
 describe('R2 bucket lock preflight', () => {
   const lockEnv = { CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID, R2_BUCKET: issuer.R2_BUCKET, CLOUDFLARE_API_TOKEN: 'api-token' };

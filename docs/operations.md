@@ -13,11 +13,8 @@ Configure repository secret `CLOUDFLARE_ACCOUNT_ID` and create protected
 - Secrets: `CLOUDFLARE_API_TOKEN` (Workers Scripts Edit + Pages Edit + R2 bucket
   configuration read),
   `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` with Object Read & Write access
-  to that environment's bucket, plus `GH_CREDENTIAL_ISSUER_TOKEN`, a GitHub App
-  installation token or fine-grained token with Environments write access to this
-  repository. Keep the token current. Prepare creates or rotates its model's
-  encryption key as an environment secret;
-  [operations.ts](../scripts/operations.ts) derives the name.
+  to that environment's bucket, and a distinct 32-byte hexadecimal
+  `FORECAST_SHARD_CREDENTIAL_KEY` for each environment.
 - Variables: `API_BASE_URL`, `PAGES_PROJECT_NAME`, and optional
   `TERRAIN_CATALOG_REF` to select a [terrain catalog](#terrain-data). Bucket names come
   from [wrangler.json](../apps/api/wrangler.json).
@@ -59,7 +56,9 @@ Generated workflow triggers select models by the cron expression that fired,
 including delayed starts. Manual runs finish each model before starting the next;
 scheduled runs start selected models concurrently. Without `cycle`, each model
 discovers its latest complete upstream run. Already-published
-cycles are skipped unless `-f allow-same-cycle=true` is passed. Pass
+cycles are skipped unless `-f allow-same-cycle=true` is passed. External cycle
+events require a registered event-driven model, an environment, and an explicit
+UTC cycle. Pass
 `-f retain-full-artifacts=true` to retain full build artifacts after a
 successful run.
 
@@ -94,8 +93,7 @@ forecast's native and fine render work before weather acquisition.
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the run revision remains current main, the plan meets the
 [build elapsed budget](../apps/batch/src/capacity.ts),
-its scoped credentials remain valid and its environment secret has not been
-rotated by a later same-model build. After a main change, expiry or rotation, start
+its scoped credentials and the environment sealing key remain valid. After a main change, expiry or rotation, start
 a new build.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
@@ -110,20 +108,18 @@ local cache. Integrity and configuration failures stop immediately. The
 can prepare and upload the same arrays locally.
 
 The prepare job signs [temporary R2 credentials](https://developers.cloudflare.com/r2/examples/authenticate-r2-temp-credentials/)
-and encrypts them with a fresh per-build AES-256-GCM key in the plan artifact,
-bound to the bucket, model, build ID and deadline. Shards receive only their
-model's environment key. Terrain preparation, planning and publication receive
-the parent R2 credentials. The write credential permits `PutObject` under its build prefix; the
-read credential permits `GetObject` and `HeadObject` under that prefix,
-`coverage/`, and `terrain/prepared/`. Both expire at the plan deadline or the
-[elapsed build budget](../apps/batch/src/capacity.ts), whichever comes first. Protect the encryption key and plan artifact as
-credentials until expiry.
-GitHub reads [environment secrets when a job starts](https://docs.github.com/en/actions/reference/security/secrets#when-github-actions-reads-secrets).
-The `needs: prepare` barrier starts shards after key rotation. The
-per-environment, per-model concurrency lock holds until the model workflow ends,
-preventing another same-model build from rotating its key while shards run.
-Shard GitHub tokens have `contents: read` and cannot download
-artifacts from other runs; current-run artifact delivery uses the Actions runtime.
+and seals them with the environment key and a fresh nonce. The envelope binds
+the bucket, model, build ID, and deadline. Shards receive the sealed envelope and
+the sealing key. Their credentials grant reads under the build, coverage, and
+prepared terrain prefixes and conditional writes under the build prefix.
+The credentials expire by the [build deadline](../apps/batch/src/capacity.ts).
+Rotate the environment key between runs.
+
+The bootstrap artifact carries the plan, envelope, and frozen coverage files.
+The coordinator writes the plan and completed shard receipts under the build's
+`_control/` prefix in R2. Publication reads and checks those receipts directly.
+A retried shard can reuse its completed receipt while its plan is valid.
+The build retention and cleanup rules include these control objects.
 
 Planning uploads coverage and prepared terrain to R2 and records their receipts
 in the frozen plan. Workers stage verified terrain from R2 and derive fine lift

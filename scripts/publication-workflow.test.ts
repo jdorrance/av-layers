@@ -7,7 +7,12 @@ import { canonicalGridJson, createSparseCoverage, encodeSparseCoverage, expected
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
 import { localPath } from '../apps/batch/src/validate.js';
-const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn() }));
+const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn(), stageControl: vi.fn() }));
+vi.mock('./forecast-control.js', async importOriginal => ({
+  ...await importOriginal<typeof import('./forecast-control.js')>(),
+  downloadForecastControlReceipts: fake.stageControl,
+  completeForecastControlShard: async (_store: unknown, _plan: unknown, _shard: unknown, _path: unknown, build: () => Promise<string>) => { await build(); }
+}));
 vi.mock('./smoke-api.js', async importOriginal => ({ ...await importOriginal<typeof import('./smoke-api.js')>(), verifyPublishedForecast: fake.verifyServing }));
 vi.mock('../apps/batch/src/parallel.js', () => ({ createForecastPlan: fake.plan, readBuildPlan: fake.readPlan, buildForecastShard: fake.shard, finalizeForecastBuild: fake.finalize, verifyBuildReceipts: fake.verifyReceipts }));
 vi.mock('../apps/batch/src/providers.js', async () => {
@@ -41,7 +46,7 @@ beforeEach(() => {
   fake.fineCoverage.mockResolvedValue({ mask: { coverage: { fixture: true } }, bytes: Uint8Array.of(1) });
   fake.terrain.mockResolvedValue({ key: 'terrain/prepared/fixture/manifest.json' });
   fake.plan.mockResolvedValue({ model: 'gfs', cycle: manifest.cycle, groups: [[1, 2], [3, 4], [5, 6], [7, 8]] });
-  fake.readPlan.mockResolvedValue({ model: 'gfs', buildId: manifest.buildId });
+  fake.readPlan.mockResolvedValue({ model: 'gfs', buildId: manifest.buildId, createdAt: new Date().toISOString() });
   fake.verifyServing.mockResolvedValue(undefined);
   fake.shard.mockResolvedValue('output/shards/0/receipt.json');
   fake.finalize.mockImplementation(async (_plan, { onValidated }) => { await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, 'output/builds/gfs/build/manifest.json'); return 'manifest.json'; });
@@ -653,6 +658,7 @@ const run = { id: 123, run_attempt: 2, path: '.github/workflows/forecast.yml', h
 it('accepts completed main publisher runs and returns their immutable source revision', () => {
   expect(forecastArtifactRevision(run, repository, '123')).toBe(revision);
   expect(forecastArtifactRevision({ ...run, event: 'workflow_dispatch' }, repository, '123')).toBe(revision);
+  expect(forecastArtifactRevision({ ...run, event: 'repository_dispatch' }, repository, '123')).toBe(revision);
 });
 it('rejects lookalike artifacts from forks, other workflows, refs or uncompleted runs', () => {
   for (const patch of [{ event: 'pull_request' }, { head_branch: 'feature' }, { head_repository: { full_name: 'fork/repo' } }, { path: '.github/workflows/ci.yml' }, { status: 'in_progress' }, { id: 124 }]) {
@@ -716,7 +722,7 @@ it('cancels the shard and removes its signal handlers', async () => {
   expect(fake.storage).not.toHaveBeenCalled();
 });
 it('never publishes or cleans up an incomplete shard set', async () => {
-  fake.finalize.mockRejectedValueOnce(new Error('Missing forecast shard'));
+  fake.stageControl.mockRejectedValueOnce(new Error('Missing forecast shard'));
   await expect(finalizeAndPublish()).rejects.toThrow('Missing forecast shard');
   expect(fake.publish).not.toHaveBeenCalled(); expect(fake.cleanup).not.toHaveBeenCalled();
   expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"publication": "not-attempted"'));
