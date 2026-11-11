@@ -616,7 +616,7 @@ function startPreview(): void {
         opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
         overlay.setOpacity(opacity);
       }
-      if (state.camera) map.jumpTo(state.camera);
+      if (state.camera) map.jumpTo(state.camera, { previewHistory: true });
       requestedTime = state.validTime;
       if (state.model && state.model !== currentModel) {
         await loadModel(state.model);
@@ -637,6 +637,7 @@ function startPreview(): void {
   for (const button of modelButtons) {
     button.addEventListener('click', () => {
       if (button.disabled || mapFailed) return;
+      if (currentModel === AUTO_MODEL_ID) applyingHistory = null;
       const model = button.value as ModelId;
       void loadModel(model);
       focusRegion(model);
@@ -711,7 +712,11 @@ function startPreview(): void {
     if (mapFailed) return;
     void openPoint(normalizePoint(event.lngLat.lat, event.lngLat.lng));
   });
-  map.on('movestart', () => { if (currentModel === AUTO_MODEL_ID) autoAbort?.abort(); });
+  map.on('movestart', event => {
+    if (currentModel !== AUTO_MODEL_ID || 'previewHistory' in event) return;
+    applyingHistory = null;
+    autoAbort?.abort();
+  });
   map.on('moveend', () => {
     if (build && !expired) updateTimeUi();
     if (currentModel === AUTO_MODEL_ID && !applyingHistory) void loadAuto();
