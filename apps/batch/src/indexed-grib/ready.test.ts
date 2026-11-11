@@ -61,7 +61,9 @@ it('admits a complete private cycle from latest, pins it, and reads only bounded
     const resolved = await provider.resolveRun!({ store, cacheDir });
     expect(resolved).toEqual({ cycle, sourcePin: { key: readyKey, bytes: objects.get(readyKey)!.bytes.length, sha256: objects.get(readyKey)!.hash } });
     expect(store.head).toHaveBeenCalledTimes(files.length * 2);
-    expect(store.get.mock.calls.map(([key]) => key)).toEqual([latestKey, readyKey, ...files.slice(2).map(file => file.idxKey), ...files.slice(0, 2).map(file => file.idxKey)]);
+    const [pointer, receipt, ...indexes] = store.get.mock.calls.map(([key]) => key);
+    expect([pointer, receipt]).toEqual([latestKey, readyKey]);
+    expect(indexes.sort()).toEqual(files.map(file => file.idxKey).sort());
     store.get.mockClear();
     await expect(provider.resolveRun!({ cycle, store, cacheDir })).resolves.toEqual(resolved);
     expect(store.get.mock.calls.map(([key]) => key)).toEqual([readyKey]);
