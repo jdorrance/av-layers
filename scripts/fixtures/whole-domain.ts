@@ -13,15 +13,15 @@ export function denseFixtureMask(product: ProductDefinition, grid: Grid): Covera
   return { grid, bounds: product.bounds, output, halo: new Uint8Array(output.length), tiles, maxZoom: product.maxNativeZoom };
 }
 
-/** Stage flat 100 m fixture terrain without fetching a source catalog. */
-export async function syntheticWholeDomain(out: string, product: ProductDefinition) {
+/** Stage flat fixture terrain without fetching a source catalog. */
+export async function syntheticWholeDomain(out: string, product: ProductDefinition, elevationM = 100) {
   if (product.terrainSubdivisionFactor === undefined) throw new Error('Synthetic whole-domain fixture requires a subdivision factor');
   const { fine: grid } = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor);
   const mask = nativeSparseMask(denseFixtureMask(product, grid)), fine = { mask, ...describeSparseCoverage(mask, product) };
   const cells = mask.coverage.offsets.at(-1)!, heights = new Uint8Array(cells * 4), valid = new Uint8Array(cells).fill(1);
   const view = new DataView(heights.buffer);
-  for (let index = 0; index < cells; index++) view.setFloat32(index * 4, 100, true);
+  for (let index = 0; index < cells; index++) view.setFloat32(index * 4, elevationM, true);
   const terrain = await writeSparsePreparedTerrain({ storage: localTerrainStorage(out), grid, coverage: mask.coverage,
-    coverageDescriptor: fine.bytes, source: TERRAIN_SOURCE, dataId: sha256('synthetic flat terrain at 100 m'), heights, valid });
+    coverageDescriptor: fine.bytes, source: TERRAIN_SOURCE, dataId: sha256(`synthetic flat terrain at ${elevationM} m`), heights, valid });
   return { fine, terrain };
 }

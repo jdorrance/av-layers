@@ -1,4 +1,5 @@
 import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
+import { ARMENIA_LAMBERT, NEW_ZEALAND_LAMBERT } from '../../../tests/lambert-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { gridSchema } from './grid-schema.js';
@@ -34,6 +35,43 @@ describe('native spherical grid geometry', () => {
     expect(t.x).toBeCloseTo(-787721.8109120375, 6);
     expect(t.y).toBeCloseTo(600947.9564130091, 6);
     expect(tangent.gridToGeographic(t.x, t.y)!.lat).toBeCloseTo(45, 10);
+  });
+
+  // PROJ 9.6.0, +proj=lcc +R=6370000 with the parallels, origin and meridian of each grid.
+  it.each([
+    { region: 'Armenia', grid: ARMENIA_LAMBERT, points: [
+      [40.179, 44.499, -84.924586148, -2334.214483120],
+      [40.523, 44.195, -25770.559119895, 35946.908359112],
+      [40.317, 45.350, 72037.905672342, 13349.849124622]
+    ] },
+    { region: 'New Zealand', grid: NEW_ZEALAND_LAMBERT, points: [
+      [-44.487, 169.969, -200816.799545267, -368088.588265303],
+      [-43.595, 170.142, -189772.575804235, -268565.214905415],
+      [-41.2865, 174.7762, 189875.709553508, -12079.414833767]
+    ] }
+  ])('matches PROJ coordinates and their inverse in $region', ({ grid, points }) => {
+    const geometry = prepareGridGeometry(grid);
+    for (const [lat, lon, xM, yM] of points) {
+      const projected = geometry.geographicToGrid(lat, lon)!;
+      expect(projected.x * grid.dxM + grid.x0M).toBeCloseTo(xM, 6);
+      expect(projected.y * grid.dyM + grid.y0M).toBeCloseTo(yM, 6);
+      const inverse = geometry.gridToGeographic((xM - grid.x0M) / grid.dxM, (yM - grid.y0M) / grid.dyM)!;
+      expect(inverse.lat).toBeCloseTo(lat, 10);
+      expect(inverse.lon).toBeCloseTo(lon, 10);
+    }
+  });
+
+  it.each([
+    [-44.487, 169.969, 1.66124534],
+    [-41.2865, 174.7762, -1.49400500]
+  ])('rotates New Zealand grid winds at %s, %s using PROJ convergence', (lat, lon, convergenceDeg) => {
+    const rotation = prepareGridGeometry(NEW_ZEALAND_LAMBERT).rotationAndMetrics(lat, lon)!;
+    const theta = convergenceDeg * Math.PI / 180;
+    const u = gridVectorToEarth(1, 0, rotation), v = gridVectorToEarth(0, 1, rotation);
+    expect(u.east).toBeCloseTo(Math.cos(theta), 8);
+    expect(u.north).toBeCloseTo(-Math.sin(theta), 8);
+    expect(v.east).toBeCloseTo(Math.sin(theta), 8);
+    expect(v.north).toBeCloseTo(Math.cos(theta), 8);
   });
 
   it('keeps grid-vector rotation separate from storage direction and validates metric scale', () => {

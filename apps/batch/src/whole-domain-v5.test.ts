@@ -1,11 +1,13 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
+import { ARMENIA_LAMBERT } from '../../../tests/lambert-fixtures.js';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import z from 'zod';
-import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, sampleResponseV5Schema, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, wholeDomainDonorSupport, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { deriveTerrainM } from '@av/client';
 import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
@@ -19,6 +21,7 @@ import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, checkPerformance } from './capacity.js';
 import { fixtureProvider, PublicationStore } from '../parallel-fixtures.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
+import { denseFixtureMask, syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
 import type { ForecastProvider } from './provider.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain } from './whole-domain/prepare.js';
 import { prepareWholeDomainTerrain } from './whole-domain/terrain.js';
@@ -91,7 +94,7 @@ afterAll(async () => { await Promise.all(sharedRoots.splice(0).map(path => rm(pa
 async function root(name: string): Promise<string> { const path = await mkdtemp(join(tmpdir(), `av-${name}-`)); temporary.push(path); return path; }
 async function sharedRoot(name: string): Promise<string> { const path = await mkdtemp(join(tmpdir(), `av-${name}-`)); sharedRoots.push(path); return path; }
 
-async function verifySampleServing(store: PublicationStore, manifest: Awaited<ReturnType<typeof readV5>>, configured: ProductDefinition) {
+async function sampleReader(store: PublicationStore, manifest: Awaited<ReturnType<typeof readV5>>, configured: ProductDefinition) {
   const bucket = { async get(key: string, options?: { range?: { offset: number; length: number } }) {
     const object = store.objects.get(key);
     if (!object) return null;
@@ -99,16 +102,25 @@ async function verifySampleServing(store: PublicationStore, manifest: Awaited<Re
     return { key, size: object.bytes.length, httpEtag: object.etag, customMetadata: object.metadata, range,
       body: new Response(Uint8Array.from(bytes).buffer).body, arrayBuffer: async () => Uint8Array.from(bytes).buffer };
   } };
-  const entry = { buildId: manifest.buildId, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt };
-  if (!store.objects.has('catalog/gfs/latest.json')) store.objects.set('catalog/gfs/latest.json', { bytes: Buffer.from(JSON.stringify({ version: 1, model: 'gfs', latestBuildId: manifest.buildId, retained: [entry] })), etag: 'pointer' });
+  const { model, buildId, cycle, expiresAt } = manifest;
+  const entry = { buildId, manifestKey: `builds/${model}/${buildId}/manifest.json`, cycle, expiresAt };
+  const pointerKey = `catalog/${model}/latest.json`;
+  if (!store.objects.has(pointerKey)) store.objects.set(pointerKey, { bytes: Buffer.from(JSON.stringify({ version: 1, model, latestBuildId: buildId, retained: [entry] })), etag: 'pointer' });
   const apiPath = '../../api/src/index.js';
   const { createApp } = await import(apiPath) as { createApp(options: { products: Record<string, ProductDefinition> }): { fetch(request: Request, env: unknown, context: unknown): Promise<Response> } };
-  const app = createApp({ products: { gfs: configured } });
-  for (const frame of [manifest.frames[0].id, 'all']) {
-    const url = new URL(`https://example.com/v1/models/gfs/runs/${manifest.buildId}/sample?lat=71&lon=10&frame=${frame}&layers=usable-lift-msl`);
+  const app = createApp({ products: { [model]: configured } });
+  return async (params: URLSearchParams) => {
+    const url = new URL(`https://example.com/v1/models/${model}/runs/${buildId}/sample?${params}`);
     const response = await app.fetch(new Request(url, { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' }, { waitUntil() {}, passThroughOnException() {} });
     expect(response.status, await response.clone().text()).toBe(200);
-    const body = await response.json() as { frames: unknown[] };
+    return sampleResponseV5Schema.parse(await response.json());
+  };
+}
+
+async function verifySampleServing(store: PublicationStore, manifest: Awaited<ReturnType<typeof readV5>>, configured: ProductDefinition) {
+  const sample = await sampleReader(store, manifest, configured);
+  for (const frame of [manifest.frames[0].id, 'all']) {
+    const body = await sample(new URLSearchParams({ lat: '71', lon: '10', frame, layers: 'usable-lift-msl' }));
     expect(body.frames.length).toBe(frame === 'all' ? manifest.frames.length : 1);
   }
 }
@@ -174,6 +186,47 @@ const sealedSerial = () => serialFixture ??= buildSerialFixture();
 async function builtManifest() {
   return structuredClone((await sealedSerial()).manifest);
 }
+
+it('serves separate 1 km Lambert lift and native surfaces with serial and shard parity', async () => {
+  const grid = { ...ARMENIA_LAMBERT, width: 18, height: 18, x0M: 0, y0M: 0, dxM: 1000, dyM: 1000 };
+  const configured: ProductDefinition = { ...product, grid, bounds: [44, 40, 45, 41],
+    terrainSubdivisionFactor: 1, frameHours: [1, 2], intervalHours: 1 };
+  const geometry = planWholeDomainGrid(grid, 1);
+  expect(geometry.fine).toEqual(geometry.native);
+  const corners = [0, grid.width - 1, (grid.height - 1) * grid.width, grid.width * grid.height - 1];
+  const donors = wholeDomainDonorSupport(geometry, corners);
+  expect(Array.from({ length: grid.width * grid.height }, (_, index) => index).filter(index => getBit(donors, index))).toEqual(corners);
+
+  const cycle = '2026-06-21T12:00:00.000Z';
+  const provider: ForecastProvider = { id: 'fixture', provider: 'Synthetic', maxLevels: 3, async open({ activeIndices }) {
+    return { cycle, stats: { fixture: true }, async close() {}, async acquire(hour) { return normalizedFixtureFrame(grid, activeIndices, cycle, hour, 1); } };
+  } };
+  const options = { cycle, product: configured, provider, mask: denseFixtureMask(configured, grid) };
+  const serialRoot = await root('wd-lambert-k1-serial'), out = await root('wd-lambert-k1-shards'), store = new PublicationStore();
+  const elevationM = 175;
+  const serial = await readV5(await buildForecast({ ...options, out: serialRoot, wholeDomain: await syntheticWholeDomain(serialRoot, configured, elevationM) }));
+  const plan = await createBuildPlan({ ...options, out, store, shards: 2, wholeDomain: await syntheticWholeDomain(out, configured, elevationM) });
+  for (const [shard] of plan.groups.entries()) await buildShard({ ...options, out, plan, shard, store });
+  const path = await finalizeBuild({ ...options, out, plan, store }), manifest = await readV5(path);
+  expect(manifest.frames).toEqual(serial.frames);
+  for (const id of ['native', 'fine'] as const) {
+    const shards = surface(manifest, id).samples.shards;
+    const actual = shards.map(shard => Buffer.from(store.objects.get(shard.key)!.bytes));
+    expect(actual).toEqual(await surfaceBytes(serialRoot, serial, id));
+  }
+  expect(surface(manifest, 'fine')).toMatchObject({ grid, kind: 'fine', terrain: { layoutVersion: 1 } });
+  const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
+  await store.put(manifestKey, await readFile(path), { ifNoneMatch: '*' });
+  const sample = await sampleReader(store, manifest, configured);
+  const result = await sample(new URLSearchParams({ lat: String(grid.latitudeOfOriginDeg), lon: String(grid.centralMeridianDeg),
+    frame: 'all', layers: 'usable-lift-msl,usable-lift-agl' }));
+  expect(result.frames).toHaveLength(2);
+  for (const frame of result.frames) {
+    expect(frame.layers['usable-lift-msl']).toMatchObject({ status: 'valid', surfaceId: 'fine' });
+    expect(frame.layers['usable-lift-agl']).toMatchObject({ status: 'valid', surfaceId: 'fine' });
+    expect(deriveTerrainM(frame, { manifest, templates: {}, expiresAtMs: Date.parse(manifest.expiresAt) })).toBeCloseTo(elevationM, 3);
+  }
+}, 60_000);
 
 describe('whole-domain v5 production', () => {
   it('rejects independently valid duplicate cells while allowing a nonduplicate change', async () => {

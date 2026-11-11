@@ -13,6 +13,7 @@ const auxLevelsSchema = z.partialRecord(z.enum(Object.keys(AUX_LEVEL_UNITS) as [
   auxiliary.extend({ conversion: z.literal('geometric-w-to-omega').optional() }));
 const upstreamSchema = z.object({
   protocol: z.literal('indexed-grib2'), provider: z.string().min(1), centre: z.number().int().nonnegative(),
+  subCentre: z.number().int().min(0).max(65535).optional(),
   urlTemplate: z.string().url(), nativeLongitudeOrigin: z.number().finite().optional(),
   products: z.record(z.string().min(1), z.string().min(1)), surfaceProduct: z.string().min(1),
   pressureLevelsHpa: z.record(z.string().min(1), levels),
