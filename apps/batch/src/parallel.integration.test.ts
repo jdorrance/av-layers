@@ -6,7 +6,7 @@ import { encodeBoundedJson, LIFT_STEP_RENDER_STYLE, liftRenderStyle, MAX_MANIFES
 import { syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
-import { BUILD_BUDGETS } from './capacity.js';
+import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from './capacity.js';
 import { buildShard, createBuildPlan, finalizeBuild, MAX_FORECAST_SHARDS, readBuildPlan, type BuildPlan } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
 import { assertValidatedBuild, localPath, sha256, validateBuild } from './validate.js';
@@ -262,10 +262,15 @@ describe('forecast hour-group builds', () => {
     expect(await readdir(out)).toEqual([]);
   });
 
-  it('rejects an otherwise consistent plan older than the measured build budget', async () => {
+  it.each([
+    { name: 'new', elapsedMs: BUILD_BUDGETS.elapsedMs, explicit: true },
+    { name: 'legacy explicit', elapsedMs: LEGACY_FORECAST_ELAPSED_MS, explicit: true },
+    { name: 'legacy implicit', elapsedMs: LEGACY_FORECAST_ELAPSED_MS, explicit: false }
+  ])('rejects an expired $name plan before opening a provider', async ({ elapsedMs, explicit }) => {
     const out = await temporaryRoot(), provider = fixtureProvider();
-    const createdAt = new Date(Date.now() - BUILD_BUDGETS.elapsedMs - 1000).toISOString();
-    const changed = { ...plan, createdAt, deadlineAt: new Date(Date.parse(createdAt) + BUILD_BUDGETS.elapsedMs).toISOString(), buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${plan.buildId.split('Z-')[1]}` };
+    const createdAt = new Date(Date.now() - elapsedMs - 1000).toISOString();
+    const deadlineAt = explicit ? new Date(Date.parse(createdAt) + elapsedMs).toISOString() : undefined;
+    const changed = { ...plan, createdAt, deadlineAt, buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${plan.buildId.split('Z-')[1]}` };
     await expect(buildShard({ plan: changed, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow(/elapsed-time budget/);
     expect(provider.open).not.toHaveBeenCalled();
     expect(await readdir(out)).toEqual([]);

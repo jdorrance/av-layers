@@ -150,7 +150,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   };
   let inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   let prefetchFrameCount: 0 | 1 = 1;
-  if (inlinePeakBytes > BUILD_BUDGETS.peakRssBytes) {
+  if (inlinePeakBytes > BUILD_BUDGETS.workingSetBytes) {
     prefetchFrameCount = 0;
     inlinePeakBytes -= workingSet.prefetchFrame;
     workingSet.prefetchFrame = 0;
@@ -165,7 +165,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     const peak = inlinePeakBytes + (raster ? sharedInputBytes + raster * RASTER_WORKER_RESERVE_BYTES - workingSet.rasterInline : 0) +
       (derive ? deriveSharedInputs + derive * (RASTER_WORKER_RESERVE_BYTES + workerColumns) : 0);
     const total = raster + derive, imbalance = Math.abs(raster - derive);
-    if (peak > BUILD_BUDGETS.peakRssBytes || total < selectedTotal || (total === selectedTotal &&
+    if (peak > BUILD_BUDGETS.workingSetBytes || total < selectedTotal || (total === selectedTotal &&
         (imbalance > selectedImbalance || (imbalance === selectedImbalance && raster <= rasterWorkers)))) continue;
     rasterWorkers = raster; deriveWorkers = derive; selectedTotal = total; selectedImbalance = imbalance;
   }
@@ -179,11 +179,11 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   const violations: string[] = [];
   if (!Number.isSafeInteger(tiles) || tiles > BUILD_BUDGETS.tiles) violations.push('tile budget exceeded');
   if (!Number.isSafeInteger(numericBytes) || numericBytes > BUILD_BUDGETS.numericBytes) violations.push('aggregate scalar and profile bytes exceed the build budget');
-  if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) violations.push('whole-domain working set exceeds the 2 GiB process budget');
+  if (estimatedPeakBytes > BUILD_BUDGETS.workingSetBytes) violations.push(`whole-domain working set exceeds the ${BUILD_BUDGETS.workingSetBytes / 1024 ** 3} GiB process budget`);
   if (fineFields > 512 * 1024 * 1024) violations.push('live fine packed fields exceed the inline budget');
   const capacity: WholeDomainCapacity = { frames, mapFrames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine?.storedCells ?? 0,
     nativeSampleBytes, fineSampleBytes, profileBytes, numericBytes, rasterWorkers, deriveWorkers, prefetchFrameCount,
-    deriveFrameCopyBytes: deriveWorkers ? deriveJobCopyBytes + Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes) : 0,
+    deriveFrameCopyBytes: deriveWorkers ? deriveJobCopyBytes + Math.max(0, BUILD_BUDGETS.workingSetBytes - estimatedPeakBytes) : 0,
     rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
   return { capacity, layouts, profileLayout, assemblyBufferBytes: largestShard };
 }

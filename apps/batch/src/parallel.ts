@@ -5,7 +5,7 @@ import z from 'zod';
 import { profileRecordBytes, prepareShardedSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { getProduct } from '@av/contracts/models';
 import { artifactSchema, assertSampleLayoutBindingV5, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, matchesFrameIntervals, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sameJsonValue, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestV5Schema, parseBoundedJson, SAMPLE_BLOCK_SIZE, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
-import { assertForecastInputs, BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES } from './capacity.js';
+import { assertForecastInputs, BUILD_BUDGETS, forecastPlanDeadline, isForecastPlanDeadline, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES } from './capacity.js';
 import { createBuildStamp, type BuildOptions } from './build.js';
 import { loadCoverage } from './coverage.js';
 import { forecastFrame, type ForecastInputs } from './frame-build.js';
@@ -52,7 +52,7 @@ const buildPlanBase = z.strictObject({
   groups: z.array(z.array(z.number().int().positive()).min(1).max(MAX_SAMPLE_VALUES)).min(1).max(MAX_FORECAST_SHARDS)
 });
 const planSchema = buildPlanBase.superRefine((plan, ctx) => {
-  if (plan.deadlineAt !== undefined && Date.parse(plan.deadlineAt) !== Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs) ctx.addIssue({ code: 'custom', message: 'Invalid forecast plan deadline' });
+  if (!isForecastPlanDeadline(plan.createdAt, forecastPlanDeadline(plan))) ctx.addIssue({ code: 'custom', message: 'Invalid forecast plan deadline' });
 });
 export type BuildPlan = z.infer<typeof planSchema>;
 
@@ -251,9 +251,9 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
       || !same(plan.groups, partitionForecastHours(resolveProductFrameHours(product, mask, plan.cycle), plan.groups.length))) {
     throw new Error('Invalid forecast plan identity or frame groups');
   }
-  const age = Date.now() - Date.parse(plan.createdAt);
+  const now = Date.now(), age = now - Date.parse(plan.createdAt);
   if (age < -60_000 || (!resume && age > MAX_BUILD_LIFETIME_MS)) throw new Error('Forecast plan exceeds publisher lifetime');
-  if (!resume && age > BUILD_BUDGETS.elapsedMs) throw new Error('Forecast plan exceeds elapsed-time budget; start a new build');
+  if (!resume && now >= forecastPlanDeadline(plan)) throw new Error('Forecast plan exceeds elapsed-time budget; start a new build');
   const prepared = await loadFrozenWholeDomain({ product, frozen: plan.wholeDomain, out: resolve(inputs.out), maxLevels: provider.maxLevels, signal: inputs.signal });
   if (plan.coverageHash !== prepared.native.hash || mask.maxZoom !== prepared.nativeMask.maxZoom
       || (['output', 'halo', 'tiles'] as const).some(name => {
@@ -279,8 +279,8 @@ async function writeReceipt(path: string, receipt: unknown): Promise<string> {
 
 /** One job owns one group; completion is recorded only after its pack and archives finish. */
 export async function buildShard(options: ForecastInputs & { plan: BuildPlan; shard: number; out: string; cacheDir?: string; signal?: AbortSignal; store?: ObjectStorage }): Promise<string> {
-  const deadline = options.plan.deadlineAt ?? new Date(Date.parse(options.plan.createdAt) + BUILD_BUDGETS.elapsedMs).toISOString();
-  const deadlineSignal = AbortSignal.timeout(Math.max(1, Date.parse(deadline) - Date.now()));
+  const deadline = forecastPlanDeadline(options.plan);
+  const deadlineSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
   options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadlineSignal]) : deadlineSignal };
   const { shard } = options, root = resolve(options.out);
   options.signal?.throwIfAborted();
@@ -294,7 +294,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
     const whole = prepared;
     if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
     const result = await buildWholeDomainFrames({ ...options, prepared: whole, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
-      sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], journalPrefix: prefix, sampleGroup: shard });
+      sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], deadlineAt: deadline, journalPrefix: prefix, sampleGroup: shard });
     const numericReader = createLocalFileReader(MAX_V5_SHARD_BYTES), validation = { reader: numericReader, signal: options.signal };
     for (const surface of result.surfaces) {
       const coverage = surface.id === 'native' ? whole.native : whole.fine;
@@ -337,8 +337,8 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
 
 /** Repack hour packs into serving groups, then use the ordinary full-build validator/publisher. */
 export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan; store?: ObjectStorage } & Pick<BuildOptions, 'out' | 'signal' | 'onValidated'>): Promise<string> {
-  const deadline = options.plan.deadlineAt ?? new Date(Date.parse(options.plan.createdAt) + BUILD_BUDGETS.elapsedMs).toISOString();
-  const deadlineSignal = AbortSignal.timeout(Math.max(1, Date.parse(deadline) - Date.now()));
+  const deadline = forecastPlanDeadline(options.plan);
+  const deadlineSignal = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
   options = { ...options, signal: options.signal ? AbortSignal.any([options.signal, deadlineSignal]) : deadlineSignal };
   const assemblyStartedAt = Date.now();
   const root = resolve(options.out);

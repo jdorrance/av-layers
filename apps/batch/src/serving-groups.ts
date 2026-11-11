@@ -172,7 +172,7 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
   const resources = estimateGroupResources(input, groups, localInputs, !!input.store);
   const disk = await statfs(input.root);
   if (disk.bavail * disk.bsize < resources.diskBytes) throw new Error(`Insufficient serving compaction disk: requires ${resources.diskBytes} bytes`);
-  if (process.memoryUsage().rss + resources.workingBytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Serving compaction exceeds memory budget');
+  if (process.memoryUsage().rss + resources.workingBytes > BUILD_BUDGETS.workingSetBytes) throw new Error('Serving compaction exceeds memory budget');
   const staging = await mkdtemp(join(input.root, '.serving-'));
   const readers = Array.from({ length: input.store ? uploadLanes(groups) : 0 }, () => createLocalFileReader(MAX_V5_SHARD_BYTES));
   const staged = new Set<number>(), lastUse = input.parts.map((_, index) => Math.max(...groups.filter(group => group.sources.some(source => source.partIndex === index)).map(group => group.group)));

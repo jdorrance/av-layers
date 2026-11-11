@@ -1,7 +1,7 @@
 import { mkdir, statfs, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES } from '@av/contracts';
-import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from '../apps/batch/src/capacity.js';
+import { forecastPlanDeadline, MAX_V5_SHARD_BYTES } from '../apps/batch/src/capacity.js';
 import { runConcurrent } from '../apps/batch/src/concurrent.js';
 import { putImmutableReceipt } from '../apps/batch/src/immutable-upload.js';
 import { localPath, readLocalFile } from '../apps/batch/src/local-file.js';
@@ -15,7 +15,7 @@ const prefix = (plan: ControlPlan) => `builds/${plan.model}/${plan.buildId}/_con
 const receiptKey = (plan: ControlPlan, shard: number) => `${prefix(plan)}/shards/${shard}/receipt.json`;
 
 export function forecastPlanSignal(plan: ControlPlan, signal?: AbortSignal): AbortSignal {
-  const deadline = plan.deadlineAt ? Date.parse(plan.deadlineAt) : Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs;
+  const deadline = forecastPlanDeadline(plan);
   const remaining = deadline - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('Forecast publication deadline exceeded');
   const timeout = AbortSignal.timeout(remaining);

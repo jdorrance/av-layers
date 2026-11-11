@@ -5,7 +5,7 @@ import { DeleteObjectsCommand, GetObjectCommand, PutObjectCommand, S3Client } fr
 import { describe, expect, it, vi } from 'vitest';
 import { assertBuildBucketLock, r2ClientOptions, r2ShardStorage, r2Storage, sealShardCredentials } from './storage';
 import { putImmutable } from './immutable-upload';
-import { BUILD_BUDGETS } from './capacity';
+import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from './capacity';
 
 const env = { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
 const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', cycle: '2026-11-04T18:00:00.000Z', createdAt: '2026-11-04T19:00:00.000Z', deadlineAt: '2026-11-04T19:50:00.000Z' };
@@ -148,20 +148,22 @@ describe('R2 shard credentials', () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
     const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 1, ETag: 'etag' } as never);
     try {
-      await makeStore({ ...plan, deadlineAt: '2026-11-04T22:00:00.000Z' }).head('key');
+      await makeStore({ ...plan, deadlineAt: '2026-11-04T23:00:00.000Z' }).head('key');
       const credentials = await (send.mock.contexts[0] as S3Client).config.credentials();
       const jwt = Buffer.from(credentials.sessionToken!, 'base64').toString().slice(4);
       expect(JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString()).exp).toBe((Date.now() + BUILD_BUDGETS.elapsedMs) / 1000);
       await makeStore({ ...plan, deadlineAt: undefined }).head('key');
       const fallback = await (send.mock.contexts[1] as S3Client).config.credentials();
       const fallbackJwt = Buffer.from(fallback.sessionToken!, 'base64').toString().slice(4);
-      expect(JSON.parse(Buffer.from(fallbackJwt.split('.')[1]!, 'base64url').toString()).exp).toBe((Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs) / 1000);
-      const fallbackDeadline = Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs;
+      const fallbackDeadline = Date.parse(plan.createdAt) + LEGACY_FORECAST_ELAPSED_MS;
+      expect(JSON.parse(Buffer.from(fallbackJwt.split('.')[1]!, 'base64url').toString()).exp).toBe(fallbackDeadline / 1000);
       clock.mockReturnValue(fallbackDeadline - 30_000);
       await makeStore({ ...plan, deadlineAt: undefined }).head('key');
       const late = await (send.mock.contexts[2] as S3Client).config.credentials();
       const lateJwt = Buffer.from(late.sessionToken!, 'base64').toString().slice(4);
       expect(JSON.parse(Buffer.from(lateJwt.split('.')[1]!, 'base64url').toString()).exp).toBe(fallbackDeadline / 1000);
+      clock.mockReturnValue(fallbackDeadline);
+      expect(() => makeStore({ ...plan, deadlineAt: undefined })).toThrow('deadline expired');
       clock.mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
       for (const deadlineAt of ['2026-11-04T19:10:00.000Z', 'invalid']) expect(() => makeStore({ ...plan, deadlineAt })).toThrow('deadline');
       expect(() => makeStore({ ...plan, buildId: '../other' })).toThrow('identity');
