@@ -404,6 +404,7 @@ function startPreview(): void {
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
     const frame = build ? renderedFrames(build.manifest)[index] : undefined;
     if (!frame) return;
+    if (currentModel === AUTO_MODEL_ID && requestedTime !== frame.validTime) autoAbort?.abort();
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();

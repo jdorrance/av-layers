@@ -597,6 +597,47 @@ it('preserves Auto and its requested time when a map move overtakes an earlier r
   expect(state.get('t')).toBe(t);
 });
 
+it('keeps a held Auto timeline change when a prior map lookup finishes', async () => {
+  const build = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+  const models = [autoCatalogRow(build.manifest, 1000)];
+  let catalog = Promise.resolve(models);
+  let catalogSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) {
+      catalogSignal = init?.signal;
+      return Response.json({ models: await catalog });
+    }
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return sample(input, build.manifest);
+  });
+  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&t=${encodeURIComponent(autoTime(18))}`;
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  await import('./main');
+  map().emit('load');
+  await vi.waitFor(() => expect(tile()).toContain('/f018/'));
+
+  let finishLookup!: (result: typeof models) => void;
+  catalog = new Promise(resolve => { finishLookup = resolve; });
+  map().emit('moveend');
+  const staleLookup = catalogSignal;
+  await selectFrame(2);
+  try {
+    expect(staleLookup?.aborted).toBe(true);
+  } finally { finishLookup([]); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toContain('/f036/');
+  expect(ui('time').disabled).toBe(false);
+
+  catalog = Promise.resolve(models);
+  ui('time').dispatchEvent(new Event('change'));
+  await vi.waitFor(() => expect(fetchMock.mock.calls.some(([input]) => {
+    const url = new URL(String(input));
+    return url.pathname.endsWith('/sample') && url.searchParams.get('frame') === 'f036';
+  })).toBe(true));
+  expect(new URL(win.href).searchParams.get('t')).toBe(autoTime(36));
+});
+
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {
   await start();
   fetchMock.mockImplementation(async input => sample(input));
