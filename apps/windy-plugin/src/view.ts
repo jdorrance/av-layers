@@ -168,6 +168,16 @@ export class PluginPanel {
     this.pointHorizon.children[0].textContent = build.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
   }
 
+  renderUnavailable(message: string): void {
+    this.setMapTime('');
+    this.setNotice(null);
+    this.setStatus('No viewable build');
+    this.setError(message);
+    this.horizonNotice.hidden = true;
+    this.modelSelect.disabled = false;
+    this.opacityInput.disabled = false;
+  }
+
   renderState(state: ControllerState): void {
     this.setMapTime(state.badge);
     this.setError(state.message);

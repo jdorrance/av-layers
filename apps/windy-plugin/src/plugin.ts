@@ -16,6 +16,7 @@ let listenersBound = false;
 let mountTarget: HTMLElement | null = null;
 let mountedIn: HTMLElement | null = null;
 let selectedModel: ModelId = DEFAULT_MODEL;
+let opacity: number | undefined;
 let rasterProtocol: RasterTileProtocol | null = null;
 let previousController: PluginController | null = null;
 let paneOpen = false;
@@ -88,13 +89,12 @@ function listenAuto(enabled: boolean): void {
 }
 
 function clearAutoForecast(message: string): void {
-  controller?.dispose(); controller = null;
-  previousController?.dispose(); previousController = null;
+  const active = controller, previous = previousController;
+  controller = previousController = null;
+  active?.dispose();
+  previous?.dispose();
   panel?.clearPoint();
-  panel?.setMapTime('');
-  panel?.setNotice(null);
-  panel?.setStatus('No viewable build');
-  panel?.setError(message);
+  panel?.renderUnavailable(message);
 }
 
 async function loadAuto(): Promise<void> {
@@ -153,9 +153,10 @@ function ensurePanel(): PluginPanel {
         selectedModel = model as ModelId;
         void loadSelectedModel();
       },
-      onOpacity: opacity => {
-        controller?.setOpacity(opacity);
-        previousController?.setOpacity(opacity);
+      onOpacity: value => {
+        opacity = value;
+        controller?.setOpacity(value);
+        previousController?.setOpacity(value);
       },
       canRenderPoint: build => {
         const active = controller;
@@ -210,13 +211,12 @@ function showCurrent(ui: PluginPanel): boolean {
 
 async function startController(model: ModelId, selection?: AutoForecastSelection): Promise<void> {
   panel?.clearPoint();
-  const opacity = controller?.state().opacity;
   const previous = previousController ?? controller;
   if (previousController) controller?.dispose();
   previous?.freeze();
   previousController = previous;
   controller = null;
-  const ui = ensurePanel();
+  const ui = panel ?? ensurePanel();
   ui.setVisible(paneOpen);
   ui.setError(null);
   ui.setNotice(null);

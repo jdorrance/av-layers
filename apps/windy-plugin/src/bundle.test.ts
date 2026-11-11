@@ -373,7 +373,29 @@ it.each([
     await vi.waitFor(() => expect(layer.url).toContain(`/tiles/gfs/${gfs.manifest.buildId}/usable-lift-msl/f060/`));
     expect(selects[0].value).toBe('auto');
     expect(store.set).not.toHaveBeenCalled();
+
+    opacity.value = '0.25'; opacity.dispatch('input');
+    moveHostTime(Date.parse(autoTime(90)));
+    await vi.waitFor(() => expect(tileError.textContent).toBe('No forecast covers this location and time.'));
+    expect(selects[0].disabled).toBe(false);
+    expect(opacity.disabled).toBe(false);
+    expect(opacity.value).toBe('0.25');
+    opacity.value = '0.42'; opacity.dispatch('input');
+    layer.setOpacity.mockClear();
+    const layersBeforeRecovery = map.addLayer.mock.calls.length;
+    moveHostTime(Date.parse(autoTime(60)));
+    await vi.waitFor(() => expect(map.addLayer).toHaveBeenCalledTimes(layersBeforeRecovery + 1));
+    tileListeners.get('data')?.({ tile: {} });
+    for (const listener of [...(renderListeners.get('render') ?? [])]) listener();
+    expect(layer.setOpacity).toHaveBeenCalledWith(0.42);
+
     automatic.$destroy();
+    expect(target.children).toHaveLength(0);
+    center = { lat: YEREVAN.lat, lng: YEREVAN.lon };
+    moveHostTime(Date.parse(autoTime(18)));
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${armenia.manifest.model}/${armenia.manifest.buildId}/usable-lift-msl/f018/`));
+    expect(document.body.children).not.toContain(root);
+    expect(document.body.children).not.toContain(mobileHeader);
     win.dispatchEvent(new Event('pagehide'));
     expect(timestampListeners.size).toBe(0);
   }
