@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, fixtureProfileBuild, retainedPointBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
+import { FIXTURE_BUILD_ID, fixtureBuild } from '../../../tests/forecast-fixture';
+import { fixturePointBuild, fixtureProfileBuild, retainedPointBuild, retainedProfileBuild, retainedUnprefixedPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
 import { ApiClient, pointSeriesSelection } from '@av/client';
 import { PluginPanel } from './view';
@@ -87,7 +87,7 @@ function visit(element: FakeElement): FakeElement[] {
 }
 
 const ready: ControllerState = {
-  phase: 'ready', model: 'gfs', buildId: 'build-1', frameId: 'f003', displayedFrameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
+  phase: 'ready', model: 'gfs', buildId: FIXTURE_BUILD_ID, frameId: 'f003', displayedFrameId: 'f003', layerId: 'usable-lift-msl', opacity: 0.5,
   badge: 'Host frame f003', message: null, notice: null, horizonNotice: null
 };
 
@@ -96,14 +96,14 @@ afterEach(() => vi.unstubAllGlobals());
 it('offers the published models and follows the selected build', () => {
   installDom();
   const panel = new PluginPanel(unusedPointApi, callbacks());
-  panel.renderBuild(fixtureBuild({ buildId: 'build-1' }));
+  panel.renderBuild(fixtureBuild({ buildId: FIXTURE_BUILD_ID }));
   panel.renderState(ready);
   const nodes = visit(panel.root as unknown as FakeElement);
   const model = nodes.find(element => element.id === 'av-model')!;
   expect(model.value).toBe('gfs');
   expect(model.children.map(option => option.value)).toEqual(['gfs', 'icon-eu', 'rrfs']);
   expect(nodes.some(element => element.id === 'av-layer' || element.id === 'av-frame')).toBe(false);
-  panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: 'build-1' }));
+  panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: FIXTURE_BUILD_ID }));
   expect(model.value).toBe('icon-eu');
 });
 
@@ -126,7 +126,7 @@ it('offers a horizon choice only when a pinned build has additional point frames
   if (unprefixed.manifest.version !== 5) throw new Error('Expected v5');
   delete unprefixed.manifest.mapFrameCount;
   for (const [build, hidden, label] of [[matching, true, 'Map forecast'], [retainedPointBuild(), false, 'Map forecast'],
-    [retainedLegacyPointBuild(), false, '24 hours'], [unprefixed, false, '24 hours']] as const) {
+    [unprefixed, false, '24 hours']] as const) {
     const panel = new PluginPanel(unusedPointApi, callbacks());
     panel.renderBuild(build);
     const nodes = visit(panel.root as unknown as FakeElement);
@@ -479,9 +479,9 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   expect(time.textContent).toContain('Map: unavailable');
 });
 
-it('requests a point hour in the planned horizon when the legacy map time lies beyond it', async () => {
+it('requests a point hour in the planned horizon when the unprefixed map time lies beyond it', async () => {
   installDom();
-  const build = retainedLegacyPointBuild(), frames = pointSeriesSelection(build).frames;
+  const build = retainedUnprefixedPointBuild(), frames = pointSeriesSelection(build).frames;
   const mapFrame = build.manifest.frames[frames.length];
   const fetchImpl = vi.fn<typeof fetch>(async () => { throw new Error('Point request failed'); });
   const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });

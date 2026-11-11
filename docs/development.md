@@ -80,15 +80,17 @@ before weather acquisition starts.
 
 ```sh
 pnpm test
+pnpm test:integration
 pnpm verify
 ```
 
-`pnpm test` runs the offline test suite (pass a path such as
-`pnpm test packages/forecast` to run a subset). To run the optional retained DWD
+`pnpm test` runs the unit project. `pnpm test:integration` runs tests that
+start local workerd, package PMTiles, or build the Windy plugin. Either
+command accepts a path filter. To run the optional retained DWD
 probe check for ICON-EU, set `ICON_DWD_PROBE_DIR` as shown in the
 [ICON adapter guide](../apps/batch/src/split-grib/README.md#offline-checks).
 
-`pnpm verify` checks the PMTiles version before lint, typecheck, tests,
+`pnpm verify` checks the PMTiles version before lint, typecheck, both test projects,
 `docs:check`, and app builds. After changing API schemas, product configs, or
 CLI flags, regenerate the reference docs:
 

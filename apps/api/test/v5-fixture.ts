@@ -64,8 +64,9 @@ function denseMask(grid: Grid, maxZoom: number, active: (x: number, y: number) =
 
 interface SurfaceFixture { surface: ForecastSurfaceV5; mask: SparseCoverageMask; layout: ShardedSamplePackLayout; bytes: Uint8Array; objects: Map<string, Uint8Array>; shardSha: Map<string, string> }
 
-function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 'native' | 'fine', layers: LayerId[], frameCount: number, active: (x: number, y: number) => boolean, value: (channel: number, x: number, y: number) => { value: number; flags: number }, prefix: string, masterZoom: number): SurfaceFixture {
+function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 'native' | 'fine', layers: LayerId[], frameCount: number, active: (x: number, y: number) => boolean, value: (channel: number, x: number, y: number) => { value: number; flags: number }, prefix: string, masterZoom: number, coveredTile: boolean): SurfaceFixture {
   const mask = denseMask(grid, masterZoom, active, product.bounds);
+  if (coveredTile) mask.tiles[0] = 1;
   const description = describeSparseCoverage(mask, product);
   const coveragePrefix = `coverage/${description.hash}`;
   const channelCount = frameCount * layers.length;
@@ -110,26 +111,28 @@ interface FixtureOptions {
   product?: ProductDefinition; grid?: Grid; bounds?: ProductDefinition['bounds']; maxZoom?: number; renderZoom?: number; buildId?: string; frameHours?: readonly number[];
   mapFrameCount?: number;
   framePrefix?: 'f' | 'h';
+  cycleTime?: number;
+  coveredTile?: boolean;
   nativeLayers?: readonly LayerId[];
   nativeValue?: (layer: LayerId, frame: number, x: number, y: number) => number | null;
 }
 
-export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE_GRID, bounds = BOUNDS, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2], mapFrameCount, framePrefix = 'h', nativeLayers, nativeValue }: FixtureOptions = {}) {
+export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE_GRID, bounds = BOUNDS, maxZoom = 1, renderZoom = maxZoom, buildId = '20261101T000000Z-00000000-0000-0000-0000-000000000001', frameHours = [1, 2], mapFrameCount, framePrefix = 'h', cycleTime = NOW, coveredTile = false, nativeLayers, nativeValue }: FixtureOptions = {}) {
   const configuredNative = base.layers.filter(layer => layerSurface(layer) === 'native');
   const nativeChannels = nativeLayers ?? (configuredNative.length ? configuredNative : NATIVE_LAYERS);
   const product: ProductDefinition = { ...base, ...(nativeLayers ? { layers: [...FINE_LAYERS, ...nativeLayers] } : {}), grid, coverageId: 'native-mask', coverageDescription: 'Synthetic native surface', bounds, maxNativeZoom: renderZoom, supportHaloCells: 1, terrainSubdivisionFactor: 2 };
   const model = product.modelId, prefix = `builds/${model}/${buildId}`;
-  const cycle = new Date(NOW).toISOString(), expiresAt = new Date(NOW + 86_400_000).toISOString();
-  const frames = frameHours.map(hour => ({ id: `${framePrefix}${String(hour).padStart(3, '0')}`, validTime: new Date(NOW + hour * 3_600_000).toISOString(), intervalStart: new Date(NOW + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(NOW + hour * 3_600_000).toISOString() }));
+  const cycle = new Date(cycleTime).toISOString(), expiresAt = new Date(cycleTime + 86_400_000).toISOString();
+  const frames = frameHours.map(hour => ({ id: `${framePrefix}${String(hour).padStart(3, '0')}`, validTime: new Date(cycleTime + hour * 3_600_000).toISOString(), intervalStart: new Date(cycleTime + (hour - 1) * 3_600_000).toISOString(), intervalEnd: new Date(cycleTime + hour * 3_600_000).toISOString() }));
   const fine = buildSurface(product, planWholeDomainGrid(grid, 2).fine, 'fine', 'fine', FINE_LAYERS, mapFrameCount ?? frames.length, (_x, y) => y >= 16 && y <= 19, (channel, x, y) => {
     const layer = channel % 2, frame = Math.floor(channel / 2);
     if (layer === 0) return x === 4 && y === 17 ? { value: 0, flags: 1 } : { value: 310.25 + frame * 10 + (y === 17 ? 10 : 0), flags: 4 };
     return x === 5 && y === 17 ? { value: 0, flags: 2 } : { value: 610.25 + frame * 10, flags: 8 };
-  }, prefix, maxZoom);
+  }, prefix, maxZoom, coveredTile);
   const native = buildSurface(product, grid, 'native', 'native', [...nativeChannels], frames.length, (_x, y) => y >= 8 && y <= 10, (channel, x, y) => {
     const value = nativeValue ? nativeValue(nativeChannels[channel % nativeChannels.length]!, Math.floor(channel / nativeChannels.length), x, y) : 7 + channel;
     return { value: value ?? NaN, flags: value === null ? 2 : 0 };
-  }, prefix, maxZoom);
+  }, prefix, maxZoom, coveredTile);
   const layers = [...product.layers], surfaces = nativeLayers || configuredNative.length ? [fine.surface, native.surface] : [fine.surface];
   const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
   const descriptors = createWholeDomainDescriptors(product);

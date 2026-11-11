@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
-import { PRODUCTS } from '@av/contracts';
+import { PRODUCTS } from '@av/contracts/models';
 import { selectWorkflowModels } from './workflow-models.js';
 
 it('selects registered models with their fixed configured caps', () => {

@@ -5,6 +5,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./format": "./src/format.ts",
+    "./geometry": "./src/geometry.ts",
+    "./coverage-query": "./src/coverage-query.ts",
+    "./sparse-coverage": "./src/sparse-coverage.ts",
+    "./layers": "./src/layers.ts",
+    "./publication": "./src/publication.ts",
+    "./point-products": "./src/point-products.ts",
+    "./json": "./src/json.ts",
+    "./models": "./src/products.ts",
+    "./model-options": "./src/model-options.ts",
     "./refinement": "./src/refinement.ts",
     "./fixture-product": "./src/fixture-product.ts"
   },

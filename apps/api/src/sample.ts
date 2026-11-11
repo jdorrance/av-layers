@@ -1,22 +1,21 @@
-import { MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_POINTS, SAMPLE_STATUSES, STATUS_OUTSIDE, STATUS_UNAVAILABLE, surfaceFrameCount, isCovered, type ForecastGrid, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
-import { refinementCandidate } from '@av/contracts/refinement';
-import { packedCellsFromRange, planPackedSample, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Cell, type PackedSamplePlan, type Sample } from '@av/forecast';
-import { resolveCoverage, resolveSparseCoverage, type ResolvedCoverage } from './coverage';
+import { MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_POINTS, SAMPLE_STATUSES, STATUS_OUTSIDE, STATUS_UNAVAILABLE, surfaceFrameCount, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
+import { packedCellsFromRange, planShardedPackedSample, planSample, sampleCells, samplingCovered, type Cell, type PackedSamplePlan, type Sample } from '@av/forecast';
+import { resolveSparseCoverage } from './coverage';
 import { MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, waitFor, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
-import { artifact, servedSource, type PublishedManifest } from './publication';
+import { servedSource } from './publication';
 import { cached, fail, json, response } from './http';
-import { admitPackedRangeBytes, readLegacySampleRange, readPackedRanges, validatedRangeLength, type PackedRange } from './packed-ranges';
+import { readPackedRanges, type PackedRange } from './packed-ranges';
 import { readCoordinatePair, readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface Point { lat: number; lon: number }
 
-function admitSampleValues(m: PublishedManifest, url: URL, points = 1): void {
+function admitSampleValues(m: ManifestV5, url: URL, points = 1): void {
   const requested = url.searchParams.get('frame'), frames = requested === 'all' ? m.frames.length : requested === null ? 1 : requested.split(',').length;
   const layers = url.searchParams.get('layers')?.split(',').length ?? m.layers.length;
   if (points * frames * layers > m.descriptors.maxSampleValues) fail(429, 'sample-limit', `Select at most ${m.descriptors.maxSampleValues} point/frame/layer values`);
 }
 
-export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: PublishedManifest, url: URL): Promise<Response> {
+export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, url: URL): Promise<Response> {
   const { lat, lon } = readPointCoordinates(url);
   admitSampleValues(m, url);
   const { frames, layers: selectedLayers } = selectSampleFields(m, url);
@@ -26,71 +25,15 @@ export async function serveSample(request: Request, bucket: R2Bucket, ctx: WaitC
   canonical.searchParams.set('frame', frames.map(f => f.id).join(','));
   canonical.searchParams.set('layers', selectedLayers.join(','));
   const canonicalRequest = new Request(canonical, { headers: request.headers, signal: request.signal });
-  if (m.version === 5) return serveSampleV5(canonicalRequest, bucket, ctx, m, url.origin, canonical, lat, lon, frames, selectedLayers);
-  for (const frame of frames) for (const layer of selectedLayers) artifact(m, layer, frame.id);
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
-    const base = await resolveCoverage(bucket, m, ctx, request.signal), outside = !isCovered(base.mask, lat, lon);
-    const resolved = new Map<ForecastGrid, ResolvedCoverage>([[m, base]]);
-    const groups = new Map<ForecastGrid, { layers: LayerId[]; patchId?: string }>();
-    for (const layer of selectedLayers) {
-      let grid: ForecastGrid = m, patchId: string | undefined;
-      const patch = outside ? undefined : refinementCandidate(m.patches ?? [], layer, lat, lon);
-      if (patch) {
-        let coverage = resolved.get(patch);
-        if (!coverage) { coverage = await resolveCoverage(bucket, patch, ctx, request.signal); resolved.set(patch, coverage); }
-        if (isCovered(coverage.mask, lat, lon)) { grid = patch; patchId = patch.id; }
-      }
-      const group = groups.get(grid);
-      if (group) group.layers.push(layer);
-      else groups.set(grid, { layers: [layer], ...(patchId ? { patchId } : {}) });
-    }
-    let rangeBytes = 0;
-    const plans = [...groups].map(([grid, group]) => {
-      const jobs = frames.flatMap(frame => group.layers.map(layer => ({ frame, layer, channel: m.frames.indexOf(frame) * grid.layers.length + grid.layers.indexOf(layer) })));
-      const plan = outside ? null : planSample(grid.grid, lat, lon);
-      if (!plan && group.patchId) fail(503, 'publication-invalid', 'Refinement coverage lacks sample support');
-      const packed = plan ? planPackedSample(resolved.get(grid)!.layout, plan, grid.samples.channelCount, jobs.map(job => job.channel)) : null;
-      if (packed) rangeBytes += validatedRangeLength(packed.byteRange, grid.samples);
-      return { grid, patchId: group.patchId, jobs, plan, packed };
-    });
-    admitPackedRangeBytes(rangeBytes);
-    const source = servedSource(m, url.origin);
-    const values = new Map<string, Sample & { patchId?: string }>();
-    for (const { grid, patchId, jobs, plan, packed } of plans) {
-      const bytes = packed ? await readLegacySampleRange(bucket, ctx, request.signal, m.expiresAt, grid.samples, packed.byteRange) : null;
-      for (const job of jobs) {
-        const value = plan && packed && bytes
-          ? sampleCells(plan, packedCellsFromRange(packed, bytes, job.channel), grid.descriptors.layers[job.layer], m.tool.useStoredMslNoLift === true)
-          : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
-        values.set(`${job.frame.id}/${job.layer}`, { ...value, ...(patchId ? { patchId } : {}) });
-      }
-    }
-    const result = {
-      model: m.model,
-      buildId: m.buildId,
-      lat,
-      lon,
-      method: m.method,
-      source,
-      coverage: m.coverage,
-      expiresAt: m.expiresAt,
-      frames: frames.map(frame => ({
-        ...frame,
-        layers: Object.fromEntries(
-          selectedLayers.map(layer => {
-            const value = values.get(`${frame.id}/${layer}`)!;
-            return [layer, { ...value, status: SAMPLE_STATUSES[value.status] }];
-          })
-        )
-      }))
-    };
-    const digest = await waitFor(crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString())), request.signal);
+    const [result] = await readSamples(canonicalRequest, bucket, ctx, m, url.origin, [{ lat, lon }], frames, selectedLayers);
+    const digest = await waitFor(crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString())), canonicalRequest.signal);
     const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}-v4`);
-  }, 'sample-v4');
+    return json(result, m.expiresAt, `sample-${tag}-v5`);
+  }, 'sample-v5');
 }
 
-export async function serveSamples(request: Request, bucket: R2Bucket, ctx: WaitContext, m: PublishedManifest, url: URL): Promise<Response> {
+export async function serveSamples(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, url: URL): Promise<Response> {
   const raw = url.searchParams.get('points');
   if (!raw) fail(400, 'invalid-query', 'Select coordinate pairs');
   const pairs = raw.split(';');
@@ -102,7 +45,6 @@ export async function serveSamples(request: Request, bucket: R2Bucket, ctx: Wait
   });
   admitSampleValues(m, url, points.length);
   const { frames, layers } = selectSampleFields(m, url);
-  if (m.version !== 5) fail(409, 'unsupported-publication', 'Batch samples require a version-5 build');
   const canonical = new URL(url.origin + url.pathname);
   canonical.searchParams.set('points', points.map(pointKey).join(';'));
   canonical.searchParams.set('frame', frames.map(frame => frame.id).join(','));
@@ -110,7 +52,7 @@ export async function serveSamples(request: Request, bucket: R2Bucket, ctx: Wait
   const canonicalRequest = new Request(canonical, { headers: request.headers, signal: request.signal });
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
     const unique = [...new Map(points.map(point => [pointKey(point), point])).values()];
-    const samples = await readSamplesV5(request, bucket, ctx, m, url.origin, unique, frames, layers);
+    const samples = await readSamples(request, bucket, ctx, m, url.origin, unique, frames, layers);
     const byPoint = new Map(samples.map(sample => [pointKey(sample), sample]));
     const result = { version: 1, model: m.model, buildId: m.buildId, expiresAt: m.expiresAt,
       points: points.map((point, index) => ({ index, sample: byPoint.get(pointKey(point))! })) };
@@ -126,16 +68,16 @@ export async function serveSamples(request: Request, bucket: R2Bucket, ctx: Wait
 
 const pointKey = ({ lat, lon }: Point) => `${lat},${lon}`;
 
-interface V5Plan {
+interface PointPlan {
   point: number; surface: ForecastSurfaceV5; jobs: ReturnType<typeof sampleChannelGroups>[number]['jobs'];
   plan: ReturnType<typeof planSample>; packed: ReturnType<typeof planShardedPackedSample> | null;
   shard: ForecastSurfaceV5['samples']['shards'][number] | undefined;
   cells: Map<number, Cell[]>;
 }
-interface V5Part { plan: V5Plan; packed: PackedSamplePlan; contributors: number[] }
-interface V5Range extends PackedRange { parts: V5Part[] }
+interface SamplePart { plan: PointPlan; packed: PackedSamplePlan; contributors: number[] }
+interface SampleRange extends PackedRange { parts: SamplePart[] }
 
-function sampleParts(plan: V5Plan, mode: 'span' | 'rows' | 'records'): V5Part[] {
+function sampleParts(plan: PointPlan, mode: 'span' | 'rows' | 'records'): SamplePart[] {
   const packed = plan.packed!;
   const all = packed.contributorRanks.map((_, index) => index);
   if (mode === 'span') return [{ plan, packed, contributors: all }];
@@ -155,18 +97,18 @@ function sampleParts(plan: V5Plan, mode: 'span' | 'rows' | 'records'): V5Part[] 
   }));
 }
 
-function sampleRanges(plans: V5Plan[], mode: 'span' | 'rows' | 'records' = 'span'): V5Range[] {
-  const byShard = new Map<string, V5Part[]>();
+function sampleRanges(plans: PointPlan[], mode: 'span' | 'rows' | 'records' = 'span'): SampleRange[] {
+  const byShard = new Map<string, SamplePart[]>();
   for (const plan of plans) {
     if (!plan.packed || !plan.shard) continue;
     const key = `${plan.shard.key}:${plan.shard.sha256}`, group = byShard.get(key);
     const parts = sampleParts(plan, mode);
     if (group) group.push(...parts); else byShard.set(key, parts);
   }
-  const ranges: V5Range[] = [];
+  const ranges: SampleRange[] = [];
   for (const group of byShard.values()) {
     group.sort((left, right) => left.packed.byteRange.offset - right.packed.byteRange.offset);
-    let previous: V5Range | undefined;
+    let previous: SampleRange | undefined;
     for (const part of group) {
       const range = part.packed.byteRange;
       if (previous && range.offset <= previous.offset + previous.length) {
@@ -178,10 +120,10 @@ function sampleRanges(plans: V5Plan[], mode: 'span' | 'rows' | 'records' = 'span
   return ranges;
 }
 
-async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, origin: string, points: readonly Point[], frames: ManifestV5['frames'], layers: LayerId[]) {
+async function readSamples(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, origin: string, points: readonly Point[], frames: ManifestV5['frames'], layers: LayerId[]) {
   const releases: (() => void)[] = [];
   try {
-    const plans: V5Plan[] = [];
+    const plans: PointPlan[] = [];
     const values = points.map(() => new Map<string, Sample & { surfaceId: string }>());
     const pending = [];
     for (const surface of m.surfaces) {
@@ -219,7 +161,7 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
         }
       }
     }
-    const rangeBytes = (ranges: V5Range[]) => ranges.reduce((total, range) => total + range.length, 0);
+    const rangeBytes = (ranges: SampleRange[]) => ranges.reduce((total, range) => total + range.length, 0);
     let ranges = sampleRanges(plans);
     // Keep one-wave reads narrow; scattered queries split further to retain the byte budget.
     if (ranges.length <= MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST || rangeBytes(ranges) > MAX_SAMPLE_RANGE_BYTES) {
@@ -257,13 +199,4 @@ async function readSamplesV5(request: Request, bucket: R2Bucket, ctx: WaitContex
       })) }))
     }));
   } finally { for (const release of releases) release(); }
-}
-
-async function serveSampleV5(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, origin: string, canonical: URL, lat: number, lon: number, frames: ManifestV5['frames'], layers: LayerId[]): Promise<Response> {
-  return cached(request, m.expiresAt, ctx, async () => {
-    const [result] = await readSamplesV5(request, bucket, ctx, m, origin, [{ lat, lon }], frames, layers);
-    const digest = await waitFor(crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical.toString())), request.signal);
-    const tag = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-    return json(result, m.expiresAt, `sample-${tag}-v5`);
-  }, 'sample-v5');
 }

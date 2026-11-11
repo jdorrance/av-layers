@@ -51,6 +51,10 @@ function coveredTiles(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>): number {
 }
 
 export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCapacity {
+  return planWholeDomainCapacity(input).capacity;
+}
+
+export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   const { columns, fine, frames, nativeActive, nativeLayers, fineLayers, terrainBytes, nativeMaskBytes } = input;
   const mapFrames = input.mapFrames ?? frames;
   if (!Number.isSafeInteger(frames) || frames < 1 || !Number.isSafeInteger(mapFrames) || mapFrames < 0 || mapFrames > frames) throw new Error('Invalid frame capacity');
@@ -138,8 +142,9 @@ export function admitWholeDomain(input: WholeDomainCapacityInput): WholeDomainCa
   if (!Number.isSafeInteger(numericBytes) || numericBytes > BUILD_BUDGETS.numericBytes) violations.push('aggregate scalar and profile bytes exceed the build budget');
   if (estimatedPeakBytes > BUILD_BUDGETS.peakRssBytes) violations.push('whole-domain working set exceeds the 2 GiB process budget');
   if (fineFields > 512 * 1024 * 1024) violations.push('live fine packed fields exceed the inline budget');
-  return { frames, mapFrames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine?.storedCells ?? 0,
+  const capacity: WholeDomainCapacity = { frames, mapFrames, nativeLayers, fineLayers, tiles, nativeStoredCells: layouts.native?.storedCells ?? 0, fineStoredCells: layouts.fine?.storedCells ?? 0,
     nativeSampleBytes, fineSampleBytes, profileBytes, numericBytes, rasterWorkers, deriveWorkers, prefetchFrameCount,
     deriveFrameCopyBytes: deriveWorkers ? deriveJobCopyBytes + Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes) : 0,
     rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
+  return { capacity, layouts, profileLayout };
 }

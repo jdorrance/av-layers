@@ -19,6 +19,7 @@ Worker-only commands:
 ```sh
 pnpm --filter @av/api dev
 pnpm test apps/api
+pnpm test:integration apps/api
 pnpm --filter @av/api build
 ```
 
@@ -35,7 +36,7 @@ pnpm --filter @av/api build
 diagnostics for the native grid cell identified by `cell`. `frame` selects
 times and `layers` selects returned scalar channels while `derived` retains the
 cell's complete soaring diagnostics. See [sampling and profiles](../../docs/data.md#time-and-retention).
-V5 point routes default to the first frame. For complete timelines, page the
+Point routes default to the first frame. For complete timelines, page the
 frames or use `frame=all` with a layer subset that fits the value budget.
 See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.
 
@@ -48,13 +49,13 @@ latest and retained-run lists use short edge caching within the
 Build-specific responses cache through their expiry bound. Health and error
 responses use `no-store`.
 
-See the [OpenAPI spec](../../docs/reference/openapi.json) for parameters and
-[the data guide](../../docs/data.md) for units and status flags.
+Version-5 manifests bind each layer to its native or fine surface. The scalar
+reader supports both v5 shard layouts. Profiles are available on builds that
+publish them. See [data](../../docs/data.md) for units and status flags.
 
-Version-4 point requests select a grid per layer using patch polygons and output
-masks. Selected no-lift or unavailable results remain in effect. `patchId` names
-the applicable descriptors; missing patch assets return a publication error.
-Composited map tiles use the existing URLs and model selector.
+Set `AV_REQUEST_METRICS=true` to log requests with route, status, publication
+identity and R2 counters. [Serving budgets](../../docs/serving-budgets.md)
+defines the cache and read limits.
 
 ## Source layout
 

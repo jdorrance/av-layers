@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { manifestSchema, setBit, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { manifestV5Schema, setBit, type CoverageMask, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { INDEXED_PRODUCT } from '../../tests/model-fixtures.js';
 import { normalizedFixtureFrame } from '../../scripts/fixtures/normalized-provider.js';
 import type { ForecastProvider } from './src/provider.js';
@@ -19,7 +19,7 @@ export const product: ProductDefinition = {
   coverageDescription: 'Synthetic grid spanning block and longitude-wrap boundaries',
   bounds: [-180, 70, 180, 72],
   grid: { kind: 'regular-latlon', width: 18, height: 3, earthRadiusM: 6371229, lon0: -180, lat0: 72, dx: 20, dy: -1, wrapLongitude: true },
-  coverageId: 'parallel-fixture-coverage', maxNativeZoom: 0, terrainSubdivisionFactor: undefined,
+  coverageId: 'parallel-fixture-coverage', maxNativeZoom: 0, terrainSubdivisionFactor: 2,
   frameHours: [2, 4, 6, 8], intervalHours: 2
 };
 const cellCount = product.grid.width * product.grid.height;
@@ -70,11 +70,11 @@ export function fixtureProvider(options: { failHour?: number; abort?: AbortContr
   return { provider, open, close, acquire, observed };
 }
 
-export async function readManifest(path: string): Promise<Manifest> {
-  return manifestSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+export async function readManifest(path: string): Promise<ManifestV5> {
+  return manifestV5Schema.parse(JSON.parse(await readFile(path, 'utf8')));
 }
 
-export async function tilePixels(root: string, artifact: Manifest['artifacts'][number]): Promise<Uint8Array> {
+export async function tilePixels(root: string, artifact: ManifestV5['artifacts'][number]): Promise<Uint8Array> {
   const bytes = await readFile(localPath(root, artifact.tilesKey));
   const archive = new PMTiles({
     getKey: () => artifact.tilesKey,

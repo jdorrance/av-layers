@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { windyTileOptions } from '@av/client';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
+import { FIXTURE_BUILD_ID, fixtureBuild } from '../../../tests/forecast-fixture';
 import { forecastStackZIndex, WindyRasterLayer, type NativeRasterMap, type NativeRasterSource, type RasterSourceEvent } from './raster-layer';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-const url = (frame: string) => `https://tiles.example/tiles/gfs/build-1/precip-rate/${frame}/{z}/{x}/{y}.webp`;
+const url = (frame: string) => `https://tiles.example/tiles/gfs/${FIXTURE_BUILD_ID}/precip-rate/${frame}/{z}/{x}/{y}.webp`;
 function fixture() {
   type RenderListener = Parameters<NativeRasterMap['maplibreMap']['on']>[1];
   const handlers = new Map<string, Set<RenderListener>>();
@@ -202,7 +202,7 @@ it.each(['unload', 'remove on ready', 'replace on ready'] as const)('skips stale
 });
 
 it.each(['ready', 'supersede', 'move', 'freeze', 'remove', 'expire'] as const)('warms committed Windy frames only while current (%s)', async action => {
-  const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
+  const build = fixtureBuild({}, 'https://tiles.example');
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));
   const fetchImpl = vi.fn<typeof fetch>(async () => new Response(Uint8Array.of(82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80), {
     headers: { 'content-type': 'image/webp', 'content-length': '12' }
@@ -289,7 +289,7 @@ it('stacks above weather colors and below wind particles', () => {
 });
 
 it.each(['commit', 'failure', 'freeze'] as const)('preserves prefetched target bytes across URL changes until %s', async outcome => {
-  const build = fixtureBuild({ buildId: 'build-1' }, 'https://tiles.example');
+  const build = fixtureBuild({}, 'https://tiles.example');
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(build.manifest.createdAt));
   const requests: { url: string; signal: AbortSignal; resolve(response: Response): void }[] = [];
   vi.stubGlobal('fetch', vi.fn<typeof fetch>((url, init) => new Promise((resolve, reject) => {

@@ -1,4 +1,5 @@
-import { renderedFrames, type LayerId, type ModelId } from '@av/contracts';
+import type { LayerId } from '@av/contracts/layers';
+import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
   clampOpacity,
   DEFAULT_OPACITY,

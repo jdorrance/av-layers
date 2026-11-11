@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import * as contracts from '@av/contracts';
+import * as models from '@av/contracts/models';
 import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
 import { packCells, prepareSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
@@ -22,8 +22,8 @@ async function writeTestSamplePack(output: string, inputs: string[], layout: Ret
 }
 
 describe('build provenance validation', () => {
-  const currentProduct = contracts.getProduct;
-  beforeEach(() => { vi.spyOn(contracts, 'getProduct').mockImplementation(model => [INDEXED_PRODUCT, SPLIT_PRODUCT].find(product => product.modelId === model) ?? currentProduct(model)); });
+  const currentProduct = models.getProduct;
+  beforeEach(() => { vi.spyOn(models, 'getProduct').mockImplementation(model => [INDEXED_PRODUCT, SPLIT_PRODUCT].find(product => product.modelId === model) ?? currentProduct(model)); });
   afterEach(() => { vi.restoreAllMocks(); });
   async function fixture(product: ProductDefinition = INDEXED_PRODUCT) {
     const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));

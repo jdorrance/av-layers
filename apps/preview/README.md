@@ -24,6 +24,10 @@ Reload the page to pick up a newly published build (subject to the API's
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
+[Build checks](vite.config.ts) bound startup and lazy JavaScript transfer and
+reject server modules in the browser output.
+On Node 22.23.4, the production build measured 348.2 kB gzip for the entry
+and 29.2 kB for the Windgram. The separate MapLibre worker measured 150.6 kB.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. Open forecast settings to change
@@ -32,11 +36,12 @@ A failed profile page leaves available lift visible.
 
 Chart times within the map horizon select raster frames. Later point times keep
 the map frame and show both UTC times. The scalar chart covers builds that
-publish no native profiles. Legacy builds offer a 24-hour point view.
+publish no native profiles. Builds without a map prefix offer a 24-hour point view.
 
 ## Source layout
 
 - [src/main.ts](src/main.ts): OpenStreetMap basemap, model and AGL/MSL controls, forecast clock, and point card.
+- [src/url-state.ts](src/url-state.ts) reads and writes shared map URLs.
 - [src/raster-overlay.ts](src/raster-overlay.ts): raster replacement and prefetch.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.

@@ -9,6 +9,7 @@ import {
   manifestSchema,
   parseBoundedJson,
   parseProvenance,
+  matchesFrameIntervals,
   STATUS_MASK,
   STATUS_OUTSIDE,
   STATUS_VALID,
@@ -23,7 +24,6 @@ import {
   type RefinementPatch
 } from '@av/contracts';
 import { prepareSamplePackLayout, type GridField, type SamplePackLayout } from '@av/forecast';
-import { matchesFrameIntervals } from '../frame-build.js';
 import { fileSha256, localPath } from '../validate.js';
 import { readLocalFile } from '../local-file.js';
 import { readGridCoverage } from '../coverage.js';

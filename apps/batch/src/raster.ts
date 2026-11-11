@@ -1,7 +1,6 @@
 import { performance } from 'node:perf_hooks';
-import { compilePaletteColor, LAYERS, layerPalette, paletteBinIndex, paletteInterpolation, PALETTES, prepareCoverageTester, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type CoverageMask, type GeographicBounds, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
-import { parseRefinementConfig, refinementCandidate, type RefinementGeometry } from '@av/contracts/refinement';
-import { fieldOffset, MAX_PREPARED_SAMPLES, prepareGridAxis, prepareGridSampling, preparePointSampling, QUAD_OFFSETS, samplingCovered, validateSamplingField, type GridField, type PreparedGridAxis, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
+import { compilePaletteColor, LAYERS, layerPalette, paletteBinIndex, paletteInterpolation, PALETTES, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
+import { fieldOffset, prepareGridAxis, prepareGridSampling, QUAD_OFFSETS, type GridField, type PreparedGridAxis, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
 
 export interface RasterPixels { rgba: Uint8Array; blank: boolean }
 export interface RasterMetrics {
@@ -9,29 +8,8 @@ export interface RasterMetrics {
   prepareMs: number; rasterMs: number; tiles: number; blankTiles: number;
   mbtilesWriteWallMs?: number; pmtilesConvertWallMs?: number; pmtilesVerifyWallMs?: number; sqliteWorkMs?: number;
 }
-export interface RasterPatch<Mask extends SamplingMask = CoverageMask> {
-  id: string;
-  geometry: RefinementGeometry;
-  descriptors: { bounds: GeographicBounds };
-  layers: readonly LayerId[];
-  mask: Mask;
-}
-export type RasterPatchFields = Readonly<Record<string, GridField>>;
-
 /** Publish the same sampling rule that rasterization uses for this build. */
 export const RASTER_SAMPLING = { useStoredMslNoLift: true } as const;
-
-/** Each declared layer has a complete field, including unavailable/no-lift cells. */
-export function validateRasterPatchFields(patches: readonly RasterPatch<SamplingMask>[], layer: LayerId, fields: RasterPatchFields = {}): void {
-  const expected = patches.filter(patch => patch.layers.includes(layer));
-  if (Object.keys(fields).length !== expected.length) throw new RangeError('Raster patch field IDs do not match the declared layer');
-  for (const patch of expected) {
-    const field = Object.hasOwn(fields, patch.id) ? fields[patch.id] : undefined;
-    if (!field) throw new RangeError(`Missing or invalid raster patch field: ${patch.id}`);
-    try { validateSamplingField(patch.mask.grid, field, patch.mask); }
-    catch { throw new RangeError(`Missing or invalid raster patch field: ${patch.id}`); }
-  }
-}
 
 function compilePalettes(liftInterpolation?: PaletteColorMode): Record<string, PaletteColorTable> {
   return Object.fromEntries(Object.entries(PALETTES).map(([id, palette]) => [
@@ -47,16 +25,6 @@ export function mercatorPoint(z: number, x: number, y: number, px: number, py: n
   return { lat, lon };
 }
 
-function axes(z: number, x: number, y: number) {
-  const lats = new Float64Array(512), lons = new Float64Array(512);
-  for (let i = 0; i < 256; i++) {
-    lats[i * 2] = mercatorPoint(z, x, y, 0, i + 0.25).lat;
-    lats[i * 2 + 1] = mercatorPoint(z, x, y, 0, i + 0.75).lat;
-    lons[i * 2] = mercatorPoint(z, x, y, i + 0.25, 0).lon;
-    lons[i * 2 + 1] = mercatorPoint(z, x, y, i + 0.75, 0).lon;
-  }
-  return { lats, lons };
-}
 function latitudeCoordinates(z: number, y: number): Float64Array {
   const lats = new Float64Array(512);
   for (let i = 0; i < 256; i++) {
@@ -76,59 +44,7 @@ function longitudeCoordinates(z: number, x: number): Float64Array {
 const NO_COORDINATES = new Float64Array(0);
 
 function preparedTileGeometry(mask: SamplingMask, z: number, x: number, y: number): PreparedGridSampling {
-  const { lats, lons } = axes(z, x, y);
-  return prepareGridSampling(mask, lats, lons);
-}
-
-interface CompositeGeometry {
-  byteLength: number;
-  base: PreparedGridSampling;
-  owners: Uint8Array;
-  offsets: Uint32Array;
-  patches: { index: number; sampling: PreparedGridSampling }[];
-}
-type TileGeometry = PreparedGridSampling | CompositeGeometry;
-function span(axis: Float64Array, low: number, high: number): [number, number] | null {
-  let first = -1, end = 0;
-  for (let i = 0; i < axis.length; i++) if (axis[i] >= low && axis[i] <= high) { if (first < 0) first = i; end = i + 1; }
-  return first < 0 ? null : [first, end];
-}
-function compositeGeometry(mask: SamplingMask, patches: readonly RasterPatch<SamplingMask>[], covered: readonly ((lat: number, lon: number) => boolean)[], z: number, x: number, y: number): TileGeometry {
-  const { lats, lons } = axes(z, x, y), base = prepareGridSampling(mask, lats, lons);
-  const windows = patches.flatMap((patch, index) => {
-    const [w, s, e, n] = patch.descriptors.bounds, xs = span(lons, w, e), ys = span(lats, s, n);
-    return xs && ys ? [{ patch, index, xs, ys, count: 0 }] : [];
-  });
-  if (!windows.length) return base;
-  const owners = new Uint8Array(lats.length * lons.length), candidates = windows.map(window => window.patch);
-  const baseCovered = covered[0];
-  for (const window of windows) {
-    for (let py = window.ys[0]; py < window.ys[1]; py++) for (let px = window.xs[0]; px < window.xs[1]; px++) {
-      const lat = lats[py], lon = lons[px];
-      if (baseCovered(lat, lon) && refinementCandidate(candidates, undefined, lat, lon) === window.patch && covered[window.index + 1](lat, lon)) {
-        owners[py * lons.length + px] = window.index + 1;
-        window.count++;
-      }
-    }
-  }
-  const owned = windows.filter(window => window.count);
-  if (!owned.length) return base;
-  const sampleCount = lats.length * lons.length, offsets = new Uint32Array(sampleCount), prepared: CompositeGeometry['patches'] = [];
-  let aggregate = 0;
-  for (const window of owned) {
-    aggregate += window.count;
-    if (aggregate > MAX_PREPARED_SAMPLES) throw new RangeError('Composite raster geometry exceeds the prepared sample budget');
-    const patchLats = new Float64Array(window.count), patchLons = new Float64Array(window.count);
-    let offset = 0;
-    for (let py = window.ys[0]; py < window.ys[1]; py++) for (let px = window.xs[0]; px < window.xs[1]; px++) {
-      const index = py * lons.length + px;
-      if (owners[index] !== window.index + 1) continue;
-      offsets[index] = offset;
-      patchLats[offset] = lats[py]; patchLons[offset] = lons[px]; offset++;
-    }
-    prepared.push({ index: window.index, sampling: preparePointSampling(patches[window.index].mask, patchLats, patchLons) });
-  }
-  return { base, owners, offsets, patches: prepared, byteLength: base.byteLength + owners.byteLength + offsets.byteLength + prepared.reduce((sum, item) => sum + item.sampling.byteLength, 0) };
+  return prepareGridSampling(mask, latitudeCoordinates(z, y), longitudeCoordinates(z, x));
 }
 
 function samplePixel(
@@ -177,24 +93,11 @@ function samplePixel(
   return true;
 }
 
-function raster(field: GridField, mask: SamplingMask, prepared: TileGeometry, layer: LayerId, palette: PaletteColorTable, patches: readonly RasterPatch<SamplingMask>[] = [], patchFields: RasterPatchFields = {}): { rgba: Uint8Array; blank: boolean } {
+function raster(field: GridField, mask: SamplingMask, prepared: PreparedGridSampling, layer: LayerId, palette: PaletteColorTable): RasterPixels {
   const rgba = new Uint8Array(256 * 256 * 4);
-  const base = 'base' in prepared ? prepared.base : prepared;
-  const baseInto = base.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift);
-  let sampleInto = baseInto, composite = false;
-  if ('base' in prepared) {
-    const samplers: (undefined | ReturnType<PreparedGridSampling['bind']>)[] = [];
-    for (const item of prepared.patches) if (patches[item.index].layers.includes(layer)) {
-      samplers[item.index + 1] = item.sampling.bind(patchFields[patches[item.index].id], layer, RASTER_SAMPLING.useStoredMslNoLift);
-      composite = true;
-    }
-    if (composite) sampleInto = (x, y, out) => {
-      const index = y * base.width + x, owner = samplers[prepared.owners[index]];
-      if (owner) owner(prepared.offsets[index], 0, out); else baseInto(x, y, out);
-    };
-  }
+  const sampleInto = prepared.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift);
   const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
-  if (!composite && !base.contributors.some(idx => {
+  if (!prepared.contributors.some(idx => {
     let offset: number;
     try { offset = fieldOffset(field, idx, mask.grid.width); } catch { return false; }
     return paletteBinIndex(layer, field.values[offset], field.flags[offset], palette.colorCount) >= 0
@@ -214,15 +117,11 @@ function raster(field: GridField, mask: SamplingMask, prepared: TileGeometry, la
 export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, stats: RasterMetrics = {
   geometryBytes: 0, peakGeometryBytes: 0, geometryHits: 0, geometryMisses: 0,
   prepareMs: 0, rasterMs: 0, tiles: 0, blankTiles: 0
-}, patches: readonly RasterPatch<SamplingMask>[] = [], liftInterpolation?: PaletteColorMode) {
+}, liftInterpolation?: PaletteColorMode) {
   if (!Number.isSafeInteger(budget) || budget < 0) throw new RangeError('Invalid raster geometry budget');
   const palettes = liftInterpolation === undefined ? defaultPalettes : compilePalettes(liftInterpolation);
-  if (patches.length) {
-    parseRefinementConfig({ type: 'FeatureCollection', features: patches.map(patch => ({ type: 'Feature', id: patch.id, properties: {}, geometry: patch.geometry })) });
-    for (const patch of patches) if (!patch.layers.length || new Set(patch.layers).size !== patch.layers.length || patch.layers.some(layer => !Object.hasOwn(LAYERS, layer)) || patch.mask.maxZoom !== mask.maxZoom) throw new RangeError('Invalid raster patch layers or zoom');
-  }
-  const covered = patches.length ? [mask, ...patches.map(patch => patch.mask)].map(item => 'coverage' in item ? (lat: number, lon: number) => samplingCovered(item, lat, lon) : prepareCoverageTester(item)) : [];
-  type CachedGeometry = { kind: 'tile'; geometry: TileGeometry; byteLength: number; axes?: PreparedGridAxis[] } | { kind: 'latitude' | 'longitude'; axis: PreparedGridAxis; byteLength: number };
+  type CachedGeometry = { kind: 'tile'; geometry: PreparedGridSampling; byteLength: number; axes?: PreparedGridAxis[] } |
+    { kind: 'latitude' | 'longitude'; axis: PreparedGridAxis; byteLength: number };
   const cache = new Map<string, CachedGeometry>();
   const axisReferences = new Map<PreparedGridAxis, number>();
   const entryAxes = (entry: CachedGeometry) => entry.kind === 'tile' ? entry.axes ?? [] : [entry.axis];
@@ -255,7 +154,7 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
     remember(key, { kind, axis, byteLength: 0 });
     return axis;
   }
-  function geometry(z: number, x: number, y: number): { geometry: TileGeometry; byteLength: number; axes?: PreparedGridAxis[] } {
+  function geometry(z: number, x: number, y: number): { geometry: PreparedGridSampling; byteLength: number; axes?: PreparedGridAxis[] } {
     if (mask.grid.kind !== 'regular-latlon') {
       const geometry = preparedTileGeometry(mask, z, x, y);
       return { geometry, byteLength: geometry.byteLength };
@@ -269,17 +168,14 @@ export function createRasterizer(mask: SamplingMask, budget = 24 * 1024 * 1024, 
     if (found) { stats.geometryHits++; cache.delete(key); cache.set(key, found); return (found as Extract<CachedGeometry, { kind: 'tile' }>).geometry; }
     stats.geometryMisses++;
     const started = performance.now();
-    const result = patches.length
-      ? (() => { const geometry = compositeGeometry(mask, patches, covered, z, x, y); return { geometry, byteLength: geometry.byteLength }; })()
-      : geometry(z, x, y);
+    const result = geometry(z, x, y);
     stats.prepareMs += performance.now() - started;
     remember(key, { kind: 'tile', ...result });
     return result.geometry;
   }
 
-  function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patchFields?: RasterPatchFields) {
-    if (patches.length || patchFields) validateRasterPatchFields(patches, layer, patchFields);
-    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, mask, plan, layer, palettes[layerPalette(layer)], patches, patchFields);
+  function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number): RasterPixels {
+    const plan = prepared(z, x, y), started = performance.now(), result = raster(field, mask, plan, layer, palettes[layerPalette(layer)]);
     stats.rasterMs += performance.now() - started; stats.tiles++;
     if (result.blank) stats.blankTiles++;
     return result;

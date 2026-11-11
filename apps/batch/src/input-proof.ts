@@ -1,9 +1,9 @@
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { coverageIndices, type ModelDefinition } from '@av/contracts';
+import { coverageIndices, matchesFrameIntervals, type ModelDefinition } from '@av/contracts';
 import { validateNormalizedFrame } from '@av/forecast';
 import { loadCoverage } from './coverage.js';
-import { forecastFrame, matchesFrameIntervals } from './frame-build.js';
+import { forecastFrame } from './frame-build.js';
 import type { ResolvableForecastProvider } from './provider.js';
 
 /** Verify every required source field at one public cell through the normal session boundary. */

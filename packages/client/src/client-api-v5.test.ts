@@ -1,12 +1,11 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError } from './index';
-import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, publishedSampleResponseSchema, LIFT_METHOD,
-  computeFreshness, latestSchema, profileResponseSchema, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES,
+import { createWholeDomainDescriptors, createRecipeIdentity, manifestV5Schema, sampleResponseV5Schema, LIFT_METHOD,
+  computeFreshness, latestV5Schema, profileResponseSchema, estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES,
   type LayerId, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import { deriveSoaringViews } from '@av/soaring';
 import { profileRecordBytes } from '@av/forecast';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
 
 const expiresAt = '2026-11-02T00:00:00.000Z';
 const created = '2026-11-01T00:00:00.000Z';
@@ -43,7 +42,7 @@ const manifest: ManifestV5 = manifestV5Schema.parse({
 });
 
 function latestPayload() {
-  return latestSchema.parse({
+  return latestV5Schema.parse({
     pointer: { version: 1, model: 'gfs', latestBuildId: buildId, retained: [{ buildId, manifestKey: `${prefix}/manifest.json`, cycle: created, expiresAt }] },
     manifest,
     templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/gfs/${buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
@@ -109,7 +108,7 @@ function profilePayload(): ProfileResponse {
 }
 
 function samplePayload() {
-  return publishedSampleResponseSchema.parse({
+  return sampleResponseV5Schema.parse({
     version: 5, model: 'gfs', buildId, lat: 0.5, lon: 0.5, method: manifest.method, source: manifest.source, expiresAt,
     surfaces: manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
     frames: manifest.frames.map(frame => ({ ...frame, layers: {
@@ -142,11 +141,21 @@ describe('ApiClient v5 pinning', () => {
     await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
-  it('pins a v5 manifest with native precipitation and fine lift surfaces', async () => {
-    const { client: api, fetchImpl } = client();
+  it.each(['cell-major-block-shards-v1', 'frame-group-block-shards-v1'] as const)('pins native precipitation and fine lift in %s', async format => {
+    const payload = latestPayload();
+    if (format === 'frame-group-block-shards-v1') payload.manifest = {
+      ...manifest, surfaces: manifest.surfaces.map(surface => ({
+        ...surface, samples: { ...surface.samples, format,
+          shards: surface.samples.shards.map((shard, blockShard) => ({
+            ...shard, group: 0, firstFrame: 0, frameCount: 1, blockShard,
+            key: `${prefix}/surfaces/${surface.id}/samples/g0-b${blockShard}.bin`
+          })) }
+      }))
+    };
+    const { client: api, fetchImpl } = client(() => payload);
     const build = await api.latest('gfs');
     expect(fetchImpl).toHaveBeenCalledWith('https://api.test/v1/models/gfs/latest?expand=manifest', expect.anything());
-    expect(build.manifest.version).toBe(5);
+    expect(build.manifest.surfaces.every(surface => surface.samples.format === format)).toBe(true);
     expect(build.templates['precip-rate']).toContain('/precip-rate/');
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
   });
@@ -179,18 +188,10 @@ describe('ApiClient v5 pinning', () => {
     await expect(api.sample(build, { lat: 0.5, lon: 0.5 })).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
-  it('rejects a v5 sample for a legacy pinned build', async () => {
-    const legacy = { ...manifest, version: 3, surfaces: undefined, coverage: { id: 'native-mask', hash: hash('e'), maskKey: `coverage/${hash('e')}/manifest.json`, maxZoom: 0 }, grid: manifest.surfaces[1]!.grid, samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 3, bytes: 15, key: `${prefix}/samples.bin`, sha256: hash('a') }, patches: undefined };
-    const latest = latestSchema.parse({
-      pointer: { version: 1, model: 'gfs', latestBuildId: buildId, retained: [{ buildId, manifestKey: `${prefix}/manifest.json`, cycle: created, expiresAt }] },
-      manifest: legacy,
-      templates: Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/gfs/${buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-      freshness: computeFreshness(legacy, Date.parse(created))
-    });
-    const { fetchImpl, client: api } = client(() => latest);
-    fetchImpl.mockResolvedValueOnce(jsonResponse(samplePayload()));
-    const build = await api.latest('gfs');
-    await expect(api.sample(build, { lat: 0.5, lon: 0.5 })).rejects.toBeInstanceOf(InvalidApiResponseError);
+  it('rejects a legacy expanded manifest at the cutover boundary', async () => {
+    const payload = latestPayload();
+    const { client: api } = client(() => ({ ...payload, manifest: { ...manifest, version: 3 } }));
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
   it('rechecks the pinned v5 expiry after an in-flight sample', async () => {
@@ -243,11 +244,7 @@ describe('ApiClient multi-point samples', () => {
     await expect(api.samples(build, { points })).rejects.toBeInstanceOf(RangeError);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
-  it('reports legacy batch capability before fetching while retaining single samples', async () => {
-    const { fetchImpl, client: api } = client();
-    await expect(api.samples(fixtureBuild({ expiresAt }), { points })).rejects.toMatchObject({ status: 409, code: 'unsupported-publication' });
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+
 });
 
 describe('ApiClient native profiles', () => {

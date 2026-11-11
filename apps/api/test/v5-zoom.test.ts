@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PRODUCTS, LAYER_IDS, LAYERS, MAX_NATIVE_ZOOM, renderedLayers, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
+import { PRODUCTS } from '@av/contracts/models';
+import { LAYER_IDS, LAYERS, MAX_NATIVE_ZOOM, renderedLayers, manifestV5Schema, sampleResponseV5Schema } from '@av/contracts';
 import { describeSparseCoverage } from '../../batch/src/coverage.js';
 import { createApp } from '../src/index';
 import { NOW, commonPoint, createGroupedV5Fixture, createV5Fixture } from './v5-fixture';

@@ -1,49 +1,9 @@
-import z from 'zod';
+import type { Grid, LambertConformalGrid } from './grid-schema.js';
+export type { Grid, LambertConformalGrid, RegularLatLonGrid } from './grid-schema.js';
 
-const finite = z.number().finite();
-const step = finite.refine(value => value !== 0, 'Grid spacing must be nonzero');
-const latitude = finite.min(-90).max(90);
-const interiorLatitude = finite.gt(-90).lt(90);
-const common = {
-  width: z.number().int().positive().max(0x7fffffff),
-  height: z.number().int().positive().max(0x7fffffff),
-  earthRadiusM: finite.positive()
-};
-
-export const regularLatLonGridSchema = z.object({
-  kind: z.literal('regular-latlon'), ...common,
-  lon0: finite, lat0: latitude, dx: step, dy: step, wrapLongitude: z.boolean()
-});
-export const lambertConformalGridSchema = z.object({
-  kind: z.literal('lambert-conformal'), ...common,
-  centralMeridianDeg: finite.min(-180).max(180),
-  latitudeOfOriginDeg: interiorLatitude,
-  standardParallel1Deg: interiorLatitude,
-  standardParallel2Deg: interiorLatitude,
-  /** Coordinates of the first mass-grid cell relative to the projection origin. */
-  x0M: finite, y0M: finite, dxM: step, dyM: step,
-  wrapLongitude: z.literal(false)
-});
-export const gridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema, lambertConformalGridSchema]).superRefine((grid, ctx) => {
-  if (!Number.isSafeInteger(grid.width * grid.height) || grid.width * grid.height >= 0xffffffff) {
-    ctx.addIssue({ code: 'custom', message: 'Grid cell indices exceed uint32' });
-  }
-  if (grid.kind === 'lambert-conformal') {
-    const { n, f, rho0 } = lambertConstants(grid);
-    if (!Number.isFinite(n) || Math.abs(n) < 1e-10 || !Number.isFinite(f) || !Number.isFinite(rho0)) {
-      ctx.addIssue({ code: 'custom', message: 'Degenerate Lambert standard parallels or origin' });
-    }
-  }
-});
-export type RegularLatLonGrid = z.infer<typeof regularLatLonGridSchema>;
-export type LambertConformalGrid = z.infer<typeof lambertConformalGridSchema>;
-export type Grid = z.infer<typeof gridSchema>;
-
-/** Compare declared geometry, independent of JSON property insertion order. */
-export function sameGrid(left: Grid, right: Grid): boolean {
-  const a = gridSchema.safeParse(left), b = gridSchema.safeParse(right);
-  return a.success && b.success && JSON.stringify(a.data) === JSON.stringify(b.data);
-}
+export const MAX_GRID_DIMENSION = 0x7fffffff;
+export const LAMBERT_GRID_FIELDS = ['kind', 'width', 'height', 'earthRadiusM', 'centralMeridianDeg', 'latitudeOfOriginDeg',
+  'standardParallel1Deg', 'standardParallel2Deg', 'x0M', 'y0M', 'dxM', 'dyM', 'wrapLongitude'] as const satisfies readonly (keyof LambertConformalGrid)[];
 
 export type GeographicBounds = readonly [west: number, south: number, east: number, north: number];
 export interface GridPoint { x: number; y: number }
@@ -72,6 +32,31 @@ function lambertConstants(grid: LambertConformalGrid) {
   return { n, f, rho0 };
 }
 
+export function validGridCellCount(grid: Pick<Grid, 'width' | 'height'>): boolean {
+  const cells = grid.width * grid.height;
+  return Number.isSafeInteger(cells) && cells < 0xffffffff;
+}
+
+export function validLambertProjection(grid: LambertConformalGrid): boolean {
+  const { n, f, rho0 } = lambertConstants(grid);
+  return Number.isFinite(n) && Math.abs(n) >= 1e-10 && Number.isFinite(f) && Number.isFinite(rho0);
+}
+
+export function isValidGridGeometry(grid: Grid): boolean {
+  if (!grid || ![grid.width, grid.height].every(size => Number.isSafeInteger(size) && size > 0 && size <= MAX_GRID_DIMENSION)
+      || !validGridCellCount(grid) || !Number.isFinite(grid.earthRadiusM) || grid.earthRadiusM <= 0) return false;
+  const finiteStep = (step: number) => Number.isFinite(step) && step !== 0;
+  if (grid.kind === 'regular-latlon') {
+    return Number.isFinite(grid.lon0) && Number.isFinite(grid.lat0) && Math.abs(grid.lat0) <= 90
+      && finiteStep(grid.dx) && finiteStep(grid.dy) && typeof grid.wrapLongitude === 'boolean';
+  }
+  return grid.kind === 'lambert-conformal' && grid.wrapLongitude === false
+    && Number.isFinite(grid.centralMeridianDeg) && Math.abs(grid.centralMeridianDeg) <= 180
+    && [grid.latitudeOfOriginDeg, grid.standardParallel1Deg, grid.standardParallel2Deg].every(angle => Number.isFinite(angle) && Math.abs(angle) < 90)
+    && Number.isFinite(grid.x0M) && Number.isFinite(grid.y0M) && finiteStep(grid.dxM) && finiteStep(grid.dyM)
+    && validLambertProjection(grid);
+}
+
 export interface GridGeometry {
   geographicToGrid(lat: number, lon: number): GridPoint | null;
   gridToGeographic(x: number, y: number): GeographicPoint | null;
@@ -90,33 +75,35 @@ export interface GridMetrics {
 
 /** Compile one validated spherical geometry. No source fields, shared mutable state or caches. */
 export function prepareGridGeometry(raw: Grid): GridGeometry {
-  const grid = gridSchema.parse(raw);
-  if (grid.kind === 'regular-latlon') {
+  if (!isValidGridGeometry(raw)) throw new RangeError('Invalid grid geometry');
+  if (raw.kind === 'regular-latlon') {
+    const { lon0, lat0, dx, dy, width, earthRadiusM, wrapLongitude } = raw;
     return {
       geographicToGrid(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90) return null;
-        let x = snapGridCoordinate((lon - grid.lon0) / grid.dx);
-        const y = snapGridCoordinate((lat - grid.lat0) / grid.dy);
-        if (grid.wrapLongitude) x = snapGridCoordinate(((x % grid.width) + grid.width) % grid.width);
+        let x = snapGridCoordinate((lon - lon0) / dx);
+        const y = snapGridCoordinate((lat - lat0) / dy);
+        if (wrapLongitude) x = snapGridCoordinate(((x % width) + width) % width);
         return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
       },
       gridToGeographic(x, y) {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-        const lat = grid.lat0 + y * grid.dy, lon = grid.lon0 + x * grid.dx;
+        const lat = lat0 + y * dy, lon = lon0 + x * dx;
         if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon)) return null;
         return { lat, lon: wrapDegrees(lon) };
       },
       rotationAndMetrics(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) >= 90) return null;
-        return { cos: 1, sin: 0, mapScale: null, metersPerColumn: Math.abs(grid.dx) * RAD * grid.earthRadiusM * Math.cos(lat * RAD), metersPerRow: Math.abs(grid.dy) * RAD * grid.earthRadiusM };
+        return { cos: 1, sin: 0, mapScale: null, metersPerColumn: Math.abs(dx) * RAD * earthRadiusM * Math.cos(lat * RAD), metersPerRow: Math.abs(dy) * RAD * earthRadiusM };
       }
     };
   }
-  const { n, f, rho0 } = lambertConstants(grid), sign = Math.sign(n);
+  const { centralMeridianDeg, x0M, y0M, dxM, dyM, earthRadiusM } = raw;
+  const { n, f, rho0 } = lambertConstants(raw), sign = Math.sign(n);
   const project = (lat: number, lon: number) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) >= 90) return null;
-    const theta = n * wrapRadians((lon - grid.centralMeridianDeg) * RAD);
-    const rho = grid.earthRadiusM * f / Math.tan(Math.PI / 4 + lat * RAD / 2) ** n;
+    const theta = n * wrapRadians((lon - centralMeridianDeg) * RAD);
+    const rho = earthRadiusM * f / Math.tan(Math.PI / 4 + lat * RAD / 2) ** n;
     if (!Number.isFinite(rho)) return null;
     return { theta, rho, x: rho * Math.sin(theta), y: rho0 - rho * Math.cos(theta) };
   };
@@ -124,26 +111,26 @@ export function prepareGridGeometry(raw: Grid): GridGeometry {
     geographicToGrid(lat, lon) {
       const point = project(lat, lon);
       if (!point) return null;
-      const x = snapGridCoordinate((point.x - grid.x0M) / grid.dxM), y = snapGridCoordinate((point.y - grid.y0M) / grid.dyM);
+      const x = snapGridCoordinate((point.x - x0M) / dxM), y = snapGridCoordinate((point.y - y0M) / dyM);
       return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
     },
     gridToGeographic(x, y) {
       if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-      const px = grid.x0M + x * grid.dxM, py = grid.y0M + y * grid.dyM;
+      const px = x0M + x * dxM, py = y0M + y * dyM;
       const rho = sign * Math.hypot(px, rho0 - py);
       if (!Number.isFinite(rho) || rho === 0) return null;
       const theta = Math.atan2(sign * px, sign * (rho0 - py));
       if (Math.abs(theta / n) > Math.PI + 1e-12) return null;
-      const lat = (2 * Math.atan((grid.earthRadiusM * f / rho) ** (1 / n)) - Math.PI / 2) / RAD;
-      const lon = wrapDegrees(grid.centralMeridianDeg + theta / n / RAD);
+      const lat = (2 * Math.atan((earthRadiusM * f / rho) ** (1 / n)) - Math.PI / 2) / RAD;
+      const lon = wrapDegrees(centralMeridianDeg + theta / n / RAD);
       return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
     },
     rotationAndMetrics(lat, lon) {
       const point = project(lat, lon);
       if (!point) return null;
-      const mapScale = Math.abs(n * point.rho) / (grid.earthRadiusM * Math.cos(lat * RAD));
+      const mapScale = Math.abs(n * point.rho) / (earthRadiusM * Math.cos(lat * RAD));
       if (!Number.isFinite(mapScale) || mapScale <= 0) return null;
-      return { cos: Math.cos(point.theta), sin: Math.sin(point.theta), mapScale, metersPerColumn: Math.abs(grid.dxM) / mapScale, metersPerRow: Math.abs(grid.dyM) / mapScale };
+      return { cos: Math.cos(point.theta), sin: Math.sin(point.theta), mapScale, metersPerColumn: Math.abs(dxM) / mapScale, metersPerRow: Math.abs(dyM) / mapScale };
     }
   };
 }
@@ -159,4 +146,10 @@ export function gridVectorToEarth(u: number, v: number, rotation: Pick<GridMetri
 }
 export function earthVectorToGrid(east: number, north: number, rotation: Pick<GridMetrics, 'cos' | 'sin'>): { u: number; v: number } {
   return { u: rotation.cos * east - rotation.sin * north, v: rotation.sin * east + rotation.cos * north };
+}
+
+export function normalizeLon(lon: number): number {
+  if (!Number.isFinite(lon)) return lon;
+  const wrapped = ((((lon + 180) % 360) + 360) % 360) - 180;
+  return wrapped === -180 && lon > 0 ? 180 : Object.is(wrapped, -0) ? 0 : wrapped;
 }

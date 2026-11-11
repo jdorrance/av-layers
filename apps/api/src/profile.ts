@@ -1,6 +1,6 @@
 /** Serve bounded profiles and scalar diagnostics from one covered native cell. */
 import {
-  SAMPLE_STATUSES, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, assertProfileLayoutBindingV5,
+  SAMPLE_STATUSES, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes,
   prepareGridGeometry, sparseCoverageLookup, type LayerId, type ManifestV5
 } from '@av/contracts';
 import {
@@ -13,7 +13,7 @@ import { resolveSparseCoverage, sha256 } from './coverage';
 import { reserveAllocation, waitFor, type WaitContext } from './resources';
 import { cached, fail, response } from './http';
 import { readPackedRanges, type PackedRange } from './packed-ranges';
-import { servedSource, type PublishedManifest } from './publication';
+import { servedSource } from './publication';
 import { readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface ReadJob extends PackedRange { apply(bytes: Uint8Array): void }
@@ -22,9 +22,8 @@ const DERIVED_LAYERS: readonly LayerId[] = [
   'thermal-top-msl', 'thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'
 ];
 
-export async function serveProfile(request: Request, bucket: R2Bucket, ctx: WaitContext, manifest: PublishedManifest, url: URL): Promise<Response> {
-  if (manifest.version !== 5) fail(409, 'profile-unavailable', 'This build has no native profiles');
-  const m: ManifestV5 = manifest, surface = m.surfaces.find(item => item.kind === 'native');
+export async function serveProfile(request: Request, bucket: R2Bucket, ctx: WaitContext, m: ManifestV5, url: URL): Promise<Response> {
+  const surface = m.surfaces.find(item => item.kind === 'native');
   if (!surface?.profiles) fail(409, 'profile-unavailable', 'This build has no native profiles');
   const profiles = surface.profiles, { lat, lon } = readPointCoordinates(url);
   const { frames, layers } = selectSampleFields(m, url, surface.layers);
@@ -37,10 +36,9 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
   return cached(canonicalRequest, m.expiresAt, ctx, async () => {
     const releases: (() => void)[] = [reserveAllocation(estimated)];
     try {
-      const lease = await resolveSparseCoverage(bucket, surface, ctx, m.descriptors.bounds, request.signal);
+      const lease = await resolveSparseCoverage(bucket, surface, ctx, m.descriptors.bounds, request.signal, 'profile');
       releases.push(lease.release);
       const { coverage } = lease;
-      assertProfileLayoutBindingV5(surface, { grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.mask.coverage.blockIds });
       const geometry = prepareGridGeometry(surface.grid);
       const neighborhood = samplingCovered(coverage.mask, lat, lon) ? planSample(surface.grid, lat, lon) : null;
       const donor = neighborhood?.contributors.filter(cell => sparseCoverageLookup(coverage.mask.coverage, cell.column, cell.row)?.output).sort((a, b) => b.weight - a.weight)[0];

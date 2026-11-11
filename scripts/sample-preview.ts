@@ -1,14 +1,19 @@
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { coverageDescriptorSchema, forecastGrids, getProvenanceReference, modelPointerSchema, parseProvenance, type ManifestV5, type ModelPointer, type ProductDefinition, type PublishedManifest } from '@av/contracts';
-import { readGridCoverage, readSparseCoverage } from '../apps/batch/src/coverage.js';
+import { modelPointerSchema, type ManifestV5, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { readSparseCoverage } from '../apps/batch/src/coverage.js';
+import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
+import { readLocalProvenance } from '../apps/batch/src/frame-provenance.js';
+import { readLocalFile } from '../apps/batch/src/local-file.js';
+import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
+import { PREPARED_DESCRIPTOR_MAX_BYTES } from '../apps/batch/src/terrain/prepare.js';
+import { fileSha256 } from '../apps/batch/src/validate.js';
 import { validateLocalBuild } from '../apps/batch/src/local-build.js';
-import { forecastObjects } from '../apps/batch/src/publication-objects.js';
+import { forecastObjects, provenanceObjects } from '../apps/batch/src/publication-objects.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
@@ -16,7 +21,7 @@ const wranglerJs = join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 function invariant(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 
-function buildLocalPointer(manifest: PublishedManifest, manifestKey: string): ModelPointer {
+function buildLocalPointer(manifest: ManifestV5, manifestKey: string): ModelPointer {
   return modelPointerSchema.parse({ version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt }] });
 }
 
@@ -34,12 +39,6 @@ export async function openLocalPreviewStore(persistTo: string): Promise<LocalPre
   return { head: key => proxy.env.BUCKET.head(key), put: (key, bytes, options) => proxy.env.BUCKET.put(key, bytes, options), dispose: proxy.dispose };
 }
 
-async function fileHash(path: string): Promise<string> {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return hash.digest('hex');
-}
-
 interface ObjectDependency { key: string; sha256: string; contentType: string }
 
 function record(value: unknown, name: string): Record<string, unknown> {
@@ -50,7 +49,7 @@ function record(value: unknown, name: string): Record<string, unknown> {
 async function terrainDependencies(outputRoot: string, surface: ManifestV5['surfaces'][number]): Promise<ObjectDependency[]> {
   const terrain = surface.terrain;
   if (!terrain) return [];
-  const bytes = await readFile(join(outputRoot, terrain.key));
+  const bytes = await readLocalFile(join(outputRoot, terrain.key), PREPARED_DESCRIPTOR_MAX_BYTES);
   invariant(sha256(bytes) === terrain.sha256, `Terrain manifest hash mismatch: ${terrain.key}`);
   const files = record(record(JSON.parse(bytes.toString('utf8')), 'Terrain descriptor').files, 'Terrain files');
   const dependencies: ObjectDependency[] = [{ key: terrain.key, sha256: terrain.sha256, contentType: 'application/json' }];
@@ -66,26 +65,18 @@ async function terrainDependencies(outputRoot: string, surface: ManifestV5['surf
   return dependencies;
 }
 
-async function previewDependencies(outputRoot: string, manifest: PublishedManifest): Promise<ObjectDependency[]> {
-  if (manifest.version === 5) {
-    const dependencies: ObjectDependency[] = [];
-    for (const surface of manifest.surfaces) {
+async function previewDependencies(outputRoot: string, manifest: ManifestV5): Promise<ObjectDependency[]> {
+  const dependencies: ObjectDependency[] = [];
+  const coverages = new Set<string>();
+  for (const surface of manifest.surfaces) {
+    if (!coverages.has(surface.coverage.hash)) {
+      coverages.add(surface.coverage.hash);
       const { descriptor } = await readSparseCoverage(outputRoot, surface.coverage.hash), prefix = `coverage/${surface.coverage.hash}`;
       invariant(surface.coverage.maskKey === `${prefix}/manifest.json`, `Surface coverage path differs: ${surface.coverage.maskKey}`);
       dependencies.push({ key: surface.coverage.maskKey, sha256: surface.coverage.hash, contentType: 'application/json' });
       for (const name of ['sparse', 'tiles'] as const) dependencies.push({ key: `${prefix}/${name}.bin`, sha256: descriptor.files[name].sha256, contentType: 'application/octet-stream' });
-      dependencies.push(...await terrainDependencies(outputRoot, surface));
     }
-    return dependencies;
-  }
-  const dependencies: ObjectDependency[] = [];
-  for (const grid of forecastGrids(manifest)) {
-    await readGridCoverage(outputRoot, grid);
-    const coverage = coverageDescriptorSchema.parse(JSON.parse((await readFile(join(outputRoot, grid.coverage.maskKey))).toString('utf8')));
-    dependencies.push(
-      ...(['output', 'halo', 'tiles'] as const).map(name => ({ key: `coverage/${grid.coverage.hash}/${name}.bin`, sha256: coverage.files[name].sha256, contentType: 'application/octet-stream' })),
-      { key: grid.coverage.maskKey, sha256: grid.coverage.hash, contentType: 'application/json' }
-    );
+    dependencies.push(...await terrainDependencies(outputRoot, surface));
   }
   return dependencies;
 }
@@ -94,22 +85,22 @@ export interface PreviewOptions {
   manifestPath: string; persistTo?: string; port?: number; reseed?: boolean; fixture?: boolean; seedOnly?: boolean; trustedProduct?: ProductDefinition;
 }
 
-export async function seedLocalBuild(options: PreviewOptions, openStore = openLocalPreviewStore, validate: (manifestPath: string) => Promise<{ root: string; manifest: PublishedManifest }> = manifestPath => validateLocalBuild(manifestPath, options.trustedProduct)): Promise<{ manifest: PublishedManifest; manifestPath: string; persistTo: string; uploadedObjects: number; reusedObjects: number }> {
+export async function seedLocalBuild(options: PreviewOptions, openStore = openLocalPreviewStore) {
   const manifestPath = resolve(options.manifestPath), persistTo = resolve(options.persistTo ?? join(root, '.wrangler', options.fixture ? 'fixture-state' : 'state'));
-  const manifestBytes = await readFile(manifestPath), { root: outputRoot, manifest } = await validate(manifestPath);
+  const product = options.trustedProduct ?? (options.fixture ? OFFLINE_PRODUCT : undefined);
+  const { bytes: manifestBytes, root: outputRoot, manifest } = await validateLocalBuild(manifestPath, product);
+  invariant(manifest.version === 5, 'Local preview requires a v5 build');
   invariant(Date.parse(manifest.expiresAt) > Date.now(), 'Build has expired; regenerate it before previewing');
   const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
   invariant(join(outputRoot, manifestKey) === manifestPath, 'Manifest path must match output/builds/{model}/{buildId}/manifest.json');
   const manifestSha = sha256(manifestBytes), dependencies = await previewDependencies(outputRoot, manifest);
-  const provenance = getProvenanceReference(manifest), provenanceBytes = await readFile(join(outputRoot, provenance.key));
-  invariant(sha256(provenanceBytes) === provenance.sha256, `Provenance hash mismatch: ${provenance.key}`);
-  parseProvenance(JSON.parse(provenanceBytes.toString('utf8')), manifest);
-  dependencies.push({ ...provenance, contentType: 'application/json' }, ...forecastObjects(manifest));
+  const { reference, value: index } = await readLocalProvenance(outputRoot, manifest);
+  dependencies.push({ ...reference, contentType: 'application/json' }, ...provenanceObjects(index), ...forecastObjects(manifest));
   const objects = [];
   for (const object of dependencies) {
     const file = join(outputRoot, object.key), info = await stat(file);
-    invariant(info.isFile() && info.size > 0, `Missing local artifact: ${object.key}`);
-    invariant(await fileHash(file) === object.sha256, `Artifact hash mismatch: ${object.key}`);
+    invariant(info.isFile() && info.size > 0 && info.size <= BUILD_BUDGETS.samplePackBytes, `Missing local artifact: ${object.key}`);
+    invariant(await fileSha256(file, info.size) === object.sha256, `Artifact hash mismatch: ${object.key}`);
     objects.push({ ...object, file, size: info.size });
   }
   const markerDir = join(persistTo, '.sample-preview'), marker = join(markerDir, `${manifest.buildId}-${manifestSha.slice(0, 16)}.json`);
@@ -126,7 +117,7 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
       const existing = force ? null : await store.head(object.key);
       if (existing?.size === object.size && existing.customMetadata?.sha256 === object.sha256) { reusedObjects++; continue; }
       // Sequential uploads keep memory to one local artifact plus the runtime transport.
-      await put(object.key, await readFile(object.file), object.contentType, object.sha256);
+      await put(object.key, await readLocalFile(object.file, object.size, object.size), object.contentType, object.sha256);
     }
     const existingManifest = force ? null : await store.head(manifestKey);
     if (existingManifest?.size === manifestBytes.length && existingManifest.customMetadata?.sha256 === manifestSha) reusedObjects++;

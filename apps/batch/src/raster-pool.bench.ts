@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
-import { DEFAULT_MODEL, MAX_MODEL_WORKERS, coverageAtZoom, expectedTiles, getProduct, type LayerId } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct } from '@av/contracts/models';
+import { MAX_MODEL_WORKERS, coverageAtZoom, expectedTiles, type LayerId } from '@av/contracts';
 import { createRasterizer } from './raster.js';
 import { createRasterPool, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';

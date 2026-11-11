@@ -14,8 +14,8 @@ Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the opti
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-ref <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
-- `capacity`: `--model <string>`, `--frames <string>`, `--layers <string>`, `--models <string>`, `--native-zoom <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
+- `capacity`: `--model <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
 - `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
 - `validate`: `--manifest <string>`, `--receipts-only`.
 
@@ -1018,6 +1018,7 @@ Shared limits and storage constants:
 - `MAX_COVERAGE_DESCRIPTOR_BYTES`: `131072`.
 - `MAX_FORECAST_SHARDS`: `256`.
 - `MAX_GRID_CELLS`: `4000000`.
+- `MAX_GRID_DIMENSION`: `2147483647`.
 - `MAX_JSON_CONTAINER_ENTRIES`: `256`.
 - `MAX_MANIFEST_BYTES`: `524288`.
 - `MAX_MANIFEST_JSON_TOKENS`: `16384`.

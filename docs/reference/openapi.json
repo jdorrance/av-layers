@@ -3,632 +3,16 @@
     "parameters": {},
     "schemas": {
       "PublishedManifest": {
-        "anyOf": [
-          {
-            "properties": {
-              "artifacts": {
-                "items": {
-                  "properties": {
-                    "frame": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "layer": {
-                      "enum": [
-                        "usable-lift-msl",
-                        "usable-lift-agl",
-                        "precip-rate",
-                        "thermal-velocity",
-                        "thermal-top-msl",
-                        "pbl-height-agl",
-                        "sensible-heat-flux",
-                        "latent-heat-flux",
-                        "surface-lcl-msl",
-                        "cape-jkg",
-                        "cloud-cover-total",
-                        "cloud-cover-low",
-                        "sfc-temp-c",
-                        "sfc-dewpoint-c",
-                        "mslp-hpa",
-                        "wind-10m-u",
-                        "wind-10m-v",
-                        "wind-gust-10m",
-                        "bl-mean-wind-u",
-                        "bl-mean-wind-v"
-                      ],
-                      "type": "string"
-                    },
-                    "tilesKey": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "tilesSha256": {
-                      "pattern": "^[a-f0-9]{64}$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "layer",
-                    "frame",
-                    "tilesKey",
-                    "tilesSha256"
-                  ],
-                  "type": "object"
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "items": {
+              "properties": {
+                "frame": {
+                  "minLength": 1,
+                  "type": "string"
                 },
-                "maxItems": 256,
-                "minItems": 1,
-                "type": "array"
-              },
-              "buildId": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "coverage": {
-                "properties": {
-                  "hash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "id": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "maskKey": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "maxZoom": {
-                    "maximum": 10,
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "id",
-                  "hash",
-                  "maskKey",
-                  "maxZoom"
-                ],
-                "type": "object"
-              },
-              "createdAt": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "cycle": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "descriptors": {
-                "properties": {
-                  "attribution": {
-                    "maxLength": 2048,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "bounds": {
-                    "items": {
-                      "anyOf": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "maximum": 90,
-                          "minimum": -90,
-                          "type": "number"
-                        }
-                      ]
-                    },
-                    "maxItems": 4,
-                    "minItems": 4,
-                    "type": "array"
-                  },
-                  "coverageDescription": {
-                    "maxLength": 2048,
-                    "type": "string"
-                  },
-                  "layers": {
-                    "additionalProperties": {
-                      "properties": {
-                        "delivery": {
-                          "enum": [
-                            "tiles-and-samples",
-                            "samples-only"
-                          ],
-                          "type": "string"
-                        },
-                        "hideNonPositiveValues": {
-                          "type": "boolean"
-                        },
-                        "id": {
-                          "enum": [
-                            "usable-lift-msl",
-                            "usable-lift-agl",
-                            "precip-rate",
-                            "thermal-velocity",
-                            "thermal-top-msl",
-                            "pbl-height-agl",
-                            "sensible-heat-flux",
-                            "latent-heat-flux",
-                            "surface-lcl-msl",
-                            "cape-jkg",
-                            "cloud-cover-total",
-                            "cloud-cover-low",
-                            "sfc-temp-c",
-                            "sfc-dewpoint-c",
-                            "mslp-hpa",
-                            "wind-10m-u",
-                            "wind-10m-v",
-                            "wind-gust-10m",
-                            "bl-mean-wind-u",
-                            "bl-mean-wind-v"
-                          ],
-                          "type": "string"
-                        },
-                        "kind": {
-                          "enum": [
-                            "scalar"
-                          ],
-                          "type": "string"
-                        },
-                        "label": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "methodId": {
-                          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                          "type": "string"
-                        },
-                        "noLiftSampleValue": {
-                          "nullable": true,
-                          "type": "number"
-                        },
-                        "palette": {
-                          "enum": [
-                            "lift",
-                            "rain"
-                          ],
-                          "type": "string"
-                        },
-                        "quantity": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "supportsLiftFlags": {
-                          "type": "boolean"
-                        },
-                        "supportsNoLift": {
-                          "type": "boolean"
-                        },
-                        "timeSupport": {
-                          "enum": [
-                            "valid-time",
-                            "interval-mean",
-                            "interval-maximum",
-                            "interval-flux-endpoint-profile"
-                          ],
-                          "type": "string"
-                        },
-                        "units": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "verticalReference": {
-                          "enum": [
-                            "MSL",
-                            "model-AGL",
-                            "terrain-AGL",
-                            "surface",
-                            "pressure-level"
-                          ],
-                          "type": "string"
-                        },
-                        "zeroOnNoLiftInterpolation": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "kind",
-                        "label",
-                        "quantity",
-                        "units",
-                        "verticalReference",
-                        "timeSupport",
-                        "methodId",
-                        "supportsNoLift",
-                        "supportsLiftFlags",
-                        "noLiftSampleValue",
-                        "zeroOnNoLiftInterpolation",
-                        "hideNonPositiveValues"
-                      ],
-                      "type": "object"
-                    },
-                    "type": "object"
-                  },
-                  "maxSampleValues": {
-                    "exclusiveMinimum": true,
-                    "maximum": 256,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "methods": {
-                    "additionalProperties": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "caveats": {
-                          "items": {
-                            "maxLength": 512,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "maxItems": 8,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "id": {
-                          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                          "type": "string"
-                        },
-                        "inputs": {
-                          "additionalProperties": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "dimensions": {
-                                "enum": [
-                                  "cell",
-                                  "level",
-                                  "level-cell"
-                                ],
-                                "type": "string"
-                              },
-                              "id": {
-                                "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                                "type": "string"
-                              },
-                              "missingness": {
-                                "enum": [
-                                  "explicit-cell-mask",
-                                  "all-levels-required"
-                                ],
-                                "type": "string"
-                              },
-                              "quantity": {
-                                "maxLength": 80,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "timeSupport": {
-                                "enum": [
-                                  "static",
-                                  "valid-time",
-                                  "interval-mean",
-                                  "interval-maximum"
-                                ],
-                                "type": "string"
-                              },
-                              "units": {
-                                "maxLength": 24,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "verticalReference": {
-                                "maxLength": 80,
-                                "minLength": 1,
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "quantity",
-                              "units",
-                              "dimensions",
-                              "verticalReference",
-                              "timeSupport",
-                              "missingness"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "object"
-                        },
-                        "outputs": {
-                          "items": {
-                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                            "type": "string"
-                          },
-                          "maxItems": 16,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "parameters": {
-                          "additionalProperties": {
-                            "type": "number"
-                          },
-                          "type": "object"
-                        },
-                        "requiredInputs": {
-                          "items": {
-                            "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                            "type": "string"
-                          },
-                          "maxItems": 16,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "spatialSupport": {
-                          "enum": [
-                            "column",
-                            "bilinear-neighborhood"
-                          ],
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "requiredInputs",
-                        "inputs",
-                        "outputs",
-                        "spatialSupport",
-                        "parameters",
-                        "caveats"
-                      ],
-                      "type": "object"
-                    },
-                    "type": "object"
-                  },
-                  "palettes": {
-                    "items": {
-                      "properties": {
-                        "colors": {
-                          "items": {
-                            "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
-                            "type": "string"
-                          },
-                          "maxItems": 256,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "edges": {
-                          "items": {
-                            "type": "number"
-                          },
-                          "maxItems": 256,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "id": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "interpolation": {
-                          "enum": [
-                            "step",
-                            "linear-rgb"
-                          ],
-                          "type": "string"
-                        },
-                        "noLiftColor": {
-                          "type": "string"
-                        },
-                        "provisional": {
-                          "type": "boolean"
-                        },
-                        "transparentBelow": {
-                          "type": "number"
-                        },
-                        "units": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "edges",
-                        "colors",
-                        "units"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 16,
-                    "minItems": 1,
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "layers",
-                  "palettes",
-                  "methods",
-                  "attribution",
-                  "coverageDescription",
-                  "bounds",
-                  "maxSampleValues"
-                ],
-                "type": "object"
-              },
-              "expiresAt": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "frames": {
-                "items": {
-                  "properties": {
-                    "id": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "intervalEnd": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "intervalStart": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "validTime": {
-                      "format": "date-time",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "validTime",
-                    "intervalStart",
-                    "intervalEnd"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 256,
-                "minItems": 1,
-                "type": "array"
-              },
-              "grid": {
-                "oneOf": [
-                  {
-                    "properties": {
-                      "dx": {
-                        "type": "number"
-                      },
-                      "dy": {
-                        "type": "number"
-                      },
-                      "earthRadiusM": {
-                        "exclusiveMinimum": true,
-                        "minimum": 0,
-                        "type": "number"
-                      },
-                      "height": {
-                        "exclusiveMinimum": true,
-                        "maximum": 2147483647,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "kind": {
-                        "enum": [
-                          "regular-latlon"
-                        ],
-                        "type": "string"
-                      },
-                      "lat0": {
-                        "maximum": 90,
-                        "minimum": -90,
-                        "type": "number"
-                      },
-                      "lon0": {
-                        "type": "number"
-                      },
-                      "width": {
-                        "exclusiveMinimum": true,
-                        "maximum": 2147483647,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "wrapLongitude": {
-                        "type": "boolean"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "width",
-                      "height",
-                      "earthRadiusM",
-                      "lon0",
-                      "lat0",
-                      "dx",
-                      "dy",
-                      "wrapLongitude"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "properties": {
-                      "centralMeridianDeg": {
-                        "maximum": 180,
-                        "minimum": -180,
-                        "type": "number"
-                      },
-                      "dxM": {
-                        "type": "number"
-                      },
-                      "dyM": {
-                        "type": "number"
-                      },
-                      "earthRadiusM": {
-                        "exclusiveMinimum": true,
-                        "minimum": 0,
-                        "type": "number"
-                      },
-                      "height": {
-                        "exclusiveMinimum": true,
-                        "maximum": 2147483647,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "kind": {
-                        "enum": [
-                          "lambert-conformal"
-                        ],
-                        "type": "string"
-                      },
-                      "latitudeOfOriginDeg": {
-                        "exclusiveMaximum": true,
-                        "exclusiveMinimum": true,
-                        "maximum": 90,
-                        "minimum": -90,
-                        "type": "number"
-                      },
-                      "standardParallel1Deg": {
-                        "exclusiveMaximum": true,
-                        "exclusiveMinimum": true,
-                        "maximum": 90,
-                        "minimum": -90,
-                        "type": "number"
-                      },
-                      "standardParallel2Deg": {
-                        "exclusiveMaximum": true,
-                        "exclusiveMinimum": true,
-                        "maximum": 90,
-                        "minimum": -90,
-                        "type": "number"
-                      },
-                      "width": {
-                        "exclusiveMinimum": true,
-                        "maximum": 2147483647,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "wrapLongitude": {
-                        "enum": [
-                          false
-                        ],
-                        "type": "boolean"
-                      },
-                      "x0M": {
-                        "type": "number"
-                      },
-                      "y0M": {
-                        "type": "number"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "width",
-                      "height",
-                      "earthRadiusM",
-                      "centralMeridianDeg",
-                      "latitudeOfOriginDeg",
-                      "standardParallel1Deg",
-                      "standardParallel2Deg",
-                      "x0M",
-                      "y0M",
-                      "dxM",
-                      "dyM",
-                      "wrapLongitude"
-                    ],
-                    "type": "object"
-                  }
-                ]
-              },
-              "layers": {
-                "items": {
+                "layer": {
                   "enum": [
                     "usable-lift-msl",
                     "usable-lift-agl",
@@ -653,1837 +37,938 @@
                   ],
                   "type": "string"
                 },
-                "maxItems": 20,
-                "minItems": 1,
-                "type": "array"
-              },
-              "method": {
-                "properties": {
-                  "hash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "id": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "id",
-                  "hash"
-                ],
-                "type": "object"
-              },
-              "metrics": {
-                "additionalProperties": {
-                  "nullable": true
-                },
-                "type": "object"
-              },
-              "model": {
-                "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                "type": "string"
-              },
-              "palettes": {
-                "items": {
+                "tilesKey": {
                   "minLength": 1,
                   "type": "string"
                 },
-                "minItems": 1,
+                "tilesSha256": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "layer",
+                "frame",
+                "tilesKey",
+                "tilesSha256"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "buildId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "cycle": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "descriptors": {
+            "properties": {
+              "attribution": {
+                "maxLength": 2048,
+                "minLength": 1,
+                "type": "string"
+              },
+              "bounds": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "maximum": 90,
+                      "minimum": -90,
+                      "type": "number"
+                    }
+                  ]
+                },
+                "maxItems": 4,
+                "minItems": 4,
                 "type": "array"
               },
-              "patches": {
-                "items": {
-                  "additionalProperties": false,
+              "coverageDescription": {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              "layers": {
+                "additionalProperties": {
                   "properties": {
-                    "coverage": {
-                      "properties": {
-                        "hash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "id": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maskKey": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxZoom": {
-                          "maximum": 10,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "hash",
-                        "maskKey",
-                        "maxZoom"
+                    "delivery": {
+                      "enum": [
+                        "tiles-and-samples",
+                        "samples-only"
                       ],
-                      "type": "object"
-                    },
-                    "descriptors": {
-                      "properties": {
-                        "attribution": {
-                          "maxLength": 2048,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "bounds": {
-                          "items": {
-                            "anyOf": [
-                              {
-                                "type": "number"
-                              },
-                              {
-                                "maximum": 90,
-                                "minimum": -90,
-                                "type": "number"
-                              }
-                            ]
-                          },
-                          "maxItems": 4,
-                          "minItems": 4,
-                          "type": "array"
-                        },
-                        "coverageDescription": {
-                          "maxLength": 2048,
-                          "type": "string"
-                        },
-                        "layers": {
-                          "additionalProperties": {
-                            "properties": {
-                              "delivery": {
-                                "enum": [
-                                  "tiles-and-samples",
-                                  "samples-only"
-                                ],
-                                "type": "string"
-                              },
-                              "hideNonPositiveValues": {
-                                "type": "boolean"
-                              },
-                              "id": {
-                                "enum": [
-                                  "usable-lift-msl",
-                                  "usable-lift-agl",
-                                  "precip-rate",
-                                  "thermal-velocity",
-                                  "thermal-top-msl",
-                                  "pbl-height-agl",
-                                  "sensible-heat-flux",
-                                  "latent-heat-flux",
-                                  "surface-lcl-msl",
-                                  "cape-jkg",
-                                  "cloud-cover-total",
-                                  "cloud-cover-low",
-                                  "sfc-temp-c",
-                                  "sfc-dewpoint-c",
-                                  "mslp-hpa",
-                                  "wind-10m-u",
-                                  "wind-10m-v",
-                                  "wind-gust-10m",
-                                  "bl-mean-wind-u",
-                                  "bl-mean-wind-v"
-                                ],
-                                "type": "string"
-                              },
-                              "kind": {
-                                "enum": [
-                                  "scalar"
-                                ],
-                                "type": "string"
-                              },
-                              "label": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "methodId": {
-                                "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                                "type": "string"
-                              },
-                              "noLiftSampleValue": {
-                                "nullable": true,
-                                "type": "number"
-                              },
-                              "palette": {
-                                "enum": [
-                                  "lift",
-                                  "rain"
-                                ],
-                                "type": "string"
-                              },
-                              "quantity": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "supportsLiftFlags": {
-                                "type": "boolean"
-                              },
-                              "supportsNoLift": {
-                                "type": "boolean"
-                              },
-                              "timeSupport": {
-                                "enum": [
-                                  "valid-time",
-                                  "interval-mean",
-                                  "interval-maximum",
-                                  "interval-flux-endpoint-profile"
-                                ],
-                                "type": "string"
-                              },
-                              "units": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "verticalReference": {
-                                "enum": [
-                                  "MSL",
-                                  "model-AGL",
-                                  "terrain-AGL",
-                                  "surface",
-                                  "pressure-level"
-                                ],
-                                "type": "string"
-                              },
-                              "zeroOnNoLiftInterpolation": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "kind",
-                              "label",
-                              "quantity",
-                              "units",
-                              "verticalReference",
-                              "timeSupport",
-                              "methodId",
-                              "supportsNoLift",
-                              "supportsLiftFlags",
-                              "noLiftSampleValue",
-                              "zeroOnNoLiftInterpolation",
-                              "hideNonPositiveValues"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "object"
-                        },
-                        "maxSampleValues": {
-                          "exclusiveMinimum": true,
-                          "maximum": 256,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "methods": {
-                          "additionalProperties": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "caveats": {
-                                "items": {
-                                  "maxLength": 512,
-                                  "minLength": 1,
-                                  "type": "string"
-                                },
-                                "maxItems": 8,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "id": {
-                                "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                                "type": "string"
-                              },
-                              "inputs": {
-                                "additionalProperties": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "dimensions": {
-                                      "enum": [
-                                        "cell",
-                                        "level",
-                                        "level-cell"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "id": {
-                                      "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                                      "type": "string"
-                                    },
-                                    "missingness": {
-                                      "enum": [
-                                        "explicit-cell-mask",
-                                        "all-levels-required"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "quantity": {
-                                      "maxLength": 80,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "timeSupport": {
-                                      "enum": [
-                                        "static",
-                                        "valid-time",
-                                        "interval-mean",
-                                        "interval-maximum"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "units": {
-                                      "maxLength": 24,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "verticalReference": {
-                                      "maxLength": 80,
-                                      "minLength": 1,
-                                      "type": "string"
-                                    }
-                                  },
-                                  "required": [
-                                    "id",
-                                    "quantity",
-                                    "units",
-                                    "dimensions",
-                                    "verticalReference",
-                                    "timeSupport",
-                                    "missingness"
-                                  ],
-                                  "type": "object"
-                                },
-                                "type": "object"
-                              },
-                              "outputs": {
-                                "items": {
-                                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                                  "type": "string"
-                                },
-                                "maxItems": 16,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "parameters": {
-                                "additionalProperties": {
-                                  "type": "number"
-                                },
-                                "type": "object"
-                              },
-                              "requiredInputs": {
-                                "items": {
-                                  "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                                  "type": "string"
-                                },
-                                "maxItems": 16,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "spatialSupport": {
-                                "enum": [
-                                  "column",
-                                  "bilinear-neighborhood"
-                                ],
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "requiredInputs",
-                              "inputs",
-                              "outputs",
-                              "spatialSupport",
-                              "parameters",
-                              "caveats"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "object"
-                        },
-                        "palettes": {
-                          "items": {
-                            "properties": {
-                              "colors": {
-                                "items": {
-                                  "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
-                                  "type": "string"
-                                },
-                                "maxItems": 256,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "edges": {
-                                "items": {
-                                  "type": "number"
-                                },
-                                "maxItems": 256,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "id": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "interpolation": {
-                                "enum": [
-                                  "step",
-                                  "linear-rgb"
-                                ],
-                                "type": "string"
-                              },
-                              "noLiftColor": {
-                                "type": "string"
-                              },
-                              "provisional": {
-                                "type": "boolean"
-                              },
-                              "transparentBelow": {
-                                "type": "number"
-                              },
-                              "units": {
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "edges",
-                              "colors",
-                              "units"
-                            ],
-                            "type": "object"
-                          },
-                          "maxItems": 16,
-                          "minItems": 1,
-                          "type": "array"
-                        }
-                      },
-                      "required": [
-                        "layers",
-                        "palettes",
-                        "methods",
-                        "attribution",
-                        "coverageDescription",
-                        "bounds",
-                        "maxSampleValues"
-                      ],
-                      "type": "object"
-                    },
-                    "geometry": {
-                      "oneOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "coordinates": {
-                              "items": {
-                                "items": {
-                                  "items": {
-                                    "anyOf": [
-                                      {
-                                        "maximum": 180,
-                                        "minimum": -180,
-                                        "type": "number"
-                                      },
-                                      {
-                                        "maximum": 80,
-                                        "minimum": -80,
-                                        "type": "number"
-                                      }
-                                    ]
-                                  },
-                                  "maxItems": 2,
-                                  "minItems": 2,
-                                  "type": "array"
-                                },
-                                "maxItems": 256,
-                                "minItems": 4,
-                                "type": "array"
-                              },
-                              "maxItems": 16,
-                              "minItems": 1,
-                              "type": "array"
-                            },
-                            "type": {
-                              "enum": [
-                                "Polygon"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "type",
-                            "coordinates"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "coordinates": {
-                              "items": {
-                                "items": {
-                                  "items": {
-                                    "items": {
-                                      "anyOf": [
-                                        {
-                                          "maximum": 180,
-                                          "minimum": -180,
-                                          "type": "number"
-                                        },
-                                        {
-                                          "maximum": 80,
-                                          "minimum": -80,
-                                          "type": "number"
-                                        }
-                                      ]
-                                    },
-                                    "maxItems": 2,
-                                    "minItems": 2,
-                                    "type": "array"
-                                  },
-                                  "maxItems": 256,
-                                  "minItems": 4,
-                                  "type": "array"
-                                },
-                                "maxItems": 16,
-                                "minItems": 1,
-                                "type": "array"
-                              },
-                              "maxItems": 16,
-                              "minItems": 1,
-                              "type": "array"
-                            },
-                            "type": {
-                              "enum": [
-                                "MultiPolygon"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "type",
-                            "coordinates"
-                          ],
-                          "type": "object"
-                        }
-                      ]
-                    },
-                    "grid": {
-                      "oneOf": [
-                        {
-                          "properties": {
-                            "dx": {
-                              "type": "number"
-                            },
-                            "dy": {
-                              "type": "number"
-                            },
-                            "earthRadiusM": {
-                              "exclusiveMinimum": true,
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "height": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "kind": {
-                              "enum": [
-                                "regular-latlon"
-                              ],
-                              "type": "string"
-                            },
-                            "lat0": {
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "lon0": {
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "wrapLongitude": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "width",
-                            "height",
-                            "earthRadiusM",
-                            "lon0",
-                            "lat0",
-                            "dx",
-                            "dy",
-                            "wrapLongitude"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "properties": {
-                            "centralMeridianDeg": {
-                              "maximum": 180,
-                              "minimum": -180,
-                              "type": "number"
-                            },
-                            "dxM": {
-                              "type": "number"
-                            },
-                            "dyM": {
-                              "type": "number"
-                            },
-                            "earthRadiusM": {
-                              "exclusiveMinimum": true,
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "height": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "kind": {
-                              "enum": [
-                                "lambert-conformal"
-                              ],
-                              "type": "string"
-                            },
-                            "latitudeOfOriginDeg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "standardParallel1Deg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "standardParallel2Deg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "wrapLongitude": {
-                              "enum": [
-                                false
-                              ],
-                              "type": "boolean"
-                            },
-                            "x0M": {
-                              "type": "number"
-                            },
-                            "y0M": {
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "width",
-                            "height",
-                            "earthRadiusM",
-                            "centralMeridianDeg",
-                            "latitudeOfOriginDeg",
-                            "standardParallel1Deg",
-                            "standardParallel2Deg",
-                            "x0M",
-                            "y0M",
-                            "dxM",
-                            "dyM",
-                            "wrapLongitude"
-                          ],
-                          "type": "object"
-                        }
-                      ]
-                    },
-                    "id": {
-                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
                       "type": "string"
                     },
-                    "layers": {
-                      "items": {
-                        "enum": [
-                          "usable-lift-msl",
-                          "usable-lift-agl",
-                          "precip-rate",
-                          "thermal-velocity",
-                          "thermal-top-msl",
-                          "pbl-height-agl",
-                          "sensible-heat-flux",
-                          "latent-heat-flux",
-                          "surface-lcl-msl",
-                          "cape-jkg",
-                          "cloud-cover-total",
-                          "cloud-cover-low",
-                          "sfc-temp-c",
-                          "sfc-dewpoint-c",
-                          "mslp-hpa",
-                          "wind-10m-u",
-                          "wind-10m-v",
-                          "wind-gust-10m",
-                          "bl-mean-wind-u",
-                          "bl-mean-wind-v"
-                        ],
-                        "type": "string"
-                      },
-                      "maxItems": 20,
-                      "minItems": 1,
-                      "type": "array"
+                    "hideNonPositiveValues": {
+                      "type": "boolean"
                     },
-                    "method": {
-                      "properties": {
-                        "hash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "id": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "hash"
+                    "id": {
+                      "enum": [
+                        "usable-lift-msl",
+                        "usable-lift-agl",
+                        "precip-rate",
+                        "thermal-velocity",
+                        "thermal-top-msl",
+                        "pbl-height-agl",
+                        "sensible-heat-flux",
+                        "latent-heat-flux",
+                        "surface-lcl-msl",
+                        "cape-jkg",
+                        "cloud-cover-total",
+                        "cloud-cover-low",
+                        "sfc-temp-c",
+                        "sfc-dewpoint-c",
+                        "mslp-hpa",
+                        "wind-10m-u",
+                        "wind-10m-v",
+                        "wind-gust-10m",
+                        "bl-mean-wind-u",
+                        "bl-mean-wind-v"
                       ],
-                      "type": "object"
+                      "type": "string"
                     },
-                    "samples": {
-                      "properties": {
-                        "blockSize": {
-                          "enum": [
-                            16
-                          ],
-                          "type": "number"
-                        },
-                        "bytes": {
-                          "exclusiveMinimum": true,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "channelCount": {
-                          "exclusiveMinimum": true,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "format": {
-                          "enum": [
-                            "cell-major-blocks-v1"
-                          ],
-                          "type": "string"
-                        },
-                        "key": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "sha256": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "storedCells": {
-                          "exclusiveMinimum": true,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "format",
-                        "blockSize",
-                        "storedCells",
-                        "channelCount",
-                        "bytes",
-                        "key",
-                        "sha256"
+                    "kind": {
+                      "enum": [
+                        "scalar"
                       ],
-                      "type": "object"
+                      "type": "string"
                     },
-                    "terrain": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "dataId": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "key": {
-                          "pattern": "^terrain\\/prepared\\/[a-f0-9]{64}\\/manifest\\.json$",
-                          "type": "string"
-                        },
-                        "sha256": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "surface": {
-                          "maxLength": 80,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "verticalDatum": {
-                          "maxLength": 80,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "dataId",
-                        "key",
-                        "sha256",
-                        "verticalDatum",
-                        "surface"
+                    "label": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "methodId": {
+                      "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                      "type": "string"
+                    },
+                    "noLiftSampleValue": {
+                      "nullable": true,
+                      "type": "number"
+                    },
+                    "palette": {
+                      "enum": [
+                        "lift",
+                        "rain"
                       ],
-                      "type": "object"
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "supportsLiftFlags": {
+                      "type": "boolean"
+                    },
+                    "supportsNoLift": {
+                      "type": "boolean"
+                    },
+                    "timeSupport": {
+                      "enum": [
+                        "valid-time",
+                        "interval-mean",
+                        "interval-maximum",
+                        "interval-flux-endpoint-profile"
+                      ],
+                      "type": "string"
+                    },
+                    "units": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "verticalReference": {
+                      "enum": [
+                        "MSL",
+                        "model-AGL",
+                        "terrain-AGL",
+                        "surface",
+                        "pressure-level"
+                      ],
+                      "type": "string"
+                    },
+                    "zeroOnNoLiftInterpolation": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "id",
-                    "grid",
-                    "coverage",
-                    "geometry",
-                    "descriptors",
-                    "layers",
-                    "samples",
-                    "method",
-                    "terrain"
+                    "kind",
+                    "label",
+                    "quantity",
+                    "units",
+                    "verticalReference",
+                    "timeSupport",
+                    "methodId",
+                    "supportsNoLift",
+                    "supportsLiftFlags",
+                    "noLiftSampleValue",
+                    "zeroOnNoLiftInterpolation",
+                    "hideNonPositiveValues"
+                  ],
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              "maxSampleValues": {
+                "exclusiveMinimum": true,
+                "maximum": 256,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "methods": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "caveats": {
+                      "items": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 8,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "pattern": "^[a-z][a-z0-9._-]{0,127}$",
+                      "type": "string"
+                    },
+                    "inputs": {
+                      "additionalProperties": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "dimensions": {
+                            "enum": [
+                              "cell",
+                              "level",
+                              "level-cell"
+                            ],
+                            "type": "string"
+                          },
+                          "id": {
+                            "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                            "type": "string"
+                          },
+                          "missingness": {
+                            "enum": [
+                              "explicit-cell-mask",
+                              "all-levels-required"
+                            ],
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "timeSupport": {
+                            "enum": [
+                              "static",
+                              "valid-time",
+                              "interval-mean",
+                              "interval-maximum"
+                            ],
+                            "type": "string"
+                          },
+                          "units": {
+                            "maxLength": 24,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "verticalReference": {
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "quantity",
+                          "units",
+                          "dimensions",
+                          "verticalReference",
+                          "timeSupport",
+                          "missingness"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "object"
+                    },
+                    "outputs": {
+                      "items": {
+                        "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "parameters": {
+                      "additionalProperties": {
+                        "type": "number"
+                      },
+                      "type": "object"
+                    },
+                    "requiredInputs": {
+                      "items": {
+                        "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
+                        "type": "string"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "spatialSupport": {
+                      "enum": [
+                        "column",
+                        "bilinear-neighborhood"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "requiredInputs",
+                    "inputs",
+                    "outputs",
+                    "spatialSupport",
+                    "parameters",
+                    "caveats"
+                  ],
+                  "type": "object"
+                },
+                "type": "object"
+              },
+              "palettes": {
+                "items": {
+                  "properties": {
+                    "colors": {
+                      "items": {
+                        "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
+                        "type": "string"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "edges": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "interpolation": {
+                      "enum": [
+                        "step",
+                        "linear-rgb"
+                      ],
+                      "type": "string"
+                    },
+                    "noLiftColor": {
+                      "type": "string"
+                    },
+                    "provisional": {
+                      "type": "boolean"
+                    },
+                    "transparentBelow": {
+                      "type": "number"
+                    },
+                    "units": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "edges",
+                    "colors",
+                    "units"
                   ],
                   "type": "object"
                 },
                 "maxItems": 16,
                 "minItems": 1,
                 "type": "array"
-              },
-              "recipe": {
-                "properties": {
-                  "hash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "id": {
-                    "maxLength": 128,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "lockHash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "source": {
-                    "properties": {
-                      "configurationId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "domainId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "modelFamily": {
-                        "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "modelFamily",
-                      "configurationId",
-                      "domainId"
-                    ],
-                    "type": "object"
-                  },
-                  "sourceDirty": {
-                    "type": "boolean"
-                  },
-                  "sourceRevision": {
-                    "maxLength": 128,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "id",
-                  "hash",
-                  "source",
-                  "sourceRevision",
-                  "sourceDirty",
-                  "lockHash"
-                ],
-                "type": "object"
-              },
-              "samples": {
-                "properties": {
-                  "blockSize": {
-                    "enum": [
-                      16
-                    ],
-                    "type": "number"
-                  },
-                  "bytes": {
-                    "exclusiveMinimum": true,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "channelCount": {
-                    "exclusiveMinimum": true,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "format": {
-                    "enum": [
-                      "cell-major-blocks-v1"
-                    ],
-                    "type": "string"
-                  },
-                  "key": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "sha256": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "storedCells": {
-                    "exclusiveMinimum": true,
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "required": [
-                  "format",
-                  "blockSize",
-                  "storedCells",
-                  "channelCount",
-                  "bytes",
-                  "key",
-                  "sha256"
-                ],
-                "type": "object"
-              },
-              "source": {
-                "additionalProperties": {
-                  "nullable": true
-                },
-                "properties": {
-                  "provenanceKey": {
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "provenanceSha256": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "provider": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "provider",
-                  "provenanceKey",
-                  "provenanceSha256"
-                ],
-                "type": "object"
-              },
-              "tool": {
-                "additionalProperties": {
-                  "nullable": true
-                },
-                "properties": {
-                  "useStoredMslNoLift": {
-                    "enum": [
-                      true
-                    ],
-                    "type": "boolean"
-                  }
-                },
-                "type": "object"
-              },
-              "version": {
-                "anyOf": [
-                  {
-                    "enum": [
-                      3
-                    ],
-                    "type": "number"
-                  },
-                  {
-                    "enum": [
-                      4
-                    ],
-                    "type": "number"
-                  }
-                ]
               }
             },
             "required": [
-              "version",
-              "descriptors",
-              "recipe",
-              "model",
-              "buildId",
-              "cycle",
-              "createdAt",
-              "expiresAt",
-              "method",
-              "coverage",
-              "grid",
-              "frames",
               "layers",
-              "artifacts",
-              "samples",
-              "source",
-              "tool",
               "palettes",
-              "metrics"
+              "methods",
+              "attribution",
+              "coverageDescription",
+              "bounds",
+              "maxSampleValues"
             ],
             "type": "object"
           },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "artifacts": {
-                "items": {
-                  "properties": {
-                    "frame": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "layer": {
-                      "enum": [
-                        "usable-lift-msl",
-                        "usable-lift-agl",
-                        "precip-rate",
-                        "thermal-velocity",
-                        "thermal-top-msl",
-                        "pbl-height-agl",
-                        "sensible-heat-flux",
-                        "latent-heat-flux",
-                        "surface-lcl-msl",
-                        "cape-jkg",
-                        "cloud-cover-total",
-                        "cloud-cover-low",
-                        "sfc-temp-c",
-                        "sfc-dewpoint-c",
-                        "mslp-hpa",
-                        "wind-10m-u",
-                        "wind-10m-v",
-                        "wind-gust-10m",
-                        "bl-mean-wind-u",
-                        "bl-mean-wind-v"
-                      ],
-                      "type": "string"
-                    },
-                    "tilesKey": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "tilesSha256": {
-                      "pattern": "^[a-f0-9]{64}$",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "layer",
-                    "frame",
-                    "tilesKey",
-                    "tilesSha256"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 256,
-                "minItems": 1,
-                "type": "array"
-              },
-              "buildId": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "createdAt": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "cycle": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "descriptors": {
-                "properties": {
-                  "attribution": {
-                    "maxLength": 2048,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "bounds": {
-                    "items": {
-                      "anyOf": [
-                        {
-                          "type": "number"
-                        },
-                        {
-                          "maximum": 90,
-                          "minimum": -90,
-                          "type": "number"
-                        }
-                      ]
-                    },
-                    "maxItems": 4,
-                    "minItems": 4,
-                    "type": "array"
-                  },
-                  "coverageDescription": {
-                    "maxLength": 2048,
-                    "type": "string"
-                  },
-                  "layers": {
-                    "additionalProperties": {
-                      "properties": {
-                        "delivery": {
-                          "enum": [
-                            "tiles-and-samples",
-                            "samples-only"
-                          ],
-                          "type": "string"
-                        },
-                        "hideNonPositiveValues": {
-                          "type": "boolean"
-                        },
-                        "id": {
-                          "enum": [
-                            "usable-lift-msl",
-                            "usable-lift-agl",
-                            "precip-rate",
-                            "thermal-velocity",
-                            "thermal-top-msl",
-                            "pbl-height-agl",
-                            "sensible-heat-flux",
-                            "latent-heat-flux",
-                            "surface-lcl-msl",
-                            "cape-jkg",
-                            "cloud-cover-total",
-                            "cloud-cover-low",
-                            "sfc-temp-c",
-                            "sfc-dewpoint-c",
-                            "mslp-hpa",
-                            "wind-10m-u",
-                            "wind-10m-v",
-                            "wind-gust-10m",
-                            "bl-mean-wind-u",
-                            "bl-mean-wind-v"
-                          ],
-                          "type": "string"
-                        },
-                        "kind": {
-                          "enum": [
-                            "scalar"
-                          ],
-                          "type": "string"
-                        },
-                        "label": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "methodId": {
-                          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                          "type": "string"
-                        },
-                        "noLiftSampleValue": {
-                          "nullable": true,
-                          "type": "number"
-                        },
-                        "palette": {
-                          "enum": [
-                            "lift",
-                            "rain"
-                          ],
-                          "type": "string"
-                        },
-                        "quantity": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "supportsLiftFlags": {
-                          "type": "boolean"
-                        },
-                        "supportsNoLift": {
-                          "type": "boolean"
-                        },
-                        "timeSupport": {
-                          "enum": [
-                            "valid-time",
-                            "interval-mean",
-                            "interval-maximum",
-                            "interval-flux-endpoint-profile"
-                          ],
-                          "type": "string"
-                        },
-                        "units": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "verticalReference": {
-                          "enum": [
-                            "MSL",
-                            "model-AGL",
-                            "terrain-AGL",
-                            "surface",
-                            "pressure-level"
-                          ],
-                          "type": "string"
-                        },
-                        "zeroOnNoLiftInterpolation": {
-                          "type": "boolean"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "kind",
-                        "label",
-                        "quantity",
-                        "units",
-                        "verticalReference",
-                        "timeSupport",
-                        "methodId",
-                        "supportsNoLift",
-                        "supportsLiftFlags",
-                        "noLiftSampleValue",
-                        "zeroOnNoLiftInterpolation",
-                        "hideNonPositiveValues"
-                      ],
-                      "type": "object"
-                    },
-                    "type": "object"
-                  },
-                  "maxSampleValues": {
-                    "exclusiveMinimum": true,
-                    "maximum": 256,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "methods": {
-                    "additionalProperties": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "caveats": {
-                          "items": {
-                            "maxLength": 512,
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "maxItems": 8,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "id": {
-                          "pattern": "^[a-z][a-z0-9._-]{0,127}$",
-                          "type": "string"
-                        },
-                        "inputs": {
-                          "additionalProperties": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "dimensions": {
-                                "enum": [
-                                  "cell",
-                                  "level",
-                                  "level-cell"
-                                ],
-                                "type": "string"
-                              },
-                              "id": {
-                                "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                                "type": "string"
-                              },
-                              "missingness": {
-                                "enum": [
-                                  "explicit-cell-mask",
-                                  "all-levels-required"
-                                ],
-                                "type": "string"
-                              },
-                              "quantity": {
-                                "maxLength": 80,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "timeSupport": {
-                                "enum": [
-                                  "static",
-                                  "valid-time",
-                                  "interval-mean",
-                                  "interval-maximum"
-                                ],
-                                "type": "string"
-                              },
-                              "units": {
-                                "maxLength": 24,
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "verticalReference": {
-                                "maxLength": 80,
-                                "minLength": 1,
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "quantity",
-                              "units",
-                              "dimensions",
-                              "verticalReference",
-                              "timeSupport",
-                              "missingness"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "object"
-                        },
-                        "outputs": {
-                          "items": {
-                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                            "type": "string"
-                          },
-                          "maxItems": 16,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "parameters": {
-                          "additionalProperties": {
-                            "type": "number"
-                          },
-                          "type": "object"
-                        },
-                        "requiredInputs": {
-                          "items": {
-                            "pattern": "^[a-z][A-Za-z0-9_-]{0,63}$",
-                            "type": "string"
-                          },
-                          "maxItems": 16,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "spatialSupport": {
-                          "enum": [
-                            "column",
-                            "bilinear-neighborhood"
-                          ],
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "requiredInputs",
-                        "inputs",
-                        "outputs",
-                        "spatialSupport",
-                        "parameters",
-                        "caveats"
-                      ],
-                      "type": "object"
-                    },
-                    "type": "object"
-                  },
-                  "palettes": {
-                    "items": {
-                      "properties": {
-                        "colors": {
-                          "items": {
-                            "pattern": "^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$",
-                            "type": "string"
-                          },
-                          "maxItems": 256,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "edges": {
-                          "items": {
-                            "type": "number"
-                          },
-                          "maxItems": 256,
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "id": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "interpolation": {
-                          "enum": [
-                            "step",
-                            "linear-rgb"
-                          ],
-                          "type": "string"
-                        },
-                        "noLiftColor": {
-                          "type": "string"
-                        },
-                        "provisional": {
-                          "type": "boolean"
-                        },
-                        "transparentBelow": {
-                          "type": "number"
-                        },
-                        "units": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "edges",
-                        "colors",
-                        "units"
-                      ],
-                      "type": "object"
-                    },
-                    "maxItems": 16,
-                    "minItems": 1,
-                    "type": "array"
-                  }
-                },
-                "required": [
-                  "layers",
-                  "palettes",
-                  "methods",
-                  "attribution",
-                  "coverageDescription",
-                  "bounds",
-                  "maxSampleValues"
-                ],
-                "type": "object"
-              },
-              "expiresAt": {
-                "format": "date-time",
-                "type": "string"
-              },
-              "frames": {
-                "items": {
-                  "properties": {
-                    "id": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "intervalEnd": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "intervalStart": {
-                      "format": "date-time",
-                      "type": "string"
-                    },
-                    "validTime": {
-                      "format": "date-time",
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "validTime",
-                    "intervalStart",
-                    "intervalEnd"
-                  ],
-                  "type": "object"
-                },
-                "maxItems": 256,
-                "minItems": 1,
-                "type": "array"
-              },
-              "layers": {
-                "items": {
-                  "enum": [
-                    "usable-lift-msl",
-                    "usable-lift-agl",
-                    "precip-rate",
-                    "thermal-velocity",
-                    "thermal-top-msl",
-                    "pbl-height-agl",
-                    "sensible-heat-flux",
-                    "latent-heat-flux",
-                    "surface-lcl-msl",
-                    "cape-jkg",
-                    "cloud-cover-total",
-                    "cloud-cover-low",
-                    "sfc-temp-c",
-                    "sfc-dewpoint-c",
-                    "mslp-hpa",
-                    "wind-10m-u",
-                    "wind-10m-v",
-                    "wind-gust-10m",
-                    "bl-mean-wind-u",
-                    "bl-mean-wind-v"
-                  ],
-                  "type": "string"
-                },
-                "maxItems": 20,
-                "minItems": 1,
-                "type": "array"
-              },
-              "mapFrameCount": {
-                "exclusiveMinimum": true,
-                "maximum": 9007199254740991,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "method": {
-                "properties": {
-                  "hash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "id": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "id",
-                  "hash"
-                ],
-                "type": "object"
-              },
-              "metrics": {
-                "additionalProperties": {
-                  "nullable": true
-                },
-                "type": "object"
-              },
-              "model": {
-                "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                "type": "string"
-              },
-              "palettes": {
-                "items": {
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "frames": {
+            "items": {
+              "properties": {
+                "id": {
                   "minLength": 1,
                   "type": "string"
                 },
-                "minItems": 1,
-                "type": "array"
-              },
-              "recipe": {
-                "properties": {
-                  "hash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "id": {
-                    "maxLength": 128,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "lockHash": {
-                    "pattern": "^[a-f0-9]{64}$",
-                    "type": "string"
-                  },
-                  "source": {
-                    "properties": {
-                      "configurationId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "domainId": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "modelFamily": {
-                        "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "modelFamily",
-                      "configurationId",
-                      "domainId"
-                    ],
-                    "type": "object"
-                  },
-                  "sourceDirty": {
-                    "type": "boolean"
-                  },
-                  "sourceRevision": {
-                    "maxLength": 128,
-                    "minLength": 1,
-                    "type": "string"
-                  }
+                "intervalEnd": {
+                  "format": "date-time",
+                  "type": "string"
                 },
-                "required": [
-                  "id",
-                  "hash",
-                  "source",
-                  "sourceRevision",
-                  "sourceDirty",
-                  "lockHash"
-                ],
-                "type": "object"
+                "intervalStart": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "validTime": {
+                  "format": "date-time",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "validTime",
+                "intervalStart",
+                "intervalEnd"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          },
+          "layers": {
+            "items": {
+              "enum": [
+                "usable-lift-msl",
+                "usable-lift-agl",
+                "precip-rate",
+                "thermal-velocity",
+                "thermal-top-msl",
+                "pbl-height-agl",
+                "sensible-heat-flux",
+                "latent-heat-flux",
+                "surface-lcl-msl",
+                "cape-jkg",
+                "cloud-cover-total",
+                "cloud-cover-low",
+                "sfc-temp-c",
+                "sfc-dewpoint-c",
+                "mslp-hpa",
+                "wind-10m-u",
+                "wind-10m-v",
+                "wind-gust-10m",
+                "bl-mean-wind-u",
+                "bl-mean-wind-v"
+              ],
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "mapFrameCount": {
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "method": {
+            "properties": {
+              "hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "id": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "hash"
+            ],
+            "type": "object"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "nullable": true
+            },
+            "type": "object"
+          },
+          "model": {
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "type": "string"
+          },
+          "palettes": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "recipe": {
+            "properties": {
+              "hash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "lockHash": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
               },
               "source": {
-                "additionalProperties": {
-                  "nullable": true
-                },
                 "properties": {
-                  "provenanceKey": {
+                  "configurationId": {
                     "minLength": 1,
                     "type": "string"
                   },
-                  "provenanceSha256": {
-                    "pattern": "^[a-f0-9]{64}$",
+                  "domainId": {
+                    "minLength": 1,
                     "type": "string"
                   },
-                  "provider": {
-                    "minLength": 1,
+                  "modelFamily": {
+                    "pattern": "^[a-z][a-z0-9-]{0,63}$",
                     "type": "string"
                   }
                 },
                 "required": [
-                  "provider",
-                  "provenanceKey",
-                  "provenanceSha256"
+                  "modelFamily",
+                  "configurationId",
+                  "domainId"
                 ],
                 "type": "object"
               },
-              "surfaces": {
-                "items": {
+              "sourceDirty": {
+                "type": "boolean"
+              },
+              "sourceRevision": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "hash",
+              "source",
+              "sourceRevision",
+              "sourceDirty",
+              "lockHash"
+            ],
+            "type": "object"
+          },
+          "source": {
+            "additionalProperties": {
+              "nullable": true
+            },
+            "properties": {
+              "provenanceKey": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "provenanceSha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              },
+              "provider": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "provenanceKey",
+              "provenanceSha256"
+            ],
+            "type": "object"
+          },
+          "surfaces": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "coverage": {
                   "additionalProperties": false,
                   "properties": {
-                    "coverage": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "gridHash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "hash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "id": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maskKey": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxZoom": {
-                          "maximum": 10,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "hash",
-                        "maskKey",
-                        "maxZoom",
-                        "gridHash"
-                      ],
-                      "type": "object"
-                    },
-                    "grid": {
-                      "oneOf": [
-                        {
-                          "properties": {
-                            "dx": {
-                              "type": "number"
-                            },
-                            "dy": {
-                              "type": "number"
-                            },
-                            "earthRadiusM": {
-                              "exclusiveMinimum": true,
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "height": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "kind": {
-                              "enum": [
-                                "regular-latlon"
-                              ],
-                              "type": "string"
-                            },
-                            "lat0": {
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "lon0": {
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "wrapLongitude": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "width",
-                            "height",
-                            "earthRadiusM",
-                            "lon0",
-                            "lat0",
-                            "dx",
-                            "dy",
-                            "wrapLongitude"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "properties": {
-                            "centralMeridianDeg": {
-                              "maximum": 180,
-                              "minimum": -180,
-                              "type": "number"
-                            },
-                            "dxM": {
-                              "type": "number"
-                            },
-                            "dyM": {
-                              "type": "number"
-                            },
-                            "earthRadiusM": {
-                              "exclusiveMinimum": true,
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "height": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "kind": {
-                              "enum": [
-                                "lambert-conformal"
-                              ],
-                              "type": "string"
-                            },
-                            "latitudeOfOriginDeg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "standardParallel1Deg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "standardParallel2Deg": {
-                              "exclusiveMaximum": true,
-                              "exclusiveMinimum": true,
-                              "maximum": 90,
-                              "minimum": -90,
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": true,
-                              "maximum": 2147483647,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "wrapLongitude": {
-                              "enum": [
-                                false
-                              ],
-                              "type": "boolean"
-                            },
-                            "x0M": {
-                              "type": "number"
-                            },
-                            "y0M": {
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "kind",
-                            "width",
-                            "height",
-                            "earthRadiusM",
-                            "centralMeridianDeg",
-                            "latitudeOfOriginDeg",
-                            "standardParallel1Deg",
-                            "standardParallel2Deg",
-                            "x0M",
-                            "y0M",
-                            "dxM",
-                            "dyM",
-                            "wrapLongitude"
-                          ],
-                          "type": "object"
-                        }
-                      ]
-                    },
                     "gridHash": {
                       "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
-                    "id": {
-                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                    "hash": {
+                      "pattern": "^[a-f0-9]{64}$",
                       "type": "string"
                     },
-                    "kind": {
+                    "id": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maskKey": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxZoom": {
+                      "maximum": 10,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "hash",
+                    "maskKey",
+                    "maxZoom",
+                    "gridHash"
+                  ],
+                  "type": "object"
+                },
+                "grid": {
+                  "oneOf": [
+                    {
+                      "properties": {
+                        "dx": {
+                          "type": "number"
+                        },
+                        "dy": {
+                          "type": "number"
+                        },
+                        "earthRadiusM": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "height": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "enum": [
+                            "regular-latlon"
+                          ],
+                          "type": "string"
+                        },
+                        "lat0": {
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "lon0": {
+                          "type": "number"
+                        },
+                        "width": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "wrapLongitude": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "width",
+                        "height",
+                        "earthRadiusM",
+                        "lon0",
+                        "lat0",
+                        "dx",
+                        "dy",
+                        "wrapLongitude"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "centralMeridianDeg": {
+                          "maximum": 180,
+                          "minimum": -180,
+                          "type": "number"
+                        },
+                        "dxM": {
+                          "type": "number"
+                        },
+                        "dyM": {
+                          "type": "number"
+                        },
+                        "earthRadiusM": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "height": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "enum": [
+                            "lambert-conformal"
+                          ],
+                          "type": "string"
+                        },
+                        "latitudeOfOriginDeg": {
+                          "exclusiveMaximum": true,
+                          "exclusiveMinimum": true,
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "standardParallel1Deg": {
+                          "exclusiveMaximum": true,
+                          "exclusiveMinimum": true,
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "standardParallel2Deg": {
+                          "exclusiveMaximum": true,
+                          "exclusiveMinimum": true,
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "width": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "wrapLongitude": {
+                          "enum": [
+                            false
+                          ],
+                          "type": "boolean"
+                        },
+                        "x0M": {
+                          "type": "number"
+                        },
+                        "y0M": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "width",
+                        "height",
+                        "earthRadiusM",
+                        "centralMeridianDeg",
+                        "latitudeOfOriginDeg",
+                        "standardParallel1Deg",
+                        "standardParallel2Deg",
+                        "x0M",
+                        "y0M",
+                        "dxM",
+                        "dyM",
+                        "wrapLongitude"
+                      ],
+                      "type": "object"
+                    }
+                  ]
+                },
+                "gridHash": {
+                  "pattern": "^[a-f0-9]{64}$",
+                  "type": "string"
+                },
+                "id": {
+                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "native",
+                    "fine"
+                  ],
+                  "type": "string"
+                },
+                "layers": {
+                  "items": {
+                    "enum": [
+                      "usable-lift-msl",
+                      "usable-lift-agl",
+                      "precip-rate",
+                      "thermal-velocity",
+                      "thermal-top-msl",
+                      "pbl-height-agl",
+                      "sensible-heat-flux",
+                      "latent-heat-flux",
+                      "surface-lcl-msl",
+                      "cape-jkg",
+                      "cloud-cover-total",
+                      "cloud-cover-low",
+                      "sfc-temp-c",
+                      "sfc-dewpoint-c",
+                      "mslp-hpa",
+                      "wind-10m-u",
+                      "wind-10m-v",
+                      "wind-gust-10m",
+                      "bl-mean-wind-u",
+                      "bl-mean-wind-v"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 20,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "profiles": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "blockCount": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "blockSize": {
                       "enum": [
-                        "native",
-                        "fine"
+                        16
+                      ],
+                      "type": "number"
+                    },
+                    "coverageHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "format": {
+                      "enum": [
+                        "native-column-profile-v1"
                       ],
                       "type": "string"
                     },
-                    "layers": {
+                    "groups": {
                       "items": {
-                        "enum": [
-                          "usable-lift-msl",
-                          "usable-lift-agl",
-                          "precip-rate",
-                          "thermal-velocity",
-                          "thermal-top-msl",
-                          "pbl-height-agl",
-                          "sensible-heat-flux",
-                          "latent-heat-flux",
-                          "surface-lcl-msl",
-                          "cape-jkg",
-                          "cloud-cover-total",
-                          "cloud-cover-low",
-                          "sfc-temp-c",
-                          "sfc-dewpoint-c",
-                          "mslp-hpa",
-                          "wind-10m-u",
-                          "wind-10m-v",
-                          "wind-gust-10m",
-                          "bl-mean-wind-u",
-                          "bl-mean-wind-v"
+                        "additionalProperties": false,
+                        "properties": {
+                          "firstFrame": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "frameCount": {
+                            "exclusiveMinimum": true,
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "shards": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "blockCount": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "bytes": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 67108864,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "firstBlock": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                },
+                                "key": {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "sha256": {
+                                  "pattern": "^[a-f0-9]{64}$",
+                                  "type": "string"
+                                },
+                                "storedCells": {
+                                  "exclusiveMinimum": true,
+                                  "maximum": 9007199254740991,
+                                  "minimum": 0,
+                                  "type": "integer"
+                                }
+                              },
+                              "required": [
+                                "firstBlock",
+                                "blockCount",
+                                "storedCells",
+                                "bytes",
+                                "key",
+                                "sha256"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 256,
+                            "minItems": 1,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "firstFrame",
+                          "frameCount",
+                          "shards"
                         ],
-                        "type": "string"
+                        "type": "object"
                       },
-                      "maxItems": 20,
+                      "maxItems": 256,
                       "minItems": 1,
                       "type": "array"
                     },
-                    "profiles": {
+                    "levelCount": {
+                      "exclusiveMinimum": true,
+                      "maximum": 256,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "recordBytes": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "storedCells": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "blockSize",
+                    "levelCount",
+                    "recordBytes",
+                    "coverageHash",
+                    "blockCount",
+                    "storedCells",
+                    "groups"
+                  ],
+                  "type": "object"
+                },
+                "samples": {
+                  "oneOf": [
+                    {
                       "additionalProperties": false,
                       "properties": {
                         "blockCount": {
@@ -2498,20 +983,159 @@
                           ],
                           "type": "number"
                         },
+                        "channelCount": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "channelOrder": {
+                          "enum": [
+                            "frame-then-layer"
+                          ],
+                          "type": "string"
+                        },
                         "coverageHash": {
                           "pattern": "^[a-f0-9]{64}$",
                           "type": "string"
                         },
                         "format": {
                           "enum": [
-                            "native-column-profile-v1"
+                            "cell-major-block-shards-v1"
                           ],
                           "type": "string"
                         },
-                        "groups": {
+                        "shards": {
                           "items": {
                             "additionalProperties": false,
                             "properties": {
+                              "blockCount": {
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "bytes": {
+                                "exclusiveMinimum": true,
+                                "maximum": 67108864,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "firstBlock": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "key": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sha256": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "storedCells": {
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "firstBlock",
+                              "blockCount",
+                              "storedCells",
+                              "bytes",
+                              "key",
+                              "sha256"
+                            ],
+                            "type": "object"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "storedCells": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "blockSize",
+                        "channelOrder",
+                        "channelCount",
+                        "coverageHash",
+                        "blockCount",
+                        "storedCells",
+                        "format",
+                        "shards"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blockCount": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "blockSize": {
+                          "enum": [
+                            16
+                          ],
+                          "type": "number"
+                        },
+                        "channelCount": {
+                          "exclusiveMinimum": true,
+                          "maximum": 9007199254740991,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "channelOrder": {
+                          "enum": [
+                            "frame-then-layer"
+                          ],
+                          "type": "string"
+                        },
+                        "coverageHash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "format": {
+                          "enum": [
+                            "frame-group-block-shards-v1"
+                          ],
+                          "type": "string"
+                        },
+                        "shards": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "blockCount": {
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "blockShard": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "bytes": {
+                                "exclusiveMinimum": true,
+                                "maximum": 67108864,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "firstBlock": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
                               "firstFrame": {
                                 "maximum": 9007199254740991,
                                 "minimum": 0,
@@ -2523,79 +1147,42 @@
                                 "minimum": 0,
                                 "type": "integer"
                               },
-                              "shards": {
-                                "items": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "blockCount": {
-                                      "exclusiveMinimum": true,
-                                      "maximum": 9007199254740991,
-                                      "minimum": 0,
-                                      "type": "integer"
-                                    },
-                                    "bytes": {
-                                      "exclusiveMinimum": true,
-                                      "maximum": 67108864,
-                                      "minimum": 0,
-                                      "type": "integer"
-                                    },
-                                    "firstBlock": {
-                                      "maximum": 9007199254740991,
-                                      "minimum": 0,
-                                      "type": "integer"
-                                    },
-                                    "key": {
-                                      "minLength": 1,
-                                      "type": "string"
-                                    },
-                                    "sha256": {
-                                      "pattern": "^[a-f0-9]{64}$",
-                                      "type": "string"
-                                    },
-                                    "storedCells": {
-                                      "exclusiveMinimum": true,
-                                      "maximum": 9007199254740991,
-                                      "minimum": 0,
-                                      "type": "integer"
-                                    }
-                                  },
-                                  "required": [
-                                    "firstBlock",
-                                    "blockCount",
-                                    "storedCells",
-                                    "bytes",
-                                    "key",
-                                    "sha256"
-                                  ],
-                                  "type": "object"
-                                },
-                                "maxItems": 256,
-                                "minItems": 1,
-                                "type": "array"
+                              "group": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "key": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "sha256": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "storedCells": {
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
                               }
                             },
                             "required": [
+                              "firstBlock",
+                              "blockCount",
+                              "storedCells",
+                              "bytes",
+                              "key",
+                              "sha256",
+                              "group",
                               "firstFrame",
                               "frameCount",
-                              "shards"
+                              "blockShard"
                             ],
                             "type": "object"
                           },
-                          "maxItems": 256,
                           "minItems": 1,
                           "type": "array"
-                        },
-                        "levelCount": {
-                          "exclusiveMinimum": true,
-                          "maximum": 256,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "recordBytes": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
                         },
                         "storedCells": {
                           "exclusiveMinimum": true,
@@ -2605,367 +1192,128 @@
                         }
                       },
                       "required": [
-                        "format",
                         "blockSize",
-                        "levelCount",
-                        "recordBytes",
+                        "channelOrder",
+                        "channelCount",
                         "coverageHash",
                         "blockCount",
                         "storedCells",
-                        "groups"
-                      ],
-                      "type": "object"
-                    },
-                    "samples": {
-                      "oneOf": [
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "blockCount": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "blockSize": {
-                              "enum": [
-                                16
-                              ],
-                              "type": "number"
-                            },
-                            "channelCount": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "channelOrder": {
-                              "enum": [
-                                "frame-then-layer"
-                              ],
-                              "type": "string"
-                            },
-                            "coverageHash": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "format": {
-                              "enum": [
-                                "cell-major-block-shards-v1"
-                              ],
-                              "type": "string"
-                            },
-                            "shards": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "blockCount": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "bytes": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 67108864,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "firstBlock": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "key": {
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "sha256": {
-                                    "pattern": "^[a-f0-9]{64}$",
-                                    "type": "string"
-                                  },
-                                  "storedCells": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  }
-                                },
-                                "required": [
-                                  "firstBlock",
-                                  "blockCount",
-                                  "storedCells",
-                                  "bytes",
-                                  "key",
-                                  "sha256"
-                                ],
-                                "type": "object"
-                              },
-                              "minItems": 1,
-                              "type": "array"
-                            },
-                            "storedCells": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "blockSize",
-                            "channelOrder",
-                            "channelCount",
-                            "coverageHash",
-                            "blockCount",
-                            "storedCells",
-                            "format",
-                            "shards"
-                          ],
-                          "type": "object"
-                        },
-                        {
-                          "additionalProperties": false,
-                          "properties": {
-                            "blockCount": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "blockSize": {
-                              "enum": [
-                                16
-                              ],
-                              "type": "number"
-                            },
-                            "channelCount": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "channelOrder": {
-                              "enum": [
-                                "frame-then-layer"
-                              ],
-                              "type": "string"
-                            },
-                            "coverageHash": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "format": {
-                              "enum": [
-                                "frame-group-block-shards-v1"
-                              ],
-                              "type": "string"
-                            },
-                            "shards": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "blockCount": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "blockShard": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "bytes": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 67108864,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "firstBlock": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "firstFrame": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "frameCount": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "group": {
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  },
-                                  "key": {
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "sha256": {
-                                    "pattern": "^[a-f0-9]{64}$",
-                                    "type": "string"
-                                  },
-                                  "storedCells": {
-                                    "exclusiveMinimum": true,
-                                    "maximum": 9007199254740991,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  }
-                                },
-                                "required": [
-                                  "firstBlock",
-                                  "blockCount",
-                                  "storedCells",
-                                  "bytes",
-                                  "key",
-                                  "sha256",
-                                  "group",
-                                  "firstFrame",
-                                  "frameCount",
-                                  "blockShard"
-                                ],
-                                "type": "object"
-                              },
-                              "minItems": 1,
-                              "type": "array"
-                            },
-                            "storedCells": {
-                              "exclusiveMinimum": true,
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "blockSize",
-                            "channelOrder",
-                            "channelCount",
-                            "coverageHash",
-                            "blockCount",
-                            "storedCells",
-                            "format",
-                            "shards"
-                          ],
-                          "type": "object"
-                        }
-                      ]
-                    },
-                    "terrain": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "coverageHash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "dataId": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "gridHash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "key": {
-                          "pattern": "^terrain\\/prepared\\/[a-f0-9]{64}\\/manifest\\.json$",
-                          "type": "string"
-                        },
-                        "layoutVersion": {
-                          "enum": [
-                            1
-                          ],
-                          "type": "number"
-                        },
-                        "sha256": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "surface": {
-                          "maxLength": 80,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "verticalDatum": {
-                          "maxLength": 80,
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "dataId",
-                        "key",
-                        "sha256",
-                        "verticalDatum",
-                        "surface",
-                        "gridHash",
-                        "coverageHash",
-                        "layoutVersion"
+                        "format",
+                        "shards"
                       ],
                       "type": "object"
                     }
+                  ]
+                },
+                "terrain": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coverageHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "dataId": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "gridHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "key": {
+                      "pattern": "^terrain\\/prepared\\/[a-f0-9]{64}\\/manifest\\.json$",
+                      "type": "string"
+                    },
+                    "layoutVersion": {
+                      "enum": [
+                        1
+                      ],
+                      "type": "number"
+                    },
+                    "sha256": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "surface": {
+                      "maxLength": 80,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "verticalDatum": {
+                      "maxLength": 80,
+                      "minLength": 1,
+                      "type": "string"
+                    }
                   },
                   "required": [
-                    "id",
-                    "kind",
-                    "grid",
+                    "dataId",
+                    "key",
+                    "sha256",
+                    "verticalDatum",
+                    "surface",
                     "gridHash",
-                    "coverage",
-                    "layers",
-                    "samples"
+                    "coverageHash",
+                    "layoutVersion"
                   ],
                   "type": "object"
-                },
-                "maxItems": 2,
-                "minItems": 1,
-                "type": "array"
+                }
               },
-              "tool": {
-                "additionalProperties": {
-                  "nullable": true
-                },
-                "properties": {
-                  "useStoredMslNoLift": {
-                    "enum": [
-                      true
-                    ],
-                    "type": "boolean"
-                  }
-                },
-                "type": "object"
-              },
-              "version": {
+              "required": [
+                "id",
+                "kind",
+                "grid",
+                "gridHash",
+                "coverage",
+                "layers",
+                "samples"
+              ],
+              "type": "object"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
+          "tool": {
+            "additionalProperties": {
+              "nullable": true
+            },
+            "properties": {
+              "useStoredMslNoLift": {
                 "enum": [
-                  5
+                  true
                 ],
-                "type": "number"
+                "type": "boolean"
               }
             },
-            "required": [
-              "version",
-              "descriptors",
-              "recipe",
-              "model",
-              "buildId",
-              "cycle",
-              "createdAt",
-              "expiresAt",
-              "method",
-              "frames",
-              "layers",
-              "artifacts",
-              "surfaces",
-              "source",
-              "tool",
-              "palettes",
-              "metrics"
-            ],
             "type": "object"
+          },
+          "version": {
+            "enum": [
+              5
+            ],
+            "type": "number"
           }
-        ]
+        },
+        "required": [
+          "version",
+          "descriptors",
+          "recipe",
+          "model",
+          "buildId",
+          "cycle",
+          "createdAt",
+          "expiresAt",
+          "method",
+          "frames",
+          "layers",
+          "artifacts",
+          "surfaces",
+          "source",
+          "tool",
+          "palettes",
+          "metrics"
+        ],
+        "type": "object"
       }
     }
   },
@@ -3425,34 +1773,6 @@
                           },
                           "available": {
                             "type": "boolean"
-                          },
-                          "coverage": {
-                            "properties": {
-                              "hash": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "id": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "maskKey": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "maxZoom": {
-                                "maximum": 10,
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "hash",
-                              "maskKey",
-                              "maxZoom"
-                            ],
-                            "type": "object"
                           },
                           "cycle": {
                             "type": "string"
@@ -5769,420 +4089,247 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "anyOf": [
-                    {
-                      "properties": {
-                        "buildId": {
-                          "type": "string"
-                        },
-                        "coverage": {
-                          "properties": {
-                            "hash": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "id": {
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "maskKey": {
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "maxZoom": {
-                              "maximum": 10,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "hash",
-                            "maskKey",
-                            "maxZoom"
-                          ],
-                          "type": "object"
-                        },
-                        "expiresAt": {
-                          "type": "string"
-                        },
-                        "frames": {
-                          "items": {
-                            "properties": {
-                              "id": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "intervalEnd": {
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "intervalStart": {
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "layers": {
-                                "additionalProperties": {
-                                  "properties": {
-                                    "interpolated": {
-                                      "type": "boolean"
-                                    },
-                                    "patchId": {
-                                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                                      "type": "string"
-                                    },
-                                    "status": {
-                                      "enum": [
-                                        "valid",
-                                        "no-usable-lift",
-                                        "unavailable",
-                                        "outside-domain"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "support": {
-                                      "type": "integer"
-                                    },
-                                    "value": {
-                                      "nullable": true,
-                                      "type": "number"
-                                    }
-                                  },
-                                  "required": [
-                                    "value",
-                                    "status",
-                                    "support",
-                                    "interpolated"
-                                  ],
-                                  "type": "object"
-                                },
-                                "type": "object"
-                              },
-                              "validTime": {
-                                "format": "date-time",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "validTime",
-                              "intervalStart",
-                              "intervalEnd",
-                              "layers"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "lat": {
-                          "type": "number"
-                        },
-                        "lon": {
-                          "type": "number"
-                        },
-                        "method": {
-                          "properties": {
-                            "hash": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "id": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "hash"
-                          ],
-                          "type": "object"
-                        },
-                        "model": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "additionalProperties": {
-                            "nullable": true
-                          },
-                          "properties": {
-                            "provenanceKey": {
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "provenanceSha256": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "provider": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "provider",
-                            "provenanceKey",
-                            "provenanceSha256"
-                          ],
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "model",
-                        "buildId",
-                        "lat",
-                        "lon",
-                        "method",
-                        "source",
-                        "coverage",
-                        "expiresAt",
-                        "frames"
-                      ],
-                      "type": "object"
+                  "additionalProperties": false,
+                  "properties": {
+                    "buildId": {
+                      "type": "string"
                     },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "buildId": {
-                          "type": "string"
-                        },
-                        "expiresAt": {
-                          "type": "string"
-                        },
-                        "frames": {
-                          "items": {
-                            "properties": {
-                              "id": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "intervalEnd": {
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "intervalStart": {
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "layers": {
-                                "additionalProperties": {
-                                  "additionalProperties": false,
-                                  "properties": {
-                                    "interpolated": {
-                                      "type": "boolean"
-                                    },
-                                    "status": {
-                                      "enum": [
-                                        "valid",
-                                        "no-usable-lift",
-                                        "unavailable",
-                                        "outside-domain"
-                                      ],
-                                      "type": "string"
-                                    },
-                                    "support": {
-                                      "type": "integer"
-                                    },
-                                    "surfaceId": {
-                                      "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                                      "type": "string"
-                                    },
-                                    "value": {
-                                      "nullable": true,
-                                      "type": "number"
-                                    }
-                                  },
-                                  "required": [
-                                    "value",
-                                    "status",
-                                    "support",
-                                    "interpolated",
-                                    "surfaceId"
-                                  ],
-                                  "type": "object"
+                    "expiresAt": {
+                      "type": "string"
+                    },
+                    "frames": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "intervalEnd": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "intervalStart": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "layers": {
+                            "additionalProperties": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "interpolated": {
+                                  "type": "boolean"
                                 },
-                                "type": "object"
-                              },
-                              "validTime": {
-                                "format": "date-time",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "validTime",
-                              "intervalStart",
-                              "intervalEnd",
-                              "layers"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        },
-                        "lat": {
-                          "type": "number"
-                        },
-                        "lon": {
-                          "type": "number"
-                        },
-                        "method": {
-                          "properties": {
-                            "hash": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "id": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "id",
-                            "hash"
-                          ],
-                          "type": "object"
-                        },
-                        "model": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "additionalProperties": {
-                            "nullable": true
-                          },
-                          "properties": {
-                            "provenanceKey": {
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "provenanceSha256": {
-                              "pattern": "^[a-f0-9]{64}$",
-                              "type": "string"
-                            },
-                            "provider": {
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "provider",
-                            "provenanceKey",
-                            "provenanceSha256"
-                          ],
-                          "type": "object"
-                        },
-                        "surfaces": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "coverage": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "gridHash": {
-                                    "pattern": "^[a-f0-9]{64}$",
-                                    "type": "string"
-                                  },
-                                  "hash": {
-                                    "pattern": "^[a-f0-9]{64}$",
-                                    "type": "string"
-                                  },
-                                  "id": {
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "maskKey": {
-                                    "minLength": 1,
-                                    "type": "string"
-                                  },
-                                  "maxZoom": {
-                                    "maximum": 10,
-                                    "minimum": 0,
-                                    "type": "integer"
-                                  }
-                                },
-                                "required": [
-                                  "id",
-                                  "hash",
-                                  "maskKey",
-                                  "maxZoom",
-                                  "gridHash"
-                                ],
-                                "type": "object"
-                              },
-                              "id": {
-                                "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                                "type": "string"
-                              },
-                              "kind": {
-                                "enum": [
-                                  "native",
-                                  "fine"
-                                ],
-                                "type": "string"
-                              },
-                              "layers": {
-                                "items": {
+                                "status": {
                                   "enum": [
-                                    "usable-lift-msl",
-                                    "usable-lift-agl",
-                                    "precip-rate",
-                                    "thermal-velocity",
-                                    "thermal-top-msl",
-                                    "pbl-height-agl",
-                                    "sensible-heat-flux",
-                                    "latent-heat-flux",
-                                    "surface-lcl-msl",
-                                    "cape-jkg",
-                                    "cloud-cover-total",
-                                    "cloud-cover-low",
-                                    "sfc-temp-c",
-                                    "sfc-dewpoint-c",
-                                    "mslp-hpa",
-                                    "wind-10m-u",
-                                    "wind-10m-v",
-                                    "wind-gust-10m",
-                                    "bl-mean-wind-u",
-                                    "bl-mean-wind-v"
+                                    "valid",
+                                    "no-usable-lift",
+                                    "unavailable",
+                                    "outside-domain"
                                   ],
                                   "type": "string"
                                 },
-                                "maxItems": 20,
-                                "minItems": 1,
-                                "type": "array"
+                                "support": {
+                                  "type": "integer"
+                                },
+                                "surfaceId": {
+                                  "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "nullable": true,
+                                  "type": "number"
+                                }
+                              },
+                              "required": [
+                                "value",
+                                "status",
+                                "support",
+                                "interpolated",
+                                "surfaceId"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "object"
+                          },
+                          "validTime": {
+                            "format": "date-time",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "validTime",
+                          "intervalStart",
+                          "intervalEnd",
+                          "layers"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "lat": {
+                      "type": "number"
+                    },
+                    "lon": {
+                      "type": "number"
+                    },
+                    "method": {
+                      "properties": {
+                        "hash": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "id": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "hash"
+                      ],
+                      "type": "object"
+                    },
+                    "model": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "additionalProperties": {
+                        "nullable": true
+                      },
+                      "properties": {
+                        "provenanceKey": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "provenanceSha256": {
+                          "pattern": "^[a-f0-9]{64}$",
+                          "type": "string"
+                        },
+                        "provider": {
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "provider",
+                        "provenanceKey",
+                        "provenanceSha256"
+                      ],
+                      "type": "object"
+                    },
+                    "surfaces": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "coverage": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "gridHash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "hash": {
+                                "pattern": "^[a-f0-9]{64}$",
+                                "type": "string"
+                              },
+                              "id": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maskKey": {
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "maxZoom": {
+                                "maximum": 10,
+                                "minimum": 0,
+                                "type": "integer"
                               }
                             },
                             "required": [
                               "id",
-                              "kind",
-                              "layers",
-                              "coverage"
+                              "hash",
+                              "maskKey",
+                              "maxZoom",
+                              "gridHash"
                             ],
                             "type": "object"
                           },
-                          "maxItems": 2,
-                          "minItems": 1,
-                          "type": "array"
+                          "id": {
+                            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "enum": [
+                              "native",
+                              "fine"
+                            ],
+                            "type": "string"
+                          },
+                          "layers": {
+                            "items": {
+                              "enum": [
+                                "usable-lift-msl",
+                                "usable-lift-agl",
+                                "precip-rate",
+                                "thermal-velocity",
+                                "thermal-top-msl",
+                                "pbl-height-agl",
+                                "sensible-heat-flux",
+                                "latent-heat-flux",
+                                "surface-lcl-msl",
+                                "cape-jkg",
+                                "cloud-cover-total",
+                                "cloud-cover-low",
+                                "sfc-temp-c",
+                                "sfc-dewpoint-c",
+                                "mslp-hpa",
+                                "wind-10m-u",
+                                "wind-10m-v",
+                                "wind-gust-10m",
+                                "bl-mean-wind-u",
+                                "bl-mean-wind-v"
+                              ],
+                              "type": "string"
+                            },
+                            "maxItems": 20,
+                            "minItems": 1,
+                            "type": "array"
+                          }
                         },
-                        "version": {
-                          "enum": [
-                            5
-                          ],
-                          "type": "number"
-                        }
+                        "required": [
+                          "id",
+                          "kind",
+                          "layers",
+                          "coverage"
+                        ],
+                        "type": "object"
                       },
-                      "required": [
-                        "version",
-                        "model",
-                        "buildId",
-                        "lat",
-                        "lon",
-                        "method",
-                        "source",
-                        "expiresAt",
-                        "surfaces",
-                        "frames"
+                      "maxItems": 2,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "version": {
+                      "enum": [
+                        5
                       ],
-                      "type": "object"
+                      "type": "number"
                     }
-                  ]
+                  },
+                  "required": [
+                    "version",
+                    "model",
+                    "buildId",
+                    "lat",
+                    "lon",
+                    "method",
+                    "source",
+                    "expiresAt",
+                    "surfaces",
+                    "frames"
+                  ],
+                  "type": "object"
                 }
               }
             },

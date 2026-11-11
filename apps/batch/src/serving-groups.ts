@@ -127,7 +127,11 @@ function digest(bytes: Uint8Array): string {
 
 /** Additional disk holds outputs and live remote inputs; local inputs use hardlinks. */
 export function servingGroupResources(input: ServingPlan, localInputs: ReadonlySet<string> = new Set(), remoteUploads = true): { diskBytes: number; workingBytes: number; sourceBytes: number; outputBytes: number } {
-  const groups = planGroups(input), partBytes = input.parts.map(part => part.shards.reduce((n, shard) => n + shard.bytes, 0));
+  return estimateGroupResources(input, planGroups(input), localInputs, remoteUploads);
+}
+
+function estimateGroupResources(input: ServingPlan, groups: readonly PlannedGroup[], localInputs: ReadonlySet<string>, remoteUploads: boolean) {
+  const partBytes = input.parts.map(part => part.shards.reduce((n, shard) => n + shard.bytes, 0));
   const stagedBytes = input.parts.map(part => part.shards.reduce((n, shard) => n + (localInputs.has(shard.key) ? 0 : shard.bytes), 0));
   const lastUse = input.parts.map((_, index) => Math.max(...groups.filter(group => group.sources.some(source => source.partIndex === index)).map(group => group.group)));
   const staged = new Set<number>();
@@ -160,7 +164,7 @@ export async function writeServingGroups(input: ServingPlan & { root: string; st
       localInputs.add(shard.key);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
-  const resources = servingGroupResources(input, localInputs, !!input.store);
+  const resources = estimateGroupResources(input, groups, localInputs, !!input.store);
   const disk = await statfs(input.root);
   if (disk.bavail * disk.bsize < resources.diskBytes) throw new Error(`Insufficient serving compaction disk: requires ${resources.diskBytes} bytes`);
   if (process.memoryUsage().rss + resources.workingBytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Serving compaction exceeds memory budget');

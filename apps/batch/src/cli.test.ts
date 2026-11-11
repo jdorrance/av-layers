@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BuildOptions } from './build.js';
-import { DEFAULT_MODEL, getProduct, MODEL_IDS, planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
+import { getProduct, MODEL_IDS } from '@av/contracts/models';
+import { planWholeDomainGrid, type RegularLatLonGrid } from '@av/contracts';
 import { BUILD_BUDGETS } from './capacity.js';
 
 const fake = vi.hoisted(() => ({ build: vi.fn(), read: vi.fn(), storage: vi.fn() }));
@@ -31,12 +32,12 @@ it('passes a pinned global catalog to the build and opens one terrain store', as
   await runBatch(['build', '--model', 'icon-eu', '--terrain-catalog-ref', 'catalog.json']);
   expect(fake.read).toHaveBeenCalledWith('catalog.json', 16 * 1024);
   expect(fake.storage).toHaveBeenCalledOnce();
-  expect(fake.build).toHaveBeenCalledWith('icon-eu', expect.objectContaining({ refinement: { catalogRef, storage: {} } }));
+  expect(fake.build).toHaveBeenCalledWith('icon-eu', expect.objectContaining({ wholeDomain: { catalogRef, storage: {} } }));
 });
 
-it('does not construct terrain storage when no catalog was supplied', async () => {
-  await runBatch(['build']);
-  expect(fake.build).toHaveBeenCalledWith(DEFAULT_MODEL, { out: 'output', cycle: undefined, cacheDir: undefined });
+it('requires a catalog before loading a terrain store', async () => {
+  await expect(runBatch(['build'])).rejects.toThrow('--terrain-catalog-ref is required');
+  expect(fake.build).not.toHaveBeenCalled();
   expect(fake.storage).not.toHaveBeenCalled();
   expect(fake.read).not.toHaveBeenCalled();
 });
@@ -45,10 +46,11 @@ it('uses the local terrain store without constructing R2 storage', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'av-cli-terrain-'));
   const key = 'terrain/test.bin', bytes = Uint8Array.of(1, 2, 3);
   fake.storage.mockImplementation(() => { throw new Error('R2 must not be opened'); });
-  fake.build.mockImplementationOnce(async (_model: string, { refinement }: BuildOptions) => {
-    expect(refinement?.catalogRef).toEqual(catalogRef);
-    await refinement!.storage.put(key, bytes, { ifNoneMatch: '*' }, 'application/octet-stream');
-    expect((await refinement!.storage.get(key, undefined, bytes.length))?.bytes).toEqual(Buffer.from(bytes));
+  fake.build.mockImplementationOnce(async (_model: string, { wholeDomain }: BuildOptions) => {
+    if (!wholeDomain || !('catalogRef' in wholeDomain)) throw new Error('Expected a pinned catalog');
+    expect(wholeDomain.catalogRef).toEqual(catalogRef);
+    await wholeDomain.storage.put(key, bytes, { ifNoneMatch: '*' }, 'application/octet-stream');
+    expect((await wholeDomain.storage.get(key, undefined, bytes.length))?.bytes).toEqual(Buffer.from(bytes));
     return 'output/manifest.json';
   });
   try {
@@ -70,12 +72,10 @@ it.each([
   expect(fake.read).not.toHaveBeenCalled();
 });
 
-it('preserves the staged native-grid terrain option without remote storage', async () => {
-  const terrain = { key: `terrain/prepared/${'a'.repeat(64)}/manifest.json`, sha256: 'b'.repeat(64), bytes: 100, arrayBytes: 20 };
-  fake.read.mockResolvedValue(Buffer.from(JSON.stringify(terrain)));
-  await runBatch(['build', '--terrain-ref', 'prepared.json']);
-  expect(fake.build).toHaveBeenCalledWith(DEFAULT_MODEL, expect.objectContaining({ terrain }));
+it('rejects the retired native-grid terrain option', async () => {
+  await expect(runBatch(['build', '--terrain-ref', 'prepared.json'])).rejects.toThrow('Unknown option');
   expect(fake.storage).not.toHaveBeenCalled();
+  expect(fake.build).not.toHaveBeenCalled();
 });
 
 it('rejects malformed catalog metadata before opening storage or starting a build', async () => {
@@ -123,6 +123,6 @@ it('accepts retention overrides and rejects geometry overrides for whole-domain 
   const report = JSON.parse(vi.mocked(console.log).mock.lastCall![0] as string);
   expect(report.retention).toEqual({ cadenceHours: 12, retentionDays: 3, retainedPerModel: 6,
     retentionBasis: 'cadence-override', retainedNumericBytes: 6 * report.capacity.numericBytes });
-  await expect(runBatch(['capacity', '--model', 'gfs', '--frames', '2'])).rejects.toThrow('accepts only retention overrides');
+  await expect(runBatch(['capacity', '--model', 'gfs', '--frames', '2'])).rejects.toThrow('Unknown option');
   expect(fake.storage).not.toHaveBeenCalled();
 });

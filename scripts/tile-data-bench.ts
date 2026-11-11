@@ -53,7 +53,7 @@ for (let frame = 0; frame < Math.min(3, manifest.frames.length); frame++) {
       }
     }
   }
-  const renderer = createRasterizer(mask, undefined, undefined, [], 'linear-rgb');
+  const renderer = createRasterizer(mask, undefined, undefined, 'linear-rgb');
   const startRaster = rasterBytes, startData = dataBytes;
   for (const tile of tiles) {
     const rasterImages: Uint8Array[] = [];

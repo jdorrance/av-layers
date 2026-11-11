@@ -1,5 +1,9 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, SUPPORT_MASK, getProvenanceReference, latestSchema, publishedSampleResponseSchema, renderedLayers, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ModelId, type ProfileResponse, type MultiPointSampleResponse, profileResponseSchema, multiPointSampleResponseSchema, MAX_SAMPLE_POINTS, MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, gridToGeographic } from '@av/contracts';
-import { refinementCandidate } from '@av/contracts/refinement';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
+import { gridToGeographic } from '@av/contracts/geometry';
+import { renderedLayers, SUPPORT_MASK, type LayerId } from '@av/contracts/layers';
+import { getProvenanceReference, latestV5Schema, sampleResponseV5Schema, type ModelId } from '@av/contracts/publication';
+import { estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, MAX_SAMPLE_POINTS, multiPointSampleResponseSchema,
+  profileResponseSchema, type MultiPointSampleResponse, type ProfileResponse } from '@av/contracts/point-products';
 import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
 import { createPointSeriesLoader } from './client-point.ts';
 
@@ -10,7 +14,7 @@ export interface RequestOptions {
 export interface SampleRequest extends RequestOptions {
   lat: number;
   lon: number;
-  /** Defaults to the first v5 frame; retained v3/v4 samples default to all frames. */
+  /** Defaults to the first published frame. */
   frames?: 'all' | readonly string[];
   layers?: readonly LayerId[];
   now?: number;
@@ -96,13 +100,16 @@ function requireString(value: unknown, name: string): string {
 async function readJsonBounded(response: Response, limit = MAX_POINT_RESPONSE_BYTES, signal?: AbortSignal): Promise<unknown> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > limit) {
-    await response.body?.cancel();
+    void response.body?.cancel().catch(() => {});
     throw new InvalidApiResponseError('Response exceeds byte budget');
   }
   if (!response.body) throw new InvalidApiResponseError('Response body is missing');
-  const reader = response.body.getReader(), bytes = new Uint8Array(limit);
+  const reader = response.body.getReader();
+  const declaredBytes = Number(length);
+  let bytes = new Uint8Array(Number.isSafeInteger(declaredBytes) && declaredBytes > 0 ? declaredBytes : Math.min(1024, limit));
   const abort = () => { void reader.cancel(signal?.reason).catch(() => {}); };
-  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
   let total = 0, chunks = 0;
   try {
     signal?.throwIfAborted();
@@ -112,7 +119,13 @@ async function readJsonBounded(response: Response, limit = MAX_POINT_RESPONSE_BY
       if (done) break;
       if (++chunks > 65_536) { void reader.cancel().catch(() => {}); throw new InvalidApiResponseError('Response fragmentation exceeds budget'); }
       if (total + value.length > limit) { void reader.cancel().catch(() => {}); throw new InvalidApiResponseError('Response exceeds byte budget'); }
-      bytes.set(value, total); total += value.length;
+      if (total + value.length > bytes.length) {
+        const grown = new Uint8Array(Math.min(limit, Math.max(total + value.length, bytes.length * 2)));
+        grown.set(bytes.subarray(0, total));
+        bytes = grown;
+      }
+      bytes.set(value, total);
+      total += value.length;
     }
   } finally { signal?.removeEventListener('abort', abort); reader.releaseLock(); }
   try { return JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))); }
@@ -125,7 +138,7 @@ function validatePoint(point: GeoPoint): void {
 }
 
 function sampleSelection(build: PinnedBuild, request: Pick<SampleRequest, 'frames' | 'layers'>, defaults = build.manifest.layers, points = 1, scalarLimit = true) {
-  const frames = request.frames ?? (build.manifest.version === 5 ? [build.manifest.frames[0]!.id] : 'all');
+  const frames = request.frames ?? [build.manifest.frames[0]!.id];
   const expectedFrames = frames === 'all' ? build.manifest.frames.map(frame => frame.id) : [...frames];
   const layers = request.layers ?? defaults;
   if (!expectedFrames.length || new Set(expectedFrames).size !== expectedFrames.length) throw new RangeError('frames must be non-empty and unique');
@@ -183,7 +196,7 @@ export class ApiClient {
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const parsed = latestSchema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
+    const parsed = latestV5Schema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
     if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
     const raw = parsed.data;
     const pointer = raw.pointer;
@@ -192,7 +205,7 @@ export class ApiClient {
     if (!manifestRaw) throw new InvalidApiResponseError('expanded manifest is missing');
     if (manifestRaw.model !== model) throw new InvalidApiResponseError('manifest model does not match request');
     if (manifestRaw.buildId !== pointer.latestBuildId) throw new InvalidApiResponseError('manifest build is not the pinned pointer build');
-    try { if (manifestRaw.version === 5) validateArtifactRecordsV5(manifestRaw); else validateArtifactRecords(manifestRaw); getProvenanceReference(manifestRaw); } catch { throw new InvalidApiResponseError('manifest records or capabilities are inconsistent'); }
+    try { getProvenanceReference(manifestRaw); } catch { throw new InvalidApiResponseError('manifest provenance is inconsistent'); }
     const retained = pointer.retained.find(entry => entry.buildId === manifestRaw.buildId);
     if (!retained || retained.cycle !== manifestRaw.cycle || retained.expiresAt !== manifestRaw.expiresAt || retained.manifestKey !== `builds/${model}/${manifestRaw.buildId}/manifest.json`) throw new InvalidApiResponseError('manifest does not match retained entry');
     if (options.requireLive !== false) assertNotExpired(manifestRaw.expiresAt, this.now());
@@ -236,16 +249,16 @@ export class ApiClient {
     const path = `${pointPath(build, 'sample')}?${params}`;
     const raw = await this.getJson(path, request.signal);
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
-    const parsed = publishedSampleResponseSchema.safeParse(raw);
+    const parsed = sampleResponseV5Schema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
+    this.validateSampleSurfaces(this.sampleSurfaces(build), payload);
     this.validateSample(build, request, expectedFrames, layers, payload);
     return payload;
   }
 
   async samples(build: PinnedBuild, request: MultiPointSampleRequest): Promise<MultiPointSampleResponse> {
     assertNotExpired(build.manifest.expiresAt, request.now ?? this.now());
-    if (build.manifest.version !== 5) throw new ApiError(409, 'unsupported-publication', 'Batch samples require a version-5 build');
     if (!request.points.length || request.points.length > MAX_SAMPLE_POINTS) throw new RangeError(`Select 1–${MAX_SAMPLE_POINTS} points`);
     for (const point of request.points) validatePoint(point);
     const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, build.manifest.layers, request.points.length);
@@ -258,14 +271,18 @@ export class ApiClient {
     if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId || payload.expiresAt !== build.manifest.expiresAt || payload.points.length !== request.points.length) {
       throw new InvalidApiResponseError('multi-point sample does not match pinned build or requested points');
     }
-    for (const { index, sample } of payload.points) this.validateSample(build, request.points[index], expectedFrames, layers, sample);
+    const surfaces = this.sampleSurfaces(build);
+    for (const { index, sample } of payload.points) {
+      this.validateSampleSurfaces(surfaces, sample);
+      this.validateSample(build, request.points[index], expectedFrames, layers, sample);
+    }
     return payload;
   }
 
   async profile(build: PinnedBuild, request: SampleRequest): Promise<ProfileResponse> {
     assertNotExpired(build.manifest.expiresAt, request.now ?? this.now());
     validatePoint(request);
-    const native = build.manifest.version === 5 ? build.manifest.surfaces.find(surface => surface.kind === 'native') : undefined;
+    const native = build.manifest.surfaces.find(surface => surface.kind === 'native');
     if (!native?.profiles) throw new RangeError('Build has no native profiles');
     const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, native.layers, 1, false);
     if (layers.some(layer => !native.layers.includes(layer))) throw new RangeError('Profile layers must belong to the native surface');
@@ -284,10 +301,7 @@ export class ApiClient {
         throw new InvalidApiResponseError('profile cell differs from the pinned native grid');
       }
     }
-    this.validateSample(build, request, expectedFrames, layers, {
-      ...payload, version: 5,
-      surfaces: build.manifest.version === 5 ? build.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })) : []
-    });
+    this.validateSample(build, request, expectedFrames, layers, payload);
     for (const frame of payload.frames) {
       if (frame.profile.levels.length > native.profiles.levelCount || (cell === null ? frame.profile.status !== 'outside-domain' || frame.profile.modelTerrainM !== null : frame.profile.status === 'outside-domain') ||
         layers.some(layer => frame.layers[layer].interpolated || (cell === null ? frame.layers[layer].status !== 'outside-domain' : frame.layers[layer].status === 'outside-domain'))) {
@@ -297,21 +311,21 @@ export class ApiClient {
     return payload;
   }
 
-  private validateSample(build: PinnedBuild, request: GeoPoint, expectedFrames: readonly string[], layers: readonly LayerId[], payload: SamplePayload): void {
+  private sampleSurfaces(build: PinnedBuild): string {
+    return JSON.stringify(build.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })));
+  }
+
+  private validateSampleSurfaces(expected: string, payload: SamplePayload): void {
+    if (JSON.stringify(payload.surfaces) !== expected) throw new InvalidApiResponseError('sample surfaces do not match pinned build');
+  }
+
+  private validateSample(build: PinnedBuild, request: GeoPoint, expectedFrames: readonly string[], layers: readonly LayerId[], payload: Omit<SamplePayload, 'version' | 'surfaces'>): void {
     if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId) {
       throw new InvalidApiResponseError('sample does not match pinned build');
     }
     if (payload.lat !== request.lat || payload.lon !== request.lon) throw new InvalidApiResponseError('sample coordinates do not match requested point');
     if (payload.expiresAt !== build.manifest.expiresAt || payload.method.id !== build.manifest.method.id || payload.method.hash !== build.manifest.method.hash) {
       throw new InvalidApiResponseError('sample method or expiry does not match pinned build');
-    }
-    if (build.manifest.version === 5) {
-      if (payload.version !== 5 || JSON.stringify(payload.surfaces) !== JSON.stringify(build.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })))) throw new InvalidApiResponseError('sample surfaces do not match pinned build');
-    } else {
-      if (payload.version === 5) throw new InvalidApiResponseError('sample version does not match pinned build');
-      for (const key of Object.keys(build.manifest.coverage) as (keyof Manifest['coverage'])[]) {
-        if (JSON.stringify(payload.coverage[key]) !== JSON.stringify(build.manifest.coverage[key])) throw new InvalidApiResponseError('sample coverage does not match pinned build');
-      }
     }
     for (const key of ['provider', 'provenanceKey', 'provenanceSha256'] as const) {
       if (payload.source[key] !== build.manifest.source[key]) throw new InvalidApiResponseError('sample source does not match pinned build');
@@ -320,27 +334,20 @@ export class ApiClient {
     if (receivedFrames.size !== payload.frames.length || receivedFrames.size !== expectedFrames.length || expectedFrames.some(id => !receivedFrames.has(id))) {
       throw new InvalidApiResponseError('sample frames do not match the requested selection');
     }
-    const owners = new Map<string, string | undefined>();
+    const expectedById = new Map(build.manifest.frames.map(frame => [frame.id, frame]));
+    const owners = layers.map(layer => ({ layer, spec: build.manifest.descriptors.layers[layer],
+      surfaceId: build.manifest.surfaces.find(surface => surface.layers.includes(layer))?.id }));
     for (const frame of payload.frames) {
-      const expected = build.manifest.frames.find(item => item.id === frame.id)!;
+      const expected = expectedById.get(frame.id)!;
       if (frame.validTime !== expected.validTime || frame.intervalStart !== expected.intervalStart || frame.intervalEnd !== expected.intervalEnd) {
         throw new InvalidApiResponseError(`sample frame ${frame.id} times do not match pinned build`);
       }
       if (Object.keys(frame.layers).length !== layers.length || layers.some(layer => !Object.hasOwn(frame.layers, layer))) {
         throw new InvalidApiResponseError(`sample frame ${frame.id} layers do not match the requested selection`);
       }
-      for (const layer of layers) {
+      for (const { layer, spec, surfaceId } of owners) {
         const cell = frame.layers[layer];
-        const patchId = 'patchId' in cell ? cell.patchId : undefined;
-        const patch = patchId === undefined || build.manifest.version === 5 ? undefined : build.manifest.patches?.find(item => item.id === patchId);
-        if (patchId !== undefined && (!patch || build.manifest.version === 5 || refinementCandidate(build.manifest.patches ?? [], layer, request.lat, request.lon)?.id !== patch.id || cell.status === 'outside-domain')) {
-          throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} refinement`);
-        }
-        const owner = 'surfaceId' in cell ? cell.surfaceId : patchId;
-        if (build.manifest.version === 5 && (!('surfaceId' in cell) || build.manifest.surfaces.find(surface => surface.layers.includes(layer))?.id !== cell.surfaceId)) throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} surface`);
-        if (owners.has(layer) && owners.get(layer) !== owner) throw new InvalidApiResponseError(`sample ${layer} ownership changes between frames`);
-        owners.set(layer, owner);
-        const spec = (patch?.descriptors ?? build.manifest.descriptors).layers[layer];
+        if (cell.surfaceId !== surfaceId) throw new InvalidApiResponseError(`sample frame ${frame.id} has an invalid ${layer} surface`);
         if (cell.support < 0 || cell.support > SUPPORT_MASK || (cell.support & ~SUPPORT_MASK) !== 0 || (!spec.supportsLiftFlags && cell.support !== 0) ||
             (cell.status === 'valid' && cell.value === null) ||
             (cell.status === 'no-usable-lift' && (!spec.supportsNoLift || cell.value !== spec.noLiftSampleValue)) ||

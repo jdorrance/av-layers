@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { RASTER_TILE_SIZE, MAX_TILE_BYTES, expectedTiles, LAYERS, type LayerId, type PaletteInterpolation } from '@av/contracts';
 import type { GridField, SamplingMask } from '@av/forecast';
-import { createRasterizer, renderTileRgba, type RasterPatch, type RasterPatchFields } from './raster.js';
+import { createRasterizer, renderTileRgba } from './raster.js';
 export { mercatorPoint, renderTileRgba } from './raster.js';
 import { encodeWebp } from './webp.js';
 import { createRasterPool, MAX_RASTER_WORKERS, RasterCapacityError, rasterWorkerCount, type RasterMetrics, type RasterPixels } from './raster-pool.js';
@@ -16,7 +16,7 @@ import pmtiles from '../pmtiles.json' with { type: 'json' };
 
 const execFileAsync = promisify(execFile);
 
-export interface ArchiveTarget { path: string; field: GridField; layer: LayerId; patches?: RasterPatchFields }
+export interface ArchiveTarget { path: string; field: GridField; layer: LayerId }
 
 export interface RendererOptions {
   /** Hard limit for retained axes and coverage bits; fields are never cached. */
@@ -27,7 +27,6 @@ export interface RendererOptions {
   rasterWorkers?: number;
   rasterSharedInputBytes?: number;
   signal?: AbortSignal;
-  patches?: readonly RasterPatch<SamplingMask>[];
   liftInterpolation?: PaletteInterpolation;
 }
 
@@ -47,13 +46,13 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
     tiles: 0, blankTiles: 0, peakPendingTiles: 0, peakPendingTileBytes: 0,
     rasterWorkers, workerStarts: 0, workerStartupMs: 0, peakSharedInputBytes: 0
   };
-  const rasterizer = createRasterizer(mask, budget, stats, options.patches, options.liftInterpolation);
+  const rasterizer = createRasterizer(mask, budget, stats, options.liftInterpolation);
   const binary = process.env.PMTILES_BIN || fileURLToPath(new URL('../../../.tools/pmtiles', import.meta.url));
   let toolChecked = false, blankEncoded: Promise<Buffer> | undefined, workerArchiveActive = false;
 
-  function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number, patches?: RasterPatchFields) {
+  function renderRgba(field: GridField, layer: LayerId, z: number, x: number, y: number) {
     if (workerArchiveActive) throw new Error('Worker archive group owns the renderer');
-    return rasterizer.renderTilePixels(field, layer, z, x, y, patches);
+    return rasterizer.renderTilePixels(field, layer, z, x, y);
   }
 
   async function encode(rgba: Uint8Array): Promise<Buffer> {
@@ -62,8 +61,8 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
     finally { stats.encodeWorkMs += performance.now() - started; }
   }
 
-  async function renderTile(field: GridField, layer: LayerId, z: number, x: number, y: number, patches?: RasterPatchFields): Promise<Buffer> {
-    return encodePixels(renderRgba(field, layer, z, x, y, patches));
+  async function renderTile(field: GridField, layer: LayerId, z: number, x: number, y: number): Promise<Buffer> {
+    return encodePixels(renderRgba(field, layer, z, x, y));
   }
 
   async function encodePixels(result: RasterPixels): Promise<Buffer> {
@@ -89,7 +88,7 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
       if (hasFailure) throw firstFailure;
       for (; pending.length < concurrency && next < jobs; next++) {
         const tile = tiles[Math.floor(next / targets.length)], target = targets[next % targets.length];
-        const encoded = pool ? pool.render(Math.floor(next / targets.length), next % targets.length, tile.z, tile.x, tile.y).then(encodePixels) : renderTile(target.field, target.layer, tile.z, tile.x, tile.y, target.patches);
+        const encoded = pool ? pool.render(Math.floor(next / targets.length), next % targets.length, tile.z, tile.x, tile.y).then(encodePixels) : renderTile(target.field, target.layer, tile.z, tile.x, tile.y);
         pending.push(encoded.then(bytes => {
           if (bytes.byteLength > MAX_TILE_BYTES) throw new Error('Encoded tile exceeds byte budget');
           return { bytes };
@@ -105,7 +104,7 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
         const workerMetrics = new Map<number, RasterMetrics>(), started = performance.now();
         let count = rasterWorkers;
         for (; count > 0; count--) try {
-          pool = await createRasterPool(mask, targets, { patches: options.patches, liftInterpolation: options.liftInterpolation, workers: count, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, maxSharedInputBytes: options.rasterSharedInputBytes, onMetrics(worker, metrics) {
+          pool = await createRasterPool(mask, targets, { liftInterpolation: options.liftInterpolation, workers: count, geometryCacheBytes: budget, maxPending: concurrency, signal: options.signal, maxSharedInputBytes: options.rasterSharedInputBytes, onMetrics(worker, metrics) {
           const before = workerMetrics.get(worker);
           for (const key of ['geometryHits', 'geometryMisses', 'prepareMs', 'rasterMs', 'tiles', 'blankTiles'] as const) stats[key] += metrics[key] - (before?.[key] ?? 0);
           workerMetrics.set(worker, metrics);
@@ -197,9 +196,9 @@ export function createRenderer(mask: SamplingMask, options: RendererOptions = {}
     metrics: () => ({ ...stats }),
     renderTile,
     renderTilePixels: renderRgba,
-    renderTileRgba: (field: GridField, layer: LayerId, z: number, x: number, y: number, patches?: RasterPatchFields) => renderRgba(field, layer, z, x, y, patches).rgba,
+    renderTileRgba: (field: GridField, layer: LayerId, z: number, x: number, y: number) => renderRgba(field, layer, z, x, y).rgba,
     renderArchives,
-    renderArchive: (path: string, field: GridField, layer: LayerId, patches?: RasterPatchFields) => renderArchives([{ path, field, layer, patches }])
+    renderArchive: (path: string, field: GridField, layer: LayerId) => renderArchives([{ path, field, layer }])
   };
 }
 

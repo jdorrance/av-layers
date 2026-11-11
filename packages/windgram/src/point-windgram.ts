@@ -90,7 +90,7 @@ function createPointWindgram(
   };
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
-  const usesDsm = build.manifest.version === 5 && build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
+  const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
   const toForecast = createPointForecast(build, options.point);
   let grouped: Calendar | undefined;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {

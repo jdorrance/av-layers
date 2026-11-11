@@ -1,11 +1,9 @@
 import z from 'zod';
-import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, terrainColumnMethodForProduct, methodDescriptorSchema, methodIdSchema, nativeMethodForLayer } from './methods.js';
-import { LAYER_IDS, type LayerId, type ProductDefinition } from './product.js';
-import { LAYERS, PALETTES, layerDescriptorSchema, layerIdSchema, layerSurface, paletteSchema, sampleStatusSchema, renderedLayers, layerPalette } from './layers.js';
-import { gridSchema, sameGrid, type GeographicBounds } from './geometry.js';
-import type { CoverageDescriptor } from './coverage.js';
+import { LAYER_IDS, layerSurface, renderedLayers, type LayerId } from './layers.js';
+import { layerDescriptorSchema, layerIdSchema, paletteSchema, sampleStatusSchema } from './layer-schemas.js';
+import { methodDescriptorSchema, methodIdSchema } from './method-schemas.js';
+import { gridSchema, sameGrid } from './grid-schema.js';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, MAX_SAMPLE_VALUES, MAX_RETAINED_BUILDS, MAX_NATIVE_ZOOM, PROFILE_PACK_FORMAT, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, MAX_PROFILE_LEVELS } from './format.js';
-import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
 import { MAX_JSON_CONTAINER_ENTRIES, MAX_PROVENANCE_BYTES } from './json.js';
 
 export const modelIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
@@ -31,101 +29,22 @@ export const recipeIdentitySchema = z.object({
   source: z.object({ modelFamily: modelIdSchema, configurationId: z.string().min(1), domainId: z.string().min(1) }),
   sourceRevision: z.string().min(1).max(128), sourceDirty: z.boolean(), lockHash: z.string().regex(/^[a-f0-9]{64}$/)
 });
-export function createRecipeIdentity(product: ProductDefinition, hash: string, sourceRevision = 'fixture', sourceDirty = false, lockHash = hash): z.infer<typeof recipeIdentitySchema> {
-  return recipeIdentitySchema.parse({ id: product.id, hash, source: product.source, sourceRevision, sourceDirty, lockHash });
-}
-function methodForLayer(product: Pick<ProductDefinition, 'capabilities'>, layer: LayerId) {
-  const native = nativeMethodForLayer(layer, product.capabilities.verticalCoordinate);
-  if (native) return native;
-  const method = METHODS[LAYERS[layer].methodId as keyof typeof METHODS];
-  if (!method) throw new Error(`Unknown method for ${layer}`);
-  return method.id === LIFT_METHOD.id ? LIFT_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate] : method;
-}
-export function createProductMethodId(product: Pick<ProductDefinition, 'layers' | 'capabilities'>): string {
-  return [...new Set(product.layers.map(id => methodForLayer(product, id).id))].join('+');
-}
-export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
-  const layers = product.layers.map(id => ({ ...LAYERS[id], methodId: methodForLayer(product, id).id }));
-  const methods: Record<string, unknown> = Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId as keyof typeof METHODS]]));
-  const maximumGust = z.object({ upstream: z.object({ auxSurface: z.object({ gust10mMps: z.object({ statistic: z.literal(2) }) }) }) }).safeParse(product).success;
-  const gust = layers.find(layer => layer.id === 'wind-gust-10m');
-  if (maximumGust && gust) {
-    gust.timeSupport = 'interval-maximum';
-    const method = methodDescriptorSchema.parse(methods[gust.methodId]);
-    methods[gust.methodId] = { ...method, inputs: { ...method.inputs, gust10mMps: { ...method.inputs.gust10mMps!, timeSupport: 'interval-maximum' } } };
-  }
-  return descriptorSchema.parse({
-    layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
-    methods,
-    palettes: [...new Set(renderedLayers(product.layers).map(layerPalette))].map(id => PALETTES[id]),
-    attribution: product.attribution, coverageDescription: product.coverageDescription, bounds: [...product.bounds], maxSampleValues: MAX_SAMPLE_VALUES
-  });
-}
-
-export function createRefinementDescriptors(product: ProductDefinition, bounds: GeographicBounds): z.infer<typeof descriptorSchema> {
-  const base = createProductDescriptors(product);
-  const msl = base.layers['usable-lift-msl'], agl = base.layers['usable-lift-agl'];
-  if (!msl || !agl) throw new Error('Terrain refinement requires native MSL and AGL layers');
-  const method = terrainColumnMethodForProduct(product);
-  return descriptorSchema.parse({ ...base, bounds: [...bounds],
-    coverageDescription: 'Polygon-owned terrain-column refinement inside the model coverage, with interpolation halos excluded.',
-    layers: {
-      [msl.id]: { ...msl, verticalReference: 'MSL', methodId: method.id },
-      [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: method.id }
-    },
-    methods: { [method.id]: method },
-    palettes: base.palettes.filter(palette => palette.id === agl.palette)
-  });
-}
-
-export function createWholeDomainDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
-  const base = createProductDescriptors(product), fine = createRefinementDescriptors(product, product.bounds);
-  const layers = product.layers.map(id => fine.layers[id] ?? base.layers[id]);
-  return descriptorSchema.parse({ ...base,
-    layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
-    methods: Object.fromEntries(layers.map(layer => [layer.methodId, fine.methods[layer.methodId] ?? base.methods[layer.methodId]]))
-  });
-}
-
 const timestamp = z.iso.datetime();
 const key = z.string().min(1);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 export const frameSchema = z.object({ id: key, validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp });
 export const artifactSchema = z.object({ layer: layerIdSchema, frame: key, tilesKey: key, tilesSha256: sha256 });
-/** Channels follow frames, then layers, in manifest order; the coverage determines block offsets. */
-export const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
-const methodIdentitySchema = z.object({ id: key, hash: sha256 });
-const coverageReferenceSchema = z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM) });
-export const refinementPatchSchema = z.strictObject({
-  id: modelIdSchema,
-  grid: gridSchema,
-  coverage: coverageReferenceSchema,
-  geometry: refinementGeometrySchema,
-  descriptors: descriptorSchema,
-  layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  samples: samplePackSchema,
-  method: methodIdentitySchema,
-  terrain: z.strictObject({
-    dataId: sha256,
-    key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
-    sha256,
-    verticalDatum: z.string().min(1).max(80),
-    surface: z.string().min(1).max(80)
-  })
-});
-export type RefinementPatch = z.infer<typeof refinementPatchSchema>;
-export const manifestSchema = z.object({
-  version: z.union([z.literal(3), z.literal(4)]), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
+export const methodIdentitySchema = z.object({ id: key, hash: sha256 });
+export const coverageReferenceSchema = z.object({ id: key, hash: sha256, maskKey: key, maxZoom: z.number().int().min(0).max(MAX_NATIVE_ZOOM) });
+export const publicationShape = {
+  descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
   buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
-  coverage: coverageReferenceSchema, grid: gridSchema,
   frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), samples: samplePackSchema,
-  patches: z.array(refinementPatchSchema).min(1).max(MAX_REFINEMENT_ZONES).optional(),
+  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
   tool: z.looseObject({ useStoredMslNoLift: z.literal(true).optional() }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
-}).superRefine((manifest, ctx) => {
-  if ((manifest.version === 4) !== (manifest.patches !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only version 4 publishes refinement patches' });
-});
+};
+
 const provenanceIdentity = { model: modelIdSchema, buildId: key, cycle: timestamp };
 const provenanceDescription = { ...provenanceIdentity, provider: z.string().min(1).max(256).optional(), temporalApproximation: z.string().max(2048).optional() };
 export const provenanceFrameReferenceSchema = z.strictObject({ hour: z.number().int().positive(), frame: key, key,
@@ -139,8 +58,6 @@ export const provenanceSchema = z.discriminatedUnion('version', [
 ]);
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
-export const sampleValueSchema = z.object({ value: z.number().finite().nullable(), status: sampleStatusSchema, support: z.number().int(), interpolated: z.boolean(), patchId: modelIdSchema.optional() });
-export const sampleResponseSchema = z.object({ model: z.string(), buildId: z.string(), lat: z.number().finite(), lon: z.number().finite(), method: manifestSchema.shape.method, source: manifestSchema.shape.source, coverage: manifestSchema.shape.coverage, expiresAt: z.string(), frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueSchema) })) });
 export const freshnessSchema = z.object({
   ageSeconds: z.number(),
   expiresAt: z.string(),
@@ -151,7 +68,6 @@ export const freshnessSchema = z.object({
   horizonRemainingSeconds: z.number().optional(),
   horizonExhausted: z.boolean().optional()
 });
-export type Manifest = z.infer<typeof manifestSchema>;
 export type ModelPointer = z.infer<typeof modelPointerSchema>;
 export type FreshnessSummary = z.infer<typeof freshnessSchema>;
 
@@ -190,28 +106,24 @@ const surfaceV5Schema = z.strictObject({
   }).optional()
 });
 export type ForecastSurfaceV5 = z.infer<typeof surfaceV5Schema>;
+const { source, tool, palettes, metrics, ...publicationIdentity } = publicationShape;
 const manifestV5BaseSchema = z.strictObject({
-  version: z.literal(5), descriptors: descriptorSchema, recipe: recipeIdentitySchema, model: modelIdSchema,
-  buildId: key, cycle: timestamp, createdAt: timestamp, expiresAt: timestamp, method: methodIdentitySchema,
-  frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), surfaces: z.array(surfaceV5Schema).min(1).max(2),
-  source: manifestSchema.shape.source, tool: manifestSchema.shape.tool, palettes: manifestSchema.shape.palettes, metrics: manifestSchema.shape.metrics,
-  mapFrameCount: safePositive.optional()
+  version: z.literal(5), ...publicationIdentity, surfaces: z.array(surfaceV5Schema).min(1).max(2),
+  source, tool, palettes, metrics, mapFrameCount: safePositive.optional()
 });
 export const manifestV5Schema = manifestV5BaseSchema.superRefine((manifest, ctx) => {
   try { validateV5Records(manifest); }
   catch (error) { ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid v5 manifest' }); }
 });
 export type ManifestV5 = z.infer<typeof manifestV5Schema>;
-export const publishedManifestSchema = z.union([manifestSchema, manifestV5Schema]);
-export type PublishedManifest = z.infer<typeof publishedManifestSchema>;
-export const latestSchema = z.object({ pointer: modelPointerSchema, manifest: publishedManifestSchema.optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
+export const latestV5Schema = z.object({ pointer: modelPointerSchema, manifest: manifestV5Schema.optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
 
-const sampleValueV5Schema = sampleValueSchema.omit({ patchId: true }).extend({ surfaceId: modelIdSchema }).strict();
+const sampleValueV5Schema = z.strictObject({ value: z.number().finite().nullable(), status: sampleStatusSchema,
+  support: z.number().int(), interpolated: z.boolean(), surfaceId: modelIdSchema });
 export const sampleResponseV5Schema = z.strictObject({
-  version: z.literal(5), model: sampleResponseSchema.shape.model, buildId: sampleResponseSchema.shape.buildId,
-  lat: sampleResponseSchema.shape.lat, lon: sampleResponseSchema.shape.lon, method: methodIdentitySchema,
-  source: manifestSchema.shape.source, expiresAt: sampleResponseSchema.shape.expiresAt,
+  version: z.literal(5), model: z.string(), buildId: z.string(),
+  lat: z.number().finite(), lon: z.number().finite(), method: methodIdentitySchema,
+  source: publicationShape.source, expiresAt: z.string(),
   surfaces: z.array(surfaceV5Schema.pick({ id: true, kind: true, layers: true, coverage: true })).min(1).max(2),
   frames: z.array(frameSchema.extend({ layers: z.record(z.string(), sampleValueV5Schema) }))
 }).superRefine((response, ctx) => {
@@ -228,8 +140,6 @@ export const sampleResponseV5Schema = z.strictObject({
     if (owners.get(layer) !== value.surfaceId) ctx.addIssue({ code: 'custom', message: 'Sample surface does not own layer' });
   }
 });
-export const publishedSampleResponseSchema = z.union([sampleResponseV5Schema, sampleResponseSchema.extend({ version: z.never().optional() })]);
-
 export function validateArtifactRecordsV5(manifest: ManifestV5): void {
   validateV5Records(manifestV5BaseSchema.parse(manifest));
 }
@@ -374,20 +284,9 @@ function assertPackedLayoutBindingV5(
 }
 
 /** One numerical surface; every surface inherits the parent model's frame axis. */
-export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'layers' | 'descriptors' | 'method'>;
-export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [manifest, ...(manifest.patches ?? [])]; }
-
-/** A coverage hash binds its geometry and public extent to one numeric surface. */
-export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: Pick<ForecastGrid, 'grid' | 'coverage'> & { descriptors: Pick<ForecastGrid['descriptors'], 'bounds'> }): void {
-  if (descriptor.id !== surface.coverage.id || !Number.isSafeInteger(surface.coverage.maxZoom)
-    || surface.coverage.maxZoom < 0 || descriptor.maxZoom < surface.coverage.maxZoom
-    || !sameGrid(descriptor.grid, surface.grid) || JSON.stringify(descriptor.bounds) !== JSON.stringify(surface.descriptors.bounds)
-    || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Coverage descriptor binding mismatch');
-}
-
 /** Every admitted alpha build has one immutable provenance sidecar. */
 export function getProvenanceReference(
-  manifest: Pick<Manifest, 'model' | 'buildId' | 'source'>
+  manifest: Pick<ManifestV5, 'model' | 'buildId' | 'source'>
 ): { key: string; sha256: string } {
   const source = manifest.source;
   const digest = sha256.safeParse(source.provenanceSha256);
@@ -399,7 +298,7 @@ export function getProvenanceReference(
 
 export function parseProvenance(
   raw: unknown,
-  manifest: Pick<Manifest, 'model' | 'buildId' | 'cycle'> & Partial<Pick<Manifest, 'frames'>>
+  manifest: Pick<ManifestV5, 'model' | 'buildId' | 'cycle'> & Partial<Pick<ManifestV5, 'frames'>>
 ): z.infer<typeof provenanceSchema> {
   const provenance = provenanceSchema.parse(raw);
   if (provenance.model !== manifest.model || provenance.buildId !== manifest.buildId || provenance.cycle !== manifest.cycle) {
@@ -420,7 +319,7 @@ export function parseProvenance(
   return provenance;
 }
 
-export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'model' | 'buildId' | 'cycle'> & Partial<Pick<Manifest, 'layers'>>, frame: Manifest['frames'][number]) {
+export function parseFrameProvenance(raw: unknown, identity: Pick<ManifestV5, 'model' | 'buildId' | 'cycle'> & Partial<Pick<ManifestV5, 'layers'>>, frame: ManifestV5['frames'][number]) {
   const value = frameProvenanceSchema.parse(raw);
   const requiresPrecipitation = identity.layers?.includes('precip-rate') || (value.intervals as { precipitationWindow?: unknown } | null)?.precipitationWindow !== undefined;
   if (value.model !== identity.model || value.buildId !== identity.buildId || value.cycle !== identity.cycle
@@ -432,7 +331,7 @@ export function parseFrameProvenance(raw: unknown, identity: Pick<Manifest, 'mod
   return value;
 }
 
-export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frames'][number], requiresPrecipitation: boolean): boolean {
+export function matchesFrameIntervals(intervals: unknown, frame: ManifestV5['frames'][number], requiresPrecipitation: boolean): boolean {
   if (!intervals || typeof intervals !== 'object') return false;
   const value = intervals as { profileTime?: unknown; fluxWindow?: { start?: unknown; end?: unknown }; precipitationWindow?: { start?: unknown; end?: unknown } };
   const sameInstant = (value: unknown, expected: string): boolean => typeof value === 'string' && Date.parse(value) === Date.parse(expected);
@@ -442,7 +341,7 @@ export function matchesFrameIntervals(intervals: unknown, frame: Manifest['frame
 }
 
 export function computeFreshness(
-  manifest: Pick<Manifest, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { version?: number; mapFrameCount?: number },
+  manifest: Pick<ManifestV5, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { version?: number; mapFrameCount?: number },
   nowMs = Date.now()
 ): Required<FreshnessSummary> {
   const validTimes = renderedFrames(manifest).map(f => Date.parse(f.validTime)).filter(Number.isFinite);
@@ -460,65 +359,8 @@ export function computeFreshness(
   };
 }
 
-export function validateArtifactRecords(manifest: Manifest): void {
-  const frames = new Set(manifest.frames.map(frame => frame.id));
-  if (manifest.layers.length * manifest.frames.length > manifest.descriptors.maxSampleValues) throw new Error('Sample value budget exceeded');
-  const methods = new Set<string>();
-  for (const layer of manifest.layers) {
-    const descriptor = manifest.descriptors.layers[layer];
-    if (!descriptor || descriptor.id !== layer || !manifest.descriptors.palettes.some(p => p.id === descriptor.palette)) throw new Error('Incomplete product descriptors');
-    methods.add(descriptor.methodId);
-  }
-  if (manifest.method.id !== [...methods].join('+')) throw new Error('Method identity does not match published descriptor snapshots');
-  for (const frame of manifest.frames) {
-    if (Date.parse(frame.intervalStart) > Date.parse(frame.intervalEnd) || Date.parse(frame.validTime) !== Date.parse(frame.intervalEnd)) throw new Error('Invalid frame time support');
-  }
-  const layers = new Set(manifest.layers);
-  if (frames.size === 0 || frames.size !== manifest.frames.length) throw new Error(`expected distinct frames, found ${manifest.frames.length}`);
-  if (layers.size === 0 || layers.size !== manifest.layers.length) throw new Error(`expected distinct layers, found ${manifest.layers.length}`);
-  const expectedRecords = frames.size * layers.size;
-  if (manifest.artifacts.length !== expectedRecords) {
-    throw new Error(`expected ${expectedRecords} artifact records, found ${manifest.artifacts.length}`);
-  }
-  const combinations = new Set<string>();
-  const prefix = `builds/${manifest.model}/${manifest.buildId}`;
-  if (manifest.samples.key !== `${prefix}/samples.bin` || manifest.samples.channelCount !== expectedRecords || !Number.isSafeInteger(manifest.samples.bytes) || manifest.samples.bytes !== manifest.samples.storedCells * expectedRecords * CELL_BYTES) {
-    throw new Error('Invalid sample pack metadata');
-  }
-  const patches = manifest.patches ?? [];
-  if ((manifest.version === 4) !== (patches.length > 0)) throw new Error('Refinement manifest version mismatch');
-  parseRefinementConfig({ type: 'FeatureCollection', features: patches.map(patch => ({ type: 'Feature', id: patch.id, properties: {}, geometry: patch.geometry })) });
-  for (let i = 0; i < patches.length; i++) {
-    const patch = patches[i], channels = manifest.frames.length * patch.layers.length;
-    if ((i > 0 && patches[i - 1].id >= patch.id) || new Set(patch.layers).size !== patch.layers.length
-      || channels > patch.descriptors.maxSampleValues
-      || patch.layers.some(layer => !layers.has(layer)) || patch.coverage.maxZoom !== manifest.coverage.maxZoom
-      || patch.coverage.maskKey !== `coverage/${patch.coverage.hash}/manifest.json`
-      || patch.samples.key !== `${prefix}/refinements/${patch.id}/samples.bin`
-      || patch.samples.channelCount !== channels || !Number.isSafeInteger(patch.samples.bytes)
-      || patch.samples.bytes !== patch.samples.storedCells * channels * CELL_BYTES) {
-      throw new Error('Invalid refinement grid or sample pack metadata');
-    }
-    const selectedMethods = new Set<string>();
-    for (const layer of patch.layers) {
-      const spec = patch.descriptors.layers[layer];
-      if (!spec || spec.id !== layer || !patch.descriptors.palettes.some(p => p.id === spec.palette)) throw new Error('Incomplete refinement descriptors');
-      selectedMethods.add(spec.methodId);
-    }
-    if (patch.method.id !== [...selectedMethods].join('+') || patch.method.hash !== manifest.method.hash) throw new Error('Refinement method identity mismatch');
-  }
-  for (const artifact of manifest.artifacts) {
-    if (!frames.has(artifact.frame)) throw new Error(`unknown artifact frame ${artifact.frame}`);
-    if (!layers.has(artifact.layer)) throw new Error(`unknown artifact layer ${artifact.layer}`);
-    const combination = `${artifact.layer}/${artifact.frame}`;
-    if (combinations.has(combination)) throw new Error(`duplicate artifact record ${combination}`);
-    combinations.add(combination);
-    if (artifact.tilesKey !== `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`) throw new Error(`unexpected tilesKey ${artifact.tilesKey}`);
-  }
-}
-
 /** Raster consumers use the ordered map prefix; legacy manifests expose all frames. */
-export function renderedFrames(manifest: { frames: PublishedManifest['frames']; version?: number; mapFrameCount?: number }): PublishedManifest['frames'] {
+export function renderedFrames(manifest: { frames: ManifestV5['frames']; version?: number; mapFrameCount?: number }): ManifestV5['frames'] {
   return manifest.version === 5 && manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
 }
 

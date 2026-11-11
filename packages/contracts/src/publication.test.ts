@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, publishedSampleResponseSchema, sampleResponseSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './publication.js';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './index.js';
 
 function refined(): Manifest {
   const manifest = fixtureManifest();
@@ -245,14 +245,7 @@ describe('published transport contracts', () => {
     const manifest = v5(), response = sampleResponseV5();
     expect(sampleResponseV5Schema.parse(parseBoundedJson(encodeBoundedJson(response, MAX_MANIFEST_BYTES)))).toEqual(response);
     expect(response.surfaces).toEqual(manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })));
-    expect(publishedSampleResponseSchema.safeParse(response).success).toBe(true);
-    const legacy = sampleResponseSchema.parse({
-      model: manifest.model, buildId: manifest.buildId, lat: 52.5, lon: 13.4,
-      method: manifest.method, source: manifest.source, coverage: manifest.surfaces[0].coverage, expiresAt: manifest.expiresAt,
-      frames: manifest.frames.map(frame => ({ ...frame, layers: { 'precip-rate': { value: 1, status: 'valid', support: 1, interpolated: false } } }))
-    });
-    expect(publishedSampleResponseSchema.safeParse(legacy).success).toBe(true);
-    expect(sampleResponseV5Schema.safeParse(legacy).success).toBe(false);
+
   });
 
   it.each(['singular-coverage', 'patch-id', 'missing-surface-id', 'wrong-owner', 'duplicate-surface', 'surface-grid'] as const)('rejects strict malformed v5 sample transport: %s', defect => {

@@ -30,8 +30,8 @@ The [terrain example](docs/development.md#terrain-refinement) uses
 ## Development checks
 
 Complete [setup](docs/development.md#setup) in each new worktree.
-Run `pnpm test` while working and `pnpm verify` before submitting a change.
-`pnpm build` bundles the apps locally.
+Run `pnpm test` while working. `pnpm test:integration` exercises local workerd,
+PMTiles, and the Windy bundle. Run `pnpm verify` for both suites and app builds.
 
 [Local development](docs/development.md) covers test data and server options.
 

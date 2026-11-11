@@ -4,12 +4,11 @@ import { link, mkdir, open, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { getProduct } from '@av/contracts/models';
 import {
   coverageIndices,
-  getProduct,
   MAX_PROVENANCE_BYTES,
-  sameGrid
-} from '@av/contracts';
+  sameGrid } from '@av/contracts';
 import { validateNormalizedFrame } from '@av/forecast';
 import type { NormalizedFrame } from '@av/forecast/inputs';
 import {

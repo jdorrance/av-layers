@@ -6,7 +6,9 @@ it.each([
   ['@av/soaring', 'deriveLift', ['soaring', 'thermodynamics']],
   ['@av/soaring/velocity', 'usableLiftDepthM', ['soaring']],
   ['@av/solar/grid', 'createGridDaylightTester', ['solar']],
-  ['@av/forecast/intervals', 'recoverTrailingWindow', ['forecast']]
+  ['@av/forecast/intervals', 'recoverTrailingWindow', ['forecast']],
+  ['@av/forecast/sampler', 'planSample, sampleCells', ['forecast', 'contracts']],
+  ['@av/forecast/sample-pack', 'planShardedPackedSample, packedCellsFromRange', ['forecast', 'contracts']]
 ] as const)('bundles %s with only its required math modules', async (entry, symbol, packages) => {
   const built = await build({
     configFile: false,
@@ -32,8 +34,8 @@ it.each([
   const chunks = built.output.filter(output => output.type === 'chunk');
   expect(chunks).toHaveLength(1);
   const chunk = chunks[0]!;
-  expect(chunk.exports).toEqual([symbol]);
-  const modules = chunk.moduleIds.filter(id => id !== '\0weather-math-entry');
+  expect([...chunk.exports].sort()).toEqual(symbol.split(', ').sort());
+  const modules = Object.entries(chunk.modules).filter(([, module]) => module.renderedLength > 0).map(([id]) => id);
   expect(modules.length).toBeGreaterThan(0);
   for (const id of modules) {
     expect(packages.some(name => id.includes(`/packages/${name}/src/`))).toBe(true);

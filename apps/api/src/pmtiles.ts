@@ -62,10 +62,10 @@ export class R2Source implements Source {
 }
 
 const tileReads = new WeakMap<R2Bucket, MaterializedReads<ArrayBuffer>>();
-export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext): Promise<ArrayBuffer> {
+export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<ArrayBuffer> {
   let reads = tileReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY, undefined, TILE_READ_WAITERS); tileReads.set(bucket, reads); }
-  return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx);
+  return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx, waiterSignal);
 }
 async function loadTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, signal?: AbortSignal): Promise<ArrayBuffer> {
   const archive = new PMTiles(new R2Source(bucket, key, ctx, signal), cache, decompress);

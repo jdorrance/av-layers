@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { getProduct, manifestV5Schema } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { manifestV5Schema } from '@av/contracts';
 import snapshots from './fixtures/retained-v5.json' with { type: 'json' };
 import { manifest } from '../src/publication';
 

@@ -15,7 +15,7 @@ and point queries evaluate the same grids and interpolation rules.
   millimetres per hour.
 
 Each build's manifest descriptors list its available layers and delivery.
-[Native fields](../packages/contracts/src/native-layers.ts) add lift, flux,
+[Native fields](../packages/contracts/src/layers.ts) add lift, flux,
 surface, cloud, stability and wind samples. Map layers carry palettes; native
 scalar channels use point queries.
 
@@ -54,11 +54,6 @@ pins its grid, coverage and sample shards. A sample value's `surfaceId` identifi
 its grid and ground reference. Output masks select coverage; halo cells supply
 boundary contributors. No-lift and unavailable values retain their selected
 surface's status. Missing advertised assets fail the request.
-
-Retained version-3 builds use one grid. Version-4 builds add polygon patches with
-`patchId`, independent coverage and methods. Both formats keep their existing
-sampling behavior; [regional refinement](../apps/batch/src/refinement/README.md)
-owns their evaluation tooling.
 
 ## Time and retention
 

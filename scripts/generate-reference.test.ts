@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { createProductDescriptors, createWholeDomainDescriptors, getProduct, MODEL_IDS, planWholeDomainGrid } from '@av/contracts';
+import { getProduct, MODEL_IDS } from '@av/contracts/models';
+import { createProductDescriptors, createWholeDomainDescriptors, planWholeDomainGrid } from '@av/contracts';
 import { referenceArtifacts } from './generate-reference.js';
 
 it('documents configured terrain methods and fine grids from their owners', async () => {

@@ -1,4 +1,8 @@
-import { CELL_BYTES, getBit, gridSchema, isCovered, lambertConformalGridSchema, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
+import { CELL_BYTES } from '@av/contracts/format';
+import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type LayerId, type LayerSpec } from '@av/contracts/layers';
+import { isValidGridGeometry, LAMBERT_GRID_FIELDS, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
+import { getBit, isCovered, type CoverageMask } from '@av/contracts/coverage-query';
+import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
 export interface PackedGridField extends GridField { coverage: SparseCoverage }
@@ -34,7 +38,7 @@ function outputAt(mask: SamplingMask, column: number, row: number): boolean {
 
 function validateSamplingMask(mask: SamplingMask): void {
   const { grid } = mask;
-  if (!gridSchema.safeParse(grid).success) throw new RangeError('Invalid prepared grid');
+  if (!isValidGridGeometry(grid)) throw new RangeError('Invalid prepared grid');
   if ('coverage' in mask) {
     if (mask.coverage.width !== grid.width || mask.coverage.height !== grid.height || mask.coverage.wrapLongitude !== grid.wrapLongitude) throw new RangeError('Coverage size differs from grid');
   } else if (mask.output.length !== Math.ceil(grid.width * grid.height / 8)) throw new RangeError('Coverage size differs from grid');
@@ -185,13 +189,12 @@ function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: num
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
-const lambertGridFields = lambertConformalGridSchema.keyof().options;
 const lambertGeometries = new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
 function lambertGeometry(grid: Grid): GridGeometry | null {
   if (grid.kind !== 'lambert-conformal') return null;
   const cached = lambertGeometries.get(grid);
-  if (cached && lambertGridFields.every(field => grid[field] === cached.snapshot[field])) return cached.geometry;
-  const snapshot = Object.fromEntries(lambertGridFields.map(field => [field, grid[field]])) as LambertConformalGrid;
+  if (cached && LAMBERT_GRID_FIELDS.every(field => grid[field] === cached.snapshot[field])) return cached.geometry;
+  const snapshot = Object.fromEntries(LAMBERT_GRID_FIELDS.map(field => [field, grid[field]])) as LambertConformalGrid;
   const geometry = prepareGridGeometry(snapshot);
   lambertGeometries.set(grid, { snapshot, geometry });
   return geometry;

@@ -30,14 +30,14 @@ pnpm input:proof --model icon-eu --cache-dir .cache/icon-eu
 
 See the [CLI reference](../../docs/reference.md#batch-cli) for all options and
 [operations](../../docs/operations.md) for publication, rollback, and cleanup.
-Run batch tests with `pnpm test apps/batch`.
+Run `pnpm test apps/batch` for unit tests and `pnpm test:integration apps/batch`
+for complete builds and PMTiles checks.
 
 The capacity report projects retention from configured UTC starts. Use
 `--cadence-hours` to model a different publishing interval.
-`performance.json` reports the dense native and legacy patch cells in
-`observed.gridCells`. V5 reports fine grid width × height separately as
-`observed.fineGridCells`. [Whole-domain admission](src/whole-domain/capacity.ts)
-bounds fine work by packed cell storage, raster work, and memory.
+`performance.json` reports native and fine grid sizes separately.
+[Whole-domain admission](src/whole-domain/capacity.ts) bounds fine work by
+packed cell storage, raster work, and memory.
 
 The [tile budget](src/capacity.ts) bounds raster work across layers, frames and
 surfaces. Each additional zoom level adds about four times the previous level's
@@ -49,8 +49,9 @@ elapsed time and memory have separate admission limits.
 
 - [src/cli.ts](src/cli.ts) & [src/commands.ts](src/commands.ts): CLI entry point and flag definitions.
 - [src/build.ts](src/build.ts): sequential build orchestration and manifest assembly.
-- [src/frame-build.ts](src/frame-build.ts): frame acquisition, derivation, packing, and tile rendering.
+- [src/whole-domain/frames.ts](src/whole-domain/frames.ts): acquire, derive, pack, and render frames.
 - [src/parallel.ts](src/parallel.ts): build-plan creation, shard execution, and shard assembly.
+- [src/build-receipts.ts](src/build-receipts.ts): match a publication to admitted shard receipts and verify remote objects.
 - [src/provider.ts](src/provider.ts) & [src/providers.ts](src/providers.ts): provider interface and model registry lookup.
 - [src/indexed-grib](src/indexed-grib/README.md): indexed GRIB2 range acquisition and isobaric normalization.
 - [src/split-grib](src/split-grib/README.md): split GRIB2 acquisition and model-level normalization.

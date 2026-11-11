@@ -5,7 +5,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, createRecipeIdentity, getProduct, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, createRecipeIdentity, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
 import { resolveProductFrameHours } from '@av/forecast';
 import { validateBuild } from './validate.js';
 

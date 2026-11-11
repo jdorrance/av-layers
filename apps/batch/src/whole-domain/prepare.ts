@@ -8,10 +8,8 @@ import { acquisitionSupport, loadBundledFineCoverage, stageFineCoverage, wholeDo
 import { loadWholeDomainTerrain, prepareWholeDomainTerrain, type WholeDomainTerrainOptions } from './terrain.js';
 
 export interface WholeDomainCoverage { mask: SparseCoverageMask; descriptor: SparseCoverageDescriptor; bytes: Uint8Array; hash: string }
-export interface WholeDomainOptions extends WholeDomainTerrainOptions {
-  fine?: WholeDomainCoverage;
-  terrain?: SparseTerrainRef;
-}
+export type WholeDomainOptions = (WholeDomainTerrainOptions & { fine?: WholeDomainCoverage })
+  | { fine: WholeDomainCoverage; terrain: SparseTerrainRef };
 export interface WholeDomainPrepared {
   plan: WholeDomainGrid;
   nativeMask: CoverageMask;
@@ -53,19 +51,22 @@ export async function prepareWholeDomain(options: {
 }): Promise<WholeDomainPrepared> {
   const plan = wholeDomainPlan(options.product);
   if (!plan) throw new Error('Product does not configure whole-domain terrain subdivision');
-  if (!options.wholeDomain) throw new Error('Whole-domain product requires a terrain catalog');
+  const inputs = options.wholeDomain;
+  if (!inputs) throw new Error('Whole-domain product requires a terrain catalog or prepared terrain');
   options.signal?.throwIfAborted();
   const native = await writeNativeCoverage(options.out, options.mask, options.product);
-  const fine = options.wholeDomain.fine ?? await loadBundledFineCoverage(options.product, plan);
-  if (options.wholeDomain.fine) {
+  const fine = inputs.fine ?? await loadBundledFineCoverage(options.product, plan);
+  if (inputs.fine) {
     const expected = describeSparseCoverage(fine.mask, options.product);
     if (!sameGrid(fine.mask.grid, plan.fine) || fine.mask.maxZoom < options.product.maxNativeZoom ||
         fine.hash !== expected.hash || !Buffer.from(fine.bytes).equals(expected.bytes) ||
         JSON.stringify(fine.descriptor) !== JSON.stringify(expected.descriptor)) throw new Error('Fine coverage descriptor mismatch');
   }
   await stageFineCoverage(options.out, fine);
-  const terrain = options.wholeDomain.terrain ?? await prepareWholeDomainTerrain({ ...options.wholeDomain, out: options.out,
-    grid: plan.fine, coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal: options.signal });
+  const terrain = 'catalogRef' in inputs
+    ? await prepareWholeDomainTerrain({ ...inputs, out: options.out, grid: plan.fine,
+      coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal: options.signal })
+    : inputs.terrain;
   const { required, active } = acquisitionSupport(plan, fine.mask.coverage, options.mask);
   const layers = wholeDomainSurfaceLayers(options.product);
   if (!layers.fine.length) throw new Error('Whole-domain product requires fine lift layers');
@@ -89,7 +90,7 @@ export async function loadFrozenWholeDomain(options: {
   if (!sameGrid(fine.mask.grid, plan.fine) || fine.descriptor.gridHash !== frozen.fineCoverage.gridHash || fine.descriptor.id !== frozen.fineCoverage.id || fine.descriptor.id !== product.coverageId || JSON.stringify(fine.descriptor.bounds) !== JSON.stringify(product.bounds) || fine.mask.maxZoom !== frozen.fineCoverage.maxZoom || fine.mask.maxZoom < product.maxNativeZoom || frozen.fineCoverage.maskKey !== `coverage/${fine.hash}/manifest.json`) throw new Error('Frozen fine coverage differs from its plan');
   const nativeGridHash = createHash('sha256').update(canonicalGridJson(plan.native)).digest('hex');
   if (!sameGrid(native.mask.grid, plan.native) || native.descriptor.gridHash !== nativeGridHash || native.mask.coverage.gridHash !== nativeGridHash || native.mask.maxZoom < product.maxNativeZoom || JSON.stringify(describeSparseCoverage(native.mask, product).descriptor) !== JSON.stringify(native.descriptor)) throw new Error('Frozen native coverage differs from its plan');
-  const nativeMask = denseMask(native.mask);
+  const nativeMask = denseCoverageMask(native.mask);
   const { required, active } = acquisitionSupport(plan, fine.mask.coverage, nativeMask);
   const layers = wholeDomainSurfaceLayers(product);
   const sharedFine = sharedFineCoverage(fine);
@@ -98,7 +99,7 @@ export async function loadFrozenWholeDomain(options: {
     columns, nativeSurfaceLayers: layers.native, fineSurfaceLayers: layers.fine };
 }
 
-function denseMask(mask: SparseCoverageMask): CoverageMask {
+export function denseCoverageMask(mask: SparseCoverageMask): CoverageMask {
   return { grid: mask.grid, bounds: mask.bounds, output: dense(mask, 'output'), halo: dense(mask, 'halo'), tiles: mask.tiles, maxZoom: mask.maxZoom };
 }
 function dense(mask: SparseCoverageMask, name: 'output' | 'halo'): Uint8Array {

@@ -345,21 +345,41 @@ export async function prepareSparseTerrain(options: SparseTerrainOptions): Promi
     options.onReport?.({ cacheHit: false, cells: target.cells, arrayBytes, inventoryReadBytesBound, elapsedMs: Date.now() - started, reader: readerStats, sourceBlocks, sourceAssets, totalLimits, planning: { windowPoints: WINDOW_POINTS, windows, maxWindowGroups, blockBitmapBytes: blockBitmap.byteLength, sampledPeakRssBytes, sampledPeakHeapUsedBytes, decodedBlocks, readBatches } });
   }
   progress('upload', target.cells, () => ({ sourceBlocks, sourceAssets }));
+  const ref = await writePreparedTerrain({ storage: options.storage, target, source: catalog.source, dataId: catalog.dataId, heights, valid, check: checkDeadline, signal });
+  progress('complete', target.cells, () => ({ cacheHit: false, sourceBlocks, sourceAssets }));
+  return ref;
+}
+
+/** Encode prepared arrays in sparse coverage order and commit their descriptor last. */
+export function writeSparsePreparedTerrain(options: Pick<SparseTerrainOptions, 'storage' | 'grid' | 'coverage' | 'coverageDescriptor' | 'signal'> & {
+  dataId: string; source: TerrainCatalog['source']; heights: Uint8Array; valid: Uint8Array;
+}): Promise<SparseTerrainRef> {
+  const target = identity(options.grid, options.coverage, options.coverageDescriptor);
+  return writePreparedTerrain({ ...options, target, check: () => options.signal?.throwIfAborted() });
+}
+
+async function writePreparedTerrain({ storage, target, source, dataId, heights, valid, check, signal }: {
+  storage: TerrainStorage; target: ReturnType<typeof identity>; source: TerrainCatalog['source']; dataId: string;
+  heights: Uint8Array; valid: Uint8Array; check: () => void; signal?: AbortSignal;
+}): Promise<SparseTerrainRef> {
+  const arrayBytes = target.cells * PREPARED_TERRAIN_CELL_BYTES;
+  if (heights.length !== target.cells * 4 || valid.length !== target.cells || !target.cells || arrayBytes > MAX_ARRAY_BYTES) throw new Error('Sparse terrain array budget exceeded');
+  const prefix = sparsePrefix(dataId, target.gridHash, target.coverageHash);
   const files: { elevationM: TerrainAsset[]; valid: TerrainAsset[] } = { elevationM: [], valid: [] };
   for (let start = 0, i = 0; start < target.cells; start += CHUNK_CELLS, i++) {
     const end = Math.min(start + CHUNK_CELLS, target.cells);
     for (const [name, bytes, list] of [[`elevation-${i}.f32`, heights.subarray(start * 4, end * 4), files.elevationM], [`valid-${i}.u8`, valid.subarray(start, end), files.valid]] as const) {
-      checkDeadline();
+      check();
       const asset = { key: `${prefix}/${name}`, bytes: bytes.length, sha256: sha256(bytes) };
-      await putImmutable(options.storage, asset.key, bytes, 'application/octet-stream', signal);
+      await putImmutable(storage, asset.key, bytes, 'application/octet-stream', signal);
       list.push(asset);
     }
   }
-  const descriptor = descriptorSchema.parse({ version: 2, dataId: catalog.dataId, method: PREPARED_TERRAIN_METHOD, grid: target.grid, gridHash: target.gridHash, coverageHash: target.coverageHash, layoutVersion: 1, oceanCoverage: 'verified', sourceIntegrity: SOURCE_INTEGRITY, cells: target.cells, source: catalog.source, files });
+  const descriptor = descriptorSchema.parse({ version: 2, dataId, method: PREPARED_TERRAIN_METHOD, grid: target.grid, gridHash: target.gridHash, coverageHash: target.coverageHash, layoutVersion: 1, oceanCoverage: 'verified', sourceIntegrity: SOURCE_INTEGRITY, cells: target.cells, source, files });
   const bytes = encodeJson(descriptor, PREPARED_DESCRIPTOR_MAX_BYTES);
-  checkDeadline();
-  await putImmutable(options.storage, manifestKey, bytes, 'application/json', signal);
-  checkDeadline();
-  progress('complete', target.cells, () => ({ cacheHit: false, sourceBlocks, sourceAssets }));
-  return sparseTerrainRefSchema.parse({ key: manifestKey, bytes: bytes.length, sha256: sha256(bytes), arrayBytes });
+  const key = `${prefix}/manifest.json`;
+  check();
+  await putImmutable(storage, key, bytes, 'application/json', signal);
+  check();
+  return sparseTerrainRefSchema.parse({ key, bytes: bytes.length, sha256: sha256(bytes), arrayBytes });
 }

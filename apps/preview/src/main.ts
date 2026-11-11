@@ -2,7 +2,9 @@ import { renderBuildDiagnostics } from '@av/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { PRODUCTS, renderedFrames, type LayerId, type ModelId } from '@av/contracts';
+import type { LayerId } from '@av/contracts/layers';
+import { MODEL_OPTIONS } from '@av/contracts/model-options';
+import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
   ApiClient,
   activePalettes,
@@ -23,6 +25,8 @@ import {
 } from '@av/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
+import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
+import { clockLabel, dayKey, dayLabel, frameIndexFor } from './timeline';
 
 type PointWindgram = typeof import('@av/windgram');
 
@@ -68,30 +72,9 @@ const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
 const api = new ApiClient({ baseUrl: apiBaseUrl });
 
-function finiteParam(value: string | null): number | null {
-  if (value === null || value.trim() === '') return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-}
-
-function startupQuery(): URLSearchParams {
-  return new URLSearchParams(window.location.search);
-}
-
-const query = startupQuery();
-const queryModel = query.get('model');
-const configuredModel = import.meta.env.VITE_MODEL as ModelId | undefined;
-const initialModel: ModelId = (queryModel && (offlineFixture || PRODUCTS.some(product => product.modelId === queryModel))
-  ? queryModel
-  : configuredModel ?? 'icon-eu') as ModelId;
-const queryLat = finiteParam(query.get('lat'));
-const queryLon = finiteParam(query.get('lon'));
-const queryZoom = finiteParam(query.get('z'));
-const hasCameraQuery = queryLat !== null && queryLon !== null && queryZoom !== null;
-const queryOpacity = finiteParam(query.get('opacity'));
-const initialOpacity = queryOpacity === null ? 0.7 : Math.min(1, Math.max(0, queryOpacity));
-const initialReference = query.get('ref') === 'msl' ? 'msl' : 'agl';
-const initialTime = query.get('t');
+const startup = previewQuery(window.location.search, offlineFixture);
+const initialModel = startup.model ?? import.meta.env.VITE_MODEL ?? 'icon-eu';
+const initialOpacity = startup.opacity ?? 0.7;
 
 if (offlineFixture) {
   const warning = document.createElement('p');
@@ -105,54 +88,6 @@ opacityInput.value = String(initialOpacity);
 opacityReadout.textContent = `${Math.round(initialOpacity * 100)}%`;
 
 const modelButtons: HTMLButtonElement[] = [];
-
-function dayKey(utcMs: number, offsetMinutes: number): string {
-  return new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
-}
-
-function dayLabel(key: string, todayKey: string): string {
-  const day = Date.parse(`${key}T00:00:00Z`);
-  const today = Date.parse(`${todayKey}T00:00:00Z`);
-  const diff = Math.round((day - today) / 86_400_000);
-  if (diff === -1) return 'Yesterday';
-  if (diff === 0) return 'Today';
-  if (diff === 1) return 'Tomorrow';
-  return new Date(day).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-}
-
-function clockLabel(validMs: number, offsetMinutes: number): string {
-  const local = new Date(validMs + offsetMinutes * 60_000);
-  const utc = new Date(validMs);
-  const hhmm = (date: Date) => `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
-  const sign = offsetMinutes >= 0 ? '+' : '−';
-  const abs = Math.abs(offsetMinutes);
-  const zone = `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-  return `${hhmm(local)} longitude time (${zone}) · ${hhmm(utc)} UTC`;
-}
-
-function frameIndexFor(frames: readonly { validTime: string }[], requested: string | null, now: number): number {
-  if (requested) {
-    const exact = frames.findIndex(frame => frame.validTime === requested);
-    if (exact >= 0) return exact;
-    const target = Date.parse(requested);
-    if (Number.isFinite(target)) {
-      let best = 0;
-      let distance = Number.POSITIVE_INFINITY;
-      frames.forEach((frame, index) => {
-        const delta = Math.abs(Date.parse(frame.validTime) - target);
-        if (delta < distance) { best = index; distance = delta; }
-      });
-      return best;
-    }
-  }
-  let best = 0;
-  let bestAt = Number.NEGATIVE_INFINITY;
-  frames.forEach((frame, index) => {
-    const at = Date.parse(frame.validTime);
-    if (at <= now && at >= bestAt) { best = index; bestAt = at; }
-  });
-  return best;
-}
 
 function basemapStyle(): maplibregl.StyleSpecification {
   return {
@@ -175,7 +110,7 @@ function startPreview(): void {
   modelButtons.length = 0;
   const choices = offlineFixture
     ? [{ modelId: initialModel, label: 'Synthetic fixture' }]
-    : PRODUCTS.map(product => ({ modelId: product.modelId, label: product.label }));
+    : MODEL_OPTIONS;
   for (const choice of choices) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -186,10 +121,9 @@ function startPreview(): void {
     modelBar.append(button);
   }
 
-  const center: [number, number] = hasCameraQuery
-    ? [queryLon!, queryLat!]
-    : initialModel === 'rrfs' ? [-97.5, 39] : initialModel === 'icon-eu' ? [45.04, 40.07] : [0, 20];
-  const zoom = hasCameraQuery ? queryZoom! : initialModel === 'icon-eu' ? 7 : initialModel === 'rrfs' ? 3.2 : 2;
+  const center: [number, number] = startup.camera?.center ??
+    (initialModel === 'rrfs' ? [-97.5, 39] : initialModel === 'icon-eu' ? [45.04, 40.07] : [0, 20]);
+  const zoom = startup.camera?.zoom ?? (initialModel === 'icon-eu' ? 7 : initialModel === 'rrfs' ? 3.2 : 2);
   const map = new maplibregl.Map({
     container: 'map',
     center,
@@ -204,8 +138,8 @@ function startPreview(): void {
 
   let build: PinnedBuild | null = null;
   let currentModel: ModelId = initialModel;
-  let reference: 'agl' | 'msl' = initialReference;
-  let requestedTime = initialTime;
+  let reference: AltitudeReference = startup.reference;
+  let requestedTime = startup.validTime;
   let selectedFrame: string | null = null;
   let opacity = initialOpacity;
   let expired = false;
@@ -227,7 +161,8 @@ function startPreview(): void {
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
   let urlReady = false;
-  let applyingHistory = false;
+  let historyRevision = 0;
+  let applyingHistory: number | null = null;
   let opacityCommitted = false;
   let legendOpen = true;
 
@@ -257,23 +192,13 @@ function startPreview(): void {
     for (const button of modelButtons) button.className = button.value === currentModel ? 'model-button is-selected' : 'model-button';
   }
 
-  function locationHref(): string {
-    const params = new URLSearchParams();
-    params.set('model', currentModel);
-    params.set('ref', reference);
-    params.set('opacity', String(Math.round(opacity * 100) / 100));
-    const camera = map.getCenter();
-    params.set('lat', camera.lat.toFixed(4));
-    params.set('lon', camera.lng.toFixed(4));
-    params.set('z', String(Math.round(map.getZoom() * 100) / 100));
-    const frame = build?.manifest.frames.find(item => item.id === selectedFrame);
-    if (frame) params.set('t', frame.validTime);
-    return `${window.location.pathname}?${params}`;
-  }
-
   function writeUrl(mode: 'push' | 'replace'): void {
     if (applyingHistory || !urlReady || pendingModel) return;
-    const next = locationHref();
+    const camera = map.getCenter();
+    const validTime = build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
+    const next = previewUrl(window.location.pathname, {
+      model: currentModel, reference, opacity, lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime
+    });
     if (next === `${window.location.pathname}${window.location.search}`) return;
     const method = mode === 'push' ? 'pushState' : 'replaceState';
     window.history[method](null, '', next);
@@ -498,6 +423,8 @@ function startPreview(): void {
 
   async function loadModel(model: ModelId): Promise<void> {
     if (mapFailed) return;
+    const replaceUrl = applyingHistory === null;
+    const revision = historyRevision;
     disposeExpiry();
     if (expiryTimer !== null) {
       window.clearInterval(expiryTimer);
@@ -530,7 +457,7 @@ function startPreview(): void {
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
-      pointHorizonSelect.children[0].textContent = next.manifest.version === 5 && next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
+      pointHorizonSelect.children[0].textContent = next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
       chooseFrame(next);
       updateOverlay();
       updateFreshness();
@@ -540,7 +467,7 @@ function startPreview(): void {
       if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
       if (loadAbort === requestAbort) pendingModel = null;
       urlReady = true;
-      if (!applyingHistory) writeUrl('replace');
+      if (replaceUrl && revision === historyRevision) writeUrl('replace');
     } catch (error) {
       if (requestAbort.signal.aborted || loadAbort !== requestAbort || (error instanceof DOMException && error.name === 'AbortError')) return;
       showError(error instanceof Error ? error.message : String(error));
@@ -608,36 +535,35 @@ function startPreview(): void {
     });
   }
 
-  function applyHistory(): void {
+  async function applyHistory(): Promise<void> {
     if (lifecycle.signal.aborted) return;
-    const params = startupQuery();
-    const model = params.get('model');
-    applyingHistory = true;
-    reference = params.get('ref') === 'msl' ? 'msl' : 'agl';
-    syncReference();
-    const nextOpacity = finiteParam(params.get('opacity'));
-    if (nextOpacity !== null) {
-      opacity = Math.min(1, Math.max(0, nextOpacity));
-      opacityInput.value = String(opacity);
-      opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
-      overlay.setOpacity(opacity);
+    const state = previewQuery(window.location.search, offlineFixture);
+    const change = ++historyRevision;
+    applyingHistory = change;
+    try {
+      reference = state.reference;
+      syncReference();
+      if (state.opacity !== null) {
+        opacity = state.opacity;
+        opacityInput.value = String(opacity);
+        opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
+        overlay.setOpacity(opacity);
+      }
+      if (state.camera) map.jumpTo(state.camera);
+      requestedTime = state.validTime;
+      if (state.model && state.model !== currentModel) {
+        await loadModel(state.model);
+        return;
+      }
+      if (build) {
+        const previousFrame = selectedFrame;
+        chooseFrame(build);
+        if (selectedFrame !== previousFrame) followMapFrame();
+        updateOverlay();
+      }
+    } finally {
+      if (applyingHistory === change) applyingHistory = null;
     }
-    const lat = finiteParam(params.get('lat'));
-    const lon = finiteParam(params.get('lon'));
-    const zoomLevel = finiteParam(params.get('z'));
-    if (lat !== null && lon !== null && zoomLevel !== null) map.jumpTo({ center: [lon, lat], zoom: zoomLevel });
-    requestedTime = params.get('t');
-    if (model && model !== currentModel && (offlineFixture || PRODUCTS.some(product => product.modelId === model))) {
-      void loadModel(model as ModelId).finally(() => { applyingHistory = false; });
-      return;
-    }
-    if (build) {
-      const previousFrame = selectedFrame;
-      chooseFrame(build);
-      if (selectedFrame !== previousFrame) followMapFrame();
-      updateOverlay();
-    }
-    applyingHistory = false;
   }
 
   for (const button of modelButtons) {
@@ -774,8 +700,8 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    if (!hasCameraQuery && initialModel === 'icon-eu') map.fitBounds(ARMENIA, { padding: 36, duration: 0 });
-    else if (!hasCameraQuery && initialModel === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
+    if (!startup.camera && initialModel === 'icon-eu') map.fitBounds(ARMENIA, { padding: 36, duration: 0 });
+    else if (!startup.camera && initialModel === 'rrfs') map.fitBounds(NORTH_AMERICA, { padding: 32, duration: 0 });
     void loadModel(initialModel);
   });
 }

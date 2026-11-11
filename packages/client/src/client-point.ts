@@ -1,5 +1,7 @@
 /** Load a point's selected sample first, with bounded pages for the remaining forecast. */
-import { maxProfileFrames, renderedFrames, surfaceFrameCount, type LayerId, type PublishedManifest } from '@av/contracts';
+import type { LayerId } from '@av/contracts/layers';
+import { maxProfileFrames } from '@av/contracts/point-products';
+import { renderedFrames, surfaceFrameCount, type ManifestV5 } from '@av/contracts/publication';
 import type { PinnedBuild, PointFrame, PointHorizon, PointSeries, PointSeriesLoader } from './client-types.ts';
 
 const MAX_PAGES = 16;
@@ -14,10 +16,6 @@ const profileFields: readonly LayerId[] = [...diagnostics, 'pbl-height-agl', 'wi
 /** Published map-lift layers and the frames where those layers can be sampled. */
 export function pointLiftExpectation(build: PinnedBuild): { layers: readonly LayerId[]; frames: ReadonlySet<string> } {
   const { manifest } = build;
-  if (manifest.version !== 5) {
-    const layers = liftLayers.filter(layer => manifest.layers.includes(layer));
-    return { layers, frames: new Set(layers.length ? manifest.frames.map(frame => frame.id) : []) };
-  }
   const fine = manifest.surfaces.find(surface => surface.kind === 'fine');
   if (!fine) return { layers: [], frames: new Set() };
   const layers = liftLayers.filter(layer => fine.layers.includes(layer));
@@ -25,7 +23,7 @@ export function pointLiftExpectation(build: PinnedBuild): { layers: readonly Lay
 }
 
 function nativeSurface({ manifest }: PinnedBuild) {
-  return manifest.version === 5 ? manifest.surfaces.find(surface => surface.kind === 'native') : undefined;
+  return manifest.surfaces.find(surface => surface.kind === 'native');
 }
 
 export function hasNativeProfiles(build: PinnedBuild): boolean {
@@ -46,10 +44,10 @@ function pointSelection(build: PinnedBuild) {
   return { layers: [...sample.layers, ...layers], sample, profile: { layers, levelCount: native.profiles.levelCount } };
 }
 
-function pointFrames(manifest: PublishedManifest, horizon: PointHorizon) {
+function pointFrames(manifest: ManifestV5, horizon: PointHorizon) {
   let frames = manifest.frames;
   if (horizon !== 'forecast') {
-    if (manifest.version === 5 && manifest.mapFrameCount !== undefined) frames = renderedFrames(manifest);
+    if (manifest.mapFrameCount !== undefined) frames = renderedFrames(manifest);
     else {
       const until = Date.parse(frames[0].validTime) + 24 * 3600000;
       frames = frames.filter(frame => Date.parse(frame.validTime) < until);

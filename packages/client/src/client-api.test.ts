@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError, type LatestPayload } from './index';
-import { fixtureManifest, fixtureLatest, fixturePatch } from '../../../tests/forecast-fixture';
-import type { SamplePayload } from './client-types';
-import { sampleResponseSchema } from '@av/contracts';
+import { FIXTURE_BUILD_ID, fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
-const frames = fixtureManifest().frames;
-const layerIds = fixtureManifest().layers;
-function manifest() { return fixtureManifest({ buildId: '20261030T000000Z-abc', createdAt: created, expiresAt }); }
+const frames = fixtureManifestV5().frames;
+const layerIds = fixtureManifestV5().layers;
+function manifest() { return fixtureManifestV5({ createdAt: created, expiresAt }); }
 function latestPayload(): LatestPayload & { manifest: ReturnType<typeof manifest> } { return fixtureLatest(manifest()) as LatestPayload & { manifest: ReturnType<typeof manifest> }; }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -22,9 +20,9 @@ describe('ApiClient.latest', () => {
     const build = await client.latest('gfs');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toBe('https://api.test/v1/models/gfs/latest?expand=manifest');
-    expect(build.manifest.buildId).toBe('20261030T000000Z-abc');
+    expect(build.manifest.buildId).toBe(FIXTURE_BUILD_ID);
     expect(build.templates['usable-lift-msl']).toContain('/usable-lift-msl/{frame}/{z}/{x}/{y}.webp');
-    expect(build.manifest.version !== 5 && build.manifest.coverage.maxZoom).toBe(manifest().coverage.maxZoom);
+    expect(build.manifest.surfaces).toEqual(manifest().surfaces);
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
   });
 
@@ -78,19 +76,24 @@ describe('ApiClient.latest', () => {
 });
 
 describe('ApiClient.sample', () => {
-  function samplePayload() {
+  function samplePayload(selected = frames) {
+    const published = manifest();
     return {
+      version: 5,
       model: 'gfs',
-      buildId: '20261030T000000Z-abc',
+      buildId: FIXTURE_BUILD_ID,
       lat: -32.9,
       lon: -68.9,
-      method: manifest().method,
-      source: manifest().source,
-      coverage: manifest().coverage,
+      method: published.method,
+      source: published.source,
+      surfaces: published.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
       expiresAt,
-      frames: frames.map(frame => ({
+      frames: selected.map(frame => ({
         ...frame,
-        layers: Object.fromEntries(layerIds.map(layer => [layer, { value: 310, status: 'valid', support: layer === 'precip-rate' ? 0 : 4, interpolated: false }]))
+        layers: Object.fromEntries(layerIds.map(layer => [layer, {
+          value: 310, status: 'valid', support: layer === 'precip-rate' ? 0 : 4, interpolated: false,
+          surfaceId: published.surfaces.find(surface => surface.layers.includes(layer))!.id
+        }]))
       }))
     };
   }
@@ -104,10 +107,11 @@ describe('ApiClient.sample', () => {
     ['missing expiry', p => { Object.assign(p, { expiresAt: undefined }); }],
     ['wrong expiry', p => { p.expiresAt = created; }],
     ['wrong method hash', p => { p.method.hash = 'f'.repeat(64); }],
-    ['wrong coverage hash', p => { p.coverage.hash = 'f'.repeat(64); }],
+    ['wrong coverage hash', p => { p.surfaces[0].coverage.hash = 'f'.repeat(64); }],
     ['wrong source', p => { p.source.provenanceSha256 = 'f'.repeat(64); }],
     ['missing layer', p => { delete p.frames[0].layers['precip-rate']; }],
     ['extra layer', p => { p.frames[0].layers.extra = p.frames[0].layers['precip-rate']; }],
+    ['wrong surface owner', p => { p.frames[0].layers['precip-rate'].surfaceId = 'gfs-fine'; }],
     ['invalid rain support', p => { p.frames[0].layers['precip-rate'].support = 4; }],
     ['unknown support bit', p => { p.frames[0].layers['usable-lift-agl'].support = 256; }],
     ['support integer overflow', p => { p.frames[0].layers['usable-lift-agl'].support = 2 ** 32; }],
@@ -120,7 +124,7 @@ describe('ApiClient.sample', () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latestPayload())).mockResolvedValueOnce(jsonResponse(payload));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
     const build = await client.latest('gfs');
-    await expect(client.sample(build, { lat: -32.9, lon: -68.9 })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    await expect(client.sample(build, { lat: -32.9, lon: -68.9, frames: 'all' })).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
   it('validates a legitimate partial selection and refuses absent identifiers before fetching', async () => {
     const payload = samplePayload(); payload.frames = [{ ...payload.frames[2], layers: { 'precip-rate': payload.frames[2].layers['precip-rate'] } }];
@@ -132,45 +136,26 @@ describe('ApiClient.sample', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it('accepts mixed base/refined ownership and applies the selected patch descriptor', async () => {
-    const base = manifest(), patch = fixturePatch(base);
-    patch.descriptors.layers['usable-lift-agl'].noLiftSampleValue = null;
-    const latest = fixtureLatest({ ...base, version: 4, patches: [patch] });
-    const payload: SamplePayload = sampleResponseSchema.parse({ ...samplePayload(), lat: 0, lon: 0 });
-    for (const frame of payload.frames) frame.layers['usable-lift-agl'] = { value: null, status: 'no-usable-lift', support: 4, interpolated: false, patchId: patch.id };
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latest)).mockResolvedValueOnce(jsonResponse(payload));
+  it('uses the pinned no-lift descriptor for a fine-surface value', async () => {
+    const pinned = manifest();
+    pinned.descriptors.layers['usable-lift-agl'].noLiftSampleValue = null;
+    const payload = samplePayload([frames[0]]);
+    Object.assign(payload.frames[0].layers['usable-lift-agl'], { value: null, status: 'no-usable-lift' });
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(fixtureLatest(pinned))).mockResolvedValueOnce(jsonResponse(payload));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
     const build = await client.latest('gfs');
-    const result = await client.sample(build, { lat: 0, lon: 0 });
-    expect(result.frames[0].layers['usable-lift-agl']).toMatchObject({ value: null, status: 'no-usable-lift', patchId: patch.id });
-    expect(result.frames[0].layers['precip-rate']).not.toHaveProperty('patchId');
+    const result = await client.sample(build, { lat: payload.lat, lon: payload.lon });
+    expect(result.frames[0].layers['usable-lift-agl']).toMatchObject({ value: null, status: 'no-usable-lift', surfaceId: 'gfs-fine' });
   });
 
-  it.each(['unknown', 'unsupported-layer', 'outside-polygon', 'outside-status', 'missing-frame-owner', 'old-manifest'] as const)('rejects %s refinement claims', async failure => {
-    const base = manifest(), patch = fixturePatch(base);
-    const latest = failure === 'old-manifest' ? fixtureLatest(base) : fixtureLatest({ ...base, version: 4, patches: [patch] });
-    const payload: SamplePayload = sampleResponseSchema.parse({ ...samplePayload(), lat: 0, lon: 0 });
-    for (const frame of payload.frames) frame.layers['usable-lift-agl'].patchId = patch.id;
-    if (failure === 'unknown') payload.frames[0].layers['usable-lift-agl'].patchId = 'zone-missing';
-    if (failure === 'unsupported-layer') payload.frames[0].layers['precip-rate'].patchId = patch.id;
-    if (failure === 'outside-polygon') payload.lon = 1;
-    if (failure === 'outside-status') Object.assign(payload.frames[0].layers['usable-lift-agl'], { value: null, support: 0, status: 'outside-domain' });
-    if (failure === 'missing-frame-owner') delete payload.frames[1].layers['usable-lift-agl'].patchId;
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latest)).mockResolvedValueOnce(jsonResponse(payload));
-    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
-    const build = await client.latest('gfs');
-    await expect(client.sample(build, { lat: payload.lat, lon: payload.lon })).rejects.toBeInstanceOf(InvalidApiResponseError);
-  });
   it('supports more than eight frames within the admitted result budget', async () => {
-    const latest = latestPayload(), extra = { ...frames[7], id: 'f027' };
-    latest.manifest!.frames = [...frames, extra];
-    latest.manifest!.artifacts.push(...layerIds.map(layer => ({ layer, frame: extra.id, tilesKey: `builds/gfs/${latest.manifest!.buildId}/${layer}/${extra.id}.pmtiles`, tilesSha256: 'a'.repeat(64) })));
-    latest.manifest!.samples.channelCount = 27; latest.manifest!.samples.bytes = latest.manifest!.samples.storedCells * 27 * 5;
-    const payload = samplePayload(); payload.frames.push({ ...payload.frames[7], id: extra.id });
+    const selected = [...frames, { ...frames[7], id: 'f027' }];
+    const latest = fixtureLatest(fixtureManifestV5({ createdAt: created, expiresAt, frames: selected }));
+    const payload = samplePayload(selected);
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(latest)).mockResolvedValueOnce(jsonResponse(payload));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
     const build = await client.latest('gfs');
-    expect((await client.sample(build, { lat: -32.9, lon: -68.9 })).frames).toHaveLength(9);
+    expect((await client.sample(build, { lat: -32.9, lon: -68.9, frames: 'all' })).frames).toHaveLength(9);
   });
 
   it('requests the explicit all-8-frame × all-3-layer series in one call', async () => {
@@ -181,7 +166,7 @@ describe('ApiClient.sample', () => {
     const build = await client.latest('gfs');
     const series = await client.sample(build, { lat: -32.9, lon: -68.9, frames: 'all', layers: [...layerIds] });
     const url = new URL(String(fetchImpl.mock.calls[1][0]));
-    expect(url.pathname).toBe('/v1/models/gfs/runs/20261030T000000Z-abc/sample');
+    expect(url.pathname).toBe(`/v1/models/gfs/runs/${FIXTURE_BUILD_ID}/sample`);
     expect(url.searchParams.get('frame')).toBe('all');
     expect(url.searchParams.get('layers')).toBe('usable-lift-msl,usable-lift-agl,precip-rate');
     expect(series.frames).toHaveLength(8);
@@ -267,7 +252,10 @@ describe('bounded request lifecycle', () => {
   });
   it('cancels oversized response streams before parsing', async () => {
     const cancel = vi.fn();
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); }, cancel })));
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(
+      new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(1024 * 1024 + 1)); }, cancel }),
+      { headers: { 'content-length': '12' } }
+    ));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
     await expect(client.latest('gfs')).rejects.toThrow('Response exceeds byte budget'); expect(cancel).toHaveBeenCalledTimes(1); expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

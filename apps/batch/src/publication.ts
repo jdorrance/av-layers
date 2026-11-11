@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, renderedFrames, getProduct, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, renderedFrames, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -162,7 +163,7 @@ async function publishV5Dependencies(store: ObjectStorage, root: string, manifes
   if (!product) throw new Error('No trusted publication recipe');
   for (const surface of manifest.surfaces) {
     const coverage = await readSparseCoverage(root, surface.coverage.hash);
-    if (!sameGrid(surface.grid, coverage.descriptor.grid) || surface.gridHash !== coverage.descriptor.gridHash || surface.coverage.id !== coverage.descriptor.id || surface.coverage.maxZoom !== coverage.descriptor.maxZoom || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Sparse coverage binding mismatch');
+    if (!sameGrid(surface.grid, coverage.descriptor.grid) || surface.gridHash !== coverage.descriptor.gridHash || surface.coverage.id !== coverage.descriptor.id || surface.coverage.maxZoom > coverage.descriptor.maxZoom || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Sparse coverage binding mismatch');
     for (const name of ['sparse', 'tiles'] as const) {
       const file = coverage.descriptor.files[name], key = `${coveragePrefix(surface.coverage.hash)}/${name}.bin`;
       const bytes = await readLocalFile(localPath(root, key), name === 'sparse' ? MAX_SPARSE_COVERAGE_BYTES : MAX_COVERAGE_BITSET_BYTES, file.bytes);
@@ -191,7 +192,7 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     const object = await store.get(surface.coverage.maskKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, signal);
     if (!object || sha256(object.bytes) !== surface.coverage.hash || surface.coverage.maskKey !== `coverage/${surface.coverage.hash}/manifest.json`) throw new Error('Rollback sparse coverage missing or corrupt');
     const descriptor = sparseCoverageDescriptorSchema.parse(decode(object.bytes));
-    if (descriptor.id !== surface.coverage.id || descriptor.maxZoom !== surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || sha256(Buffer.from(canonicalGridJson(descriptor.grid))) !== descriptor.gridHash || !sameGrid(descriptor.grid, surface.grid)) throw new Error('Rollback sparse coverage binding mismatch');
+    if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || sha256(Buffer.from(canonicalGridJson(descriptor.grid))) !== descriptor.gridHash || !sameGrid(descriptor.grid, surface.grid)) throw new Error('Rollback sparse coverage binding mismatch');
     const prefix = coveragePrefix(surface.coverage.hash), sparseKey = `${prefix}/sparse.bin`;
     const sparse = await store.get(sparseKey, undefined, MAX_SPARSE_COVERAGE_BYTES, signal);
     signal?.throwIfAborted();

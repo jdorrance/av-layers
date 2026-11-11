@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as contracts from '@av/contracts';
 import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, sampleResponseV5Schema, type LayerId } from '@av/contracts';
 import { nativeColumnCloudDiagnostics } from '@av/soaring';
 import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
@@ -9,7 +10,7 @@ import { createApp } from '../src/index';
 import { NOW, attachNativeProfiles, createGroupedV5Fixture, createV5Fixture, nativePoint } from './v5-fixture';
 
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 function nativeValue(layer: LayerId, _frame: number, x: number): number | null {
   const values: Partial<Record<LayerId, number>> = {
@@ -67,6 +68,21 @@ function splitLastNativePacks(f: Fixture) {
 }
 
 describe('native profile API', () => {
+  it('reuses scalar and profile layout bindings with the response cache disabled', async () => {
+    const f = fixture();
+    const scalar = vi.spyOn(contracts, 'assertSampleLayoutBindingV5');
+    const profile = vi.spyOn(contracts, 'assertProfileLayoutBindingV5');
+    const request = () => f.app.fetch(new Request(`https://api.test${path(f)}`, { headers: { 'cf-connecting-ip': '192.0.2.1' } }),
+      { BUCKET: f.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' }, { waitUntil() {} });
+    const cold = await read(await request());
+    const warm = await request();
+    expect(warm.headers.get('x-av-response-cache')).toBe('bypass');
+    expect(await read(warm)).toEqual(cold);
+    expect(scalar).toHaveBeenCalledTimes(1);
+    expect(profile).toHaveBeenCalledTimes(1);
+    assertReleased(f);
+  });
+
   it.each([false, true])('honors declared scalar/profile partitions with grouped samples=%s', async grouped => {
     const varyingTemperature = (layer: LayerId, frame: number, x: number) => layer === 'sfc-temp-c'
       ? nativeValue(layer, frame, x)! + frame : nativeValue(layer, frame, x);

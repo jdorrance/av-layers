@@ -3,7 +3,7 @@ import { ApiClient } from './client-api';
 import { MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from '@av/contracts';
 import { pointLiftExpectation, pointSeriesSelection } from './client-point';
 import type { PointSeries } from './client-types';
-import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedLegacyPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
+import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedUnprefixedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
 const point = { lat: 32.9, lon: -117.25 };
 function setup() {
@@ -14,18 +14,11 @@ function setup() {
 }
 
 describe('cached point forecast pages', () => {
-  it.each([3, 4] as const)('keeps the v%s day selection within 24 hours while preserving its full forecast', async version => {
-    const build = retainedLegacyPointBuild(version), m = build.manifest;
-    if (m.version === 5) throw new Error('Expected legacy manifest');
+  it('keeps an unprefixed day selection within 24 hours while preserving its full forecast', async () => {
+    const build = retainedUnprefixedPointBuild(), m = build.manifest;
     expect(pointSeriesSelection(build).frames).toEqual(m.frames.slice(0, 24).map(frame => frame.id));
     expect(pointSeriesSelection(build, 'forecast').frames.at(-1)).toBe('f384');
-    const fetchImpl = vi.fn<typeof fetch>(async input => {
-      const url = new URL(String(input)), ids = url.searchParams.get('frame')!.split(','), layers = url.searchParams.get('layers')!.split(',');
-      return new Response(JSON.stringify({ model: m.model, buildId: m.buildId, ...point, method: m.method, source: m.source,
-        expiresAt: m.expiresAt, coverage: m.coverage, frames: m.frames.filter(frame => ids.includes(frame.id)).map(frame => ({
-          ...frame, layers: Object.fromEntries(layers.map(layer => [layer, { value: 500, status: 'valid', support: 0, interpolated: false }]))
-        })) }));
-    });
+    const fetchImpl = vi.fn<typeof fetch>(async input => new Response(JSON.stringify(fixturePointSample(build, String(input)))));
     const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(m.createdAt) });
     expect((await api.pointSeries(build, point).load('day')).frames).toHaveLength(24);
     expect(fetchImpl.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('frame')!.split(',').length)).toEqual([1, 23]);

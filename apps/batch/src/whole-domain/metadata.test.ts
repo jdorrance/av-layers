@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, canonicalGridJson, createRecipeIdentity, createWholeDomainDescriptors, encodeBoundedJson, getProduct, layerSurface, manifestV5Schema, mapFrameCount, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, parseBoundedJson, PROFILE_PACK_FORMAT, renderedFrames, renderedLayers, SAMPLE_BLOCK_SIZE, sourceIntervalHours, validateArtifactRecordsV5, type ForecastSurfaceV5, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, canonicalGridJson, createRecipeIdentity, createWholeDomainDescriptors, encodeBoundedJson, layerSurface, manifestV5Schema, mapFrameCount, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, parseBoundedJson, PROFILE_PACK_FORMAT, renderedFrames, renderedLayers, SAMPLE_BLOCK_SIZE, sourceIntervalHours, validateArtifactRecordsV5, type ForecastSurfaceV5, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
 import { describeSparseCoverage, loadCoverage } from '../coverage.js';
 import { forecastFrame } from '../frame-build.js';

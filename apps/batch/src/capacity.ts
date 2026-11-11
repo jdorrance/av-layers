@@ -1,7 +1,7 @@
 import { CELL_BYTES, coverageAtZoom, coverageIndices, expectedTiles, forecastGrids, forecastStartsPerDay, LAYERS, MAX_GRID_CELLS, MAX_NATIVE_ZOOM, MAX_RETAINED_BUILDS, sameGrid, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { prepareSamplePackLayout } from '@av/forecast';
 import { prepareTerrainColumns } from '@av/forecast/refinement';
-import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES, type PreparedTerrain } from './terrain/prepare.js';
+import { MAX_PREPARED_TERRAIN_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
 import { MAX_RASTER_SHARED_INPUT_BYTES, rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
 import type { LoadedRefinement } from './refinement/prepare.js';
 
@@ -17,7 +17,6 @@ export const BUILD_BUDGETS = {
 
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
 export const MAX_V5_SHARD_BYTES = 64 * 1024 * 1024;
-export type PreparedBuild = ReturnType<typeof prepareBuild<LoadedRefinement>> & { terrain?: PreparedTerrain };
 
 interface FrameResources { maxLevels: number; auxiliarySurfaceFields?: number; auxiliaryLevelFields?: number }
 export function normalizedFrameBytes(activeCells: number, verticalCoordinate: ProductDefinition['capabilities']['verticalCoordinate'], resources: FrameResources): number {
@@ -91,14 +90,19 @@ export function estimateCapacity(mask: CoverageMask, product: ProductDefinition,
   };
 }
 
-/** Prepare v3/v4 geometry/counts and reject resource growth before acquiring weather. */
-export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: FrameResources & { retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
-  mask = coverageAtZoom(mask, product.maxNativeZoom);
+export function assertForecastInputs(mask: CoverageMask, product: ProductDefinition): void {
   if (!Array.isArray(product.layers) || !product.layers.length || new Set(product.layers).size !== product.layers.length || product.layers.some(layer => !Object.hasOwn(LAYERS, layer))) throw new Error('Product requires unique implemented scalar layers');
   if (!Array.isArray(product.frameHours) || !product.frameHours.length || product.frameHours.some((hour, index) => !Number.isSafeInteger(hour) || (index > 0 && hour <= product.frameHours[index - 1]))) throw new Error('Product requires strictly ascending integer frame hours');
   if (!Number.isFinite(product.intervalHours) || product.intervalHours <= 0 || product.intervalHours > product.frameHours[0]) throw new Error('Product interval must be positive and not exceed its first frame');
-  if (mask.maxZoom !== product.maxNativeZoom || !sameGrid(mask.grid, product.grid)) throw new Error('Coverage does not match the trusted product');
+  if (mask.maxZoom < product.maxNativeZoom || !sameGrid(mask.grid, product.grid)) throw new Error('Coverage does not match the trusted product');
+  if (!mask.output.some(Boolean)) throw new Error('Coverage must contain output and active cells before acquisition');
   if (mask.grid.width * mask.grid.height > BUILD_BUDGETS.gridCells) throw new Error('Grid-cell budget exceeded');
+}
+
+/** Prepare v3/v4 geometry/counts and reject resource growth before acquiring weather. */
+export function prepareBuild<Refinement extends { mask: CoverageMask } = LoadedRefinement>(mask: CoverageMask, product: ProductDefinition, resources: FrameResources & { retainedGeometryFields?: number; frameCount?: number; terrainBytes?: number; refinements?: readonly Refinement[] }) {
+  mask = coverageAtZoom(mask, product.maxNativeZoom);
+  assertForecastInputs(mask, product);
   if ((resources.refinements ?? []).reduce((sum, item) => sum + item.mask.grid.width * item.mask.grid.height, mask.grid.width * mask.grid.height) > BUILD_BUDGETS.gridCells) throw new Error('Aggregate grid-cell budget exceeded');
   if (!Number.isSafeInteger(resources.maxLevels) || resources.maxLevels < 1 || resources.maxLevels > 256) throw new Error('Invalid normalized level budget');
   const indices = coverageIndices(mask), layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);

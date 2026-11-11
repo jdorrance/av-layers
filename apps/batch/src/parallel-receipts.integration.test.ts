@@ -1,20 +1,18 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { TERRAIN_CLEARANCE_METHOD, canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type Manifest, type ProvenanceFrameReference, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { canonicalGridJson, manifestV5Schema, planWholeDomainGrid, setBit, sparseCoverageFromDense, type CoverageMask, type ProvenanceFrameReference, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
 import { describeSparseCoverage } from './coverage.js';
 import { buildShard, createBuildPlan, finalizeBuild, type BuildPlan } from './parallel.js';
-import { assertValidatedBuild, localPath, sha256 } from './validate.js';
-import * as refinementConfig from './refinement/config.js';
+import { assertValidatedBuild, sha256 } from './validate.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
-import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, readManifest, temporaryRoot, tilePixels } from '../parallel-fixtures.js';
+import { CYCLE, cleanupTemporaryRoots, fixtureProvider, temporaryRoot } from '../parallel-fixtures.js';
 
-const fallback = vi.hoisted(() => ({ legacy: false, compared: 0, filled: 0, mappingBytes: [] as number[] }));
 const metricsHooks = vi.hoisted(() => ({ afterPrepare: undefined as (() => void) | undefined, afterMerge: undefined as (() => void) | undefined, afterValidate: undefined as (() => void) | undefined, afterShardValidate: undefined as (() => void) | undefined }));
 vi.mock('./whole-domain/prepare.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./whole-domain/prepare.js')>();
@@ -36,29 +34,6 @@ vi.mock('./validate.js', async importOriginal => {
     const result = await actual.validateSampleGroup(...args); metricsHooks.afterShardValidate?.(); return result;
   }, validateBuild: async (...args: Parameters<typeof actual.validateBuild>) => {
     const result = await actual.validateBuild(...args); metricsHooks.afterValidate?.(); return result;
-  } };
-});
-vi.mock('@av/forecast/refinement', async importOriginal => {
-  const actual = await importOriginal<typeof import('@av/forecast/refinement')>();
-  return { ...actual, prepareTerrainColumns: (...args: Parameters<typeof actual.prepareTerrainColumns>) => {
-    const columns = actual.prepareTerrainColumns(...args);
-    if (!fallback.legacy) fallback.mappingBytes.push(columns.byteLength + columns.workspaceBytes);
-    const dense = fallback.legacy ? actual.prepareTerrainClearance(args[0], args[1]) : undefined;
-    return { ...columns, derive: (...deriveArgs: Parameters<typeof columns.derive>) => {
-      const [frame, terrain, time, options] = deriveArgs;
-      if (!dense) {
-        const result = columns.derive(...deriveArgs);
-        fallback.compared++;
-        fallback.filled += result.metrics.filledBelowGroundBridgeExceeded ?? 0;
-        return result;
-      }
-      const native = options?.nativeClearance;
-      if (!native) throw new Error('Missing native clearance inputs');
-      const fields = dense.derive(native.diagnostics, native.flags, terrain, time, options.daylightOnly);
-      return columns.derive(frame, terrain, time, { ...options, nativeClearance: undefined, clearance: {
-        methodId: TERRAIN_CLEARANCE_METHOD.id, validTime: native.validTime, grid: args[1].grid, fields
-      } });
-    } };
   } };
 });
 vi.mock('./raster-pool.js', async importOriginal => ({
@@ -90,157 +65,6 @@ afterEach(async () => {
   metricsHooks.afterShardValidate = undefined;
   vi.unstubAllEnvs();
   await cleanupTemporaryRoots();
-});
-
-describe('refined hour-group builds', () => {
-  let fixtureRoot: string, serialRoot: string, shardRoot: string, legacyRoot: string, ungatedRoot: string, legacyUngatedRoot: string;
-  let plan: BuildPlan, serial: Manifest, legacy: Manifest, ungated: Manifest, legacyUngated: Manifest;
-  let serialMappingBytes: number;
-  let restoreConfig: () => void;
-  const source = fixtureProvider();
-  const zones = { type: 'FeatureCollection', features: [
-    { type: 'Feature', id: 'east', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0.3, 71.2], [0.34, 71.2], [0.34, 71.24], [0.3, 71.24], [0.3, 71.2]]] } },
-    { type: 'Feature', id: 'west', properties: {}, geometry: { type: 'Polygon', coordinates: [[[0.1, 71.1], [0.14, 71.1], [0.14, 71.14], [0.1, 71.14], [0.1, 71.1]]] } }
-  ] };
-
-  beforeAll(async () => {
-    fixtureRoot = await mkdtemp(join(tmpdir(), 'av-refined-parallel-'));
-    serialRoot = join(fixtureRoot, 'serial'); shardRoot = join(fixtureRoot, 'parallel'); legacyRoot = join(fixtureRoot, 'legacy');
-    ungatedRoot = join(fixtureRoot, 'ungated'); legacyUngatedRoot = join(fixtureRoot, 'legacy-ungated');
-    const configured = refinementConfig.configuredRefinements;
-    const resolveConfig = vi.spyOn(refinementConfig, 'configuredRefinements').mockImplementation(product => configured(product, zones));
-    restoreConfig = () => resolveConfig.mockRestore();
-    const storage = new TerrainTestStorage(), refinement = { storage, catalogRef: seedTerrainCatalog(storage) };
-    fallback.legacy = true;
-    legacy = await readManifest(await buildForecast({ out: legacyRoot, cycle: CYCLE, product, mask, provider: fixtureProvider().provider, refinement }));
-    fallback.legacy = false;
-    fallback.mappingBytes = [];
-    serial = await readManifest(await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask, provider: source.provider, refinement }));
-    serialMappingBytes = fallback.mappingBytes.reduce((sum, value) => sum + value, 0);
-    fallback.legacy = true;
-    legacyUngated = await readManifest(await buildForecast({ out: legacyUngatedRoot, cycle: CYCLE, product, mask, provider: fixtureProvider().provider, refinement, deriveOptions: { daylightOnly: false } }));
-    fallback.legacy = false;
-    ungated = await readManifest(await buildForecast({ out: ungatedRoot, cycle: CYCLE, product, mask, provider: fixtureProvider().provider, refinement, deriveOptions: { daylightOnly: false } }));
-    plan = await createBuildPlan({ out: shardRoot, cycle: CYCLE, product, mask, provider: source.provider, refinement, shards: 2 });
-    expect(source.acquire.mock.calls.map(([hour]) => hour)).toEqual(product.frameHours);
-    expect(resolveConfig).toHaveBeenCalledTimes(5);
-    expect(plan.refinements?.map(input => input.id)).toEqual(['east', 'west']);
-    resolveConfig.mockImplementation(() => { throw new Error('Workers must use the frozen regions'); });
-    storage.objects.clear();
-    const workerRoots = plan.groups.map((_, shard) => join(fixtureRoot, `worker-${shard}`));
-    await Promise.all(workerRoots.map(async (out, shard) => {
-      await cp(shardRoot, out, { recursive: true });
-      const downloadedPlan = JSON.parse(await readFile(join(out, 'plan.json'), 'utf8')) as BuildPlan;
-      await buildShard({ plan: downloadedPlan, shard, out, product, mask, provider: source.provider });
-    }));
-    for (const out of workerRoots) for (const directory of ['builds', 'shards']) {
-      await cp(join(out, directory), join(shardRoot, directory), { recursive: true });
-    }
-  }, 60_000);
-  afterAll(async () => {
-    fallback.legacy = false;
-    restoreConfig?.();
-    if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  async function copyCompleted(): Promise<string> {
-    const out = await temporaryRoot();
-    await cp(shardRoot, out, { recursive: true });
-    return out;
-  }
-  const manifestPath = (out: string) => join(out, 'builds', product.modelId, plan.buildId, 'manifest.json');
-  const finalize = (out: string, onValidated?: Parameters<typeof finalizeBuild>[0]['onValidated']) =>
-    finalizeBuild({ plan, out, product, mask, provider: source.provider, onValidated });
-
-  it('merges byte-identical fine AGL packs without acquiring extra forecast hours or rereading terrain', async () => {
-    const out = await copyCompleted(), onValidated = vi.fn();
-    const manifest = await readManifest(await finalize(out, onValidated));
-    expect(manifest.version).toBe(4);
-    expect(manifest.frames).toEqual(serial.frames);
-    expect(manifest.patches?.map(patch => patch.id)).toEqual(['east', 'west']);
-    expect(await readFile(localPath(out, manifest.samples.key))).toEqual(await readFile(localPath(serialRoot, serial.samples.key)));
-    expect(await readFile(localPath(serialRoot, serial.samples.key))).toEqual(await readFile(localPath(legacyRoot, legacy.samples.key)));
-    for (const [index, patch] of manifest.patches!.entries()) {
-      const expected = serial.patches![index], input = plan.refinements![index];
-      expect(patch.layers).toEqual([...TERRAIN_CLEARANCE_METHOD.outputs]);
-      expect(patch.samples.channelCount).toBe(product.frameHours.length * TERRAIN_CLEARANCE_METHOD.outputs.length);
-      expect(patch.grid).toEqual(input.grid);
-      expect(patch.coverage).toEqual(input.coverage);
-      expect(patch.terrain).toEqual(expected.terrain);
-      expect(patch.terrain).toMatchObject({ key: input.terrain.key, sha256: input.terrain.sha256 });
-      expect(patch.descriptors).toEqual(expected.descriptors);
-      const bytes = await readFile(localPath(out, patch.samples.key));
-      expect(bytes).toEqual(await readFile(localPath(serialRoot, expected.samples.key)));
-      expect(bytes).toEqual(await readFile(localPath(legacyRoot, legacy.patches![index].samples.key)));
-      expect(Array.from({ length: bytes.length / 5 }, (_, i) => bytes.readFloatLE(i * 5)).some(value => value > 0)).toBe(true);
-    }
-    for (let index = 0; index < manifest.artifacts.length; index++) {
-      expect(await tilePixels(out, manifest.artifacts[index])).toEqual(await tilePixels(serialRoot, serial.artifacts[index]));
-      expect(await tilePixels(out, manifest.artifacts[index])).toEqual(await tilePixels(legacyRoot, legacy.artifacts[index]));
-    }
-    const capacity = serial.metrics.capacity as { refinement: { gridCells: number }; workingSet: { refinementMapping: number; derivedFields: number } };
-    expect(capacity.workingSet.refinementMapping).toBe(serialMappingBytes);
-    expect(capacity.workingSet.derivedFields).toBe((mask.grid.width * mask.grid.height * product.layers.length + capacity.refinement.gridCells * TERRAIN_CLEARANCE_METHOD.outputs.length) * 5);
-    expect(fallback.compared).toBeGreaterThan(0);
-    expect(fallback.filled).toBeGreaterThan(0);
-    expect([...source.observed.hours].sort((a, b) => a - b)).toEqual([2, 2, 4, 4, 6, 6, 8, 8]);
-    expect(terrainReader.opened).toBe(2);
-    expect(onValidated).toHaveBeenCalledOnce();
-    expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();
-  }, 60_000);
-
-  it('preserves legacy fallback with daylight gating disabled', async () => {
-    expect(await readFile(localPath(ungatedRoot, ungated.samples.key))).toEqual(await readFile(localPath(legacyUngatedRoot, legacyUngated.samples.key)));
-    for (const [index, patch] of ungated.patches!.entries()) {
-      expect(await readFile(localPath(ungatedRoot, patch.samples.key))).toEqual(await readFile(localPath(legacyUngatedRoot, legacyUngated.patches![index].samples.key)));
-    }
-    for (const [index, artifact] of ungated.artifacts.entries()) {
-      expect(await tilePixels(ungatedRoot, artifact)).toEqual(await tilePixels(legacyUngatedRoot, legacyUngated.artifacts[index]));
-    }
-  }, 60_000);
-
-  it.each(['omitted', 'missing', 'extra', 'reordered'])('rejects %s refinement receipts before publishing', async kind => {
-    const out = await copyCompleted(), path = join(out, 'shards/0/receipt.json'), onValidated = vi.fn();
-    const receipt = JSON.parse(await readFile(path, 'utf8'));
-    if (kind === 'omitted') delete receipt.refinements;
-    else if (kind === 'missing') receipt.refinements.pop();
-    else if (kind === 'extra') receipt.refinements.push({ id: 'unexpected', sampleSha256: '0'.repeat(64) });
-    else receipt.refinements.reverse();
-    await writeFile(path, JSON.stringify(receipt));
-    await expect(finalize(out, onValidated)).rejects.toThrow(/refinement set mismatch/);
-    expect(onValidated).not.toHaveBeenCalled();
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it.each(['missing', 'truncated', 'wrong-hash'])('rejects a %s fine shard pack instead of filling or ignoring it', async kind => {
-    const out = await copyCompleted(), path = join(out, 'shards/0/refinements/east/samples.bin'), onValidated = vi.fn();
-    if (kind === 'missing') await rm(path);
-    else {
-      const bytes = await readFile(path);
-      if (kind === 'wrong-hash') { bytes[0] ^= 1; await writeFile(path, bytes); }
-      else await writeFile(path, bytes.subarray(0, bytes.length - 5));
-    }
-    await expect(finalize(out, onValidated)).rejects.toThrow();
-    expect(onValidated).not.toHaveBeenCalled();
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it.each(['geometry', 'terrain-reference'])('binds frozen %s to the recipe before opening a provider', async kind => {
-    const out = await temporaryRoot(), provider = fixtureProvider(), changed = structuredClone(plan);
-    if (kind === 'terrain-reference') changed.refinements![0].terrain.sha256 = '0'.repeat(64);
-    else changed.refinements![0].bounds[0] += 0.001;
-    await expect(buildShard({ plan: changed, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow(/recipe or source revision/);
-    expect(provider.open).not.toHaveBeenCalled();
-    expect(await readdir(out)).toEqual([]);
-  });
-
-  it('rejects missing staged terrain before any acquisition', async () => {
-    const out = await copyCompleted(), provider = fixtureProvider();
-    await rm(join(out, 'shards'), { recursive: true });
-    await rm(localPath(out, plan.refinements![0].terrain.key));
-    await expect(buildShard({ plan, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow();
-    expect(provider.open).not.toHaveBeenCalled();
-  });
 });
 
 describe('whole-domain parallel receipt integrity', () => {
@@ -384,7 +208,7 @@ describe('whole-domain parallel receipt integrity', () => {
 
   it.each(['missing', 'rss', 'elapsed'])('rejects invalid frozen planning %s before worker acquisition', async kind => {
     const out = await copyCompleted(), changed = structuredClone(plan), provider = fixtureProvider();
-    if (kind === 'missing') delete changed.preparation;
+    if (kind === 'missing') Reflect.deleteProperty(changed, 'preparation');
     else if (kind === 'rss') changed.preparation!.peakRssBytes = BUILD_BUDGETS.peakRssBytes + 1;
     else changed.preparation!.elapsedMs = BUILD_BUDGETS.elapsedMs + 1;
     await expect(buildShard({ plan: changed, shard: 0, out, product: wholeProduct, mask: wholeMask, provider: provider.provider })).rejects.toThrow('Invalid forecast plan');

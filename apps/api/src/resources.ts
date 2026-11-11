@@ -34,7 +34,17 @@ export class ByteCache<K, V> {
   }
 }
 
-export interface RequestMetrics { r2Reads: number; r2Bytes: number; cacheHits: number; coalesced: number; responseCache?: 'hit' | 'miss' | 'bypass' }
+export interface RequestMetrics {
+  r2Reads: number;
+  r2Bytes: number;
+  cacheHits: number;
+  coalesced: number;
+  responseCache?: 'hit' | 'miss' | 'bypass';
+  route?: string;
+  model?: string;
+  buildId?: string;
+  problemCode?: string;
+}
 export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metrics?: RequestMetrics; responseCacheEnabled?: boolean }
 export function countRead(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.r2Reads++; }
 export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.cacheHits++; }

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LAYERS, MAX_SAMPLE_POINTS, MAX_SAMPLE_RANGE_BYTES, getProduct, layerSurface, multiPointSampleResponseSchema, sampleResponseV5Schema } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { LAYERS, MAX_SAMPLE_POINTS, MAX_SAMPLE_RANGE_BYTES, layerSurface, multiPointSampleResponseSchema, sampleResponseV5Schema } from '@av/contracts';
 import { serveSample, serveSamples } from '../src/sample';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
@@ -94,12 +95,7 @@ describe('version-5 batch samples', () => {
     expect(fixture.get).not.toHaveBeenCalled();
   });
 
-  it('reports legacy batch capability as unavailable before reading coverage', async () => {
-    const fixture = createV5Fixture(), url = new URL(`https://api.test/v1/models/gfs/runs/${fixture.buildId}/samples?points=9,-180`);
-    const legacy = { ...fixture.manifest, version: 4 } as unknown as Parameters<typeof serveSamples>[3];
-    await expect(serveSamples(new Request(url), fixture.bucket, { waitUntil() {} }, legacy, url)).rejects.toMatchObject({ status: 409, code: 'unsupported-publication' });
-    expect(fixture.get).not.toHaveBeenCalled();
-  });
+
 
   it('serves published sample-only channels through the shared scalar and batch engine', async () => {
     const fixture = createV5Fixture(), layer = 'cloud-cover-total';

@@ -1,4 +1,9 @@
-import { PRODUCTS, RASTER_TILE_SIZE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, normalizeLon, renderedLayers, renderedFrames, type LayerId, type Manifest } from '@av/contracts';
+import { RASTER_TILE_SIZE } from '@av/contracts/format';
+import { normalizeLon, type Grid } from '@av/contracts/geometry';
+import { renderedLayers, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS,
+  SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, type LayerId } from '@av/contracts/layers';
+import { MODEL_OPTIONS } from '@av/contracts/model-options';
+import { renderedFrames, type ManifestV5 } from '@av/contracts/publication';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
 import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
 
@@ -13,10 +18,8 @@ export function formatAltitude(meters: number | null, unitSystem: UnitSystem): s
 export function deriveTerrainM(frame: FrameSample, build: PinnedBuild): number | null {
   const msl = frame.layers['usable-lift-msl'], agl = frame.layers['usable-lift-agl'];
   if (!msl || !agl || msl.status !== 'valid' || agl.status !== 'valid' || msl.value === null || agl.value === null || msl.interpolated || agl.interpolated || msl.support !== agl.support) return null;
-  if ('surfaceId' in msl && 'surfaceId' in agl && build.manifest.version === 5 && msl.surfaceId === agl.surfaceId &&
+  if (msl.surfaceId === agl.surfaceId &&
     build.manifest.surfaces.find(surface => surface.id === msl.surfaceId)?.kind === 'fine' && build.manifest.descriptors.layers['usable-lift-agl'].verticalReference === 'terrain-AGL') return msl.value - agl.value;
-  if ('patchId' in msl && 'patchId' in agl && msl.patchId && msl.patchId === agl.patchId && build.manifest.version !== 5 &&
-    build.manifest.patches?.find(patch => patch.id === msl.patchId)?.descriptors.layers['usable-lift-agl'].verticalReference === 'terrain-AGL') return msl.value - agl.value;
   return null;
 }
 
@@ -78,7 +81,7 @@ export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: Un
   return { id: frame.id, validTime: frame.validTime, terrainM: lift.terrainM, mslM: lift.mslM, aglM: lift.aglM, lclM, thermalTopM, summary };
 }
 
-export function activePalettes(palettes: readonly PaletteSummary[], layerId: string | null, descriptors: Manifest['descriptors']['layers']): readonly PaletteSummary[] {
+export function activePalettes(palettes: readonly PaletteSummary[], layerId: string | null, descriptors: ManifestV5['descriptors']['layers']): readonly PaletteSummary[] {
   if (!layerId || !Object.hasOwn(descriptors, layerId)) return palettes;
   if (descriptors[layerId].delivery === 'samples-only') return [];
   const targetId = descriptors[layerId].palette;
@@ -97,18 +100,21 @@ export function samePoint(a: GeoPoint | null | undefined, b: GeoPoint | null | u
 
 export function coverageSummaryText(build: PinnedBuild): string {
   const manifest = build.manifest;
-  const ids = manifest.version === 5 ? manifest.surfaces.map(surface => surface.coverage.id).join(', ') : manifest.coverage.id;
+  const ids = manifest.surfaces.map(surface => surface.coverage.id).join(', ');
   return `Coverage ${ids}: ${manifest.descriptors.coverageDescription}`;
 }
 
-export function layerMaxZoom(manifest: PinnedBuild['manifest'], layer: LayerId): number {
-  if (manifest.version !== 5) return manifest.coverage.maxZoom;
+function layerSurface(manifest: ManifestV5, layer: LayerId) {
   const surface = manifest.surfaces.find(surface => surface.layers.includes(layer));
   if (!surface) throw new Error(`No surface owns ${layer}`);
-  return surface.coverage.maxZoom;
+  return surface;
 }
 
-function gridSpacing(grid: Manifest['grid']): string {
+export function layerMaxZoom(manifest: ManifestV5, layer: LayerId): number {
+  return layerSurface(manifest, layer).coverage.maxZoom;
+}
+
+function gridSpacing(grid: Grid): string {
   return grid.kind === 'regular-latlon' ? `${grid.dx}° × ${Math.abs(grid.dy)}°` : `${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m`;
 }
 
@@ -127,16 +133,9 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     ['Method', `${manifest.method.id} · ${manifest.method.hash.slice(0, 12)}…`],
     ['Source', `${model} · ${native}`]
   ];
-  if (manifest.version === 5) {
-    for (const surface of manifest.surfaces) {
-      const elevation = surface.terrain ? ` · ${surface.terrain.surface} · ${surface.terrain.verticalDatum}` : '';
-      rows.push([`Surface ${surface.id}`, `${surface.grid.width} × ${surface.grid.height} · ${gridSpacing(surface.grid)} · ${surface.layers.join(', ')} · z0–${surface.coverage.maxZoom}${elevation}`]);
-    }
-  } else {
-    rows.push(
-      ['Display', `z0–${manifest.coverage.maxZoom} · ${RASTER_TILE_SIZE} px raster · overzoomed above z${manifest.coverage.maxZoom}`],
-      ['Grid', manifest.grid.kind === 'regular-latlon' ? `${manifest.grid.width} × ${manifest.grid.height} · ${gridSpacing(manifest.grid)} regular latitude/longitude` : `${manifest.grid.width} × ${manifest.grid.height} · ${gridSpacing(manifest.grid)} Lambert conformal`]
-    );
+  for (const surface of manifest.surfaces) {
+    const elevation = surface.terrain ? ` · ${surface.terrain.surface} · ${surface.terrain.verticalDatum}` : '';
+    rows.push([`Surface ${surface.id}`, `${surface.grid.width} × ${surface.grid.height} · ${gridSpacing(surface.grid)} · ${surface.layers.join(', ')} · z0–${surface.coverage.maxZoom}${elevation}`]);
   }
   rows.push(
     ['Coverage', manifest.descriptors.coverageDescription],
@@ -147,13 +146,6 @@ export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]>
     }),
     ['Expires', manifest.expiresAt]
   );
-  for (const patch of manifest.version === 5 ? [] : manifest.patches ?? []) {
-    rows.push([`Refinement ${patch.id}`, `${patch.grid.width} × ${patch.grid.height} · ${patch.method.id}`]);
-    for (const layer of patch.layers) {
-      const descriptor = patch.descriptors.layers[layer];
-      rows.push([`${patch.id} · ${descriptor.label}`, `${descriptor.units} · ${descriptor.verticalReference} · ${descriptor.methodId}`]);
-    }
-  }
   if (typeof source.provenanceUrl === 'string') {
     rows.push(['Source data', source.provenanceUrl]);
   } else if (typeof source.provenanceKey === 'string') {
@@ -180,20 +172,16 @@ export function formatSupportFlags(support: number): string {
   return flags.join('+') || '—';
 }
 
-export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: Manifest['descriptors']['layers'] = {}, patches: Manifest['patches'] = []): { headings: string[]; rows: string[][] } {
-  const descriptor = (layer: string, patchId?: string) => patchId ? patches.find(patch => patch.id === patchId)?.descriptors.layers[layer] : descriptors[layer];
+export function seriesTable(payload: { frames: readonly FrameSample[] }, layers: readonly string[], descriptors: ManifestV5['descriptors']['layers'] = {}): { headings: string[]; rows: string[][] } {
   const label = (layer: string) => {
-    const value = payload.frames[0]?.layers[layer];
-    const spec = descriptor(layer, value && 'patchId' in value ? value.patchId : undefined);
+    const spec = descriptors[layer];
     return spec ? `${spec.label} (${spec.units})` : layer;
   };
   return {
     headings: ['Frame', 'Valid', ...layers.map(label), ...layers.map(layer => `${label(layer)} status/support`)],
     rows: payload.frames.map(frame => [frame.id, frame.validTime, ...layers.map(layer => formatSampleStatus(frame.layers[layer])), ...layers.map(layer => {
       const value = frame.layers[layer];
-      const patchId = 'patchId' in value ? value.patchId : undefined;
-      const spec = descriptor(layer, patchId);
-      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''}${patchId && spec ? ` / ${patchId} · ${spec.verticalReference} · ${spec.methodId}` : ''}${'surfaceId' in value ? ` / ${value.surfaceId}` : ''}`;
+      return `${value.status} / ${formatSupportFlags(value.support)}${value.interpolated ? ' / interpolated' : ''} / ${value.surfaceId}`;
     })])
   };
 }
@@ -276,10 +264,10 @@ export function planViewportPrefetch(options: {
   const [west, south, east, north] = manifest.descriptors.bounds;
   function normalize(tile: ViewportTile, layer: LayerId): ViewportTile | undefined {
     if (![tile.z, tile.x, tile.y].every(Number.isSafeInteger) || tile.z < 0 || tile.z > 30) return;
-    const maxZoom = layerMaxZoom(manifest, layer), z = Math.min(tile.z, maxZoom), scale = 2 ** (tile.z - z), width = 2 ** z;
+    const { grid, coverage } = layerSurface(manifest, layer);
+    const z = Math.min(tile.z, coverage.maxZoom), scale = 2 ** (tile.z - z), width = 2 ** z;
     let x = Math.floor(tile.x / scale);
     const y = Math.floor(tile.y / scale);
-    const grid = manifest.version === 5 ? manifest.surfaces.find(surface => surface.layers.includes(layer))!.grid : manifest.grid;
     if (grid.wrapLongitude) x = ((x % width) + width) % width;
     if (x < 0 || x >= width || y < 0 || y >= width) return;
     return { z, x, y };
@@ -353,8 +341,8 @@ export function windyTileOptions(maxNativeZoom: number, opacity = DEFAULT_OPACIT
 export function populateModelOptions(select: { add(option: unknown): void }): void {
   const OptionCtor = (globalThis as { Option?: new (text: string, value: string) => { disabled: boolean } }).Option;
   if (!OptionCtor) throw new Error('Global Option constructor is not available');
-  for (const product of PRODUCTS) {
-    const option = new OptionCtor(product.label, product.modelId);
+  for (const { label, modelId } of MODEL_OPTIONS) {
+    const option = new OptionCtor(label, modelId);
     option.disabled = false;
     select.add(option);
   }

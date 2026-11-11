@@ -63,10 +63,6 @@ and [serving budgets](serving-budgets.md):
   height-supported donor weights used for $E_{\text{supported}}(h_f)$, falling
   back lazily to [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
   only on cells where all donors exceed `maximumBelowGroundExtrapolationM`.
-- **Refinement patch boundary feathering (`apps/batch/src/raster.ts`):** blend
-  1 km patch fields with base native fields across a narrow border collar in
-  [`compositeGeometry`](../apps/batch/src/raster.ts) to eliminate hard seams at
-  polygon boundaries.
 - **Indexed smooth tiles:** quantize `linear-rgb` interpolation in
   [`palette-color.ts`](../packages/contracts/src/palette-color.ts) and average
   valid quarter-pixel scalar samples in

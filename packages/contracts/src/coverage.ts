@@ -1,7 +1,13 @@
+import { getBit } from './bits.js';
+export { getBit, setBit } from './bits.js';
 import { z } from 'zod';
-import { geographicToGrid, gridSchema, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid } from './geometry.js';
+import { gridSchema } from './grid-schema.js';
+import type { Grid } from './geometry.js';
+import type { CoverageMask } from './coverage-query.js';
+export { isCovered, prepareCoverageTester, type CoverageMask, type SparseCoverageMask } from './coverage-query.js';
+export { normalizeLon } from './geometry.js';
 import { MAX_NATIVE_ZOOM, SAMPLE_BLOCK_SIZE } from './format.js';
-import { createSparseCoverage, sparseCoverageLookup, type SparseCoverage } from './sparse-coverage.js';
+import { createSparseCoverage, type SparseCoverage } from './sparse-coverage.js';
 
 export const MAX_COVERAGE_DESCRIPTOR_BYTES = 128 * 1024;
 export const MAX_COVERAGE_BITSET_BYTES = 512 * 1024;
@@ -51,15 +57,6 @@ export const coveragePrefix = (hash: string): string => {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('Invalid coverage hash');
   return `coverage/${hash}`;
 };
-
-export function normalizeLon(lon: number): number {
-  if (!Number.isFinite(lon)) return lon;
-  const wrapped = ((((lon + 180) % 360) + 360) % 360) - 180;
-  return wrapped === -180 && lon > 0 ? 180 : Object.is(wrapped, -0) ? 0 : wrapped;
-}
-
-export interface CoverageMask { grid: Grid; bounds?: GeographicBounds; output: Uint8Array; halo: Uint8Array; tiles: Uint8Array; maxZoom: number }
-export interface SparseCoverageMask { grid: Grid; bounds?: GeographicBounds; coverage: SparseCoverage; tiles: Uint8Array; maxZoom: number }
 
 export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
   createSparseCoverage(coverage);
@@ -125,14 +122,6 @@ export function assertSparseCoverageHalo(coverage: SparseCoverage): void {
     }
   }
 }
-export function getBit(bits: Uint8Array, index: number): boolean {
-  return Number.isSafeInteger(index) && index >= 0 && index < bits.length * 8 && (bits[index >> 3] & (1 << (index & 7))) !== 0;
-}
-export function setBit(bits: Uint8Array, index: number, value = true): void {
-  if (!Number.isSafeInteger(index) || index < 0 || index >= bits.length * 8) throw new RangeError('bit index out of bounds');
-  const i = index >> 3, bit = 1 << (index & 7);
-  bits[i] = value ? bits[i] | bit : bits[i] & ~bit;
-}
 /** Stable row-major index lists reused across acquisition, derivation and summaries. */
 export function coverageIndices(mask: CoverageMask): { output: Uint32Array; active: Uint32Array } {
   const size = mask.grid.width * mask.grid.height, out: number[] = [], act: number[] = [];
@@ -142,43 +131,6 @@ export function coverageIndices(mask: CoverageMask): { output: Uint32Array; acti
     if (isOut || getBit(mask.halo, i)) act.push(i);
   }
   return { output: Uint32Array.from(out), active: Uint32Array.from(act) };
-}
-function coveredCoordinate(mask: CoverageMask | SparseCoverageMask, x: number, y: number): boolean {
-  const { grid } = mask;
-  if (!Number.isFinite(x) || !Number.isFinite(y) || (!grid.wrapLongitude && (x < -0.5 || x > grid.width - 0.5)) || y < -0.5 || y > grid.height - 0.5) return false;
-  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
-  const c0 = grid.wrapLongitude ? ((x0 % grid.width) + grid.width) % grid.width : x0;
-  const c1 = grid.wrapLongitude ? (((x0 + 1) % grid.width) + grid.width) % grid.width : x0 + 1;
-  const col = fx === 0 ? c0 : fx < 0.5 ? c0 : fx > 0.5 ? c1 : Math.min(c0, c1);
-  const row = fy <= 0.5 ? Math.max(0, y0) : Math.min(grid.height - 1, y0 + 1);
-  if (col < 0 || col >= grid.width || row < 0 || row >= grid.height) return false;
-  return 'coverage' in mask ? sparseCoverageLookup(mask.coverage, col, row)?.output === true : getBit(mask.output, row * grid.width + col);
-}
-export function isCovered(mask: CoverageMask | SparseCoverageMask, lat: number, lon: number): boolean {
-  if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
-  const { grid } = mask;
-  // Keep the regular-grid hot path allocation-free except for the result-free arithmetic.
-  let x: number, y: number;
-  if (grid.kind === 'regular-latlon') {
-    x = snapGridCoordinate((lon - grid.lon0) / grid.dx);
-    y = snapGridCoordinate((lat - grid.lat0) / grid.dy);
-    if (grid.wrapLongitude) x = snapGridCoordinate(((x % grid.width) + grid.width) % grid.width);
-  } else {
-    const point = geographicToGrid(grid, lat, lon);
-    if (!point) return false;
-    ({ x, y } = point);
-  }
-  return coveredCoordinate(mask, x, y);
-}
-/** Compile projected coordinates once while preserving the same nearest-cell ownership as isCovered. */
-export function prepareCoverageTester(mask: CoverageMask | SparseCoverageMask): (lat: number, lon: number) => boolean {
-  if (mask.grid.kind === 'regular-latlon') return (lat, lon) => isCovered(mask, lat, lon);
-  const geometry = prepareGridGeometry(mask.grid);
-  return (lat, lon) => {
-    if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
-    const point = geometry.geographicToGrid(lat, lon);
-    return !!point && coveredCoordinate(mask, point.x, point.y);
-  };
 }
 export function isTileCovered(mask: Pick<CoverageMask, 'tiles' | 'maxZoom'>, z: number, x: number, y: number): boolean {
   if (!Number.isInteger(z) || z < 0 || z > mask.maxZoom || z > 24 || !Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) return false;

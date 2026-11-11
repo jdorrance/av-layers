@@ -1,9 +1,8 @@
-import z from 'zod';
-import { LIFT_METHOD, PRECIPITATION_ALL_HOURS_METHOD, methodIdSchema } from './methods.js';
-import { LAYER_IDS, type LayerId } from './product.js';
 import { CELL_BYTES } from './format.js';
-import { getBit, type CoverageMask } from './coverage.js';
-import { NATIVE_LAYERS, NATIVE_LAYER_IDS, nativeMethodId, nativeLayerTimeSupport } from './native-layers.js';
+import { getBit } from './bits.js';
+import type { CoverageMask } from './coverage.js';
+import type { LayerSpec } from './layer-schemas.js';
+export type { LayerSpec } from './layer-schemas.js';
 
 export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
 export const STATUS_VALID = 0, STATUS_NO_LIFT = 1, STATUS_UNAVAILABLE = 2, STATUS_OUTSIDE = 3, STATUS_MASK = 3;
@@ -11,9 +10,7 @@ export const SUPPORT_PARCEL_CROSSING = 4, SUPPORT_PROFILE_TOP = 8, SUPPORT_PBL_C
 export const SUPPORT_CUMULUS = 32, SUPPORT_OVERDEVELOPED = 64, SUPPORT_CLOUD_CAPPED = 128;
 export const CLOUD_SUPPORT_MASK = SUPPORT_CUMULUS | SUPPORT_OVERDEVELOPED | SUPPORT_CLOUD_CAPPED;
 export const SUPPORT_MASK = SUPPORT_PARCEL_CROSSING | SUPPORT_PROFILE_TOP | SUPPORT_PBL_CLOSURE | CLOUD_SUPPORT_MASK;
-export const layerIdSchema = z.enum(LAYER_IDS);
-export const sampleStatusSchema = z.enum(SAMPLE_STATUSES);
-export type SampleStatus = z.infer<typeof sampleStatusSchema>;
+export type SampleStatus = (typeof SAMPLE_STATUSES)[number];
 
 export const LIFT_EDGES = [0,300,600,900,1200,1500,1850,2150,2450,2750,3050,3350,3650,3950,4250,4550,4900,5200,5500,5800,6100,6400,6700] as const;
 export const LIFT_COLORS = ['#55184d','#b93b88','#8f7fac','#62cbff','#0168ff','#00345d','#036d00','#35cd34','#9dff64','#fefa02','#cbc939','#d59b99','#d3595a','#f92d2d','#9b0900','#d87400','#ffa50b','#f1cd5d','#a6a7a9','#516565','#1c4f4f','#003333'] as const;
@@ -33,68 +30,103 @@ export const PALETTES = { lift: { id: 'lift', edges: LIFT_EDGES, colors: LIFT_CO
 
 
 export const PALETTE_IDS = Object.keys(PALETTES) as (keyof typeof PALETTES)[];
-export const paletteIdSchema = z.enum(PALETTE_IDS);
-export type PaletteId = z.infer<typeof paletteIdSchema>;
+export type PaletteId = keyof typeof PALETTES;
 
-export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional(), interpolation: z.enum(PALETTE_INTERPOLATIONS).optional() });
-export const layerDescriptorSchema = z.object({
-  id: layerIdSchema, kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
-  verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface', 'pressure-level']), timeSupport: z.enum(['valid-time', 'interval-mean', 'interval-maximum', 'interval-flux-endpoint-profile']),
-  methodId: methodIdSchema, palette: paletteIdSchema.optional(), delivery: z.enum(['tiles-and-samples', 'samples-only']).optional(),
-  supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
-  noLiftSampleValue: z.number().finite().nullable(), zeroOnNoLiftInterpolation: z.boolean(), hideNonPositiveValues: z.boolean()
-}).refine(layer => layer.delivery === 'samples-only' || layer.palette !== undefined, 'Rendered layers require a palette');
+export const LIFT_METHOD_ID = 'dry-lenschow-1p2-v2';
+export const ALL_HOURS_PRECIP_METHOD_ID = 'trailing-precipitation-rate-v2';
 
-export type LayerSpec = z.infer<typeof layerDescriptorSchema>;
+/** Native point channels and their physical method groups. */
+export const NATIVE_LAYERS = {
+  'thermal-velocity': { label: 'Thermal velocity', quantity: 'thermal-velocity', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'soaring' },
+  'thermal-top-msl': { label: 'Thermal top', quantity: 'thermal-top', units: 'm MSL', verticalReference: 'MSL', methodGroup: 'soaring' },
+  'pbl-height-agl': { label: 'Boundary-layer height', quantity: 'boundary-layer-height', units: 'm AGL', verticalReference: 'model-AGL', methodGroup: 'soaring' },
+  'sensible-heat-flux': { label: 'Sensible heat flux', quantity: 'upward-sensible-heat-flux', units: 'W/m2', verticalReference: 'surface', methodGroup: 'soaring' },
+  'latent-heat-flux': { label: 'Latent heat flux', quantity: 'upward-latent-heat-flux', units: 'W/m2', verticalReference: 'surface', methodGroup: 'soaring' },
+  'surface-lcl-msl': { label: 'Surface LCL', quantity: 'lifting-condensation-level', units: 'm MSL', verticalReference: 'MSL', methodGroup: 'cloud' },
+  'cape-jkg': { label: 'CAPE', quantity: 'convective-available-potential-energy', units: 'J/kg', verticalReference: 'surface', methodGroup: 'surface' },
+  'cloud-cover-total': { label: 'Total cloud cover', quantity: 'cloud-cover-total', units: '%', verticalReference: 'surface', methodGroup: 'surface' },
+  'cloud-cover-low': { label: 'Low cloud cover', quantity: 'cloud-cover-low', units: '%', verticalReference: 'surface', methodGroup: 'surface' },
+  'sfc-temp-c': { label: 'Surface temperature', quantity: 'air-temperature', units: 'degC', verticalReference: 'surface', methodGroup: 'surface' },
+  'sfc-dewpoint-c': { label: 'Surface dewpoint', quantity: 'dew-point-temperature', units: 'degC', verticalReference: 'surface', methodGroup: 'surface' },
+  'mslp-hpa': { label: 'Mean sea-level pressure', quantity: 'air-pressure', units: 'hPa', verticalReference: 'MSL', methodGroup: 'surface' },
+  'wind-10m-u': { label: '10 m eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
+  'wind-10m-v': { label: '10 m northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
+  'wind-gust-10m': { label: '10 m wind gust', quantity: 'wind-gust', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
+  'bl-mean-wind-u': { label: 'Boundary-layer mean eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
+  'bl-mean-wind-v': { label: 'Boundary-layer mean northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
+} as const;
+
+export type NativeLayerId = keyof typeof NATIVE_LAYERS;
+export type NativeMethodGroup = (typeof NATIVE_LAYERS)[NativeLayerId]['methodGroup'];
+export const NATIVE_LAYER_IDS = Object.keys(NATIVE_LAYERS) as NativeLayerId[];
+export const nativeMethodId = (group: NativeMethodGroup, coordinate: 'isobaric' | 'model-levels' = 'isobaric') =>
+  `native-${group}${coordinate === 'model-levels' ? '-model-levels' : ''}-v1`;
+
+export function isNativeThermalLayer(id: string): boolean {
+  return id === 'thermal-velocity' || id === 'thermal-top-msl';
+}
+
+export function nativeLayerTimeSupport(id: NativeLayerId): 'valid-time' | 'interval-mean' | 'interval-flux-endpoint-profile' {
+  return id.endsWith('heat-flux') ? 'interval-mean' : isNativeThermalLayer(id) ? 'interval-flux-endpoint-profile' : 'valid-time';
+}
+
+const renderedLayerDefinitions = {
+  'usable-lift-msl': { surface: 'fine', spec: {
+      id: 'usable-lift-msl',
+      label: 'Usable lift top (MSL)', quantity: 'usable-lift-top', verticalReference: 'MSL',
+      timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD_ID,
+      kind: 'scalar',
+      units: 'm MSL',
+      palette: 'lift',
+      supportsNoLift: true,
+      supportsLiftFlags: true,
+      noLiftSampleValue: null,
+      zeroOnNoLiftInterpolation: false,
+      hideNonPositiveValues: false
+  } },
+  'usable-lift-agl': { surface: 'fine', spec: {
+      id: 'usable-lift-agl',
+      label: 'Usable lift depth (model AGL)', quantity: 'usable-lift-top', verticalReference: 'model-AGL',
+      timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD_ID,
+      kind: 'scalar',
+      units: 'm AGL',
+      palette: 'lift',
+      supportsNoLift: true,
+      supportsLiftFlags: true,
+      noLiftSampleValue: 0,
+      zeroOnNoLiftInterpolation: true,
+      hideNonPositiveValues: true
+  } },
+  'precip-rate': { surface: 'native', spec: {
+      id: 'precip-rate',
+      label: 'Precipitation rate', quantity: 'precipitation-rate', verticalReference: 'surface',
+      timeSupport: 'interval-mean', methodId: ALL_HOURS_PRECIP_METHOD_ID,
+      kind: 'scalar',
+      units: 'mm/h',
+      palette: 'rain',
+      supportsNoLift: false,
+      supportsLiftFlags: false,
+      noLiftSampleValue: null,
+      zeroOnNoLiftInterpolation: false,
+      hideNonPositiveValues: false
+  } },
+} as const;
+
+type RenderedLayerId = keyof typeof renderedLayerDefinitions;
+export type LayerId = RenderedLayerId | NativeLayerId;
+const renderedLayerIds = Object.keys(renderedLayerDefinitions) as RenderedLayerId[];
+export const LAYER_IDS: readonly LayerId[] = [...renderedLayerIds, ...NATIVE_LAYER_IDS];
 
 export const LAYERS: Readonly<Record<LayerId, LayerSpec>> = {
-  'usable-lift-msl': {
-    id: 'usable-lift-msl',
-    label: 'Usable lift top (MSL)', quantity: 'usable-lift-top', verticalReference: 'MSL',
-    timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD.id,
-    kind: 'scalar',
-    units: 'm MSL',
-    palette: 'lift',
-    supportsNoLift: true,
-    supportsLiftFlags: true,
-    noLiftSampleValue: null,
-    zeroOnNoLiftInterpolation: false,
-    hideNonPositiveValues: false
-  },
-  'usable-lift-agl': {
-    id: 'usable-lift-agl',
-    label: 'Usable lift depth (model AGL)', quantity: 'usable-lift-top', verticalReference: 'model-AGL',
-    timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD.id,
-    kind: 'scalar',
-    units: 'm AGL',
-    palette: 'lift',
-    supportsNoLift: true,
-    supportsLiftFlags: true,
-    noLiftSampleValue: 0,
-    zeroOnNoLiftInterpolation: true,
-    hideNonPositiveValues: true
-  },
-  'precip-rate': {
-    id: 'precip-rate',
-    label: 'Precipitation rate', quantity: 'precipitation-rate', verticalReference: 'surface',
-    timeSupport: 'interval-mean', methodId: PRECIPITATION_ALL_HOURS_METHOD.id,
-    kind: 'scalar',
-    units: 'mm/h',
-    palette: 'rain',
-    supportsNoLift: false,
-    supportsLiftFlags: false,
-    noLiftSampleValue: null,
-    zeroOnNoLiftInterpolation: false,
-    hideNonPositiveValues: false
-  },
+  ...Object.fromEntries(renderedLayerIds.map(id => [id, renderedLayerDefinitions[id].spec satisfies LayerSpec])) as Record<RenderedLayerId, LayerSpec>,
   ...Object.fromEntries(NATIVE_LAYER_IDS.map(id => {
-    const [label, quantity, units, verticalReference, group] = NATIVE_LAYERS[id];
+    const { label, quantity, units, verticalReference, methodGroup } = NATIVE_LAYERS[id];
     return [id, { id, label, quantity, units, verticalReference, kind: 'scalar',
       timeSupport: nativeLayerTimeSupport(id),
-      methodId: nativeMethodId(group), delivery: 'samples-only', supportsNoLift: false,
-      supportsLiftFlags: id.startsWith('thermal-'), noLiftSampleValue: null,
-      zeroOnNoLiftInterpolation: false, hideNonPositiveValues: false }];
-  })) as Record<(typeof NATIVE_LAYER_IDS)[number], LayerSpec>
+      methodId: nativeMethodId(methodGroup), delivery: 'samples-only', supportsNoLift: false,
+      supportsLiftFlags: isNativeThermalLayer(id), noLiftSampleValue: null,
+      zeroOnNoLiftInterpolation: false, hideNonPositiveValues: false } satisfies LayerSpec];
+  })) as Record<NativeLayerId, LayerSpec>
 };
 
 export function isPaletteId(value: string): value is PaletteId {
@@ -104,7 +136,7 @@ export function isLayerId(value: string): value is LayerId {
   return Object.hasOwn(LAYERS, value);
 }
 export function layerSurface(layer: LayerId): 'native' | 'fine' {
-  return layer === 'usable-lift-msl' || layer === 'usable-lift-agl' ? 'fine' : 'native';
+  return Object.hasOwn(renderedLayerDefinitions, layer) ? renderedLayerDefinitions[layer as RenderedLayerId].surface : 'native';
 }
 export function renderedLayers(layers: readonly LayerId[], descriptors: Readonly<Record<string, Pick<LayerSpec, 'delivery'>>> = LAYERS): LayerId[] {
   return layers.filter(id => descriptors[id]?.delivery !== 'samples-only');

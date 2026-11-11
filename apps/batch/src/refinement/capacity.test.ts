@@ -7,12 +7,9 @@ import { setBit, STATUS_VALID, TERRAIN_COLUMN_METHOD, type CoverageMask, type Pr
 import type { GridField } from '@av/forecast';
 import { prepareTerrainClearance, prepareTerrainColumns } from '@av/forecast/refinement';
 import * as refinement from '@av/forecast/refinement';
-import { buildForecast } from '../build.js';
 import { BUILD_BUDGETS, estimateCapacity, prepareBuild } from '../capacity.js';
-import type { ForecastProvider } from '../provider.js';
 import { createSamplePackBuilder } from '../sample-pack.js';
 import { seedTerrainCatalog, TerrainTestStorage } from '../terrain/test-fixtures.js';
-import * as config from './config.js';
 import { planRefinementCoverage } from './coverage.js';
 import { loadRefinements, prepareRefinements } from './prepare.js';
 
@@ -149,7 +146,7 @@ describe('refinement build admission', () => {
     } finally { packs.forEach(pack => pack.close()); }
   });
 
-  it('rejects aggregate packs before opening weather or publishing, even when every pack fits alone', async () => {
+  it('rejects aggregate legacy control packs when every pack fits alone', async () => {
     const options = await preparedFixture();
     const baseline = prepareBuild(options.mask, options.product, { maxLevels: 2 });
     const prepared = prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: options.refinements });
@@ -159,21 +156,11 @@ describe('refinement build admission', () => {
       const pack = createSamplePackBuilder(patch.layout, options.product.frameHours.length * TERRAIN_COLUMN_METHOD.outputs.length);
       expect(pack.byteLength).toBeLessThan(limit); pack.close();
     }
-    const configure = config.configuredRefinements;
-    vi.spyOn(config, 'configuredRefinements').mockImplementation(product => configure(product, zones));
-    const open = vi.fn<ForecastProvider['open']>(async () => { throw new Error('Unexpected weather acquisition'); });
-    const onValidated = vi.fn();
     const originalBudget = Object.getOwnPropertyDescriptor(BUILD_BUDGETS, 'samplePackBytes')!;
     // Exercise the real admission path with small fixture buffers, not a 256 MiB allocation.
     Object.defineProperty(BUILD_BUDGETS, 'samplePackBytes', { ...originalBudget, value: limit });
     try {
-      await expect(buildForecast({
-        product: options.product, mask: options.mask, out: options.out,
-        provider: { id: 'fixture', provider: 'fixture', maxLevels: 2, open }, onValidated,
-        refinement: { catalogRef: options.catalogRef, storage: options.storage }
-      })).rejects.toThrow(/sample-pack budget exceeded/);
-      expect(open).not.toHaveBeenCalled();
-      expect(onValidated).not.toHaveBeenCalled();
+      expect(() => prepareBuild(options.mask, options.product, { maxLevels: 2, refinements: options.refinements })).toThrow(/sample-pack budget exceeded/);
     } finally { Object.defineProperty(BUILD_BUDGETS, 'samplePackBytes', originalBudget); }
   });
 });

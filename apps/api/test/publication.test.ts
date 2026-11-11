@@ -9,6 +9,41 @@ afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(
 const retained = (m: ReturnType<typeof createV5Fixture>['manifest']) => ({ buildId: m.buildId, manifestKey: `builds/${m.model}/${m.buildId}/manifest.json`, cycle: m.cycle, expiresAt: m.expiresAt });
 
 describe('validated publication reuse', () => {
+  it('drops a cancelled queued manifest read before it can reach R2', async () => {
+    const fixture = createV5Fixture();
+    const publications = Array.from({ length: 5 }, (_, index) => createV5Fixture({
+      buildId: `20261101T000000Z-00000000-0000-0000-0000-${String(index + 2).padStart(12, '0')}`
+    }));
+    for (const publication of publications) for (const [key, value] of publication.objects) fixture.objects.set(key, value);
+    const get = fixture.get.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    fixture.get.mockImplementation(async (key, options) => { await gate; return get(key, options); });
+    const load = (publication: typeof fixture, signal?: AbortSignal) => manifest(fixture.bucket, publication.manifest.model,
+      publication.buildId, retained(publication.manifest), undefined, fixture.product, signal);
+    const active = publications.slice(0, 4).map(publication => load(publication));
+    const abort = new AbortController();
+    const queued = expect(load(publications[4], abort.signal)).rejects.toThrow('Request disconnected');
+    try {
+      expect(fixture.get).toHaveBeenCalledTimes(4);
+      abort.abort(new Error('Request disconnected'));
+      await queued;
+    } finally { release(); await Promise.all(active); }
+    expect(fixture.get).toHaveBeenCalledTimes(4);
+    await load(publications[4]);
+    expect(fixture.get).toHaveBeenCalledTimes(5);
+  });
+
+  it('rejects a build that expires during product validation', async () => {
+    const fixture = createV5Fixture(), entry = retained(fixture.manifest);
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    vi.spyOn(crypto.subtle, 'digest').mockImplementationOnce((algorithm, data) => {
+      vi.setSystemTime(Date.parse(entry.expiresAt));
+      return digest(algorithm, data);
+    });
+    await expect(manifest(fixture.bucket, fixture.manifest.model, fixture.buildId, entry, undefined, fixture.product)).rejects.toMatchObject({ code: 'not-retained' });
+  });
+
   it('shares cold static validation and reuses it while rechecking retained-entry binding', async () => {
     const fixture = createV5Fixture(), entry = await admit(fixture.bucket, fixture.manifest.model, fixture.buildId);
     const digest = vi.spyOn(crypto.subtle, 'digest');

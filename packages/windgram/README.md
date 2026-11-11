@@ -16,7 +16,7 @@ Pass each loader progress result to `renderPointWindgram`. The lift readout uses
 the sampled AGL and MSL values while the profile loads. The MSL chart shows native
 levels above model ground and preserves map lift below it. The scalar chart
 covers builds that publish no native profiles. Day tabs use the point’s
-longitude offset.
+longitude offset. CAPE and gust labels follow the pinned layer descriptors.
 
 [`point-windgram.ts`](src/point-windgram.ts) owns the panel and its lifecycle.
 [`from-av-profile.ts`](src/from-av-profile.ts) maps point frames to chart hours.

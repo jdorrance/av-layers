@@ -1,7 +1,8 @@
 import z from 'zod';
 import { MAX_GRID_CELLS } from './coverage.js';
-import { gridSchema, prepareGridGeometry, withinGeographicBounds, type GeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
-import type { LayerId } from './product.js';
+import { gridSchema } from './grid-schema.js';
+import { prepareGridGeometry, withinGeographicBounds, type GeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import type { LayerId } from './layers.js';
 
 /** Shared projected spacing; geometry and source support determine each bounded grid. */
 export const REFINEMENT_SPACING_M = 1000;

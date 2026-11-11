@@ -3,15 +3,15 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
-import { createRefinementDescriptors, manifestSchema, setBit, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
-import { prepareSamplePackLayout } from '@av/forecast';
+import { coverageIndices, createProductDescriptors, createRecipeIdentity, createRefinementDescriptors, manifestSchema, setBit, TERRAIN_COLUMN_METHOD, type CoverageMask, type Manifest, type ProductDefinition, type RefinementPatch } from '@av/contracts';
+import { deriveFrame, prepareSamplePackLayout } from '@av/forecast';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
-import { fixturePatch } from '../../../../tests/forecast-fixture.js';
-import { buildForecast } from '../build.js';
+import { fixtureManifest, fixturePatch } from '../../../../tests/forecast-fixture.js';
+import { forecastFrame } from '../frame-build.js';
+import { renderArchive } from '../render.js';
 import { writeCoverage } from '../coverage.js';
-import type { ForecastProvider } from '../provider.js';
 import { createSamplePackBuilder } from '../sample-pack.js';
-import { assertValidatedBuild, localPath, validateBuild } from '../validate.js';
+import { assertValidatedBuild, localPath, sha256, validateBuild } from '../validate.js';
 
 // Exercise real pixels, encoding, archives and validation with one inline tile.
 vi.mock('../raster-pool.js', async importOriginal => ({
@@ -26,16 +26,6 @@ const product: ProductDefinition = {
   grid: { kind: 'regular-latlon', width: 3, height: 3, earthRadiusM: 6371229, lon0: -1, lat0: 1, dx: 1, dy: -1, wrapLongitude: false }
 };
 const baseMask: CoverageMask = { grid: product.grid, bounds: product.bounds, maxZoom: 0, output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1) };
-const provider: ForecastProvider = {
-  id: product.source.configurationId, provider: 'Synthetic validation fixture', maxLevels: 3,
-  async open({ activeIndices }) {
-    return { cycle, stats: { networkRequests: 0 },
-      async acquire(hour) { return normalizedFixtureFrame(product.grid, activeIndices, cycle, hour, product.intervalHours); },
-      async close() {}
-    };
-  }
-};
-
 let root: string, manifest: Manifest, fineMask: CoverageMask;
 async function writeFineCoverage(mask: CoverageMask, patch: RefinementPatch): Promise<void> {
   const hash = await writeCoverage(root, mask, { coverageId: patch.coverage.id, coverageDescription: 'Synthetic interior with complete interpolation halo', bounds: patch.descriptors.bounds, supportHaloCells: 1 });
@@ -43,8 +33,28 @@ async function writeFineCoverage(mask: CoverageMask, patch: RefinementPatch): Pr
 }
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'av-refinement-validation-'));
-  const path = await buildForecast({ out: root, product, mask: baseMask, provider, cycle });
-  const base = manifestSchema.parse(JSON.parse(await readFile(path, 'utf8'))), patch = fixturePatch(base);
+  const coverageHash = await writeCoverage(root, baseMask, product), frames = [forecastFrame(cycle, 1, 1)];
+  const base = fixtureManifest({ model: product.modelId, cycle, frames, grid: product.grid, layers: [...product.layers],
+    descriptors: createProductDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
+    coverage: { id: product.coverageId, hash: coverageHash, maxZoom: 0, maskKey: `coverage/${coverageHash}/manifest.json` } });
+  const frame = normalizedFixtureFrame(product.grid, coverageIndices(baseMask).active, cycle, 1, 1);
+  const fields = deriveFrame(frame, baseMask, { layers: product.layers });
+  const baseLayout = prepareSamplePackLayout(baseMask.grid, baseMask.output, baseMask.halo);
+  const basePack = createSamplePackBuilder(baseLayout, base.layers.length);
+  try {
+    for (const [index, artifact] of base.artifacts.entries()) {
+      const field = fields[artifact.layer]!;
+      basePack.writeChannel(index, field);
+      const path = localPath(root, artifact.tilesKey);
+      await renderArchive(path, field, baseMask, artifact.layer);
+      artifact.tilesSha256 = sha256(await readFile(path));
+    }
+    base.samples = { ...base.samples, storedCells: baseLayout.storedCells, ...await basePack.finish(localPath(root, base.samples.key)) };
+  } finally { basePack.close(); }
+  const provenance = Buffer.from(JSON.stringify({ version: 1, model: base.model, buildId: base.buildId, cycle, frames: [frame.receipt] }));
+  await writeFile(localPath(root, base.source.provenanceKey), provenance);
+  base.source.provenanceSha256 = sha256(provenance);
+  const patch = fixturePatch(base);
   patch.descriptors = createRefinementDescriptors(product, patch.descriptors.bounds);
   patch.layers = [...TERRAIN_COLUMN_METHOD.outputs];
   patch.method.id = TERRAIN_COLUMN_METHOD.id;

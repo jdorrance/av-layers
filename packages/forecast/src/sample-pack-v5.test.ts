@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, getProduct, layerSurface, type LayerId, type RegularLatLonGrid } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { CELL_BYTES, MAX_PACK_CHANNELS, MAX_SAMPLE_RANGE_BYTES, MAX_SAMPLE_VALUES, layerSurface, type LayerId, type RegularLatLonGrid } from '@av/contracts';
 import { planSample, type SamplePlan } from './sampler.js';
 import { packedCellsFromRange, packedRecordsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout, SAMPLE_SHARD_TARGET_BYTES } from './sample-pack.js';
 

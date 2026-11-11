@@ -1,7 +1,7 @@
 import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fixtureBuild, fixtureManifest } from '../../../tests/forecast-fixture';
-import { createProductDescriptors, CELL_BYTES, manifestV5Schema } from '@av/contracts';
+import { FIXTURE_BUILD_ID, fixtureBuild, fixtureManifestV5 } from '../../../tests/forecast-fixture';
+import { createWholeDomainDescriptors } from '@av/contracts';
 import type { PinnedBuild } from '@av/client';
 import { PluginController, type HostStore, type HostTileEvent, type HostTileEventName, type HostTileLayer, type WindyHost, type WindyTileOptions } from './controller';
 
@@ -9,46 +9,9 @@ afterEach(() => vi.useRealTimers());
 
 const created = '2026-10-30T00:00:00.000Z';
 const expiresAt = '2026-10-31T00:00:00.000Z';
-function frames() { return fixtureManifest().frames.slice(0, 3); }
+function frames() { return fixtureManifestV5().frames.slice(0, 3); }
 function pinned(overrides: { expiresAt?: string; frames?: ReturnType<typeof frames> } = {}): PinnedBuild {
-  return fixtureBuild({ buildId: 'build-1', createdAt: created, expiresAt, frames: frames(), ...overrides });
-}
-
-function v5Pinned(mapFrameCount?: number): PinnedBuild {
-  const base = fixtureManifest();
-  const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
-  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
-  const prefix = `builds/${base.model}/${base.buildId}`;
-  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
-  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
-  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
-    const frameCount = kind === 'fine' ? mapFrameCount ?? base.frames.length : base.frames.length;
-    const blockCount = blocks(gridValue), channelCount = frameCount * layers.length;
-    return {
-      id, kind, grid: gridValue, gridHash,
-      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
-      layers,
-      samples: {
-        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
-        channelCount, coverageHash, blockCount, storedCells: blockCount,
-        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
-      },
-      ...(terrain ? { terrain: {
-        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
-        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
-      } } : {})
-    };
-  };
-  const mapFrames = new Set(base.frames.slice(0, mapFrameCount ?? base.frames.length).map(frame => frame.id));
-  const manifest = manifestV5Schema.parse({
-    ...rest, version: 5, mapFrameCount, artifacts: base.artifacts.filter(artifact => mapFrames.has(artifact.frame)),
-    surfaces: [
-      surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
-      surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
-    ]
-  });
-  const templates = Object.fromEntries(manifest.layers.map(layer => [layer, `https://api.test/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])) as PinnedBuild['templates'];
-  return { manifest, templates, expiresAtMs: Date.parse(manifest.expiresAt) };
+  return fixtureBuild({ buildId: FIXTURE_BUILD_ID, createdAt: created, expiresAt, frames: frames(), ...overrides });
 }
 
 class StubLayer implements HostTileLayer {
@@ -143,13 +106,13 @@ describe('PluginController', () => {
     const controller = new PluginController({ model: 'gfs', loadBuild, host: stub.host, now: () => Date.parse(created) });
     const state = await controller.start();
     expect(loadBuild).toHaveBeenCalledTimes(1);
-    expect(state).toMatchObject({ phase: 'ready', buildId: 'build-1', frameId: 'f006', layerId: 'usable-lift-msl', opacity: 0.5 });
+    expect(state).toMatchObject({ phase: 'ready', buildId: FIXTURE_BUILD_ID, frameId: 'f006', layerId: 'usable-lift-msl', opacity: 0.5 });
     expect(state?.badge).toBe('');
     expect(stub.added).toHaveLength(1);
     stub.added[0].statusListener?.('ready', stub.added[0].url);
     expect(controller.state().badge).toContain('Host frame f006 · 2026-10-30T06:00:00.000Z');
     expect(stub.added[0].url).toContain('/usable-lift-msl/f006/{z}/{x}/{y}.webp');
-    expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 7, maxZoom: 18, opacity: 0.5 });
+    expect(stub.added[0].options).toMatchObject({ tileSize: 256, detectRetina: false, maxNativeZoom: 9, maxZoom: 18, opacity: 0.5 });
   });
 
   it('keeps each failed tile visible until that tile succeeds or leaves the viewport', async () => {
@@ -340,7 +303,7 @@ describe('PluginController', () => {
 
   it('hides the overlay for point-only times and restores it on re-entry to the map horizon', async () => {
     const outside = Date.parse('2026-10-30T09:00:00.000Z');
-    const stub = stubHost(outside), build = v5Pinned(2);
+    const stub = stubHost(outside), build = fixtureBuild({ mapFrameCount: 2 });
     expect(build.manifest.frames.some(frame => frame.id === 'f009')).toBe(true);
     const controller = new PluginController({ model: 'gfs', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
     await controller.start();
@@ -376,14 +339,14 @@ describe('PluginController', () => {
     const previous = new PluginController({ model: 'gfs', loadBuild: async () => pinned(), host: stub.host, now: () => Date.parse(created) });
     await previous.start();
     previous.dispose();
-    const build = fixtureBuild({ model: 'icon-eu', buildId: 'build-1', createdAt: created, expiresAt,
-      layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) });
+    const build = fixtureBuild({ model: 'icon-eu', buildId: FIXTURE_BUILD_ID, createdAt: created, expiresAt,
+      layers: [...SPLIT_PRODUCT.layers], descriptors: createWholeDomainDescriptors(SPLIT_PRODUCT) });
     const controller = new PluginController({ model: 'icon-eu', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
     try {
       expect(await controller.start()).toMatchObject({ phase: 'ready', model: 'icon-eu', layerId: build.manifest.layers[0] });
       expect(stub.removed).toEqual([stub.added[0]]);
       expect(stub.listeners.size).toBe(1);
-      expect(stub.added[1].url).toContain(`/icon-eu/build-1/${build.manifest.layers[0]}/`);
+      expect(stub.added[1].url).toContain(`/icon-eu/${FIXTURE_BUILD_ID}/${build.manifest.layers[0]}/`);
       expect(controller.selectLayer('precip-rate')).toMatchObject({ layerId: build.manifest.layers[0], message: 'Unknown layer precip-rate' });
       expect(stub.added[1].url).not.toContain('/precip-rate/');
     } finally { controller.dispose(); }
@@ -398,7 +361,7 @@ describe('PluginController', () => {
     });
     const stub = stubHost(Date.parse(sparseFrames[1].validTime));
     const loadBuild = vi.fn(async () => fixtureBuild({ model: 'icon-eu', createdAt: cycle, cycle, expiresAt, frames: sparseFrames,
-      layers: [...SPLIT_PRODUCT.layers], descriptors: createProductDescriptors(SPLIT_PRODUCT) }));
+      layers: [...SPLIT_PRODUCT.layers], descriptors: createWholeDomainDescriptors(SPLIT_PRODUCT) }));
     const controller = new PluginController({ model: 'icon-eu', loadBuild, host: stub.host, now: () => Date.parse(created) });
     try {
       expect(await controller.start()).toMatchObject({ frameId: 'f007' });
@@ -483,7 +446,7 @@ describe('PluginController', () => {
 
 it('passes surface zoom changes through the mounted session without tearing down the adapter', async () => {
   const stub = stubHost();
-  const controller = new PluginController({ model: 'gfs', loadBuild: async () => v5Pinned(), host: stub.host, now: () => Date.parse(created) });
+  const controller = new PluginController({ model: 'gfs', loadBuild: async () => fixtureBuild(), host: stub.host, now: () => Date.parse(created) });
   await controller.start();
   controller.setOpacity(0.7); controller.selectFrame('f006');
   controller.selectLayer('precip-rate');
@@ -537,7 +500,7 @@ it.each(['model', 'build'])('rejects displayed frame identity from another %s', 
   const controller = new PluginController({ model: 'gfs', loadBuild: async () => build, host: stub.host, now: () => Date.parse(created) });
   await controller.start();
   const layer = stub.added[0];
-  const foreign = identity === 'model' ? layer.url.replace('/gfs/', '/icon-eu/') : layer.url.replace('/build-1/', '/other-build/');
+  const foreign = identity === 'model' ? layer.url.replace('/gfs/', '/icon-eu/') : layer.url.replace(`/${FIXTURE_BUILD_ID}/`, '/other-build/');
   layer.statusListener?.('ready', foreign);
   expect(controller.state().displayedFrameId).toBeNull();
   controller.dispose();

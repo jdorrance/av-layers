@@ -1,4 +1,5 @@
-import { getProduct, regularLatLonGridSchema, renderedLayers } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { regularLatLonGridSchema, renderedLayers } from '@av/contracts';
 import models from '../scripts/fixtures/source-models.json' with { type: 'json' };
 
 function source(protocol: keyof typeof models) {

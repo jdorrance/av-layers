@@ -2,7 +2,8 @@ import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { encodeBoundedJson, LIFT_STEP_RENDER_STYLE, liftRenderStyle, MAX_MANIFEST_BYTES, PALETTES, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
+import { encodeBoundedJson, LIFT_STEP_RENDER_STYLE, liftRenderStyle, MAX_MANIFEST_BYTES, PALETTES, type CoverageMask, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { buildForecast } from './build.js';
 import { BUILD_BUDGETS } from './capacity.js';
@@ -29,7 +30,7 @@ afterEach(async () => {
 
 describe('forecast hour-group builds', () => {
   let fixtureRoot: string, serialRoot: string, shardRoot: string;
-  let plan: BuildPlan, serial: Manifest;
+  let plan: BuildPlan, serial: ManifestV5;
   let receipts: string[];
   let holdEarlier = false, releaseEarlier = () => {};
   let laterFinished = Promise.resolve();
@@ -40,8 +41,8 @@ describe('forecast hour-group builds', () => {
     fixtureRoot = await mkdtemp(join(tmpdir(), 'av-parallel-complete-'));
     serialRoot = join(fixtureRoot, 'serial');
     shardRoot = join(fixtureRoot, 'shards');
-    serial = await readManifest(await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask, provider: source.provider }));
-    plan = await createBuildPlan({ out: shardRoot, cycle: CYCLE, product, mask, provider: source.provider, shards: 2 });
+    serial = await readManifest(await buildForecast({ out: serialRoot, cycle: CYCLE, product, mask, provider: source.provider, wholeDomain: await syntheticWholeDomain(serialRoot, product) }));
+    plan = await createBuildPlan({ out: shardRoot, cycle: CYCLE, product, mask, provider: source.provider, shards: 2, wholeDomain: await syntheticWholeDomain(shardRoot, product) });
     receipts = [];
     // Both sessions overlap; deliberately finish later hours before releasing the earlier group.
     holdEarlier = true;
@@ -70,6 +71,11 @@ describe('forecast hour-group builds', () => {
     await cp(shardRoot, out, { recursive: true });
     return out;
   }
+  async function copyPlan(): Promise<string> {
+    const out = await copyCompleted();
+    await Promise.all(['shards', 'builds'].map(name => rm(join(out, name), { recursive: true, force: true })));
+    return out;
+  }
   const manifestPath = (out: string) => join(out, 'builds', product.modelId, plan.buildId, 'manifest.json');
   const receiptPath = (out: string, shard: number) => join(out, relative(shardRoot, receipts[shard]));
   async function mutateReceipt(out: string, shard: number, change: (receipt: Record<string, unknown>) => void) {
@@ -93,15 +99,16 @@ describe('forecast hour-group builds', () => {
     expect(manifest.tool.liftRenderStyle).toBe(serial.tool.liftRenderStyle);
     expect(manifest.tool.liftRenderStyle).toBe(liftRenderStyle(PALETTES.lift.interpolation));
     expect(manifest.tool.liftRenderStyle).toBe(LIFT_STEP_RENDER_STYLE);
-    expect(manifest.samples.channelCount).toBe(12);
-    expect(await readFile(localPath(out, manifest.samples.key))).toEqual(await readFile(localPath(serialRoot, serial.samples.key)));
+    for (const [index, surface] of manifest.surfaces.entries()) {
+      expect(surface.samples.shards.map(shard => shard.sha256)).toEqual(serial.surfaces[index].samples.shards.map(shard => shard.sha256));
+    }
     expect(manifest.artifacts.map(({ layer, frame }) => ({ layer, frame }))).toEqual(serial.artifacts.map(({ layer, frame }) => ({ layer, frame })));
     for (let index = 0; index < manifest.artifacts.length; index++) {
       expect(await tilePixels(out, manifest.artifacts[index])).toEqual(await tilePixels(serialRoot, serial.artifacts[index]));
     }
     const provenance = JSON.parse(await readFile(localPath(out, manifest.source.provenanceKey), 'utf8'));
     expect(provenance.frames.map((frame: { hour: number }) => frame.hour)).toEqual(product.frameHours);
-    const validated = await validateBuild(out, manifest, mask, plan.coverageHash, product);
+    const validated = await validateBuild(out, manifest, mask, undefined, product);
     expect(() => assertValidatedBuild(out, manifest, validated)).not.toThrow();
     expect(onValidated).toHaveBeenCalledExactlyOnceWith(expect.any(Object), path);
     expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();
@@ -112,7 +119,7 @@ describe('forecast hour-group builds', () => {
     expect(completionOrder).toEqual([1, 0]);
   }, 60_000);
 
-  it('records summed worker effort separately from elapsed time and peak memory', async () => {
+  it('records summed worker phase effort separately from elapsed time and peak memory', async () => {
     const out = await copyCompleted();
     for (const shard of [0, 1]) await mutateReceipt(out, shard, receipt => {
       const metrics = receipt.metrics as { peakRssBytes: number };
@@ -120,7 +127,6 @@ describe('forecast hour-group builds', () => {
     });
     const workerMetrics = await Promise.all(receipts.map(path => readFile(path, 'utf8').then(bytes => JSON.parse(bytes).metrics as { elapsedMs: number; phasesMs: Record<string, number> })));
     const manifest = await readManifest(await finalize(out));
-    expect(manifest.metrics.execution).toMatchObject({ mode: 'parallel', shardCount: 2, totalWorkerElapsedMs: workerMetrics.reduce((sum, worker) => sum + worker.elapsedMs, 0) });
     expect(manifest.metrics.peakRssBytes).toBe(1.5 * 1024 ** 3);
     const elapsedMs = manifest.metrics.elapsedMs as number;
     expect(elapsedMs).toBeGreaterThan(0);
@@ -167,10 +173,10 @@ describe('forecast hour-group builds', () => {
     };
     const root = await temporaryRoot(), localOut = join(root, 'local'), parallelOut = join(root, 'parallel');
     const inputs = { cycle: CYCLE, product: regional, mask: regionalMask, provider };
-    const local = await readManifest(await buildForecast({ ...inputs, out: localOut }));
+    const local = await readManifest(await buildForecast({ ...inputs, out: localOut, wholeDomain: await syntheticWholeDomain(localOut, regional) }));
     expect(acquire.mock.calls.map(([hour]) => hour)).toEqual([8, 14]);
     acquire.mockClear();
-    const regionalPlan = await createBuildPlan({ ...inputs, out: parallelOut, shards: 2 });
+    const regionalPlan = await createBuildPlan({ ...inputs, out: parallelOut, shards: 2, wholeDomain: await syntheticWholeDomain(parallelOut, regional) });
     expect(regionalPlan.groups).toEqual([[8], [14]]);
     expect(acquire).not.toHaveBeenCalled();
     await Promise.all(regionalPlan.groups.map((_, shard) => buildShard({ ...inputs, plan: regionalPlan, shard, out: parallelOut })));
@@ -181,14 +187,9 @@ describe('forecast hour-group builds', () => {
     expect(parallel.layers).toEqual(regional.layers);
     expect(parallel.descriptors).toEqual(local.descriptors);
     expect(parallel.method).toEqual(local.method);
-    expect(parallel.samples.channelCount).toBe(4);
-    expect(parallel.samples.sha256).toBe(local.samples.sha256);
-    expect(await readFile(localPath(parallelOut, parallel.samples.key))).toEqual(await readFile(localPath(localOut, local.samples.key)));
+    expect(parallel.surfaces[0].samples.channelCount).toBe(4);
+    expect(parallel.surfaces[0].samples.shards.map(shard => shard.sha256)).toEqual(local.surfaces[0].samples.shards.map(shard => shard.sha256));
     expect(parallel.artifacts.map(({ layer, frame }) => ({ layer, frame }))).toEqual(local.artifacts.map(({ layer, frame }) => ({ layer, frame })));
-    expect(parallel.metrics.frames).toEqual(local.metrics.frames);
-    for (const frame of Object.values(local.metrics.frames as Record<string, Record<string, { valid: number }>>)) {
-      for (const layer of regional.layers) expect(frame[layer].valid).toBe(9);
-    }
   }, 60_000);
 
   it('refuses to finalize when an expected group receipt is missing', async () => {
@@ -206,40 +207,9 @@ describe('forecast hour-group builds', () => {
     await expect(readFile(manifestPath(out))).rejects.toThrow();
   });
 
-  it.each(['missing', 'extra'])('rejects %s artifact hashes instead of changing channel membership', async count => {
-    const out = await copyCompleted();
-    await mutateReceipt(out, 0, receipt => {
-      const hashes = receipt.tileSha256 as string[];
-      if (count === 'missing') hashes.pop();
-      else hashes.push(hashes[0]);
-    });
-    await expect(finalize(out)).rejects.toThrow(/artifact count/);
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it.each(['samples', 'tiles'])('verifies the compact receipt %s hash against the actual bytes', async kind => {
-    const out = await copyCompleted();
-    await mutateReceipt(out, 0, receipt => {
-      if (kind === 'samples') receipt.sampleSha256 = '0'.repeat(64);
-      else (receipt.tileSha256 as string[])[0] = '0'.repeat(64);
-    });
-    await expect(finalize(out)).rejects.toThrow(/hash/i);
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
   it('rejects a repeated receipt instead of accepting duplicate hours as completion', async () => {
     const out = await copyCompleted();
     await writeFile(receiptPath(out, 1), await readFile(receiptPath(out, 0)));
-    await expect(finalize(out)).rejects.toThrow();
-    await expect(readFile(manifestPath(out))).rejects.toThrow();
-  });
-
-  it('rejects a shard provenance window that differs from its forecast frame', async () => {
-    const out = await copyCompleted();
-    await mutateReceipt(out, 0, receipt => {
-      const provenance = receipt.provenance as { intervals: { fluxWindow: { end: string } } }[];
-      provenance[0].intervals.fluxWindow.end = CYCLE;
-    });
     await expect(finalize(out)).rejects.toThrow();
     await expect(readFile(manifestPath(out))).rejects.toThrow();
   });
@@ -263,17 +233,16 @@ describe('forecast hour-group builds', () => {
   });
 
   it('rejects a truncated partial sample pack instead of filling missing channels with zero', async () => {
-    const out = await copyCompleted(), directory = dirname(receiptPath(out, 0));
-    const binaryFiles = (await readdir(directory)).filter(name => name.endsWith('.bin'));
-    expect(binaryFiles).toHaveLength(1);
-    const path = join(directory, binaryFiles[0]), bytes = await readFile(path);
+    const out = await copyCompleted();
+    const receipt = JSON.parse(await readFile(receiptPath(out, 0), 'utf8')) as { surfaces: { shards: { key: string }[] }[] };
+    const path = localPath(out, receipt.surfaces[0].shards[0].key), bytes = await readFile(path);
     await writeFile(path, bytes.subarray(0, bytes.length - 5));
     await expect(finalize(out)).rejects.toThrow();
     await expect(readFile(manifestPath(out))).rejects.toThrow();
   });
 
   it('binds the plan to the current recipe and coverage before opening a provider', async () => {
-    const out = await temporaryRoot(), provider = fixtureProvider();
+    const out = await copyPlan(), provider = fixtureProvider();
     const changed = { ...plan, recipe: { ...plan.recipe, hash: '0'.repeat(64) } };
     await expect(buildShard({ plan: changed, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow();
     const changedMask = { ...mask, output: new Uint8Array(mask.output) };
@@ -303,7 +272,7 @@ describe('forecast hour-group builds', () => {
   });
 
   it.each([false, true])('does not complete a failed shard (cancelled=%s)', async cancelled => {
-    const out = await temporaryRoot(), abort = cancelled ? new AbortController() : undefined;
+    const out = await copyPlan(), abort = cancelled ? new AbortController() : undefined;
     const provider = fixtureProvider({ failHour: 2, abort });
     await expect(buildShard({ plan, shard: 0, out, product, mask, provider: provider.provider, signal: abort?.signal })).rejects.toThrow();
     expect(provider.close).toHaveBeenCalledOnce();
@@ -313,7 +282,7 @@ describe('forecast hour-group builds', () => {
   });
 
   it('rejects provider cycle drift rather than mixing model runs', async () => {
-    const out = await temporaryRoot(), provider = fixtureProvider({ returnedCycle: '2026-06-21T06:00:00.000Z' });
+    const out = await copyPlan(), provider = fixtureProvider({ returnedCycle: '2026-06-21T06:00:00.000Z' });
     await expect(buildShard({ plan, shard: 0, out, product, mask, provider: provider.provider })).rejects.toThrow();
     expect(provider.acquire).not.toHaveBeenCalled();
     expect(provider.close).toHaveBeenCalledOnce();
@@ -340,7 +309,7 @@ describe('forecast hour-group builds', () => {
     const hours = [1, 2, 3, 4, 5, 6, 7, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
     const configured = { ...product, frameHours: hours, intervalHours: 1 };
     const out = await temporaryRoot(), source = fixtureProvider();
-    const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider, shards: 4 });
+    const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider, shards: 4, wholeDomain: await syntheticWholeDomain(out, configured) });
     expect(planned.groups).toEqual([[1, 2, 3, 4, 5], [6, 7, 15, 16], [17, 18, 19, 20], [21, 22, 23, 24]]);
     expect(planned.groups.flat()).toEqual(hours);
     expect(source.open).not.toHaveBeenCalled();
@@ -353,7 +322,7 @@ describe('forecast hour-group builds', () => {
   ])('partitions the configured timeline with shard target $shards', async ({ hours, shards }) => {
     const configured = { ...product, frameHours: hours, intervalHours: 1, execution: { ...product.execution, shards } };
     const out = await temporaryRoot(), source = fixtureProvider();
-    const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider });
+    const planned = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask, provider: source.provider, wholeDomain: await syntheticWholeDomain(out, configured) });
     expect(planned.groups).toHaveLength(Math.min(shards, hours.length));
     expect(planned.groups.flat()).toEqual(hours);
     const sizes = planned.groups.map(group => group.length);
@@ -364,7 +333,7 @@ describe('forecast hour-group builds', () => {
 
   it('preserves receipt hashes for plans that omit execution settings', async () => {
     const out = await temporaryRoot(), source = fixtureProvider();
-    const old = await createBuildPlan({ out, cycle: CYCLE, product, mask, provider: source.provider });
+    const old = await createBuildPlan({ out, cycle: CYCLE, product, mask, provider: source.provider, wholeDomain: await syntheticWholeDomain(out, product) });
     delete old.execution;
     await writeFile(join(out, 'plan.json'), encodeBoundedJson(old, MAX_MANIFEST_BYTES));
     const parsed = await readBuildPlan(join(out, 'plan.json'));

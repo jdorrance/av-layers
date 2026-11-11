@@ -1,6 +1,6 @@
 import type { Map, MapSourceDataEvent, ErrorEvent } from 'maplibre-gl';
 import { createRasterTileProtocol, layerMaxZoom, planViewportPrefetch, previewRasterLayer, previewRasterSource, type PinnedBuild, type RasterTileProtocol, viewportTiles } from '@av/client';
-import type { LayerId } from '@av/contracts';
+import type { LayerId } from '@av/contracts/layers';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }

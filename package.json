@@ -21,7 +21,8 @@
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",
-    "test": "vitest run",
+    "test": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
     "build": "pnpm --filter @av/preview build && pnpm --filter @av/api build",
     "forecast": "node --import tsx apps/batch/src/cli.ts build",
     "capacity": "node --import tsx apps/batch/src/cli.ts capacity",
@@ -34,7 +35,7 @@
     "docs:check": "node --import tsx scripts/generate-reference.ts --check",
     "operations": "node --import tsx scripts/operations.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
-    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm docs:check && pnpm build && git diff --check"
+    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check"
   },
   "devDependencies": {
     "@av/client": "workspace:*",

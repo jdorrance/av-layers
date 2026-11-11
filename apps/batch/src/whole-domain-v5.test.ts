@@ -32,8 +32,8 @@ import type { ArchiveTarget } from './render.js';
 import type { ObjectStorage } from './storage.js';
 
 const publicationPolicy = vi.hoisted(() => ({ minHorizonHours: 6 }));
-vi.mock('@av/contracts', async importOriginal => {
-  const actual = await importOriginal<typeof import('@av/contracts')>();
+vi.mock('@av/contracts/models', async importOriginal => {
+  const actual = await importOriginal<typeof import('@av/contracts/models')>();
   return { ...actual, getProduct: (id: string) => {
     const product = actual.getProduct(id);
     return product ? { ...product, freshness: { ...product.freshness, minHorizonHours: publicationPolicy.minHorizonHours } } : undefined;
@@ -181,10 +181,15 @@ function sizedManifest(manifest: ReturnType<typeof manifestV5Schema.parse>, size
     bytes: size.bytes, key: `${surface.samples.shards[0]!.key.replace(/\/0\.bin$/, '')}/${index}.bin`, sha256: 'a'.repeat(64) }));
   return copy;
 }
-async function builtManifest() {
+async function buildPerformanceFixture() {
   const setup = await fixture(), out = await root('wd-perf');
   const path = await buildForecast({ out, cycle: CYCLE, product, mask: nativeMask, provider: fixtureProvider().provider, wholeDomain: setup });
   return readV5(path);
+}
+
+let performanceFixture: ReturnType<typeof buildPerformanceFixture> | undefined;
+async function builtManifest() {
+  return structuredClone(await (performanceFixture ??= buildPerformanceFixture()));
 }
 
 describe('whole-domain v5 production', () => {
@@ -300,10 +305,13 @@ describe('whole-domain v5 production', () => {
   it('publishes a sealed build and refuses rollback to corrupted dependencies', async () => {
     const setup = await fixture(), out = await root('wd-publication'), store = new PublicationStore();
     const publishedProduct = { ...product, modelId: 'gfs', frameHours: [12, 24] };
+    const masterMask = { ...nativeMask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    const masterFine = { ...setup.fine.mask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    setup.fine = { mask: masterFine, ...describeSparseCoverage(masterFine, publishedProduct) };
     const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
     const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
     let published = false, sealed: ValidatedBuild | undefined;
-    const path = await buildForecast({ out, cycle, product: publishedProduct, mask: nativeMask, provider: fixtureProvider().provider, wholeDomain: setup,
+    const path = await buildForecast({ out, cycle, product: publishedProduct, mask: masterMask, provider: fixtureProvider().provider, wholeDomain: setup,
       onValidated: async result => { sealed = result; await publish(store, out, result.manifest, { authority, validated: result }); published = true; } });
     expect(published).toBe(true);
     if (!sealed) throw new Error('Missing validation result');
@@ -311,6 +319,7 @@ describe('whole-domain v5 production', () => {
     expect(() => assertValidatedBuild(out, proof.manifest, { ...proof })).toThrow('missing or changed');
     await expect(publish(store, out, proof.manifest, { authority, validated: proof, receiptsOnly: true })).rejects.toThrow('does not cover this remote store');
     const manifest = await readV5(path), pointerKey = 'catalog/gfs/latest.json', pointer = store.objects.get(pointerKey)!.bytes.slice();
+    expect(manifest.surfaces.every(surface => surface.coverage.maxZoom === 0)).toBe(true);
     await verifySampleServing(store, manifest, publishedProduct);
     const gets = vi.spyOn(store, 'get');
     await rollback(store, 'gfs', manifest.buildId, authority);
@@ -339,13 +348,14 @@ describe('whole-domain v5 production', () => {
     }
     store.objects.set(shard, original);
     const remoteManifestKey = `builds/gfs/${manifest.buildId}/manifest.json`, remoteManifest = store.objects.get(remoteManifestKey)!;
-    for (const field of ['source', 'method', 'clearance'] as const) {
+    for (const field of ['source', 'method', 'clearance', 'zoom'] as const) {
       const changed = structuredClone(manifest);
       if (field === 'source') changed.source.terrain = { dataId: 'f'.repeat(64) };
       else if (field === 'method') changed.tool.terrainMethod = 'wrong';
-      else changed.tool.terrainClearance = 'wrong';
+      else if (field === 'clearance') changed.tool.terrainClearance = 'wrong';
+      else surface(changed, 'fine').coverage.maxZoom = 2;
       store.objects.set(remoteManifestKey, { ...remoteManifest, bytes: Buffer.from(JSON.stringify(changed)) });
-      await expect(rollback(store, 'gfs', manifest.buildId, authority)).rejects.toThrow('Terrain source or method mismatch');
+      await expect(rollback(store, 'gfs', manifest.buildId, authority)).rejects.toThrow(field === 'zoom' ? 'Rollback sparse coverage binding mismatch' : 'Terrain source or method mismatch');
       expect(store.objects.get(pointerKey)!.bytes).toEqual(pointer);
     }
     store.objects.set(remoteManifestKey, remoteManifest);
@@ -361,22 +371,22 @@ describe('whole-domain v5 production', () => {
         await writeFile(terrainPath, bytes);
         const changed = structuredClone(manifest), changedTerrain = surface(changed, 'fine').terrain!;
         changedTerrain.sha256 = sha256(bytes);
-        await expect(validateBuild(out, changed, nativeMask, undefined, publishedProduct)).rejects.toThrow();
+        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow();
       }
       await writeFile(terrainPath, terrainBytes);
       for (const field of ['dataId', 'verticalDatum', 'surface', 'sha256', 'key'] as const) {
         const changed = structuredClone(manifest), changedTerrain = surface(changed, 'fine').terrain!;
         changedTerrain[field] = field === 'key' ? `terrain/prepared/${'f'.repeat(64)}/manifest.json` : field === 'dataId' || field === 'sha256' ? 'f'.repeat(64) : 'wrong';
-        await expect(validateBuild(out, changed, nativeMask, undefined, publishedProduct)).rejects.toThrow();
+        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow();
       }
       for (const field of ['terrainMethod', 'terrainClearance'] as const) {
         const changed = structuredClone(manifest);
         changed.tool[field] = 'wrong';
-        await expect(validateBuild(out, changed, nativeMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
+        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
       }
       const changed = structuredClone(manifest);
       changed.source.terrain = { dataId: 'f'.repeat(64), key: terrain.key, sha256: terrain.sha256, arrayBytes: 1 };
-      await expect(validateBuild(out, changed, nativeMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
+      await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
     } finally { await writeFile(terrainPath, terrainBytes); }
 
     const old = modelPointerSchema.parse(JSON.parse(Buffer.from(pointer).toString()));

@@ -1,7 +1,8 @@
 import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
-import { earthVectorToGrid, geographicToGrid, gridSchema, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type LambertConformalGrid } from './geometry.js';
+import { gridSchema } from './grid-schema.js';
+import { earthVectorToGrid, geographicToGrid, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
 import { isCovered, type CoverageMask } from './index.js';
 
 const grid = gridSchema.parse(fixture.grid) as LambertConformalGrid;
@@ -61,7 +62,10 @@ describe('native spherical grid geometry', () => {
       { ...grid, earthRadiusM: 0 }, { ...grid, standardParallel1Deg: 90 },
       { ...grid, standardParallel1Deg: 30, standardParallel2Deg: -30 },
       { ...grid, width: 100000, height: 100000 }
-    ]) expect(gridSchema.safeParse(invalid).success).toBe(false);
+    ]) {
+      expect(gridSchema.safeParse(invalid).success).toBe(false);
+      expect(() => prepareGridGeometry(invalid as Grid)).toThrow('Invalid grid geometry');
+    }
     const geometry = prepareGridGeometry(grid);
     expect(geometry.geographicToGrid(90, 0)).toBeNull();
     expect(geometry.geographicToGrid(NaN, 0)).toBeNull();
