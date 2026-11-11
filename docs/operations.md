@@ -51,10 +51,9 @@ Enter a configured model ID or **all** in the Forecast workflow:
 gh workflow run forecast.yml --ref main -f environment=staging -f model=all
 ```
 
-`all` expands to `MODEL_IDS`. [models.json](../packages/contracts/config/models.json)
-owns per-model UTC schedules, rendered zoom and parallelism.
-[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts) owns output
-windows, minimum horizons and frames per shard. Tune that entry, then run
+`all` selects models with a configured schedule. An explicit model ID selects
+one model. [models.json](../packages/contracts/config/models.json) owns schedules,
+forecast windows, rendered zoom and parallelism. Tune that entry, then run
 `pnpm docs:generate`, `pnpm verify` and `pnpm capacity --model MODEL`.
 Generated workflow triggers select models by the cron expression that fired,
 including delayed starts. Manual runs finish each model before starting the next;
@@ -71,8 +70,8 @@ clean up expired builds, and verify live API serving. Terrain preparation has it
 own operation budget per attempt from [build budgets](../apps/batch/src/capacity.ts);
 forecast elapsed time starts with planning.
 
-The [window settings](../packages/contracts/src/forecast-windows.ts) own each
-model's selected hours and `framesPerShard`. The registry derives the shard
+Each model's `forecast.window` supplies its selected hours and `framesPerShard`.
+The registry derives the shard
 target from their frame count; set `framesPerShard` to 1 for one selected frame
 per job. The [planner](../apps/batch/src/parallel.ts) balances those frames across
 the target groups. Publish stages verified scalar inputs on disk and streams
@@ -132,9 +131,8 @@ surfaces from the same native weather frames. Assembly requires every grid's
 complete shard set before validating and publishing the build.
 
 [Publication admission](../apps/batch/src/publication.ts) checks configured source
-age, useful rendered-map horizon and build lifetime. Source age comes from
-[models.json](../packages/contracts/config/models.json); minimum horizon comes
-from [forecast-windows.ts](../packages/contracts/src/forecast-windows.ts).
+age, useful rendered-map horizon and build lifetime. Source age and minimum
+horizon come from [models.json](../packages/contracts/config/models.json).
 Published builds are retained for 7 days.
 Cleanup waits until every object in an unreferenced build has aged seven days,
 matching the `builds/` bucket lock. Scalar source inputs share that retention;

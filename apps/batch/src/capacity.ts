@@ -24,18 +24,21 @@ export function normalizedFrameBytes(activeCells: number, verticalCoordinate: Pr
   return bytes;
 }
 
-/** Project scheduled builds, or use an explicit interval for an operator's scenario. */
-export function estimateRetention(schedule: readonly string[], { cadenceHours, retentionDays = RETENTION_DAYS }: { cadenceHours?: number; retentionDays?: number } = {}) {
+interface RetentionScenario { cadenceHours?: number; retentionDays?: number; expectedRunsPerDay?: number }
+
+/** Project retained builds from configured starts or an operator's interval. */
+export function estimateRetention(schedule: readonly string[], { cadenceHours, retentionDays = RETENTION_DAYS, expectedRunsPerDay }: RetentionScenario = {}) {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0 ||
     (cadenceHours !== undefined && (!Number.isFinite(cadenceHours) || cadenceHours <= 0))) throw new RangeError('Invalid capacity scenario');
-  const scheduledStartsPerDay = cadenceHours === undefined ? forecastStartsPerDay(schedule) : 0;
+  const runsPerDay = cadenceHours !== undefined ? 0 : schedule.length ? forecastStartsPerDay(schedule) : expectedRunsPerDay ?? 0;
+  if (cadenceHours === undefined && (!Number.isSafeInteger(runsPerDay) || runsPerDay <= 0)) throw new RangeError('Retention requires positive runs per day');
   const retainedPerModel = cadenceHours === undefined
-    ? Math.ceil(retentionDays) * scheduledStartsPerDay
+    ? Math.ceil(retentionDays) * runsPerDay
     : Math.ceil(retentionDays * 24 / cadenceHours);
   if (!Number.isSafeInteger(retainedPerModel)) throw new RangeError('Invalid capacity scenario');
   return {
-    cadenceHours: cadenceHours ?? (scheduledStartsPerDay ? 24 / scheduledStartsPerDay : null), retentionDays,
-    retainedPerModel, retentionBasis: cadenceHours === undefined ? 'schedule' : 'cadence-override',
+    cadenceHours: cadenceHours ?? 24 / runsPerDay, retentionDays,
+    retainedPerModel, retentionBasis: cadenceHours !== undefined ? 'cadence-override' : schedule.length ? 'schedule' : 'expected-runs',
     violations: retainedPerModel >= MAX_RETAINED_BUILDS ? ['retention leaves no room for a replacement build'] : []
   };
 }

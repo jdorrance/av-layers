@@ -51,7 +51,7 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 
 ## Configured models
 
-Sources: [model settings](../packages/contracts/config/models.json) and [forecast windows](../packages/contracts/src/forecast-windows.ts). See [deployments](status.md) for live applications and runs.
+Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
 Forecast trigger budget: 40 shard jobs; default workers 3.
 
@@ -59,6 +59,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 
 - Public model ID: `gfs`; model family: `gfs`; source configuration: `noaa-gfs-0p25`; domain: `global`.
 - Attribution: NOAA GFS · Aviation Forecast Layers.
+- Resolution tier: `low`.
 - Grid: `regular-latlon`; 1440 columns × 721 rows; spherical Earth radius 6371229 m; periodic longitude: true.
 - Terrain subdivision factor: `10`; fine grid: 14400 columns × 7201 rows.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
@@ -78,6 +79,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 
 - Public model ID: `icon-eu`; model family: `icon`; source configuration: `dwd-icon-eu-regular-0p0625`; domain: `europe`.
 - Attribution: DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers.
+- Resolution tier: `medium`.
 - Grid: `regular-latlon`; 1377 columns × 657 rows; spherical Earth radius 6371229 m; periodic longitude: false.
 - Terrain subdivision factor: `5`; fine grid: 6881 columns × 3281 rows.
 - Bounds [west, south, east, north]: `[-23.5,29.5,62.5,70.5]`.
@@ -96,6 +98,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 
 - Public model ID: `rrfs`; model family: `rrfs`; source configuration: `noaa-rrfs-conus-3km`; domain: `conus`.
 - Attribution: NOAA RRFS · Aviation Forecast Layers.
+- Resolution tier: `medium`.
 - Grid: `lambert-conformal`; 1799 columns × 1059 rows; spherical Earth radius 6371229 m; periodic longitude: false.
 - Terrain subdivision factor: `2`; fine grid: 3597 columns × 2117 rows.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.

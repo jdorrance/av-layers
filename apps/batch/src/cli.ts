@@ -30,7 +30,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     if (!product) throw new Error('No admitted product for this model');
     const [{ loadCoverage }, { estimateRetention }, { getForecastProvider }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js')]);
     const number = (value: string | undefined) => value === undefined ? undefined : Number(value);
-    const retentionScenario = { cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']) };
+    const retentionScenario = { cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']), expectedRunsPerDay: product.expectedRunsPerDay };
     const mask = await loadCoverage(product);
     const { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport, nativeSparseMask } = await import('./whole-domain/coverage.js');
     const plan = wholeDomainPlan(product);

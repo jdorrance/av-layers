@@ -58,7 +58,7 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
   lines.push('', '## Refinement grids', '',
     'Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).', '',
     ...Object.keys(REFINEMENT_OPTIONS).map(option => `- ${code(`--${option} <string>`)}.`));
-  lines.push('', '## Configured models', '', 'Sources: [model settings](../packages/contracts/config/models.json) and [forecast windows](../packages/contracts/src/forecast-windows.ts). See [deployments](status.md) for live applications and runs.', '',
+  lines.push('', '## Configured models', '', 'Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.', '',
     `Forecast trigger budget: ${FORECAST_PARALLELISM.jobs} shard jobs; default workers ${FORECAST_PARALLELISM.workers}.`, '');
   for (const model of [...MODEL_IDS].sort()) {
     const product = getProduct(model);
@@ -66,15 +66,18 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
     const factor = product.terrainSubdivisionFactor;
     const methods = Object.values((factor === undefined ? contracts.createProductDescriptors(product) : contracts.createWholeDomainDescriptors(product)).methods);
     const fine = factor === undefined ? undefined : contracts.planWholeDomainGrid(product.grid, factor).fine;
+    const schedule = product.execution.schedule.length ? `UTC cron schedules ${code(product.execution.schedule)}`
+      : `event-driven, ${product.expectedRunsPerDay} expected runs per day`;
     lines.push(`### ${product.label} (${product.id})`, '',
       `- Public model ID: ${code(product.modelId)}; model family: ${code(product.source.modelFamily)}; source configuration: ${code(product.source.configurationId)}; domain: ${code(product.source.domainId)}.`,
       `- Attribution: ${product.attribution}.`,
+      ...(product.tier ? [`- Resolution tier: ${code(product.tier)}.`] : []),
       `- Grid: ${code(product.grid.kind)}; ${product.grid.width} columns × ${product.grid.height} rows; spherical Earth radius ${product.grid.earthRadiusM} m; periodic longitude: ${product.grid.wrapLongitude}.`,
       ...(fine ? [`- Terrain subdivision factor: ${code(factor)}; fine grid: ${fine.width} columns × ${fine.height} rows.`] : []),
       `- Bounds [west, south, east, north]: ${code(product.bounds)}.`,
       `- Coverage: ${code(product.coverageId)}. ${product.coverageDescription}`,
       `- Native tile zoom: 0–${product.maxNativeZoom}.`,
-      `- Execution: ${product.execution.shards} target shards; at most ${product.execution.parallelism} simultaneous shard jobs; worker ceiling ${product.execution.workers}; UTC cron schedules ${code(product.execution.schedule)}.`,
+      `- Execution: ${product.execution.shards} target shards; at most ${product.execution.parallelism} simultaneous shard jobs; worker ceiling ${product.execution.workers}; ${schedule}.`,
       `- Candidate forecast lead hours: ${code(product.frameHours)}; interval: ${product.intervalHours} hours; frame policy: ${code(product.capabilities.daylightFrames)}.`,
       ...(product.mapEndHour === undefined ? [] : [`- Map prefix ends at forecast hour ${product.mapEndHour}; native samples and profiles retain the full selected axis.`]),
       ...(product.intervalChange === undefined ? [] : [`- Source interval changes at hour ${product.intervalChange.fromHour} to ${product.intervalChange.hours} hours.`]),

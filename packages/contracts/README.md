@@ -46,10 +46,9 @@ Browser clients use [`@av/client`](../client/README.md).
 
 ## Configuration
 
-[forecast-windows.ts](src/forecast-windows.ts) owns each model's output window,
-minimum useful horizon and frames per compute shard. It derives selected hours,
-map end and shard count. [models.json](config/models.json) owns source protocols,
-intervals, grids, coverage, capabilities, schedules and parallelism.
+[models.json](config/models.json) owns source protocols, intervals, grids,
+coverage, capabilities, forecast windows and execution. [product.ts](src/product.ts)
+derives selected hours, map end, minimum horizon and shard count.
 [products.ts](src/products.ts) validates the registry and resolves defaults.
 Run `pnpm docs:generate` after configuration changes to update workflow schedules
 and the reference. `terrainSubdivisionFactor` configures whole-domain lift grids.

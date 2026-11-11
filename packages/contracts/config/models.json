@@ -6,7 +6,7 @@
       "modelId": "gfs",
       "id": "gfs-soaring",
       "coverageDir": "coverage",
-      "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global"},
+      "source": {"modelFamily": "gfs", "configurationId": "noaa-gfs-0p25", "domainId": "global", "tier": "low"},
       "label": "GFS",
       "attribution": "NOAA GFS · Aviation Forecast Layers",
       "layers": [
@@ -47,7 +47,8 @@
         "intervalHours": 1,
         "intervalChange": {"fromHour": 123, "hours": 3},
         "cycleHoursUtc": [0, 6, 12, 18],
-        "statisticsResetHours": 6
+        "statisticsResetHours": 6,
+        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 2}
       },
       "freshness": {"maxCycleAgeHours": 18},
       "coverage": {
@@ -149,7 +150,7 @@
       "modelId": "icon-eu",
       "id": "icon-eu-soaring",
       "coverageDir": "coverage/icon-eu-land-v1",
-      "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe"},
+      "source": {"modelFamily": "icon", "configurationId": "dwd-icon-eu-regular-0p0625", "domainId": "europe", "tier": "medium"},
       "label": "ICON-EU",
       "attribution": "DWD ICON-EU (CC BY 4.0) · Aviation Forecast Layers",
       "layers": [
@@ -189,7 +190,8 @@
       "forecast": {
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
-        "statisticsResetHours": null
+        "statisticsResetHours": null,
+        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 18},
       "coverage": {
@@ -271,7 +273,7 @@
       "modelId": "rrfs",
       "id": "rrfs-conus-soaring",
       "coverageDir": "coverage/rrfs-conus-land-v1",
-      "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus"},
+      "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus", "tier": "medium"},
       "label": "RRFS (CONUS)",
       "attribution": "NOAA RRFS · Aviation Forecast Layers",
       "layers": [
@@ -315,7 +317,8 @@
       "forecast": {
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
-        "statisticsResetHours": 1
+        "statisticsResetHours": 1,
+        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 12},
       "coverage": {

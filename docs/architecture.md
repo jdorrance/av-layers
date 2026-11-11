@@ -43,10 +43,10 @@ surfaces share each model's cycle, timeline, publication and URLs. See
 ## Configuration and calculations
 
 [models.json](../packages/contracts/config/models.json) owns model identities,
-source fields and URLs, grids, coverage, capabilities, timing and execution.
-[forecast-windows.ts](../packages/contracts/src/forecast-windows.ts) owns output
-windows and derives selected hours, map end, minimum horizon and shard counts.
-[products.ts](../packages/contracts/src/products.ts) validates the registry;
+source fields and URLs, grids, coverage, capabilities, forecast windows and
+execution. [product.ts](../packages/contracts/src/product.ts) derives selected
+hours, map end, minimum horizon and shard counts. The registry validates unique
+identities and the job budget in [products.ts](../packages/contracts/src/products.ts);
 the Python mask generator reads the same file. `pnpm docs:generate` projects
 the configured cron union into the forecast workflow. The
 [indexed GRIB](../apps/batch/src/indexed-grib/README.md) and

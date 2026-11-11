@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 import configuration from '../config/models.json' with { type: 'json' };
-import windowSettings from './forecast-windows.js';
 import { DEFAULT_MODEL, DEFAULT_PRODUCT, MAX_MODEL_WORKERS, defineProduct, getProduct, mapFrameCount, sourceIntervalHours } from './products.js';
 
 const configured = configuration.models[0];
@@ -8,17 +7,22 @@ const base = getProduct(configured.modelId)!;
 const raw = { ...configured, forecast: base.forecast, freshness: base.freshness,
   execution: { ...configured.execution, shards: base.execution.shards } };
 
-async function withWindow(window: unknown, check: (products: typeof import('./products.js')) => void): Promise<void> {
-  vi.resetModules();
-  vi.doMock('./forecast-windows.js', () => ({ default: { ...windowSettings, gfs: window } }));
-  try { check(await import('./products.js')); }
-  finally { vi.doUnmock('./forecast-windows.js'); vi.resetModules(); }
+function withWindow(window: unknown) {
+  return defineProduct({ ...configured, forecast: { ...configured.forecast, window } });
 }
 
 describe('model configuration', () => {
   it('resolves each model window once for consumers and source adapters', () => {
     for (const settings of configuration.models) {
-      const product = getProduct(settings.modelId)!, window = windowSettings[settings.modelId as keyof typeof windowSettings];
+      const product = getProduct(settings.modelId)!, window = settings.forecast.window;
+      expect(product.frameHours).toEqual([
+        ...Array.from({ length: 24 }, (_, index) => index + 1),
+        ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)
+      ]);
+      expect(product.expectedRunsPerDay).toBe(4);
+      const { tier, ...source } = settings.source;
+      expect(product.tier).toBe(tier);
+      expect(product.source).toEqual(source);
       expect(product.frameHours).toBe(product.forecast.hours);
       expect(product.frameHours.every((hour, index, hours) => Number.isSafeInteger(hour) && hour > 0 && (!index || hour > hours[index - 1]))).toBe(true);
       expect(product.mapEndHour).toBe(product.frameHours.at(-1));
@@ -35,32 +39,29 @@ describe('model configuration', () => {
     { window: { hourlyThrough: 2, endHour: 11, tailStepHours: 3, minHorizonHours: 7, framesPerShard: 2 }, hours: [1, 2, 5, 8, 11], shards: 3 },
     { window: { hourlyThrough: 4, endHour: 14, tailStepHours: 4, minHorizonHours: 6, framesPerShard: 1 }, hours: [1, 2, 3, 4, 8, 12], shards: 6 },
     { window: { hourlyThrough: 6, endHour: 6, tailStepHours: 3, minHorizonHours: 0, framesPerShard: 3 }, hours: [1, 2, 3, 4, 5, 6], shards: 2 }
-  ])('propagates one tuned window through hours, maps, freshness and compute groups: $window', async ({ window, hours, shards }) => {
-    await withWindow(window, products => {
-      const product = products.getProduct('gfs')!;
-      expect(product.frameHours).toEqual(hours);
-      expect(product.forecast.hours).toBe(product.frameHours);
-      expect(product.mapEndHour).toBe(hours.at(-1));
-      expect(product.forecast.mapEndHour).toBe(product.mapEndHour);
-      expect(products.mapFrameCount(product)).toBe(hours.length);
-      expect(product.execution.shards).toBe(shards);
-      expect(product.freshness.minHorizonHours).toBe(window.minHorizonHours);
-      expect(product.execution.parallelism).toBe(getProduct('gfs')!.execution.parallelism);
-      expect(product.execution.schedule).toEqual(getProduct('gfs')!.execution.schedule);
-      expect([27, 123].map(hour => products.sourceIntervalHours(product, hour))).toEqual([1, 3]);
-      for (const model of ['icon-eu', 'rrfs']) expect(products.getProduct(model)).toEqual(getProduct(model));
-    });
+  ])('propagates one tuned window through hours, maps, freshness and compute groups: $window', ({ window, hours, shards }) => {
+    const product = withWindow(window);
+    expect(product.frameHours).toEqual(hours);
+    expect(product.forecast.hours).toBe(product.frameHours);
+    expect(product.mapEndHour).toBe(hours.at(-1));
+    expect(product.forecast.mapEndHour).toBe(product.mapEndHour);
+    expect(mapFrameCount(product)).toBe(hours.length);
+    expect(product.execution.shards).toBe(shards);
+    expect(product.freshness.minHorizonHours).toBe(window.minHorizonHours);
+    expect(product.execution.parallelism).toBe(base.execution.parallelism);
+    expect(product.execution.schedule).toEqual(base.execution.schedule);
+    expect([27, 123].map(hour => sourceIntervalHours(product, hour))).toEqual([1, 3]);
   });
 
   it.each([
     { hourlyThrough: 0 }, { hourlyThrough: 257 }, { hourlyThrough: 2.5 },
-    { endHour: windowSettings.gfs.hourlyThrough - 1 }, { endHour: Infinity }, { endHour: Number.MAX_SAFE_INTEGER + 1 },
+    { endHour: configured.forecast.window.hourlyThrough - 1 }, { endHour: Infinity }, { endHour: Number.MAX_SAFE_INTEGER + 1 },
     { endHour: 1_000, tailStepHours: 1 }, { tailStepHours: 0 }, { tailStepHours: NaN },
-    { minHorizonHours: -1 }, { minHorizonHours: Number.MAX_SAFE_INTEGER }, { minHorizonHours: windowSettings.gfs.endHour },
+    { minHorizonHours: -1 }, { minHorizonHours: Number.MAX_SAFE_INTEGER }, { minHorizonHours: configured.forecast.window.endHour },
     { hourlyThrough: 4, endHour: 14, tailStepHours: 4, minHorizonHours: 12 },
     { framesPerShard: 0 }, { framesPerShard: 257 }, { typo: 1 }
-  ])('rejects an invalid or unbounded window before generating hours: %j', async invalid => {
-    await expect(withWindow({ ...windowSettings.gfs, ...invalid }, () => {})).rejects.toThrow();
+  ])('rejects an invalid or unbounded window before generating hours: %j', invalid => {
+    expect(() => withWindow({ ...configured.forecast.window, ...invalid })).toThrow();
   });
 
   it.each([
@@ -68,13 +69,26 @@ describe('model configuration', () => {
     { forecast: { ...configured.forecast, mapEndHour: 1 } },
     { execution: { ...configured.execution, shards: 1 } },
     { freshness: { ...configured.freshness, minHorizonHours: 0 } }
-  ])('rejects a second configured owner for a derived window field: %j', async duplicate => {
-    vi.resetModules();
-    vi.doMock('../config/models.json', () => ({ default: { ...configuration,
-      models: [{ ...configured, ...duplicate }, ...configuration.models.slice(1)] } }));
-    try { await expect(import('./products.js')).rejects.toThrow('Forecast window owns'); }
-    finally { vi.doUnmock('../config/models.json'); vi.resetModules(); }
+  ])('rejects a second configured owner for a derived window field: %j', duplicate => {
+    expect(() => defineProduct({ ...configured, ...duplicate })).toThrow('Forecast window owns');
   });
+
+  it('admits an event-driven model with a positive expected run count', () => {
+    const settings = { ...configured, execution: { ...configured.execution, schedule: [] },
+      forecast: { ...configured.forecast, expectedRunsPerDay: 4 } };
+    expect(defineProduct(settings).expectedRunsPerDay).toBe(4);
+    expect(defineProduct(settings).execution.schedule).toEqual([]);
+    expect(() => defineProduct({ ...settings, forecast: configured.forecast })).toThrow('Event-driven models require expected runs per day');
+    for (const expectedRunsPerDay of [0, -1, 1.5, 25]) {
+      expect(() => defineProduct({ ...settings, forecast: { ...configured.forecast, expectedRunsPerDay } })).toThrow();
+    }
+  });
+
+  it('requires scheduled expectations to match the configured cron starts', () => {
+    expect(defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 4 } }).expectedRunsPerDay).toBe(4);
+    expect(() => defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 3 } })).toThrow('must match the forecast schedule');
+  });
+
   it('keeps the map prefix and source intervals independent of sparse output hours', () => {
     const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 120 }, (_, i) => 27 + i * 3)];
     const product = defineProduct({ ...raw, forecast: { ...raw.forecast, hours, mapEndHour: 24, intervalHours: 1, intervalChange: { fromHour: 123, hours: 3 } } });
@@ -97,11 +111,13 @@ describe('model configuration', () => {
   it('bounds each manual model and each shared cron cohort by the job budget', async () => {
     const first = { ...raw, modelId: 'first', id: 'first-product', execution: { ...raw.execution, parallelism: 2, schedule: ['17 5 * * *'] } };
     const second = { ...raw, modelId: 'second', id: 'second-product', execution: { ...raw.execution, parallelism: 2, schedule: ['23 6 * * *'] } };
+    const event = { ...first, forecast: { ...first.forecast, expectedRunsPerDay: 4 }, execution: { ...first.execution, schedule: [] } };
     try {
       for (const [models, admitted] of [
         [[first, second], true],
+        [[event, { ...event, modelId: second.modelId, id: second.id }], true],
         [[first, { ...second, execution: { ...second.execution, parallelism: 1, schedule: first.execution.schedule } }], false],
-        [[{ ...first, execution: { ...first.execution, parallelism: 3, schedule: [] } }], false]
+        [[{ ...event, execution: { ...event.execution, parallelism: 3 } }], false]
       ] as const) {
         vi.resetModules();
         vi.doMock('../config/models.json', () => ({ default: { defaultModel: first.modelId, parallelism: { jobs: 2, workers: 1 }, models } }));

@@ -13,6 +13,9 @@ export type ProductCapabilities = z.infer<typeof capabilitiesSchema>;
 export type VerticalCoordinateKind = ProductCapabilities['verticalCoordinate'];
 export type DaylightFramePolicy = ProductCapabilities['daylightFrames'];
 
+export const RESOLUTION_TIERS = ['low', 'medium', 'high'] as const;
+export type ResolutionTier = (typeof RESOLUTION_TIERS)[number];
+
 export const MAX_MODEL_WORKERS = 3;
 const workerLimit = z.number().int().min(0).max(MAX_MODEL_WORKERS);
 const jobLimit = z.number().int().positive().max(MAX_FORECAST_SHARDS);
@@ -69,6 +72,7 @@ export interface ProductDefinition {
   readonly coverageDir: string;
   readonly source: { readonly modelFamily: string; readonly configurationId: string; readonly domainId: string };
   readonly label: string;
+  readonly tier?: ResolutionTier;
   readonly attribution: string;
   readonly bounds: readonly [number, number, number, number];
   readonly coverageDescription: string;
@@ -88,9 +92,49 @@ export interface ProductDefinition {
 }
 
 export interface ModelDefinition extends ProductDefinition {
+  readonly expectedRunsPerDay: number;
   readonly upstream: Readonly<Record<string, unknown>>;
   readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number; readonly intervalChange?: ProductDefinition['intervalChange']; readonly mapEndHour?: number;
     readonly cycleHoursUtc: readonly number[]; readonly statisticsResetHours: number | null };
+}
+
+const windowSchema = z.strictObject({
+  hourlyThrough: z.number().int().positive().max(MAX_SAMPLE_VALUES),
+  endHour: z.number().int().positive(), tailStepHours: z.number().int().positive(),
+  minHorizonHours: z.number().int().nonnegative(),
+  framesPerShard: z.number().int().positive().max(MAX_SAMPLE_VALUES)
+}).transform((window, ctx) => {
+  if (window.endHour < window.hourlyThrough) {
+    ctx.addIssue({ code: 'custom', message: 'Forecast window ends before its hourly prefix' });
+    return z.NEVER;
+  }
+  const tailCount = Math.floor((window.endHour - window.hourlyThrough) / window.tailStepHours);
+  const frameCount = window.hourlyThrough + tailCount;
+  const mapEndHour = window.hourlyThrough + tailCount * window.tailStepHours;
+  if (frameCount > MAX_SAMPLE_VALUES || window.minHorizonHours >= mapEndHour) {
+    ctx.addIssue({ code: 'custom', message: 'Forecast window exceeds the frame budget or lacks its useful horizon' });
+    return z.NEVER;
+  }
+  const hours = Array.from({ length: frameCount }, (_, index) => index < window.hourlyThrough
+    ? index + 1 : window.hourlyThrough + (index - window.hourlyThrough + 1) * window.tailStepHours);
+  return { hours, mapEndHour, minHorizonHours: window.minHorizonHours, shards: Math.ceil(frameCount / window.framesPerShard) };
+});
+
+const windowInputSchema = z.looseObject({
+  forecast: z.looseObject({ window: windowSchema.optional() }),
+  execution: z.looseObject({}),
+  freshness: z.looseObject({})
+});
+
+function resolveWindow(raw: unknown): unknown {
+  const model = windowInputSchema.parse(raw);
+  const { window, ...forecast } = model.forecast;
+  if (!window) return model;
+  if ('hours' in forecast || 'mapEndHour' in forecast || 'shards' in model.execution || 'minHorizonHours' in model.freshness) {
+    throw new Error('Forecast window owns configured hours, mapEndHour, shards and minHorizonHours');
+  }
+  return { ...model, forecast: { ...forecast, hours: window.hours, mapEndHour: window.mapEndHour },
+    execution: { ...model.execution, shards: window.shards }, freshness: { ...model.freshness, minHorizonHours: window.minHorizonHours } };
 }
 
 // The shared portion of source JSON. Adapter-specific upstream settings stay in
@@ -99,7 +143,7 @@ const identifier = z.string().regex(/^[a-z][a-z0-9-]{0,63}$/);
 const productConfigSchema = z.object({
   modelId: identifier.refine(id => id !== 'all', 'Model ID is reserved for workflow selection'), id: identifier,
   coverageDir: z.string().regex(/^coverage(?:\/[a-z0-9-]+)*$/),
-  source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier }).readonly(),
+  source: z.object({ modelFamily: identifier, configurationId: identifier, domainId: identifier, tier: z.enum(RESOLUTION_TIERS).optional() }),
   label: z.string().min(1), attribution: z.string().min(1),
   layers: z.array(z.enum(LAYER_IDS)).min(1).max(LAYER_IDS.length).refine(
     layers => new Set(layers).size === layers.length, 'Product requires unique scalar layers'
@@ -117,7 +161,8 @@ const productConfigSchema = z.object({
     intervalChange: z.object({ fromHour: z.number().int().positive(), hours: z.number().int().positive() }).strict().optional(),
     mapEndHour: z.number().int().positive().optional(),
     cycleHoursUtc: z.array(z.number().int().min(0).max(23)).min(1).refine(hours => new Set(hours).size === hours.length).readonly(),
-    statisticsResetHours: z.number().finite().positive().nullable()
+    statisticsResetHours: z.number().finite().positive().nullable(),
+    expectedRunsPerDay: z.number().int().positive().max(24).optional()
   }).refine(forecast => forecast.intervalHours <= forecast.hours[0], 'Interval exceeds first forecast hour')
     .refine(forecast => forecast.mapEndHour === undefined || forecast.hours.some(hour => hour <= forecast.mapEndHour!), 'Map window requires a forecast prefix')
     .refine(forecast => !forecast.intervalChange || forecast.intervalChange.hours <= forecast.intervalChange.fromHour, 'Source interval exceeds transition hour'),
@@ -130,15 +175,29 @@ const productConfigSchema = z.object({
     interpolationHaloCells: z.number().int().nonnegative()
   }).refine(coverage => coverage.west < coverage.east && coverage.south < coverage.north, 'Invalid coverage bounds'),
   upstream: z.record(z.string(), z.unknown()).readonly()
+}).transform((config, ctx) => {
+  const { expectedRunsPerDay, ...forecast } = config.forecast;
+  const scheduledRuns = forecastStartsPerDay(config.execution.schedule);
+  if (!scheduledRuns && expectedRunsPerDay === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['forecast', 'expectedRunsPerDay'], message: 'Event-driven models require expected runs per day' });
+    return z.NEVER;
+  }
+  if (scheduledRuns && expectedRunsPerDay !== undefined && expectedRunsPerDay !== scheduledRuns) {
+    ctx.addIssue({ code: 'custom', path: ['forecast', 'expectedRunsPerDay'], message: 'Expected runs per day must match the forecast schedule' });
+    return z.NEVER;
+  }
+  return { ...config, forecast, expectedRunsPerDay: expectedRunsPerDay ?? scheduledRuns };
 });
 
 /** Validate declarative product settings without importing any source adapter. */
 export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
-  const config = productConfigSchema.parse(raw);
+  const config = productConfigSchema.parse(resolveWindow(raw));
   const { zoom, ...execution } = config.execution;
+  const { tier, ...source } = config.source;
   return Object.freeze({
     modelId: config.modelId, id: config.id,
-    coverageDir: config.coverageDir, source: config.source, label: config.label,
+    coverageDir: config.coverageDir, source: Object.freeze(source), label: config.label,
+    ...(tier === undefined ? {} : { tier }),
     attribution: config.attribution,
     bounds: Object.freeze([config.coverage.west, config.coverage.south, config.coverage.east, config.coverage.north] as const),
     coverageDescription: config.coverage.description, freshness: config.freshness,
@@ -151,7 +210,7 @@ export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
     ...(config.forecast.intervalChange ? { intervalChange: config.forecast.intervalChange } : {}),
     layers: config.layers, capabilities: config.capabilities,
     execution: Object.freeze({ ...execution, workers: workerLimit.parse(execution.workers ?? workers) }),
-    forecast: config.forecast, upstream: config.upstream
+    forecast: config.forecast, upstream: config.upstream, expectedRunsPerDay: config.expectedRunsPerDay
   });
 }
 
