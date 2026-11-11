@@ -1,5 +1,8 @@
 import raw from '../scripts/fixtures/manifest.contract.json' with { type: 'json' };
-import { CELL_BYTES, computeFreshness, getProvenanceReference, latestSchema, manifestSchema, refinementPatchSchema, validateArtifactRecords, type Manifest, type RefinementPatch } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { CELL_BYTES, computeFreshness, createRecipeIdentity, createWholeDomainDescriptors, getProvenanceReference,
+  latestV5Schema, layerSurface, manifestSchema, manifestV5Schema, planWholeDomainGrid, refinementPatchSchema,
+  renderedLayers, SAMPLE_BLOCK_SIZE, validateArtifactRecords, type Manifest, type ManifestV5, type RefinementPatch } from '@av/contracts';
 import type { PinnedBuild } from '@av/client';
 
 /** Start valid; tests corrupt individual fields only after constructing a fixture. */
@@ -19,18 +22,62 @@ export function fixtureManifest(overrides: Partial<Manifest> = {}): Manifest {
   return manifest;
 }
 
-export function fixtureLatest(overrides: Partial<Manifest> = {}, baseUrl = 'https://api.test') {
-  const manifest = fixtureManifest(overrides);
-  return latestSchema.parse({
+export const FIXTURE_BUILD_ID = raw.buildId;
+
+/** Whole-domain publication metadata for browser and discovery tests. */
+export function fixtureManifestV5(overrides: Partial<ManifestV5> = {}): ManifestV5 {
+  const { grid: _grid, coverage: _coverage, samples: _samples, patches: _patches, ...base } = fixtureManifest();
+  const model = overrides.model ?? base.model;
+  const product = getProduct(model) ?? getProduct(base.model)!;
+  const buildId = overrides.buildId ?? base.buildId, prefix = `builds/${model}/${buildId}`;
+  const frames = overrides.frames ?? base.frames, layers = overrides.layers ?? base.layers;
+  const count = overrides.mapFrameCount ?? frames.length;
+  const descriptors = overrides.descriptors ?? createWholeDomainDescriptors(product);
+  const grids = planWholeDomainGrid(product.grid, 2);
+  const surfaces = (['native', 'fine'] as const).flatMap(kind => {
+    const selected = layers.filter(layer => layerSurface(layer) === kind);
+    if (!selected.length) return [];
+    const id = `${model}-${kind}`, grid = grids[kind], hash = (kind === 'native' ? 'a' : 'b').repeat(64);
+    const blockCount = Math.ceil(grid.width / SAMPLE_BLOCK_SIZE) * Math.ceil(grid.height / SAMPLE_BLOCK_SIZE);
+    const channelCount = selected.length * (kind === 'fine' ? count : frames.length);
+    return [{
+      id, kind, grid, gridHash: hash,
+      coverage: { id, hash, gridHash: hash, maskKey: `coverage/${hash}/manifest.json`, maxZoom: kind === 'fine' ? 9 : 7 },
+      layers: selected,
+      samples: {
+        format: 'cell-major-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer',
+        channelCount, coverageHash: hash, blockCount, storedCells: blockCount,
+        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES,
+          key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: hash }]
+      },
+      ...(kind === 'fine' ? { terrain: { dataId: hash, key: `terrain/prepared/${hash}/manifest.json`, sha256: hash,
+        verticalDatum: 'EGM2008', surface: 'DSM', gridHash: hash, coverageHash: hash, layoutVersion: 1 } } : {})
+    }];
+  });
+  const artifacts = frames.slice(0, count).flatMap(frame => renderedLayers(layers, descriptors.layers).map(layer => ({
+    layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'a'.repeat(64)
+  })));
+  return manifestV5Schema.parse({
+    ...base, ...overrides, version: 5, model, buildId, frames, layers, descriptors,
+    surfaces: overrides.surfaces ?? surfaces, artifacts: overrides.artifacts ?? artifacts,
+    recipe: overrides.recipe ?? createRecipeIdentity(product, 'a'.repeat(64)),
+    method: overrides.method ?? { ...base.method, id: [...new Set(layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
+    source: { ...base.source, ...overrides.source, provenanceKey: `${prefix}/provenance.json` }
+  });
+}
+
+export function fixtureLatest(manifest = fixtureManifestV5(), baseUrl = 'https://api.test') {
+  return latestV5Schema.parse({
     pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt }] },
     manifest,
-    templates: Object.fromEntries(manifest.layers.map(layer => [layer, `${baseUrl}/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
+    templates: Object.fromEntries(renderedLayers(manifest.layers, manifest.descriptors.layers).map(layer => [layer,
+      `${baseUrl}/tiles/${manifest.model}/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
     freshness: computeFreshness(manifest, Date.parse(manifest.createdAt))
   });
 }
 
-export function fixtureBuild(overrides: Partial<Manifest> = {}, baseUrl = 'https://api.test'): PinnedBuild {
-  const { manifest, templates } = fixtureLatest(overrides, baseUrl);
+export function fixtureBuild(overrides: Partial<ManifestV5> = {}, baseUrl = 'https://api.test'): PinnedBuild {
+  const { manifest, templates } = fixtureLatest(fixtureManifestV5(overrides), baseUrl);
   return { manifest: manifest!, templates: templates! as PinnedBuild['templates'], expiresAtMs: Date.parse(manifest!.expiresAt) };
 }
 

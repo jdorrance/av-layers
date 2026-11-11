@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { open, writeFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_MODEL, MODEL_IDS } from '@av/contracts';
+import { DEFAULT_MODEL, MODEL_IDS } from '@av/contracts/models';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { MAX_FORECAST_SHARDS, readBuildPlan } from '../apps/batch/src/parallel.js';
 import { assertBuildBucketLock, r2ShardStorage, sealShardCredentials } from '../apps/batch/src/storage.js';

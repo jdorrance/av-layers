@@ -1,4 +1,4 @@
-import type { LayerId } from '@av/contracts';
+import type { LayerId } from '@av/contracts/layers';
 import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/client';
 import { windFromComponents } from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
@@ -53,6 +53,7 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint) {
     model: build.manifest.model,
     site: { latitude: lat, longitude: lon, timeZone: timeZoneForLongitude(lon) },
     semantics: {
+      capeLabel: layers['cape-jkg']?.label,
       gust: gust ? gust.timeSupport === 'interval-maximum' ? 'hourMax' : 'instant' : null,
       precipitation: precipitation ? precipitation.timeSupport === 'valid-time' ? 'instantRate' : 'windowMeanRate' : null
     }

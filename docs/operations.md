@@ -156,15 +156,13 @@ gh workflow run forecast.yml --ref main -f environment=staging -f model=gfs \
   -f resume-run-id=RUN_ID
 ```
 
-Resume verifies the source workflow run on `main`, checks recipe and coverage
-hashes, verifies remote receipts or uploads retained local payloads, commits the
-pointer within the original build deadline, and verifies live serving. After the
-deadline, resume completes maintenance and serving checks for the committed
-latest build.
+Resume downloads the compact forecast artifact, verifies the source run on
+`main`, checks recipe and coverage hashes, verifies remote receipts, and
+commits the pointer within the original build deadline. After the deadline,
+resume completes maintenance and serving checks for the committed latest build.
 
-Refined builds retain `plan.json` with their full artifacts. Resume checks its
-original grid and terrain references against the manifest and recipe; it does
-not resolve current catalog defaults or prepare terrain again.
+The compact artifact includes the frozen `plan.json`, coverage files and terrain
+descriptor used to verify the publication.
 
 ## Deploy the API and clients
 
@@ -173,9 +171,14 @@ gh workflow run deploy.yml --ref main -f environment=staging
 ```
 
 Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
-`@av/preview` and `@av/windy-plugin`, deploys the API Worker, probes `/healthz`
-and `/v1/catalog`, deploys Cloudflare Pages, and verifies the deployed revision
-marker and Windy plugin CORS headers.
+the clients, deploys the API Worker, and verifies each configured model's latest
+build through the catalog, retained list, point, provenance and tile routes.
+After Cloudflare Pages deploys, the job checks the revision marker and Windy
+plugin CORS headers.
+
+The Worker and browsers serve v5. Publish a fresh v5 forecast for each model
+when cutting over an environment with older builds, then rerun deployment if
+the serving probe stopped it. Existing v5 pins remain readable through expiry.
 
 Clients fetch the selected model's latest manifest from the API on load or model
 switch; reload the page to pick up a newly published build (subject to the API's
@@ -239,7 +242,11 @@ Inspect the run's uploaded receipt artifacts:
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
 checks each model's live API integrity, configured cycle age, remaining horizon
-and expiry. Actions reports publisher and cleanup failures:
+and expiry. The report records response cache state, storage reads, Worker
+timings, and client JSON duration and retries. In Actions, correlate `forecast-stage`,
+`forecast-published`, and `forecast-failure` by model, build, run and attempt.
+
+Use the report and artifacts to choose a recovery action.
 
 - **Upstream lag, shrinking horizon, or expiry:** publish a newer upstream cycle.
 - **Serving integrity:** check Worker deployment and retained R2 build objects,

@@ -31,16 +31,12 @@ base method. Runtime and peak RSS are separate from deterministic comparisons.
 Validation uses multi-cycle paired observations, support and seam checks, and
 resource measurements.
 
-## Preparation
+## Grid and terrain inputs
 
-[config.ts](config.ts) resolves the shared configuration for a product.
+[config.ts](config.ts) selects the model grid and polygon configuration.
 [planRefinements](../../../../packages/contracts/src/refinement.ts) validates the
-polygons and builds grids within the source bounds, with halo cells.
-
-[prepare.ts](prepare.ts) intersects each polygon with base coverage and adds a
-one-cell halo. It prepares DEM elevations from a pinned catalog and stages masks
-and arrays with the build plan. Workers verify and read those files locally.
-[Build budgets](../capacity.ts) include the base and fine grids.
+polygons and plans grids within the source bounds. The evaluator loads the
+original coverage and prepared DEM from the saved control build.
 
 [`@av/forecast/refinement`](../../../../packages/forecast/src/refinement.ts)
 reconstructs terrain columns for MSL and terrain-AGL lift, with same-frame

@@ -24,7 +24,7 @@ combined work across all grids selected by a request.
   descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
   and compact sample layouts. Tile requests load only descriptors and tile masks.
   Each caller joining a cold load occupies a `MaterializedReads` waiter slot.
-  Verified descriptor, sparse, tile, and legacy mask bytes also stay in the Cache
+  Verified descriptor, sparse and tile mask bytes also stay in the Cache
   API under their SHA-256. A new isolate reads those blobs before R2. The
   in-memory cache remains the hot path. Blob reads and background writes use the
   shared allocation pool; write permits last until Cache API settlement.
@@ -47,7 +47,7 @@ combined work across all grids selected by a request.
   Requests exceeding any pool or concurrency limit return uncached HTTP 503.
 
 Per-object byte caps: pointer 128 KiB, manifest 512 KiB, coverage descriptor
-128 KiB, legacy coverage bitset 512 KiB, provenance 4 MiB, PMTiles range 1 MiB,
+128 KiB, coverage tile bitset 512 KiB, provenance 4 MiB, PMTiles range 1 MiB,
 combined sample ranges 256 KiB. Sparse coverage is admitted only when decoded
 masks, indexes, tiles and metadata fit the 24 MiB cache entry bound and the
 shared in-flight pool. Version-5
@@ -63,8 +63,7 @@ Publication compacts scalar hours into serving groups in
 `/samples` can split cell spans into row spans or selected records to fit the
 combined byte budget. `/profile` charges each scalar or profile group's
 contiguous span from its first selected channel to its last for the nearest
-covered native cell. Retained regional builds read selected grids in order
-and load patch coverage lazily.
+covered native cell.
 
 Profile responses cap JSON at 1 MiB. The point loader uses `maxProfileFrames`
 to page the selected fields and native levels under the server's response
@@ -84,14 +83,17 @@ cache; full Worker memory measurements for this configuration remain pending.
 
 ## Runtime and load checks
 
-`pnpm test` includes a local `workerd` coalescing test verifying that 8
+`pnpm test:integration apps/api` includes a local `workerd` coalescing test verifying that 8
 concurrent requests share a single R2 read and complete if the initiating client
 disconnects.
 
 Response headers `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`,
-`X-Av-Coalesced`, `X-Av-Response-Cache`, and `Server-Timing: worker` report
-per-request storage and cache activity. Set `AV_REQUEST_METRICS=true` for
-structured route logs.
+`X-Av-Coalesced` and `X-Av-Response-Cache` report storage and cache activity.
+`Server-Timing` reports total Worker wall time, pinned manifest admission
+(`admit`), and elapsed time spent waiting on R2 reads owned by the request
+(`r2`). Overlapping waits count once. The health probe records these spans.
+Measure decode CPU locally because the deployed Worker clock advances on I/O.
+Set `AV_REQUEST_METRICS=true` for structured route logs.
 
 Sustained load tests run for 5 minutes per cache mode (`AV_RESPONSE_CACHE=on` vs
 `off`) at 10 req/s (90% tiles, 4% samples, 6% metadata, max 20 concurrent,

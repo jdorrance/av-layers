@@ -23,9 +23,6 @@ on:
       retain-full-artifacts:
         type: boolean
         default: false
-      terrain-inputs:
-        type: string
-        default: ''
       terrain-catalog-ref:
         type: string
         default: ''
@@ -48,7 +45,6 @@ jobs:
     timeout-minutes: 160
     environment: ${{ inputs.environment }}
     env: &plan-env
-      TERRAIN_INPUTS: ${{ inputs['terrain-inputs'] || '' }}
       TERRAIN_CATALOG_REF: >-
         ${{ inputs['terrain-catalog-ref'] || vars.TERRAIN_CATALOG_REF ||
         (inputs.environment == 'production' && '{"key":"terrain/catalogs/ea3deca482167f825fd6e05d24c120d56c7c0511d2dd52b13f220e77f011137a.json","sha256":"ea3deca482167f825fd6e05d24c120d56c7c0511d2dd52b13f220e77f011137a","bytes":12531165}') || '' }}

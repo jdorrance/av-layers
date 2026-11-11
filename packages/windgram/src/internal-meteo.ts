@@ -50,6 +50,7 @@ export interface SiteForecast {
     readonly timeZone: string;
   };
   readonly semantics: {
+    readonly capeLabel?: string;
     readonly gust: 'hourMax' | 'instant' | null;
     readonly precipitation: 'instantRate' | 'windowMeanRate' | null;
   };

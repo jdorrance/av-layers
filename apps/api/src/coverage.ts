@@ -1,9 +1,8 @@
-import { MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, assertCoverageBinding, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type CoverageDescriptor, type CoverageMask, type ForecastGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
-import { SAMPLE_SHARD_TARGET_BYTES, prepareSamplePackLayout, prepareShardedSamplePackLayout, type SamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
-import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
+import { SAMPLE_SHARD_TARGET_BYTES, prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
+import { getR2Object, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
-export interface ResolvedCoverage { descriptor: CoverageDescriptor; mask: CoverageMask; layout: SamplePackLayout }
 export interface FrameGroupShard {
   group: number; firstFrame: number; frameCount: number; blockShard: number;
   firstBlock: number; blockCount: number; storedCells: number; bytes: number; key: string; sha256: string;
@@ -18,8 +17,10 @@ export interface ResolvedSparseCoverage {
   groups: readonly FrameGroup[] | null;
 }
 interface SparseTiles { descriptor: SparseCoverageDescriptor; tiles: Uint8Array }
-const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedCoverage | ResolvedSparseCoverage | SparseTiles>>();
-const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedCoverage | ResolvedSparseCoverage | SparseTiles>>();
+const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedSparseCoverage | SparseTiles>>();
+const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedSparseCoverage | SparseTiles>>();
+const scalarBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
+const profileBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
 const tileFlights = new WeakMap<R2Bucket, MaterializedReads<SparseTiles>>();
 const COVERAGE_CACHE_BYTES = 24 * 1024 * 1024;
 const MAX_API_SPARSE_BYTES = MAX_SPARSE_COVERAGE_BYTES;
@@ -88,8 +89,7 @@ async function readVerifiedBlob(bucket: R2Bucket, key: string, digest: string, l
     countCacheHit(ctx);
     return cached;
   }
-  countRead(ctx);
-  const object = await bucket.get(key);
+  const object = await getR2Object(bucket, key, ctx);
   if (!object) throw new CoverageError(`${label} missing`);
   const bytes = await readObjectBytes(object, limit, false, ctx, signal, reserved);
   if (await sha256(bytes) !== digest) throw new CoverageError(`${label} hash mismatch`);
@@ -99,54 +99,6 @@ async function readVerifiedBlob(bucket: R2Bucket, key: string, digest: string, l
   else await stored;
   signal.throwIfAborted();
   return bytes;
-}
-
-/** Only hash-verified materialized bytes cross request boundaries; R2 bodies never do. */
-export async function resolveCoverage(bucket: R2Bucket, manifest: ForecastGrid, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<ResolvedCoverage> {
-  waiterSignal?.throwIfAborted();
-  const { hash, maskKey } = manifest.coverage;
-  const prefix = coveragePrefix(hash);
-  if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
-  let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
-  let resolved = cache.get(hash) as ResolvedCoverage | undefined;
-  if (resolved) countCacheHit(ctx);
-  if (!resolved) {
-    let reads = flights.get(bucket);
-    if (!reads) { reads = new MaterializedReads(2); flights.set(bucket, reads); }
-    resolved = await reads.run(hash, async signal => {
-      const bytes = await readVerifiedBlob(bucket, maskKey, hash, MAX_COVERAGE_DESCRIPTOR_BYTES, ctx, signal, 'Coverage descriptor');
-      let descriptor;
-      try { descriptor = coverageDescriptorSchema.parse(parseBoundedJson(bytes)); }
-      catch { throw new CoverageError('Invalid coverage descriptor'); }
-      const reads = await Promise.allSettled((['output', 'halo', 'tiles'] as const).map(async name => {
-        const file = descriptor.files[name];
-        const data = await readVerifiedBlob(bucket, `${prefix}/${name}.bin`, file.sha256, file.bytes, ctx, signal, `Coverage ${name}`);
-        if (data.length !== file.bytes) throw new CoverageError(`Coverage ${name} hash mismatch`);
-        return data;
-      }));
-      // Keep the owner admitted until every R2 operation settles, even if one
-      // sibling failed. Native R2 get() does not accept an abort signal.
-      const values = reads.map(result => {
-        if (result.status === 'rejected') throw result.reason;
-        return result.value;
-      });
-      const [output, halo, tiles] = values;
-      const mask: CoverageMask = { grid: descriptor.grid, output, halo, tiles, maxZoom: descriptor.maxZoom, bounds: descriptor.bounds };
-      const layout = prepareSamplePackLayout(mask.grid, output, halo);
-      const result = { descriptor, mask, layout };
-      // Bitsets plus conservative accounting for layout indexes and parsed descriptor.
-      const retainedBytes = output.length + halo.length + tiles.length + Math.ceil(mask.grid.width / 16) * Math.ceil(mask.grid.height / 16) * 32 + bytes.length * 4;
-      cache!.set(hash, result, retainedBytes, Date.now() + 3_600_000);
-      return result;
-    }, ctx, waiterSignal) as ResolvedCoverage;
-  }
-  try { assertCoverageBinding(resolved.descriptor, manifest); }
-  catch { throw new CoverageError('Coverage geometry or sample layout disagrees with publication'); }
-  if (resolved.layout.storedCells !== manifest.samples.storedCells) {
-    throw new CoverageError('Coverage geometry or sample layout disagrees with publication');
-  }
-  return resolved;
 }
 
 export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurfaceV5, bounds?: readonly number[], ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<SparseTiles> {
@@ -173,11 +125,26 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
       return value;
     }, ctx, waiterSignal) as SparseTiles;
   }
-  const descriptor = result.descriptor;
+  assertSurfaceCoverage(result.descriptor, surface, bounds);
+  return result;
+}
+
+function assertSurfaceCoverage(descriptor: SparseCoverageDescriptor, surface: ForecastSurfaceV5, bounds?: readonly number[]): void {
   if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash
       || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid)
       || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
-  return result;
+}
+
+function bindLayout(coverage: ResolvedSparseCoverage, surface: ForecastSurfaceV5, kind: 'sample' | 'profile'): void {
+  const bindings = kind === 'sample' ? scalarBindings : profileBindings;
+  let admitted = bindings.get(coverage);
+  if (admitted?.has(surface)) return;
+  const { mask, descriptor } = coverage;
+  const check = kind === 'sample' ? assertSampleLayoutBindingV5 : assertProfileLayoutBindingV5;
+  try { check(surface, { grid: mask.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: mask.coverage.blockIds }); }
+  catch { throw new CoverageError(`Coverage ${kind} layout disagrees with publication`); }
+  if (!admitted) { admitted = new WeakSet(); bindings.set(coverage, admitted); }
+  admitted.add(surface);
 }
 
 function frameGroups(surface: ForecastSurfaceV5): FrameGroup[] | null {
@@ -197,7 +164,7 @@ function frameGroups(surface: ForecastSurfaceV5): FrameGroup[] | null {
     .map(([group, value]) => ({ group, ...value, shards: value.shards.slice().sort((left, right) => left.blockShard - right.blockShard) }));
 }
 
-export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastSurfaceV5, ctx?: WaitContext, bounds?: readonly number[], waiterSignal?: AbortSignal): Promise<{ coverage: ResolvedSparseCoverage; release: () => void }> {
+export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastSurfaceV5, ctx?: WaitContext, bounds?: readonly number[], waiterSignal?: AbortSignal, kind: 'sample' | 'profile' = 'sample'): Promise<{ coverage: ResolvedSparseCoverage; release: () => void }> {
   waiterSignal?.throwIfAborted();
   const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = hash;
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
@@ -266,10 +233,10 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       }
     }, ctx, waiterSignal) as ResolvedSparseCoverage;
   }
-  const { descriptor, mask } = resolved;
-  if (descriptor.id !== surface.coverage.id || descriptor.maxZoom < surface.coverage.maxZoom || descriptor.gridHash !== surface.gridHash || descriptor.gridHash !== surface.coverage.gridHash || !sameGrid(descriptor.grid, surface.grid) || (bounds && JSON.stringify(descriptor.bounds) !== JSON.stringify(bounds))) throw new CoverageError('Coverage geometry disagrees with publication');
-  try { assertSampleLayoutBindingV5(surface, { grid: mask.grid, gridHash: descriptor.gridHash, coverageHash: hash, blockIds: mask.coverage.blockIds }); }
-  catch { throw new CoverageError('Coverage layout disagrees with publication'); }
+  const { mask } = resolved;
+  assertSurfaceCoverage(resolved.descriptor, surface, bounds);
+  bindLayout(resolved, surface, 'sample');
+  if (kind === 'profile') bindLayout(resolved, surface, kind);
   const groups = frameGroups(surface);
   const layouts = resolved.layouts as Map<number, ShardedSamplePackLayout>;
   const channelCounts = groups ? [...new Set(groups.map(group => group.channelCount))] : [surface.samples.channelCount];

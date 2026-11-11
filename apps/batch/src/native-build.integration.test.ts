@@ -1,136 +1,142 @@
-import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
-import { deriveFrame, type NormalizedFrame } from '@av/forecast';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PMTiles } from 'pmtiles';
-import { MODEL_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_VALID, getProduct, gridSchema, manifestSchema, type CoverageMask, type ProductDefinition } from '@av/contracts';
-import { packedCellsFromRange, planPackedSample, planSample, prepareSamplePackLayout, sampleCells, sampleGrid } from '@av/forecast';
-import fixture from '../../../packages/contracts/src/fixtures/lambert.json';
+import { afterEach, expect, it, vi } from 'vitest';
+import { getProduct } from '@av/contracts/models';
+import { gridSchema, manifestV5Schema, type Grid, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { packedCellsFromRange, planSample, planShardedPackedSample, prepareShardedSamplePackLayout, readProfileRecord, sampleCells } from '@av/forecast';
+import type { ModelLevelFrame } from '@av/forecast/inputs';
+import lambert from '../../../packages/contracts/src/fixtures/lambert.json' with { type: 'json' };
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
+import { denseFixtureMask, syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
+import { tilePixels } from '../parallel-fixtures.js';
 import { buildForecast } from './build.js';
-import { readCoverage } from './coverage.js';
+import { buildShard, createBuildPlan, finalizeBuild } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
-import { renderTileRgba } from './render.js';
-import { assertValidatedBuild, localPath, validateBuild } from './validate.js';
-import { decodeWebp } from './webp.js';
+import { assertValidatedBuild, sha256 } from './validate.js';
+import { nativeSparseMask } from './whole-domain/coverage.js';
+import golden from './whole-domain/fixtures/golden-parity.json' with { type: 'json' };
 
-const temporary: string[] = [];
-afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
-const CYCLE = '2026-06-21T15:00:00.000Z';
+const roots: string[] = [];
+async function temporaryRoot() {
+  const root = await mkdtemp(join(tmpdir(), 'av-whole-domain-parity-'));
+  roots.push(root);
+  return root;
+}
+afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
+const CYCLE = '2026-06-21T12:00:00.000Z';
+const wrapping: Grid = { kind: 'regular-latlon', width: 18, height: 3, earthRadiusM: 6371229, lon0: -180, lat0: 72, dx: 20, dy: -1, wrapLongitude: true };
+const regional: Grid = { ...wrapping, width: 3, lon0: 10, dx: 1, wrapLongitude: false };
 
-describe('offline native-grid build integration', () => {
-  it('rejects invalid product shapes before opening a provider or writing coverage', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'av-product-admission-')); temporary.push(root);
-    const grid = gridSchema.parse({ ...INDEXED_GRID, width: 3, height: 3, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false });
-    const base: ProductDefinition = { ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined, grid, maxNativeZoom: 0 };
-    const mask: CoverageMask = { grid, bounds: base.bounds, output: Uint8Array.of(255, 1), halo: new Uint8Array(2), tiles: Uint8Array.of(1), maxZoom: 0 };
-    const open = vi.fn(async () => { throw new Error('Provider must not open'); });
-    const provider: ForecastProvider = { id: 'admission-fixture', provider: 'fixture', maxLevels: 3, open };
-    const invalid = [
-      { layers: [] }, { layers: ['precip-rate', 'precip-rate'] }, { layers: ['unknown'] }, { layers: ['toString'] },
-      { frameHours: [] }, { frameHours: [3, 3] }, { frameHours: [6, 3] }, { frameHours: [1.5] }, { frameHours: [Infinity] }, { frameHours: [NaN] },
-      { intervalHours: 0 }, { intervalHours: -1 }, { intervalHours: Infinity }, { intervalHours: NaN }, { intervalHours: 4 }
-    ];
-    for (const shape of invalid) await expect(buildForecast({ out: root, product: { ...base, ...shape } as ProductDefinition, mask, provider })).rejects.toThrow(/Product requires|Product interval/);
-    expect(open).not.toHaveBeenCalled(); expect(await readdir(root)).toEqual([]);
-  });
+function configured(model: string, grid: Grid, bounds: ProductDefinition['bounds']): ProductDefinition {
+  const source = getProduct(model)!;
+  const layers = source.layers.filter(layer => ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'sfc-temp-c'].includes(layer));
+  return { ...source, modelId: `parity-${model}`, id: `synthetic-parity-${model}`, grid, bounds, maxNativeZoom: 0, terrainSubdivisionFactor: 2,
+    layers, frameHours: [1, 2], intervalHours: 1, intervalChange: undefined, mapEndHour: undefined,
+    capabilities: { ...source.capabilities, daylightFrames: 'all-hours', maxVerticalLevels: 3 }, execution: { ...source.execution, shards: 2, workers: 0 } };
+}
 
-  it.each([
-    { name: 'regular', grid: gridSchema.parse({ ...INDEXED_GRID, width: 3, height: 3, lon0: 10, lat0: 72, dx: 1, dy: -1, wrapLongitude: false }), hours: [1, 2], interval: 1, layers: ['precip-rate'] as const, point: { lat: 71.5, lon: 10.5 }, expectedRain: 1.375 },
-    { name: 'lambert', grid: gridSchema.parse(fixture.grid), hours: [3], interval: 3, layers: ['usable-lift-msl', 'precip-rate'] as const, point: { lat: 45, lon: -90 }, expectedRain: 3 + ((757366.5627555264 + 2000000) / 100000) * 0.25 + ((585230.9026221943 + 1000000) / 100000) * 0.5 }
-  ])('builds, packs, renders and validates the $name fixture with fixed method parameters without admitting a live provider', async scenario => {
-    const registeredModels = [...MODEL_IDS];
-    const root = await mkdtemp(join(tmpdir(), `av-native-${scenario.name}-`)); temporary.push(root);
-    const product: ProductDefinition = {
-      ...INDEXED_PRODUCT, terrainSubdivisionFactor: undefined, modelId: `fixture-${scenario.name}-domain`, id: `fixture-${scenario.name}`, source: { modelFamily: `fixture-base-model`, configurationId: 'offline-analytic', domainId: scenario.name },
-      label: `Offline ${scenario.name} fixture`, attribution: 'Synthetic infrastructure fixture', coverageDescription: 'Synthetic native-grid cells only; no forecast claims',
-      bounds: [-180, -85, 180, 85], grid: scenario.grid, coverageId: `fixture-${scenario.name}`, maxNativeZoom: 0,
-      frameHours: scenario.hours, intervalHours: scenario.interval, layers: scenario.layers
-    };
-    const size = Math.ceil(product.grid.width * product.grid.height / 8);
-    const mask: CoverageMask = { grid: product.grid, bounds: product.bounds, output: new Uint8Array(size), halo: new Uint8Array(size), tiles: Uint8Array.of(1), maxZoom: 0 };
-    for (let index = 0; index < product.grid.width * product.grid.height; index++) mask.output[index >> 3] |= 1 << (index & 7);
-    const plan = planSample(product.grid, scenario.point.lat, scenario.point.lon)!;
-    let closed = false;
-    const frames = new Map<number, NormalizedFrame>();
-    const provider: ForecastProvider = {
-      id: `fixture-${scenario.name}`, provider: 'Synthetic offline fixture', maxLevels: 3,
-      async open({ activeIndices }) {
-        return { cycle: CYCLE, stats: { fixture: true },
-          async acquire(hour) {
-            const frame = normalizedFixtureFrame(product.grid, activeIndices, CYCLE, hour, product.intervalHours);
-            if (scenario.name === 'lambert') {
-              const noLift = activeIndices.indexOf(plan.contributors.at(-1)!.index);
-              frame.sensibleHeatFluxWm2[noLift] = 0;
-              frame.latentHeatFluxWm2[noLift] = 0;
-            }
-            frames.set(hour, frame);
-            return frame;
-          },
-          async close() { closed = true; }
-        };
-      }
-    };
-    const onValidated = vi.fn();
-    // A caller's wider options object cannot override the methods stored in the manifest.
-    const deriveOptions = { daylightOnly: true, sinkRateMps: 1000, minimumRateMmPerHour: 1000, minimumSolarElevationDeg: 90 };
-    const manifestPath = await buildForecast({ out: root, product, mask, provider, onValidated, deriveOptions });
-    const manifest = manifestSchema.parse(JSON.parse(await readFile(manifestPath, 'utf8')));
-    expect(closed).toBe(true);
-    expect(manifest.frames).toHaveLength(scenario.hours.length);
-    expect(manifest.layers).toEqual(scenario.layers);
-    expect(manifest.samples.channelCount).toBe(scenario.hours.length * scenario.layers.length);
-    const loadedMask = await readCoverage(root, manifest.coverage.hash);
-    expect({ ...loadedMask, output: new Uint8Array(loadedMask.output), halo: new Uint8Array(loadedMask.halo), tiles: new Uint8Array(loadedMask.tiles) }).toEqual(mask);
-    const validated = await validateBuild(root, manifest, loadedMask, manifest.coverage.hash, product);
-    expect(validated.manifest.buildId).toBe(manifest.buildId);
-    expect(manifest.model).toBe(product.modelId);
-    expect(manifest.recipe.source.modelFamily).toBe('fixture-base-model');
-    expect(() => assertValidatedBuild(root, manifest, validated)).not.toThrow();
-    expect(onValidated).toHaveBeenCalledExactlyOnceWith(expect.any(Object), manifestPath);
-    expect(() => assertValidatedBuild(root, manifest, onValidated.mock.calls[0][0])).not.toThrow();
-    expect(() => assertValidatedBuild(root, manifest, JSON.parse(JSON.stringify(validated)))).toThrow('validation result');
-    expect(() => assertValidatedBuild(root, manifest, { ...validated })).toThrow('validation result');
-    expect(() => assertValidatedBuild(join(root, 'other'), manifest, validated)).toThrow('validation result');
-    expect(() => assertValidatedBuild(root, { ...manifest, cycle: '2026-06-21T21:00:00.000Z' }, validated)).toThrow('validation result');
-    await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, modelId: 'wrong-public-id' })).rejects.toThrow('Unsupported model');
-    await expect(validateBuild(root, manifest, loadedMask, manifest.coverage.hash, { ...product, source: { ...product.source, modelFamily: 'wrong-family' } })).rejects.toThrow('Unsupported model');
-    const alteredMask = { ...loadedMask, output: new Uint8Array(loadedMask.output) };
-    alteredMask.output[0] ^= 1;
-    await expect(validateBuild(root, manifest, alteredMask, manifest.coverage.hash, product)).rejects.toThrow('Coverage identity mismatch');
-
-    const bytes = await readFile(localPath(root, manifest.samples.key));
-    const layout = prepareSamplePackLayout(product.grid, mask.output, mask.halo);
-    const packed = planPackedSample(layout, plan, manifest.samples.channelCount, Array.from({ length: manifest.samples.channelCount }, (_, i) => i));
-    const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
-    const useStoredMslNoLift = manifest.tool.useStoredMslNoLift === true;
-    let channel = 0;
-    for (const hour of scenario.hours) {
-      const fields = deriveFrame(frames.get(hour)!, mask);
-      for (const layer of scenario.layers) {
-        const spec = manifest.descriptors.layers[layer], field = fields[layer]!;
-        const cells = packedCellsFromRange(packed, body, channel++);
-        const actual = sampleCells(plan, cells, spec, useStoredMslNoLift);
-        expect(actual).toEqual(sampleGrid(product.grid, field, scenario.point.lat, scenario.point.lon, spec, mask, useStoredMslNoLift));
-        if (layer === 'usable-lift-msl') {
-          expect(useStoredMslNoLift).toBe(true);
-          expect(cells.map(cell => cell.flags & STATUS_MASK)).toEqual([STATUS_VALID, STATUS_VALID, STATUS_VALID, STATUS_NO_LIFT]);
-          const bilinearMsl = plan.contributors.reduce((sum, { index, weight }) => sum + field.values[index] * weight, 0);
-          expect(actual).toMatchObject({ status: STATUS_VALID, interpolated: true });
-          expect(actual.value).toBeCloseTo(bilinearMsl, 9);
-        }
-        if (layer === 'precip-rate') expect(actual.value).toBeCloseTo(scenario.expectedRain + hour - scenario.hours[0], 9);
-        const artifact = manifest.artifacts.find(item => item.layer === layer && item.frame === `f${String(hour).padStart(3, '0')}`)!;
-        const archiveBytes = await readFile(localPath(root, artifact.tilesKey));
-        const archive = new PMTiles({ getKey: () => artifact.tilesKey, async getBytes(offset, length) { const selected = archiveBytes.subarray(offset, offset + length); return { data: selected.buffer.slice(selected.byteOffset, selected.byteOffset + selected.byteLength) }; } });
-        const tile = await archive.getZxy(0, 0, 0);
-        expect(tile).toBeDefined();
-        expect((await decodeWebp(new Uint8Array(tile!.data))).data).toEqual(renderTileRgba(field, mask, layer, 0, 0, 0));
-      }
-    }
-    expect(MODEL_IDS).toEqual(registeredModels);
-    expect(getProduct(product.modelId)).toBeUndefined();
-  }, 30000);
+it('rejects invalid product shapes before opening a provider or writing coverage', async () => {
+  const out = await temporaryRoot(), product = configured('gfs', regional, [10, 70, 12, 72]), mask = denseFixtureMask(product, regional);
+  const open = vi.fn<ForecastProvider['open']>(async () => { throw new Error('Provider must not open'); });
+  const provider = { id: 'fixture', provider: 'Synthetic', maxLevels: 3, open };
+  const invalid = [
+    { layers: [] }, { layers: ['precip-rate', 'precip-rate'] }, { layers: ['unknown'] }, { layers: ['toString'] },
+    { frameHours: [] }, { frameHours: [1, 1] }, { frameHours: [2, 1] }, { frameHours: [1.5] }, { frameHours: [Infinity] }, { frameHours: [NaN] },
+    { intervalHours: 0 }, { intervalHours: -1 }, { intervalHours: Infinity }, { intervalHours: NaN }, { intervalHours: 4 }
+  ];
+  for (const shape of invalid) {
+    await expect(buildForecast({ out, product: { ...product, ...shape } as ProductDefinition, mask, provider })).rejects.toThrow(/Product requires|Product interval/);
+  }
+  expect(open).not.toHaveBeenCalled();
+  expect(await readdir(out)).toEqual([]);
 });
+
+async function readManifest(path: string) {
+  return manifestV5Schema.parse(JSON.parse(await readFile(path, 'utf8')));
+}
+
+it.each([
+  { model: 'gfs', grid: wrapping, bounds: [-180, 70, 180, 72], lat: 71.5, lon: 179 },
+  { model: 'icon-eu', grid: regional, bounds: [10, 70, 12, 72], lat: 71.5, lon: 10.5 },
+  { model: 'rrfs', grid: gridSchema.parse(lambert.grid), bounds: [-180, -85, 180, 85], lat: 45, lon: -90 }
+] satisfies { model: keyof typeof golden.models; grid: Grid; bounds: ProductDefinition['bounds']; lat: number; lon: number }[])('preserves $model scalar records, profiles and pixels from the baseline through sharded assembly', async ({ model, grid, bounds, lat, lon }) => {
+  const serial = await temporaryRoot(), parallel = await temporaryRoot();
+  const product = configured(model, grid, bounds), mask = denseFixtureMask(product, grid);
+  const close = vi.fn(async () => {});
+  const provider: ForecastProvider = { id: 'fixture', provider: 'Synthetic', maxLevels: 3, async open({ activeIndices }) {
+    return { cycle: CYCLE, stats: { fixture: true }, close, async acquire(hour) {
+      const input = normalizedFixtureFrame(grid, activeIndices, CYCLE, hour, 1);
+      if (product.capabilities.verticalCoordinate === 'isobaric') return input;
+      const { pressureLevelsHpa, ...frame } = input;
+      const modelLevels: ModelLevelFrame = { ...frame, pressurePa: pressureLevelsHpa.map(p => new Float32Array(activeIndices.length).fill(p * 100)),
+        missing: { ...frame.missing, pressure: pressureLevelsHpa.map(() => new Uint8Array(activeIndices.length)) } };
+      return modelLevels;
+    } };
+  } };
+  const options = { cycle: CYCLE, product, mask, provider };
+  const onValidated = vi.fn();
+  const serialPath = await buildForecast({ ...options, out: serial, wholeDomain: await syntheticWholeDomain(serial, product), onValidated });
+  const plan = await createBuildPlan({ ...options, out: parallel, wholeDomain: await syntheticWholeDomain(parallel, product) });
+  for (const [shard] of plan.groups.entries()) await buildShard({ ...options, out: parallel, plan, shard });
+  const left = await readManifest(serialPath), right = await readManifest(await finalizeBuild({ ...options, out: parallel, plan }));
+  const expected = golden.models[model];
+  const hashes = (shards: readonly { key: string }[]) => Promise.all(shards.map(async shard => sha256(await readFile(join(serial, shard.key)))));
+  expect({
+    frames: left.frames,
+    layers: left.layers,
+    descriptorSha256: sha256(Buffer.from(JSON.stringify(left.descriptors))),
+    storedMsl: left.tool.useStoredMslNoLift,
+    surfaces: await Promise.all(left.surfaces.map(async surface => ({
+      kind: surface.kind,
+      coverage: surface.coverage.hash,
+      samples: await hashes(surface.samples.shards),
+      ...(surface.profiles ? { profiles: await hashes(surface.profiles.groups.flatMap(group => group.shards)) } : {})
+    })))
+  }, `Recorded at ${golden.baseline}`).toEqual({
+    frames: expected.frames, layers: expected.layers, descriptorSha256: expected.descriptorSha256,
+    storedMsl: expected.storedMsl, surfaces: expected.surfaces
+  });
+  expect(close).toHaveBeenCalledTimes(3);
+  expect(right.frames).toEqual(left.frames);
+  expect(right.layers).toEqual(left.layers);
+  expect(right.descriptors).toEqual(left.descriptors);
+  expect(right.method).toEqual(left.method);
+  expect(() => assertValidatedBuild(serial, left, onValidated.mock.calls[0][0])).not.toThrow();
+  expect(() => assertValidatedBuild(serial, left, { ...onValidated.mock.calls[0][0] })).toThrow('validation result');
+  for (const source of left.surfaces) {
+    const target = right.surfaces.find(surface => surface.kind === source.kind)!;
+    expect(source.samples.format).toBe('cell-major-block-shards-v1');
+    expect(target.samples.format).toBe('frame-group-block-shards-v1');
+    expect(source.samples.shards.map(shard => shard.sha256)).toEqual(target.samples.shards.map(shard => shard.sha256));
+  }
+  const pixelHashes = async (root: string, manifest: ManifestV5) => Object.fromEntries(await Promise.all(manifest.artifacts.map(async artifact => [
+    `${artifact.layer}/${artifact.frame}`, sha256(await tilePixels(root, artifact))
+  ])));
+  expect(await pixelHashes(serial, left), `Recorded at ${golden.baseline}`).toEqual(expected.pixels);
+  expect(await pixelHashes(parallel, right)).toEqual(expected.pixels);
+
+  const indices = nativeSparseMask(mask).coverage.blockIds, point = planSample(grid, lat, lon)!;
+  const native = (manifest: ManifestV5) => manifest.surfaces.find(surface => surface.kind === 'native')!;
+  for (let frame = 0; frame < left.frames.length; frame++) {
+    const readProfile = async (root: string, manifest: ManifestV5) => {
+      const profiles = native(manifest).profiles!;
+      const group = profiles.groups.find(group => frame >= group.firstFrame && frame < group.firstFrame + group.frameCount)!;
+      const layout = prepareShardedSamplePackLayout(grid, indices, group.frameCount, undefined, profiles.recordBytes);
+      const block = layout.blockFor(point.contributors[0].index)!;
+      const packed = planShardedPackedSample(layout, { ...point, contributors: [point.contributors[0]] }, [frame - group.firstFrame]);
+      const bytes = await readFile(join(root, group.shards[block.shard].key));
+      return readProfileRecord(bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length));
+    };
+    expect(await readProfile(parallel, right)).toEqual(await readProfile(serial, left));
+  }
+  if (product.layers.includes('precip-rate')) {
+    const surface = native(left), channel = surface.layers.indexOf('precip-rate');
+    const layout = prepareShardedSamplePackLayout(grid, indices, surface.samples.channelCount);
+    const packed = planShardedPackedSample(layout, point, [channel]);
+    const bytes = await readFile(join(serial, surface.samples.shards[packed.shard].key));
+    const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
+    const sample = sampleCells(point, packedCellsFromRange(packed, body, channel), left.descriptors.layers['precip-rate'], false);
+    expect(sample.value).toBeCloseTo(point.contributors.reduce((sum, cell) => sum + cell.weight * (1 + (cell.index % grid.width) * 0.25 + Math.floor(cell.index / grid.width) * 0.5), 0), 8);
+  }
+}, 60_000);

@@ -1,4 +1,5 @@
-import { DEFAULT_MODEL, renderedFrames, type ModelId } from '@av/contracts';
+import { DEFAULT_MODEL } from '@av/contracts/model-options';
+import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { ApiClient, createRasterTileProtocol, formatBuildFreshness, normalizePoint, type GeoPoint, type RasterTileProtocol } from '@av/client';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';

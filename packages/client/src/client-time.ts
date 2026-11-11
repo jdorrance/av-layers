@@ -1,4 +1,5 @@
-import { normalizeLon, renderedFrames, type Manifest } from '@av/contracts';
+import { normalizeLon } from '@av/contracts/geometry';
+import { renderedFrames, type ManifestV5 } from '@av/contracts/publication';
 
 export interface FrameLike {
   id: string;
@@ -128,7 +129,7 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatBuildFreshness(
-  manifest: Pick<Manifest, 'buildId' | 'createdAt'>,
+  manifest: Pick<ManifestV5, 'buildId' | 'createdAt'>,
   expiresAtMs: number,
   now = Date.now()
 ): string {

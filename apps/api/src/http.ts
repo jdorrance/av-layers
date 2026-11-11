@@ -150,16 +150,24 @@ export function validIp(ip: string): boolean {
   }
 }
 
+export function canceledRequest(request: Request, error: unknown): Response | undefined {
+  if (!request.signal.aborted || error !== request.signal.reason) return;
+  return new Response(null, { status: 499, headers: { 'cache-control': 'no-store' } });
+}
+
 export function handleError(error: Error, c: Context): Response {
-  if (!(error instanceof Problem) && !(error instanceof CoverageError) && !(error instanceof ResourceLimitError)) {
-    console.error('Unhandled API error', {
-      method: c.req.method,
-      path: c.req.path,
-      params: c.req.param(),
-      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : String(error)
-    });
+  const canceled = canceledRequest(c.req.raw, error);
+  if (canceled) return canceled;
+  let problem: Problem;
+  if (error instanceof Problem) problem = error;
+  else if (error instanceof CoverageError) problem = new Problem(503, 'coverage-unavailable', error.message);
+  else if (error instanceof ResourceLimitError) problem = new Problem(503, 'resource-limit', 'Serving resource budget exceeded');
+  else {
+    console.error('Worker request failed', error);
+    problem = new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
   }
-  const problem = error instanceof Problem ? error : error instanceof CoverageError ? new Problem(503, 'coverage-unavailable', error.message) : error instanceof ResourceLimitError ? new Problem(503, 'resource-limit', 'Serving resource budget exceeded') : new Problem(503, 'publication-unavailable', 'Publication or archive unavailable');
+  const metrics = (c.executionCtx as WaitContext).metrics;
+  if (metrics) metrics.problemCode = problem.code;
   const result = response(JSON.stringify({ type: `urn:windy-av:${problem.code}`, title: problem.code, status: problem.status, detail: problem.message }), 'application/problem+json; charset=utf-8');
   const out = new Response(result.body, { status: problem.status, headers: result.headers });
   transferBodyLease(result.body, out.body);

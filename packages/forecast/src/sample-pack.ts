@@ -1,4 +1,5 @@
-import { CELL_BYTES, MAX_PACK_CHANNELS, SAMPLE_BLOCK_SIZE, type Grid } from '@av/contracts';
+import { CELL_BYTES, MAX_PACK_CHANNELS, SAMPLE_BLOCK_SIZE } from '@av/contracts/format';
+import type { Grid } from '@av/contracts/geometry';
 import type { Cell, SamplePlan } from './sampler.js';
 
 export interface SamplePackBlock {

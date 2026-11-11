@@ -1,6 +1,6 @@
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-import { PRODUCTS } from '@av/contracts';
+import { PRODUCTS } from '@av/contracts/models';
 
 interface WorkflowModel {
   modelId: string;

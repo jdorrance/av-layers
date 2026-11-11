@@ -61,7 +61,11 @@ const surfaceChannels = {
 export function prepareNativeFields(frame: NormalizedFrame, mask: CoverageMask, layers: readonly LayerId[], coverage?: SparseCoverage) {
   const size = coverage ? coverage.offsets[coverage.offsets.length - 1]! : mask.grid.width * mask.grid.height;
   const fields: Partial<Record<LayerId, GridField>> = {};
-  for (const layer of layers) fields[layer] = { values: new Float32Array(size).fill(NaN), flags: new Uint8Array(size).fill(STATUS_OUTSIDE), ...(coverage ? { coverage } : {}) };
+  const channels = layers.map(layer => {
+    const field = { values: new Float32Array(size).fill(NaN), flags: new Uint8Array(size).fill(STATUS_OUTSIDE), ...(coverage ? { coverage } : {}) };
+    fields[layer] = field;
+    return { layer, field, source: surfaceChannels[layer as keyof typeof surfaceChannels], supportsLiftFlags: isNativeThermalLayer(layer) };
+  });
   const wantsColumn = layers.some(layer => ['thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'].includes(layer));
   const readColumn = columnReader(frame, wantsColumn);
   const values: Partial<Record<LayerId, number | null>> = {};
@@ -77,13 +81,11 @@ export function prepareNativeFields(frame: NormalizedFrame, mask: CoverageMask, 
     values['thermal-velocity'] = diagnostic?.thermalVelocityMps ?? null; values['thermal-top-msl'] = diagnostic?.thermalTopM ?? null;
     values['surface-lcl-msl'] = diagnostic?.surfaceLclM ?? null;
     values['bl-mean-wind-u'] = diagnostic?.blMeanWindU ?? null; values['bl-mean-wind-v'] = diagnostic?.blMeanWindV ?? null;
-    for (const layer of layers) {
-      const source = surfaceChannels[layer as keyof typeof surfaceChannels];
+    for (const { layer, field, source, supportsLiftFlags } of channels) {
       let value = source ? at(frame.auxSurface?.[source], i) : values[layer] ?? null;
       if (layer === 'mslp-hpa' && value !== null) value /= 100;
-      const field = fields[layer]!;
       field.values[slot] = value ?? NaN;
-      field.flags[slot] = value === null || !Number.isFinite(value) ? STATUS_UNAVAILABLE : STATUS_VALID | (isNativeThermalLayer(layer) ? support : 0);
+      field.flags[slot] = value === null || !Number.isFinite(value) ? STATUS_UNAVAILABLE : STATUS_VALID | (supportsLiftFlags ? support : 0);
     }
     return support;
   }

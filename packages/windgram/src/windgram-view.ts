@@ -1,7 +1,6 @@
 // Assemble time, altitude and profile geometry for a Windgram day.
 
 import { windFromComponents } from '@av/soaring';
-import { getProduct } from '@av/contracts';
 import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast } from './internal-meteo.ts';
 import type { WindgramLayout, WindgramHour as PublicHour, WindgramOptions } from './scene-types.ts';
 import {
@@ -116,12 +115,6 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
 
   const sampling = hours.map(hourSampling);
   const labelTime = new Intl.DateTimeFormat('en-US', { timeZone: options.timeZone, hour: 'numeric', minute: '2-digit', hour12: true });
-  const surface = getProduct(profile.model)?.upstream.auxSurface as
-    { capeJkg?: { field?: string; level?: string }; gust10mMps?: { field?: string; level?: string } } | undefined;
-  const cape = surface?.capeJkg;
-  const gust = surface?.gust10mMps;
-  const gustSource = gust?.field === 'VMAX_10M' ? '10 m ' : gust?.level === 'surface' ? 'Surface ' : '';
-
   const view: WindgramView = {
     unitSystem: system,
     presentation,
@@ -135,8 +128,8 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     columnWidth,
     floorM,
     topM,
-    gustLabel: `${gustSource}${gustNoun(profile.semantics.gust)}`,
-    capeLabel: cape?.field === 'CAPE_ML' ? 'Mixed-layer CAPE' : cape?.level === 'surface' ? 'Surface CAPE' : 'CAPE',
+    gustLabel: gustNoun(profile.semantics.gust),
+    capeLabel: profile.semantics.capeLabel ?? 'CAPE',
     precipitationSemantics: profile.semantics.precipitation,
     sourceHours: hours,
     timeZone: options.timeZone,

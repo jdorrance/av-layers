@@ -1,4 +1,4 @@
-import { countRead, MaterializedReads, type WaitContext, readBoundedStream, readObjectBytes, ResourceLimitError } from './resources';
+import { getR2Object, MaterializedReads, type WaitContext, readBoundedStream, readObjectBytes, ResourceLimitError } from './resources';
 import { Compression, EtagMismatch, PMTiles, ResolvedValueCache, TileType, type RangeResponse, type Source } from 'pmtiles';
 
 const MAX_ARCHIVE_RANGE_BYTES = 1024 * 1024;
@@ -52,8 +52,7 @@ export class R2Source implements Source {
     if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY, undefined, TILE_READ_WAITERS); archiveRangeReads.set(this.bucket, reads); }
     const waiterSignal = this.signal && signal ? AbortSignal.any([this.signal, signal]) : this.signal ?? signal;
     return reads.run(`${this.key}:${offset}:${length}:${etag ?? ''}`, async operationSignal => {
-      countRead(this.ctx);
-      const object = await this.bucket.get(this.key, { range: { offset, length }, ...(etag ? { onlyIf: { etagMatches: etag } } : {}) });
+      const object = await getR2Object(this.bucket, this.key, this.ctx, { range: { offset, length }, ...(etag ? { onlyIf: { etagMatches: etag } } : {}) });
       if (!object) throw new Error('Archive not found');
       if (!('body' in object)) throw new EtagMismatch();
       return { data: (await readObjectBytes(object, length, true, this.ctx, operationSignal)).buffer as ArrayBuffer, etag: object.etag, cacheControl: object.httpMetadata?.cacheControl, expires: object.httpMetadata?.cacheExpiry?.toISOString() };
@@ -62,10 +61,10 @@ export class R2Source implements Source {
 }
 
 const tileReads = new WeakMap<R2Bucket, MaterializedReads<ArrayBuffer>>();
-export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext): Promise<ArrayBuffer> {
+export async function readTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<ArrayBuffer> {
   let reads = tileReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(TILE_READ_CONCURRENCY, undefined, TILE_READ_WAITERS); tileReads.set(bucket, reads); }
-  return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx);
+  return reads.run(`${key}:${z}:${x}:${y}`, signal => loadTile(bucket, key, z, x, y, ctx, signal), ctx, waiterSignal);
 }
 async function loadTile(bucket: R2Bucket, key: string, z: number, x: number, y: number, ctx?: WaitContext, signal?: AbortSignal): Promise<ArrayBuffer> {
   const archive = new PMTiles(new R2Source(bucket, key, ctx, signal), cache, decompress);

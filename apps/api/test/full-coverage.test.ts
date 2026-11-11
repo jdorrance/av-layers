@@ -1,7 +1,8 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures';
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { MAX_SAMPLE_RANGE_BYTES, PRODUCTS, encodeSparseCoverage, gridToGeographic, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
+import { PRODUCTS } from '@av/contracts/models';
+import { MAX_SAMPLE_RANGE_BYTES, encodeSparseCoverage, gridToGeographic, type ForecastSurfaceV5, type ProductDefinition } from '@av/contracts';
 import { planSample, planShardedPackedSample, prepareShardedSamplePackLayout } from '@av/forecast';
 import { describeSparseCoverage, loadCoverage } from '../../batch/src/coverage';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from '../../batch/src/whole-domain/coverage';

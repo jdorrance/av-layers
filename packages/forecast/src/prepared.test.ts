@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { LAYERS, LAYER_IDS, setBit, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { planSample, prepareGridSampling, sampleCells, sampleGrid, samplingCovered, type GridField, type Sample } from './sampler.js';
 
+const representativeLayers = new Map<string, LayerId>();
+for (const layer of LAYER_IDS) {
+  const spec = LAYERS[layer];
+  const policy = JSON.stringify([spec.supportsNoLift, spec.supportsLiftFlags, spec.noLiftSampleValue, spec.zeroOnNoLiftInterpolation]);
+  if (!representativeLayers.has(policy)) representativeLayers.set(policy, layer);
+}
+const samplingPolicies = [...representativeLayers.values()].flatMap(layer =>
+  (LAYERS[layer].supportsNoLift && !LAYERS[layer].zeroOnNoLiftInterpolation ? [false, true] : [true])
+    .map(storedMsl => ({ layer, storedMsl })));
+
 function outcome<T>(fn: () => T): T | { error: string } {
   try { return fn(); } catch (error) { return { error: (error as Error).message }; }
 }
@@ -22,11 +32,11 @@ describe('prepared grid sampling parity', () => {
     }
     expect([...prepared.contributors]).toEqual([...expected]);
     const field = { values: Float32Array.from({ length: 16 }, (_, index) => index * 137.25), flags: new Uint8Array(16) };
-    for (const layer of LAYER_IDS) {
-      const sample = prepared.bind(field, layer, true), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+    for (const { layer, storedMsl } of samplingPolicies) {
+      const sample = prepared.bind(field, layer, storedMsl), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
       for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
         sample(x, y, out);
-        expect({ ...out }).toEqual(sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, true));
+        expect({ ...out }).toEqual(sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, storedMsl));
       }
     }
   });
@@ -42,10 +52,10 @@ describe('prepared grid sampling parity', () => {
         return seed & 0xfeffffff; // exclude the all-ones exponent (NaN/infinity)
       });
       const field = { values: new Float32Array(bits.buffer), flags: Uint8Array.from(n % 2 ? [4, 8, 16, 28] : [0, 0, 0, 0]) };
-      for (const layer of LAYER_IDS) {
-        const sample = prepared.bind(field, layer, true), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
+      for (const { layer, storedMsl } of samplingPolicies) {
+        const sample = prepared.bind(field, layer, storedMsl), out: Sample = { value: null, status: 3, support: 0, interpolated: false };
         for (let y = 0; y < latitudes.length; y++) for (let x = 0; x < longitudes.length; x++) {
-          expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, true)));
+          expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, latitudes[y], longitudes[x], layer, mask, storedMsl)));
         }
       }
     }
@@ -82,11 +92,11 @@ describe('prepared grid sampling parity', () => {
       const lons = Float64Array.from([-180, 180, -180 + 1e-11, -180 - 1e-9, ...Array.from({ length: 10 }, (_, i) => grid.lon0 + (i % 3 === 0 ? Math.floor(random() * width) : random() * (width + 2) - 1) * grid.dx)]);
       const prepared = prepareGridSampling(mask, lats, lons);
       expect(prepared.byteLength).toBe((lats.length + lons.length) * 24 + Math.ceil(lats.length * lons.length / 8) + prepared.contributors.byteLength);
-      for (const layer of LAYER_IDS) {
-        const sample = prepared.bind(field, layer, true), out: Sample = { value: 99, status: 0, support: 255, interpolated: true };
+      for (const { layer, storedMsl } of samplingPolicies) {
+        const sample = prepared.bind(field, layer, storedMsl), out: Sample = { value: 99, status: 0, support: 255, interpolated: true };
         for (let i = 0; i < lats.length * lons.length; i++) {
           const x = i % lons.length, y = (i - x) / lons.length;
-          const expected = outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, true));
+          const expected = outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, storedMsl));
           expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(expected);
         }
       }
@@ -103,11 +113,11 @@ describe('prepared grid sampling parity', () => {
       for (let combination = 0; combination < 256; combination++) {
         const field = { values: Float32Array.from({ length: grid.width * grid.height }, (_, i) => i % 2 ? -0 : 300), flags: Uint8Array.from({ length: grid.width * grid.height }, (_, i) => (combination >> (i * 2)) & 3) };
         const prepared = prepareGridSampling(mask, lats, lons);
-        for (const layer of LAYER_IDS) {
-          const sample = prepared.bind(field, layer, true), out = { value: null, status: 3, support: 0, interpolated: false } as Sample;
+        for (const { layer, storedMsl } of samplingPolicies) {
+          const sample = prepared.bind(field, layer, storedMsl), out = { value: null, status: 3, support: 0, interpolated: false } as Sample;
           for (let i = 0; i < lats.length * lons.length; i++) {
             const x = i % lons.length, y = (i - x) / lons.length;
-            expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, true)));
+            expect(outcome(() => { sample(x, y, out); return { ...out }; })).toEqual(outcome(() => sampleGrid(grid, field, lats[y], lons[x], layer, mask, storedMsl)));
           }
         }
       }

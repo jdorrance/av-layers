@@ -1,13 +1,14 @@
-import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PRODUCT, PRODUCTS, manifestSchema, type ProductDefinition, type PublishedManifest } from '@av/contracts';
+import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
+import { type ProductDefinition, type ManifestV5 } from '@av/contracts';
+import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
 import { assertUsefulHorizon } from '../apps/batch/src/publication.js';
 import { monitor } from './monitor-health.js';
 import * as serving from './smoke-api.js';
 
 const HOUR = 3600000;
 function fixture(product: ProductDefinition = DEFAULT_PRODUCT, cycle = '2026-12-21T00:00:00Z', hours = product.frameHours) {
-  const manifest = manifestSchema.parse(JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')));
+  const manifest = fixtureManifestV5({ layers: ['precip-rate'] });
   manifest.model = product.modelId; manifest.cycle = cycle;
   manifest.createdAt = new Date(Date.parse(cycle) + 1000).toISOString();
   manifest.expiresAt = new Date(Date.parse(cycle) + 7 * 86400000).toISOString();
@@ -18,7 +19,7 @@ function fixture(product: ProductDefinition = DEFAULT_PRODUCT, cycle = '2026-12-
   }));
   return manifest;
 }
-function observe(manifest: PublishedManifest, now: number) {
+function observe(manifest: ManifestV5, now: number) {
   vi.spyOn(Date, 'now').mockReturnValue(now);
   vi.spyOn(serving, 'probeApi').mockImplementation(async options => { options.observeManifest?.(manifest); return manifest; });
   return monitor('https://api.example', manifest.model);
@@ -28,11 +29,31 @@ afterEach(() => vi.restoreAllMocks());
 it('keeps identity and expiry findings when a later serving probe fails', async () => {
   const manifest = fixture(); manifest.expiresAt = new Date(0).toISOString();
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.cycle));
-  vi.spyOn(serving, 'probeApi').mockImplementation(async options => { options.observeManifest?.(manifest); throw new Error('sample unavailable'); });
+  vi.spyOn(serving, 'probeApi').mockImplementation(async options => {
+    options.observeManifest?.(manifest);
+    options.observeClient?.({ route: 'sample', attempts: 2, elapsedMs: 250, outcome: 'failure' });
+    throw new Error('sample unavailable');
+  });
   const result = await monitor('https://api.example');
   expect(result).toMatchObject({ healthy: false, model: DEFAULT_PRODUCT.modelId, buildId: manifest.buildId, sourceRevision: manifest.recipe.sourceRevision });
   expect(result.findings.join(';')).toContain('expired-publication');
   expect(result.findings.join(';')).toContain('sample unavailable');
+  expect(result.clientRequests.sample).toEqual({ count: 1, retries: 1, failed: 1, maxElapsedMs: 250 });
+});
+
+it('reports the first successful response when a probe retries', async () => {
+  const manifest = fixture();
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.cycle));
+  vi.spyOn(serving, 'probeApi').mockImplementation(async options => {
+    options.observeManifest?.(manifest);
+    options.observeProbe?.('latest', { status: 503, elapsedMs: 20 });
+    options.observeProbe?.('latest', { status: 200, elapsedMs: 8, responseCache: 'hit' });
+    options.observeProbe?.('latest', { status: 200, elapsedMs: 11 });
+    return manifest;
+  });
+  const result = await monitor('https://api.example');
+  expect(result.healthy).toBe(true);
+  expect(result.probes.latest).toMatchObject({ status: 200, elapsedMs: 8, responseCache: 'hit' });
 });
 
 it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId', async product => {
@@ -71,6 +92,6 @@ it('reports an unknown model before probing', async () => {
 
 it('finds an exhausted map prefix even when later native samples remain', async () => {
   const retained = fixture(DEFAULT_PRODUCT, '2026-11-06T00:00:00Z', [1, 24, 72, 384]);
-  const manifest = { ...retained, version: 5, mapFrameCount: 2 } as unknown as PublishedManifest;
+  const manifest = { ...retained, mapFrameCount: 2 };
   expect((await observe(manifest, Date.parse(manifest.cycle) + 25 * HOUR)).findings.join(';')).toContain('exhausted-horizon');
 });

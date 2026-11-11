@@ -1,3 +1,4 @@
+import { browserBundleBudget } from '../../scripts/browser-bundle.js';
 import { defineConfig } from 'vite';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -8,7 +9,7 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  plugins: [{
+  plugins: [browserBundleBudget(355_000, 31_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {

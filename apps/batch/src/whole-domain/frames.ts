@@ -1,16 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { assertWholeDomainDonorsActive, coverageAtZoom, layerSurface, renderedLayers, mapFrameCount, sourceIntervalHours, type ProvenanceFrameReference, type LayerId, type Manifest } from '@av/contracts';
-import { deriveFrame, prepareNativeProfiles, profileRecordBytes, prepareShardedSamplePackLayout, writeProfileRecord, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
+import { assertWholeDomainDonorsActive, coverageAtZoom, layerSurface, matchesFrameIntervals, renderedLayers, mapFrameCount, sourceIntervalHours, type ProvenanceFrameReference, type LayerId, type Manifest } from '@av/contracts';
+import { deriveFrame, prepareNativeProfiles, writeProfileRecord, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
 import { createNormalizedFrameTarget, type ForecastProvider } from '../provider.js';
 import type { NormalizedFrame } from '@av/forecast/inputs';
-import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES } from '../capacity.js';
+import { BUILD_BUDGETS } from '../capacity.js';
 import { failureReason } from '../failure.js';
 import { createRenderer } from '../render.js';
 import { summarizeFields } from '../summary.js';
 import { fileSha256, localPath } from '../validate.js';
-import { forecastFrame, matchesFrameIntervals, type BuildStamp, type ForecastInputs, type FrameBuildOptions } from '../frame-build.js';
-import { admitWholeDomain, wholeDomainSampleGroupLayouts, type WholeDomainCapacity } from './capacity.js';
+import { forecastFrame, type BuildStamp, type ForecastInputs, type FrameBuildOptions } from '../frame-build.js';
+import { planWholeDomainCapacity, wholeDomainCapacityInput, type WholeDomainCapacity } from './capacity.js';
 import { writeFrameProvenance } from '../frame-provenance.js';
 import { createShardedSamplePackWriter } from '../sample-pack-v5.js';
 import type { ShardedSamplePackShard } from '../sample-pack-v5.js';
@@ -76,18 +76,19 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   let packing: Promise<void> | undefined;
   let failed = false;
   let completedFrames = 0, frameHour: number | null = null, phase = 'open-provider';
+  let backgroundFailure: { phase: 'acquire' | 'pack'; hour: number } | undefined;
+  const abortFrame = (error: unknown, phase: 'acquire' | 'pack', hour: number): never => {
+    if (!signal.aborted) {
+      backgroundFailure = { phase, hour };
+      localController.abort(error);
+    }
+    throw error;
+  };
   try {
     const nativeLayers = prepared.nativeSurfaceLayers.length, fineLayers = prepared.fineSurfaceLayers.length;
-    const nativeBlocks = prepared.native.mask.coverage.blockIds;
-    const capacityInput = { product, plan: prepared.plan, nativeBlocks, nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask,
-      maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
-      auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
-      fine: prepared.fine.mask, nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
-      frames: options.hours?.length ?? product.frameHours.length, mapFrames: mapFrameCount({ ...product, frameHours: options.hours ?? product.frameHours }), nativeLayers, fineLayers, columns: prepared.columns,
-      terrainBytes: prepared.terrain.arrayBytes };
-    const admission = admitWholeDomain(capacityInput);
-    if (admission.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${admission.violations.join('; ')}`);
-    const profilesEnabled = admission.profileBytes > 0;
+    const capacityInput = wholeDomainCapacityInput(product, provider, prepared, [options.hours ?? product.frameHours]);
+    const admission = planWholeDomainCapacity(capacityInput);
+    if (admission.capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${admission.capacity.violations.join('; ')}`);
     phase = 'load-terrain';
     const terrainData = capacityInput.mapFrames ? await loadWholeDomainTerrain({ ref: prepared.terrain, out: root, grid: prepared.plan.fine,
       coverage: prepared.fine.mask.coverage, coverageDescriptor: prepared.fine.bytes, signal }) : undefined;
@@ -98,16 +99,16 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const outputIndices = indicesOf(mask);
     const hours = options.hours ?? resolveProductFrameHours(product, mask, cycle, { ...deriveOptions, outputIndices });
     const mapFrames = mapFrameCount({ ...product, frameHours: hours });
-    const capacity = admitWholeDomain({ ...capacityInput, frames: hours.length, mapFrames });
+    const { capacity, layouts, profileLayout } = hours.length === capacityInput.frames && mapFrames === capacityInput.mapFrames
+      ? admission : planWholeDomainCapacity(wholeDomainCapacityInput(product, provider, prepared, [hours]));
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
-    const layouts = wholeDomainSampleGroupLayouts({ ...capacityInput, frames: hours.length, mapFrames });
     const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
       createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
         surfaceId: options.surfaceTarget?.(surface) ?? surface, ...(options.sampleGroup === undefined ? {} : { group: options.sampleGroup }) }, { signal });
     nativeWriter = layouts.native ? writer('native', layouts.native, prepared.native.mask.coverage) : undefined;
     fineWriter = layouts.fine ? writer('fine', layouts.fine, prepared.fine.mask.coverage) : undefined;
-    const profileBytes = profileRecordBytes(provider.maxLevels);
-    const profileLayout = profilesEnabled ? prepareShardedSamplePackLayout(prepared.plan.native, nativeBlocks, hours.length, MAX_V5_SHARD_BYTES, profileBytes) : undefined;
+    const profileBytes = profileLayout?.recordBytes ?? 0;
+    const profilesEnabled = profileLayout !== null;
     const outsideProfile = profilesEnabled ? new Uint8Array(profileBytes) : undefined;
     if (profileLayout) {
       writeProfileRecord(outsideProfile!, { modelTerrainM: null, status: 'outside-domain', levels: [] });
@@ -158,7 +159,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       frames.push(descriptor);
       receipts.push(await writeFrameProvenance(root, { model: product.modelId, buildId, cycle }, descriptor, { hour, intervals: frame.intervals, receipt: frame.receipt }));
       if (capacity.prefetchFrameCount && ordinal + 1 < hours.length) {
-        prefetch = acquire(hours[ordinal + 1]!, ordinal + 1).catch(error => { localController.abort(error); throw error; });
+        const nextHour = hours[ordinal + 1]!;
+        prefetch = acquire(nextHour, ordinal + 1).catch(error => abortFrame(error, 'acquire', nextHour));
         void prefetch.catch(() => {});
       }
       const tDerive = Date.now(); phase = 'derive';
@@ -197,7 +199,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
         }
         packWriteWallMs = Date.now() - tPack;
         packMs += packWriteWallMs;
-      })().catch(error => { localController.abort(error); throw error; });
+      })().catch(error => abortFrame(error, 'pack', hour));
       void packing.catch(() => {});
       const tRender = Date.now(); phase = 'render';
       const nativeTargets: { path: string; field: GridField; layer: LayerId }[] = [];
@@ -255,7 +257,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     localController.abort(error);
     failed = true;
     await journal('failure', { version: 1, state: 'failed', buildId, provider: provider.id, cycle: acquisition?.cycle ?? options.cycle,
-      phase, failedFrameHour: frameHour, completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }).catch(() => {});
+      phase: backgroundFailure?.phase ?? phase, failedFrameHour: backgroundFailure?.hour ?? frameHour,
+      completedFrames, elapsedMs: Date.now() - started, cancelled: options.signal?.aborted ?? false, error: failureReason(error) }).catch(() => {});
     throw error;
   } finally {
     await Promise.allSettled([prefetch, packing]);

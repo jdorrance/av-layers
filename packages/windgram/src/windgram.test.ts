@@ -3,9 +3,8 @@ import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
 import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
-import { createPointForecast } from './from-av-profile.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
-import { buildWindgramView, readWindgram } from './scene.ts';
+import { buildWindgramView, createPointForecast, readWindgram } from './model.ts';
 import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
@@ -219,25 +218,28 @@ describe('Windgram data', () => {
 
   it('reads gust and precipitation classes from the published descriptors', () => {
     const { build, profile, forecast } = fixture([15]);
-    expect(forecast(profile.frames).semantics).toEqual({ gust: 'instant', precipitation: 'windowMeanRate' });
+    expect(forecast(profile.frames).semantics).toEqual({ capeLabel: 'CAPE', gust: 'instant', precipitation: 'windowMeanRate' });
     if (build.manifest.version !== 5) throw new Error('Expected v5');
     build.manifest.descriptors.layers['wind-gust-10m']!.timeSupport = 'interval-maximum';
     expect(forecast(profile.frames).semantics.gust).toBe('hourMax');
     expect(renderWindgramKey('imperial')).toContain('Map usable lift');
   });
 
-  it.each([
-    ['gfs', 'instant', 'Surface CAPE', 'Surface gust sample'],
-    ['icon-eu', 'hourMax', 'Mixed-layer CAPE', '10 m hour-max gust'],
-    ['rrfs', 'instant', 'Surface CAPE', 'Surface gust sample'],
-  ] as const)('labels the %s surface inputs in the chart readout', (model, gust, capeLabel, gustLabel) => {
-    const { profile, forecast } = fixture([15]);
-    const site = forecast(profile.frames);
-    const scene = buildWindgramView({ ...site, model, semantics: { ...site.semantics, gust } }, { unitSystem: 'metric', timeZone: site.site.timeZone });
-    const reading = { ...readWindgram(scene, 0, 1800), capeJkg: 500, gustKt: 10 };
-    const text = formatWindgramReading(sceneData(scene), reading, 'surface').join(' · ');
-    expect(text).toContain(`${capeLabel} 500 J/kg`);
-    expect(text).toContain(gustLabel);
+  it('uses pinned CAPE and gust semantics for an older build of the same model', () => {
+    const { build, profile } = fixture([15]);
+    const pointFrames = new Map(profile.frames.map(frame => [frame.id, frame]));
+    const read = () => {
+      const site = createPointForecast(build, point)(build.manifest.frames, pointFrames);
+      const scene = buildWindgramView(site, { unitSystem: 'metric', timeZone: site.site.timeZone });
+      const reading = { ...readWindgram(scene, 0, 1800), capeJkg: 500, gustKt: 10 };
+      return formatWindgramReading(sceneData(scene), reading, 'surface').join(' · ');
+    };
+    expect(read()).toContain('CAPE 500 J/kg');
+    expect(read()).toContain('gust sample');
+    build.manifest.descriptors.layers['cape-jkg'].label = 'Retained CAPE';
+    build.manifest.descriptors.layers['wind-gust-10m'].timeSupport = 'interval-maximum';
+    expect(read()).toContain('Retained CAPE 500 J/kg');
+    expect(read()).toContain('hour-max gust');
   });
 
   it('converts only changed hours as sample and profile pages arrive', () => {

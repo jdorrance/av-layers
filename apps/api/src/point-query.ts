@@ -1,6 +1,5 @@
 import { isLayerId, surfaceFrameCount, type ForecastSurfaceV5, type LayerId, type ManifestV5 } from '@av/contracts';
 import type { ResolvedSparseCoverage } from './coverage';
-import type { PublishedManifest } from './publication';
 import { fail } from './http';
 
 function coordinate(value: string | null | undefined, name: string, min: number, max: number): number {
@@ -19,7 +18,7 @@ export function readPointCoordinates(url: URL) {
 }
 
 /** Resolve unique published selections in canonical order; the caller admits its output work. */
-export function selectSampleFields(m: PublishedManifest, url: URL, defaultLayers: readonly LayerId[] = m.layers) {
+export function selectSampleFields(m: ManifestV5, url: URL, defaultLayers: readonly LayerId[] = m.layers) {
   const requested = url.searchParams.get('frame');
   const frameIds = requested === 'all' ? m.frames.map(frame => frame.id)
     : requested === null ? [m.frames[0]!.id] : requested.split(',');

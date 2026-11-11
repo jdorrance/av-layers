@@ -5,8 +5,6 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, terrainColumnMethodForProduct, type ProductDefinition } from '@av/contracts';
-import { preparedTerrainRefSchema, type PreparedTerrainRef } from './terrain/prepare.js';
-import { refinementInputSchema, type RefinementInput } from './refinement/prepare.js';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const digest = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
@@ -52,7 +50,7 @@ export interface BuildIdentity {
 /** Content identity includes actual files, even in a dirty local checkout; Git SHA alone is not a recipe. */
 export interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
 
-export async function buildIdentity(product: ProductDefinition, coverageHash: string, terrain?: PreparedTerrainRef, refinements: readonly RefinementInput[] = [], root = ROOT, wholeDomain?: WholeDomainIdentityInput): Promise<BuildIdentity> {
+export async function buildIdentity(product: ProductDefinition, coverageHash: string, { root = ROOT, wholeDomain }: { root?: string; wholeDomain?: WholeDomainIdentityInput } = {}): Promise<BuildIdentity> {
   const groups = {
     adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
     science: {
@@ -78,13 +76,11 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
   }
   const lockHash = digest(await readFile(join(root, 'pnpm-lock.yaml')));
   const configurationHash = digest(JSON.stringify({ product, coverageHash,
-    ...(terrain ? { terrain: preparedTerrainRefSchema.parse(terrain) } : {}),
-    ...(refinements.length ? { refinements: refinements.map(input => refinementInputSchema.parse(input)) } : {}),
     ...(wholeDomain ? { wholeDomain } : {}) }));
   const hash = digest(JSON.stringify({ components, lockHash, configurationHash }));
   const { revision, dirty } = await readProducerSourceState(root);
   const refinementMethod = terrainColumnMethodForProduct(product);
   const scienceHash = digest(JSON.stringify({ source: components.science, methods: { ...createProductDescriptors(product).methods,
-    ...(refinements.length || wholeDomain ? { [refinementMethod.id]: refinementMethod } : {}) } }));
+    ...(wholeDomain ? { [refinementMethod.id]: refinementMethod } : {}) } }));
   return { recipe: createRecipeIdentity(product, hash, revision, dirty, lockHash), components: { ...components, configuration: configurationHash }, scienceHash };
 }

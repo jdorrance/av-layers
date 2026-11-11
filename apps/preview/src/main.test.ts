@@ -1,10 +1,10 @@
-import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
+import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { createProductDescriptors, createWholeDomainDescriptors, CELL_BYTES, computeFreshness, latestSchema, manifestV5Schema, type Manifest } from '@av/contracts';
-import { fixtureManifest, fixtureLatest } from '../../../tests/forecast-fixture';
-import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, retainedLegacyPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
-import { type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
+import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
+import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
+import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
+import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -126,7 +126,7 @@ vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: 
 
 let doc: Document;
 let win: Window;
-let manifest: Manifest;
+let manifest: ManifestV5;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
@@ -147,48 +147,9 @@ async function selectFrame(index: number): Promise<void> {
 }
 function latest() { return new Response(JSON.stringify(fixtureLatest(manifest, 'https://api.test'))); }
 
-function v5Manifest() {
-  const base = fixtureManifest();
-  const { version: _version, coverage, grid, samples: _samples, ...rest } = base;
-  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
-  const prefix = `builds/${base.model}/${base.buildId}`;
-  const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
-  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
-  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
-  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
-    const blockCount = blocks(gridValue), channelCount = base.frames.length * layers.length;
-    return {
-      id, kind, grid: gridValue, gridHash,
-      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
-      layers,
-      samples: {
-        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
-        channelCount, coverageHash, blockCount, storedCells: blockCount,
-        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
-      },
-      ...(terrain ? { terrain: {
-        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
-        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
-      } } : {})
-    };
-  };
-  return manifestV5Schema.parse({
-    ...rest, version: 5, descriptors,
-    method: { ...rest.method, id: [...new Set(rest.layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
-    surfaces: [
-      surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
-      surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
-    ]
-  });
-}
-
-function v5Latest(manifestValue = v5Manifest()) {
-  return latestSchema.parse({
-    pointer: { version: 1, model: manifestValue.model, latestBuildId: manifestValue.buildId, retained: [{ buildId: manifestValue.buildId, manifestKey: `builds/${manifestValue.model}/${manifestValue.buildId}/manifest.json`, cycle: manifestValue.cycle, expiresAt: manifestValue.expiresAt }] },
-    manifest: manifestValue,
-    templates: Object.fromEntries(manifestValue.layers.map(layer => [layer, `https://api.test/tiles/${manifestValue.model}/${manifestValue.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])),
-    freshness: computeFreshness(manifestValue, Date.parse(manifestValue.createdAt))
-  });
+function sample(input: RequestInfo | URL, publication = manifest): Response {
+  const build: PinnedBuild = { manifest: publication, templates: {}, expiresAtMs: Date.parse(publication.expiresAt) };
+  return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
 }
 
 function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
@@ -207,7 +168,7 @@ beforeEach(() => {
   vi.stubEnv('AV_API_BASE', 'https://api.test');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = fixtureManifest();
+  manifest = fixtureManifestV5();
   vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
@@ -358,14 +319,7 @@ it('allows retrying a point request interrupted by BFCache navigation', async ()
 it('makes point values keyboard-scrollable only while the card is open', async () => {
   await start();
   expect(ui('point-body').tabIndex).toBe(-1);
-  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
-    model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
-    method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
-    frames: manifest.frames.filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id)).map(frame => ({
-      ...frame,
-      layers: Object.fromEntries(manifest.layers.map(layer => [layer, { value: 1, status: 'valid', support: 0, interpolated: false }]))
-    }))
-  })));
+  fetchMock.mockImplementation(async input => sample(input));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   expect(ui('point-body').tabIndex).toBe(0);
@@ -480,19 +434,26 @@ it('labels the map clock as longitude time alongside UTC', async () => {
   expect(ui('timestamp').textContent).toBe('05:00 longitude time (UTC−01:00) · 06:00 UTC');
 });
 
+it('uses the default camera when a shared URL has an invalid latitude', async () => {
+  win.href = 'http://localhost:5173/?model=gfs&lat=200&lon=20&z=4';
+  await start();
+  expect(map().getCenter()).toEqual({ lng: 0, lat: 20 });
+  expect(map().getZoom()).toBe(2);
+});
+
 it('loads ICON hourly frames and keeps the AGL lift layer', async () => {
   await start();
   ui('ref-agl').dispatchEvent(new Event('click'));
   const retained = { ...SPLIT_PRODUCT, layers: ['usable-lift-msl', 'usable-lift-agl'] as const };
-  manifest = fixtureManifest({ model: 'icon-eu', buildId: 'icon-hourly', layers: [...retained.layers],
-    grid: retained.grid, descriptors: createProductDescriptors(retained),
+  manifest = fixtureManifestV5({ model: 'icon-eu', layers: [...retained.layers],
+    descriptors: createWholeDomainDescriptors(retained),
     frames: [4, 5, 7].map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
       validTime: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z`,
       intervalStart: `2026-10-30T${String(hour - 1).padStart(2, '0')}:00:00.000Z`,
       intervalEnd: `2026-10-30T${String(hour).padStart(2, '0')}:00:00.000Z` }))
   });
   modelButton('icon-eu').dispatchEvent(new Event('click'));
-  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('icon-hourly'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
   expect(ui('ref-agl').className).toContain('is-selected');
   expect(ui('time').max).toBe('2');
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
@@ -523,8 +484,8 @@ it('keeps the selected forecast without background requests on focus or elapsed 
 });
 
 it('selects the v5 surface max zoom for each layer and renders scalar builds with the series chart', async () => {
-  const published = v5Manifest();
-  fetchMock.mockImplementation(async () => new Response(JSON.stringify(v5Latest(published))));
+  const published = fixtureManifestV5();
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify(fixtureLatest(published))));
   await start();
   const source = () => map().getSource(sourceId()) as { maxzoom: number; tiles: string[] };
   expect(source().maxzoom).toBe(9);
@@ -538,18 +499,7 @@ it('selects the v5 surface max zoom for each layer and renders scalar builds wit
   await Promise.resolve();
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
 
-  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
-    version: 5, model: published.model, buildId: published.buildId, lat: 32.9, lon: -117.25,
-    method: published.method, source: published.source, expiresAt: published.expiresAt,
-    surfaces: published.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
-    frames: published.frames.filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id)).map(frame => ({
-      ...frame,
-      layers: Object.fromEntries(published.layers.map(layer => {
-        const surface = published.surfaces.find(item => item.layers.includes(layer))!;
-        return [layer, { value: layer === 'precip-rate' ? 1 : layer === 'usable-lift-msl' ? 2000 : 500, status: 'valid', support: 0, interpolated: false, surfaceId: surface.id }];
-      }))
-    }))
-  })));
+  fetchMock.mockImplementation(async input => sample(input, published));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   expect(ui('point-status').hidden).toBe(true);
@@ -583,16 +533,35 @@ it('uses the attributed OpenStreetMap basemap and restores the view from the bac
   expect(map().getCenter().lng).toBeCloseTo((-134.12 + -60.89) / 2);
 });
 
+it('keeps the latest history URL when a prior model request is aborted', async () => {
+  await start();
+  const icon = fixtureManifestV5({ model: 'icon-eu', layers: ['usable-lift-msl', 'usable-lift-agl'] });
+  const rrfs = fixtureManifestV5({ model: 'rrfs', layers: ['usable-lift-msl', 'usable-lift-agl'] });
+  let finishIcon!: () => void;
+  const iconGate = new Promise<void>(resolve => { finishIcon = resolve; });
+  fetchMock.mockImplementation(async input => {
+    if (String(input).includes('/icon-eu/')) {
+      await iconGate;
+      return new Response(JSON.stringify(fixtureLatest(icon)));
+    }
+    return new Response(JSON.stringify(fixtureLatest(rrfs)));
+  });
+  win.href = 'http://localhost:5173/?model=icon-eu';
+  win.dispatchEvent(new Event('popstate'));
+  const restored = 'http://localhost:5173/?lat=39&model=rrfs&lon=-97&z=4';
+  win.href = restored;
+  win.dispatchEvent(new Event('popstate'));
+  try {
+    await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/rrfs/'));
+    expect(win.href).toBe(restored);
+  } finally { finishIcon(); }
+  await Promise.resolve();
+  expect(win.href).toBe(restored);
+});
+
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {
   await start();
-  fetchMock.mockImplementation(async input => new Response(JSON.stringify({
-    model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25,
-    method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt: manifest.expiresAt,
-    frames: manifest.frames.map((frame, i) => ({ ...frame, layers: Object.fromEntries(manifest.layers.map(layer => [layer, {
-      value: layer === 'usable-lift-msl' ? 1000 + 100 * i : layer === 'usable-lift-agl' ? 300 : 0,
-      status: 'valid', support: 0, interpolated: false
-    }])) })).filter(frame => new URL(String(input)).searchParams.get('frame')!.split(',').includes(frame.id))
-  })));
+  fetchMock.mockImplementation(async input => sample(input));
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   const series = ui('point-body').children[0];
@@ -614,7 +583,7 @@ it('shows the map lift pair while the selected native profile is pending', async
   const profileGate = new Promise<void>(resolve => { release = resolve; });
   fetchMock.mockImplementation(async input => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(v5Latest(published)));
+    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(fixtureLatest(published)));
     if (url.pathname.endsWith('/profile')) await profileGate;
     return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
   });
@@ -640,15 +609,6 @@ it('shows the map lift pair while the selected native profile is pending', async
   expect(ui('point-status').hidden).toBe(true);
 });
 
-it('keeps the full-forecast choice visible for legacy maps with a bounded 24-hour point selection', async () => {
-  const build = retainedLegacyPointBuild(), legacy = build.manifest;
-  if (legacy.version === 5) throw new Error('Expected legacy manifest');
-  fetchMock.mockImplementation(async () => new Response(JSON.stringify(fixtureLatest(legacy, 'https://api.test'))));
-  await start();
-  expect(ui('point-horizon-label').hidden).toBe(false);
-  expect(ui('point-horizon').children[0].textContent).toBe('24 hours');
-});
-
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
   const pointBuild = retainedProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
@@ -660,7 +620,7 @@ it('pages the full native point forecast while later point times keep the raster
   vi.setSystemTime(Date.parse(mapEnd) + 1);
   fetchMock.mockImplementation(async input => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(v5Latest(published)));
+    if (url.pathname.endsWith('/latest')) return new Response(JSON.stringify(fixtureLatest(published)));
     if (url.pathname.endsWith('/profile') && url.searchParams.get('frame')?.split(',').includes(firstPointOnlyFrame)) {
       loadingLaterHours = true;
       await gate;
@@ -711,7 +671,7 @@ it('labels an unprefixed v5 point day as 24 hours while keeping its full forecas
   const build = fixturePointBuild({ frameHours: Array.from({ length: 48 }, (_, index) => index + 1), mapFrameCount: 48 }), m = build.manifest;
   if (m.version !== 5) throw new Error('Expected v5');
   delete m.mapFrameCount;
-  fetchMock.mockImplementation(async () => new Response(JSON.stringify(v5Latest(m))));
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify(fixtureLatest(m))));
   await start();
   expect(ui('point-horizon-label').hidden).toBe(false);
   expect(ui('point-horizon').children[0].textContent).toBe('24 hours');
@@ -725,7 +685,7 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   fetchMock.mockImplementation(async input => {
-    if (String(input).includes('/latest?')) return new Response(JSON.stringify(v5Latest(published)));
+    if (String(input).includes('/latest?')) return new Response(JSON.stringify(fixtureLatest(published)));
     const profile = new URL(String(input)).pathname.endsWith('/profile');
     if (profile) requests.push(new URL(String(input)).searchParams.get('frame')!.split(','));
     if (profile && requests.length === (fail ? 3 : 2)) await gate;
@@ -789,7 +749,7 @@ it('labels the displayed raster through pending, failed and successful point-tim
   const pointBuild = fixtureProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
   fetchMock.mockImplementation(async input => new Response(JSON.stringify(String(input).includes('/latest?')
-    ? v5Latest(published) : fixturePointFetch(pointBuild, String(input)))));
+    ? fixtureLatest(published) : fixturePointFetch(pointBuild, String(input)))));
   autoLoadRaster = false;
   await start();
   await selectFrame(0);

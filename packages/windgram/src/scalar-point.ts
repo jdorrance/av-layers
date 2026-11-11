@@ -34,7 +34,7 @@ export function renderPointSeries(
     if (!details.open || table.children.length) return;
     const { manifest } = build;
     const layers = Object.keys(payload.frames[0]?.layers ?? {});
-    const model = seriesTable(payload, layers, manifest.descriptors.layers, manifest.version === 5 ? [] : manifest.patches);
+    const model = seriesTable(payload, layers, manifest.descriptors.layers);
     const values = node('table'), head = node('tr');
     head.append(...model.headings.map(label => node('th', label)));
     values.append(head);

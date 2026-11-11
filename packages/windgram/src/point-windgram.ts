@@ -1,10 +1,9 @@
 import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/client';
 import { mountWindgram, type WindgramMount } from './dom.ts';
-import { createPointForecast } from './from-av-profile.ts';
 import { panelStyles } from './panel-styles.ts';
 import { renderPointSeries } from './scalar-point.ts';
-import { localDateKey, type SiteForecast } from './internal-meteo.ts';
-import { buildWindgramView, type WindgramView } from './scene.ts';
+import { localDateKey } from './internal-meteo.ts';
+import { buildWindgramView, createPointForecast, type SiteForecast, type WindgramView } from './model.ts';
 import { renderWindgramKey } from './svg.ts';
 import { daylightForDate } from './windgram-time-axis.ts';
 
@@ -90,7 +89,7 @@ function createPointWindgram(
   };
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
-  const usesDsm = build.manifest.version === 5 && build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
+  const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
   const toForecast = createPointForecast(build, options.point);
   let grouped: Calendar | undefined;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {

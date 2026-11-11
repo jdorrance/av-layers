@@ -1,12 +1,12 @@
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { performance } from 'node:perf_hooks';
-import { DEFAULT_REQUEST_TIMEOUT_MS, latestSchema } from '@av/contracts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, latestV5Schema, renderedFrames } from '@av/contracts';
 import { createRasterTileProtocol } from '@av/client';
 
 const api = new URL(process.argv[2] ?? 'http://127.0.0.1:8798');
 if (api.hostname !== '127.0.0.1' || !['http:', 'https:'].includes(api.protocol)) throw new Error('Benchmark requires a local fixture API');
-const latest = latestSchema.parse(await (await fetch(new URL('/v1/models/gfs/latest?expand=manifest', api), { signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS) })).json());
+const latest = latestV5Schema.parse(await (await fetch(new URL('/v1/models/gfs/latest?expand=manifest', api), { signal: AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS) })).json());
 if (!latest.manifest) throw new Error('Expanded manifest required');
 let requests = 0, active = 0, peak = 0, failures = 0;
 const server = createServer(async (request, response) => {
@@ -24,7 +24,7 @@ await new Promise<void>((resolve, reject) => { server.once('error', reject); ser
 const address = server.address();
 if (!address || typeof address === 'string') throw new Error('Missing benchmark listener');
 const base = `http://127.0.0.1:${address.port}`, manifest = latest.manifest;
-const urls = manifest.frames.slice(0, 2).flatMap(frame => Array.from({ length: 16 }, (_, i) => `${base}/tiles/gfs/${manifest.buildId}/usable-lift-agl/${frame.id}/2/${i % 4}/${Math.floor(i / 4)}.webp`));
+const urls = renderedFrames(manifest).slice(0, 2).flatMap(frame => Array.from({ length: 16 }, (_, i) => `${base}/tiles/gfs/${manifest.buildId}/usable-lift-agl/${frame.id}/2/${i % 4}/${Math.floor(i / 4)}.webp`));
 const results = [];
 try {
   for (const concurrency of [2, 4, 8, 12]) {

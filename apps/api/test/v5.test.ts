@@ -59,20 +59,20 @@ describe('API v5 metadata', () => {
     await reading;
     await vi.waitFor(() => expect(coverageMemory(fixture.bucket).leaseRefs).toBe(2));
     abort.abort();
-    expect((await first).status).toBe(503);
+    expect((await first).status).toBe(499);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(1);
     expect(inFlightAllocationBytes()).toBeGreaterThan(0);
     expect(bodyReads).toBe(1);
     if (outcome === 'both-abort') {
       abortSecond.abort();
-      expect((await second).status).toBe(503);
+      expect((await second).status).toBe(499);
       expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
       expect(coverageMemory(fixture.bucket).leasedBytes).toBe(0);
       expect(inFlightAllocationBytes()).toBeGreaterThan(0);
     }
     finish();
     const result = await second;
-    expect(result.status).toBe(outcome === 'success' ? 200 : 503);
+    expect(result.status).toBe(outcome === 'both-abort' ? 499 : outcome === 'success' ? 200 : 503);
     await result.body?.cancel();
     await Promise.all(owners);
     expect(bodyReads).toBe(1);
@@ -105,7 +105,7 @@ describe('API v5 metadata', () => {
     await vi.waitFor(() => expect(coverageMemory(fixture.bucket).leaseRefs).toBe(2));
     const before = coverageMemory(fixture.bucket).leasedBytes;
     abort.abort();
-    expect((await first).status).toBe(503);
+    expect((await first).status).toBe(499);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(1);
     expect(coverageMemory(fixture.bucket).leasedBytes).toBe(before);
     expect(inFlightAllocationBytes()).toBeGreaterThanOrEqual(before);
@@ -143,7 +143,7 @@ describe('API v5 metadata', () => {
     expect(reserved).toBeGreaterThan(0);
     abort.abort();
     const cancelled = await response;
-    expect(cancelled.status).toBe(503);
+    expect(cancelled.status).toBe(499);
     await cancelled.body?.cancel();
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);
     expect(coverageMemory(fixture.bucket).leasedBytes).toBe(reserved);
@@ -194,7 +194,7 @@ describe('API v5 metadata', () => {
     expect(coverageMemory(fixture.bucket).leasedBytes).toBeGreaterThan(0);
     controller.abort();
     finish();
-    expect((await response).status).toBe(503);
+    expect((await response).status).toBe(499);
     expect(coverageMemory(fixture.bucket).leasedBytes).toBe(0);
   });
   it('publishes native precipitation and fine lift surfaces with output constraints', async () => {

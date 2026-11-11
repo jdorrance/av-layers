@@ -1,4 +1,5 @@
-import { gridSchema, snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
+import { gridSchema } from './grid-schema.js';
+import { snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
 
 const MAX_UINT32_CELLS = 0xffffffff;
 

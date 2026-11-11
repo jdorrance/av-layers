@@ -67,9 +67,8 @@ Return a [`NormalizedFrame`](../packages/forecast/src/inputs.ts) ordered by
 
 ## Add a scalar calculation
 
-1. Add the layer ID to `LAYER_IDS` in
-   [product.ts](../packages/contracts/src/product.ts) and define its descriptor
-   and palette in [layers.ts](../packages/contracts/src/layers.ts).
+1. Add the layer to `LAYER_REGISTRY` in
+   [layers.ts](../packages/contracts/src/layers.ts) with its descriptor and palette.
 2. Declare its required inputs and parameters in
    [methods.ts](../packages/contracts/src/methods.ts), extending
    [inputs.ts](../packages/forecast/src/inputs.ts) if new fields are needed.
@@ -80,6 +79,9 @@ Return a [`NormalizedFrame`](../packages/forecast/src/inputs.ts) ordered by
    [capacity](../apps/batch/src/capacity.ts) and
    [serving budgets](serving-budgets.md), and run `pnpm docs:generate` and
    `pnpm verify`.
+
+For changes to existing descriptors or grids, verify retained manifests against
+the candidate Worker. See the [reader cutover checks](hardening-plan.md#gate-reader-removal-on-retention-and-recoverability).
 
 ## Add a grid or neighboring-cell calculation
 

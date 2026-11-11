@@ -3,10 +3,10 @@ import { link, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { getProduct } from '@av/contracts/models';
 import {
   coverageIndices,
   getBit,
-  getProduct,
   LAYERS,
   MAX_MANIFEST_BYTES,
   STATUS_MASK,
@@ -17,8 +17,7 @@ import {
   TERRAIN_CLEARANCE_METHOD,
   prepareGridGeometry,
   type LayerId,
-  type Manifest
-} from '@av/contracts';
+  type Manifest } from '@av/contracts';
 import {
   deriveFrame,
   MAX_PREPARED_SAMPLES,
@@ -383,8 +382,8 @@ async function renderVariantImages(
   sourceFieldSha256: string
 ): Promise<{ artifacts: ImageArtifact[]; runtime: RenderRuntime }> {
   const renderers = {
-    step: createRasterizer(mask, undefined, undefined, [], 'step'),
-    'linear-rgb': createRasterizer(mask, undefined, undefined, [], 'linear-rgb')
+    step: createRasterizer(mask, undefined, undefined, 'step'),
+    'linear-rgb': createRasterizer(mask, undefined, undefined, 'linear-rgb')
   } as const;
   const artifacts: ImageArtifact[] = [];
   const totals = {

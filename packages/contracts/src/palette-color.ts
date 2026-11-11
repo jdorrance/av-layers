@@ -1,5 +1,5 @@
 import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, paletteBinIndex, type PaletteInterpolation } from './layers.js';
-import type { LayerId } from './product.js';
+import type { LayerId } from './layers.js';
 
 export type PaletteColorMode = PaletteInterpolation;
 

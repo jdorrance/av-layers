@@ -91,7 +91,8 @@ Each layer and frame writes one composited PMTiles archive. Version-5 manifests
 assign each layer to a native or fine surface with sparse coverage and bounded
 sample shards. Point queries read bounded ranges per selected surface and frame
 group. Tiles and point queries share packed fields and interpolation logic.
-Legacy version-3/version-4 readers retain their numeric pack formats.
+The [regional evaluator](../apps/batch/src/refinement/README.md) reads saved
+polygon-patch controls.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells
@@ -155,7 +156,8 @@ configures the Worker and R2 bindings.
 
 Clients pin a build ID for tiles and point requests and read available layers,
 frames, units, and palettes from the build's manifest descriptors.
-[`@av/client`](../packages/client/README.md) uses the same wire schemas as the
-batch and API apps.
+[`@av/client`](../packages/client/README.md) validates v5 wire responses.
+The [model options](../packages/contracts/src/model-options.ts) projection
+supplies model names and defaults to both browsers.
 [Local development](development.md) seeds a synthetic build into a local Worker.
 See [extensions](extensions.md) to add a model, layer, or grid.

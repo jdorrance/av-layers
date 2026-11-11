@@ -2,6 +2,7 @@
   "name": "windy-av-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["enable_request_signal"],
   "r2_buckets": [
     {
       "binding": "BUCKET",

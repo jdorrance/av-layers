@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PRODUCT, PRODUCTS, createProductDescriptors, createRecipeIdentity } from '@av/contracts';
-import { fixtureLatest, fixtureManifest } from '../../../tests/forecast-fixture.js';
+import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
+import { fixtureLatest, fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 
 class FakeElement {
   children: FakeElement[] = [];
@@ -84,12 +84,8 @@ it.each([
   const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
   const expiresAt = new Date(expiresAtMs).toISOString();
   const frames = ['03', '06'].map(hour => ({ id: `f0${hour}`, validTime: `2026-10-30T${hour}:00:00.000Z`, intervalStart: '2026-10-30T00:00:00.000Z', intervalEnd: `2026-10-30T${hour}:00:00.000Z` }));
-  const model = DEFAULT_PRODUCT.modelId, layerId = DEFAULT_PRODUCT.layers[0], fixture = fixtureManifest();
-  const manifest = fixtureManifest({ model, buildId: 'b1', expiresAt, frames, layers: [layerId], grid: DEFAULT_PRODUCT.grid,
-    descriptors: createProductDescriptors({ ...DEFAULT_PRODUCT, layers: [layerId] }), recipe: createRecipeIdentity(DEFAULT_PRODUCT, 'a'.repeat(64)),
-    coverage: { ...fixture.coverage, id: DEFAULT_PRODUCT.coverageId, maxZoom: DEFAULT_PRODUCT.maxNativeZoom },
-    source: { ...fixture.source, model, provider: 'Synthetic' }
-  });
+  const model = DEFAULT_PRODUCT.modelId, layerId = DEFAULT_PRODUCT.layers[0];
+  const manifest = fixtureManifestV5({ model, expiresAt, frames, layers: [layerId] });
   const latest = fixtureLatest(manifest, base), [west, south, east, north] = manifest.descriptors.bounds;
   const point = { lat: (south + north) / 2, lon: (west + east) / 2 };
   const fetchImpl = vi.fn<typeof fetch>(url => {
@@ -97,9 +93,10 @@ it.each([
     if (String(url).includes('/sample?')) {
       const query = new URL(String(url)).searchParams;
       return Promise.resolve(new Response(JSON.stringify({
-        model, buildId: manifest.buildId, lat: Number(query.get('lat')), lon: Number(query.get('lon')),
-        method: manifest.method, source: manifest.source, coverage: manifest.coverage, expiresAt,
-        frames: manifest.frames.filter(frame => query.get('frame')!.split(',').includes(frame.id)).map(frame => ({ ...frame, layers: { [layerId]: { value: 1200, status: 'valid', support: 0, interpolated: false } } }))
+        version: 5, model, buildId: manifest.buildId, lat: Number(query.get('lat')), lon: Number(query.get('lon')),
+        method: manifest.method, source: manifest.source, expiresAt,
+        surfaces: manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
+        frames: manifest.frames.filter(frame => query.get('frame')!.split(',').includes(frame.id)).map(frame => ({ ...frame, layers: { [layerId]: { value: 1200, status: 'valid', support: 0, interpolated: false, surfaceId: manifest.surfaces[0].id } } }))
       })));
     }
     return Promise.reject(new Error(`unexpected ${String(url)}`));
@@ -212,7 +209,7 @@ it.each([
   expect(addVisibilityListener).toHaveBeenCalledTimes(1);
   expect(map.on).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls[0][0]).toBe(`${base}/v1/models/${model}/latest?expand=manifest`);
-  expect(layer.url).toContain(`/tiles/${model}/b1/${layerId}/f006/`);
+  expect(layer.url).toContain(`/tiles/${model}/${manifest.buildId}/${layerId}/f006/`);
   expect(layer.options.zIndex).toBe(201);
   expect(protocols.size).toBe(1);
   const horizonNotice = elements.find(element => element.className === 'av-warning')!;

@@ -1,49 +1,9 @@
-import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { expect, it } from 'vitest';
-import { CELL_BYTES, manifestV5Schema, PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED,
-  SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema, TERRAIN_COLUMN_METHOD, createWholeDomainDescriptors, type LayerId } from '@av/contracts';
-import type { PinnedBuild } from './client-types';
-import { fixtureBuild, fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture';
+import { PALETTES, SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED,
+  SUPPORT_CLOUD_CAPPED, SUPPORT_PARCEL_CROSSING, paletteSchema, type LayerId } from '@av/contracts';
+import { fixtureBuild, fixtureManifestV5 } from '../../../tests/forecast-fixture';
 import { activePalettes, buildDiagnosticRows, deriveTerrainM, formatAltitude, formatSupportFlags, layerMaxZoom, planViewportPrefetch, pointFrameView, pointSeriesSelection, seriesTable, viewportTiles } from './client-view';
 
-function v5Build(): PinnedBuild {
-  const base = fixtureBuild();
-  if (base.manifest.version === 5) throw new Error('fixture requires a legacy manifest');
-  const { version: _version, coverage, grid, samples: _samples, ...rest } = base.manifest;
-  if (grid.kind !== 'regular-latlon') throw new Error('fixture requires a regular latitude/longitude grid');
-  const prefix = `builds/${base.manifest.model}/${base.manifest.buildId}`;
-  const fineGrid = { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 };
-  const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
-  const blocks = (value: typeof grid) => Math.ceil(value.width / 16) * Math.ceil(value.height / 16);
-  const surface = (id: string, kind: 'native' | 'fine', layers: string[], gridValue: typeof grid, gridHash: string, coverageHash: string, maxZoom: number, terrain: boolean) => {
-    const blockCount = blocks(gridValue), channelCount = base.manifest.frames.length * layers.length;
-    return {
-      id, kind, grid: gridValue, gridHash,
-      coverage: { id, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom, gridHash },
-      layers,
-      samples: {
-        format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const,
-        channelCount, coverageHash, blockCount, storedCells: blockCount,
-        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: 'd'.repeat(64) }]
-      },
-      ...(terrain ? { terrain: {
-        dataId: 'e'.repeat(64), key: `terrain/prepared/${'e'.repeat(64)}/manifest.json`, sha256: 'e'.repeat(64),
-        verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const
-      } } : {})
-    };
-  };
-  return {
-    ...base,
-    manifest: manifestV5Schema.parse({
-      ...rest, version: 5, descriptors,
-      method: { ...rest.method, id: [...new Set(rest.layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
-      surfaces: [
-        surface('gfs-native', 'native', ['precip-rate'], grid, 'a'.repeat(64), coverage.hash, 7, false),
-        surface('gfs-fine', 'fine', ['usable-lift-msl', 'usable-lift-agl'], fineGrid, 'b'.repeat(64), 'c'.repeat(64), 9, true)
-      ]
-    })
-  };
-}
 
 it('formats independent physical support and cloud regime flags', () => {
   expect(formatSupportFlags(SUPPORT_PARCEL_CROSSING | SUPPORT_CUMULUS | SUPPORT_OVERDEVELOPED | SUPPORT_CLOUD_CAPPED)).toBe('parcel+Cu+OD+capped');
@@ -51,7 +11,7 @@ it('formats independent physical support and cloud regime flags', () => {
 });
 
 it('honors pinned sample-only delivery for legends and every prefetch path', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   build.manifest.descriptors.layers['usable-lift-msl'].delivery = 'samples-only';
   expect(activePalettes(build.manifest.descriptors.palettes, 'usable-lift-msl', build.manifest.descriptors.layers)).toEqual([]);
   const options = { build, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] };
@@ -69,7 +29,7 @@ it('serializes stepped interpolation without changing retained palette compatibi
 });
 
 it('shows the actual horizon for irregular frames in channel order', () => {
-  const frames = fixtureManifest().frames;
+  const frames = fixtureManifestV5().frames;
   const build = fixtureBuild({ frames: [frames[2], frames[0], frames.at(-1)!] });
   expect(buildDiagnosticRows(build).find(([label]) => label === 'Horizon')).toEqual([
     'Horizon', `${frames[0].validTime} → ${frames.at(-1)!.validTime}`
@@ -77,60 +37,39 @@ it('shows the actual horizon for irregular frames in channel order', () => {
   expect(build.manifest.frames.map(frame => frame.id)).toEqual([frames[2].id, frames[0].id, frames.at(-1)!.id]);
 });
 
-it('shows each refinement method and vertical reference in build diagnostics', () => {
-  const manifest = fixtureManifest(), patch = fixturePatch(manifest);
-  const build = fixtureBuild({ version: 4, patches: [patch] });
-  const rows = buildDiagnosticRows(build);
-  expect(rows).toContainEqual([`Refinement ${patch.id}`, `${patch.grid.width} × ${patch.grid.height} · ${patch.method.id}`]);
-  for (const layer of patch.layers) {
-    const descriptor = patch.descriptors.layers[layer];
-    expect(rows).toContainEqual([`${patch.id} · ${descriptor.label}`, `${descriptor.units} · ${descriptor.verticalReference} · ${descriptor.methodId}`]);
-  }
-  expect(buildDiagnosticRows(fixtureBuild()).some(([label]) => label.startsWith('Refinement '))).toBe(false);
-});
-
-it('shows the actual terrain reference for refined point values beside base layers', () => {
-  const manifest = fixtureManifest(), patch = fixturePatch(manifest);
-  const payload = { method: manifest.method, coverage: manifest.coverage, expiresAt: manifest.expiresAt, frames: [{ ...manifest.frames[0], layers: {
-    'usable-lift-agl': { value: 300, status: 'valid' as const, support: 0, interpolated: false, patchId: patch.id },
-    'precip-rate': { value: 7, status: 'valid' as const, support: 0, interpolated: false }
+it('shows the pinned vertical reference and surface for each point value', () => {
+  const manifest = fixtureManifestV5();
+  const payload = { frames: [{ ...manifest.frames[0], layers: {
+    'usable-lift-agl': { value: 300, status: 'valid' as const, support: 0, interpolated: false, surfaceId: 'gfs-fine' },
+    'precip-rate': { value: 7, status: 'valid' as const, support: 0, interpolated: false, surfaceId: 'gfs-native' }
   } }] };
-  const table = seriesTable(payload, ['usable-lift-agl', 'precip-rate'], manifest.descriptors.layers, [patch]);
+  const table = seriesTable(payload, ['usable-lift-agl', 'precip-rate'], manifest.descriptors.layers);
   expect(table.headings[2]).toBe('Usable lift depth (terrain AGL) (m AGL)');
   expect(table.headings[3]).toContain(manifest.descriptors.layers['precip-rate'].label);
-  expect(table.rows[0][4]).toContain(`${patch.id} · terrain-AGL · ${patch.method.id}`);
-  expect(table.rows[0][5]).not.toContain(patch.id);
+  expect(table.rows[0][4]).toContain('gfs-fine');
+  expect(table.rows[0][5]).toContain('gfs-native');
 });
 
-it('uses the layer surface max zoom for v5 and the manifest max zoom for legacy builds', () => {
-  const legacy = fixtureBuild();
-  expect(layerMaxZoom(legacy.manifest, 'precip-rate')).toBe(7);
-  const v5 = v5Build();
-  expect(layerMaxZoom(v5.manifest, 'precip-rate')).toBe(7);
-  expect(layerMaxZoom(v5.manifest, 'usable-lift-msl')).toBe(9);
-  expect(layerMaxZoom(v5.manifest, 'usable-lift-agl')).toBe(9);
+it('uses the zoom limit of the layer’s owning surface', () => {
+  const { manifest } = fixtureBuild();
+  expect(layerMaxZoom(manifest, 'precip-rate')).toBe(7);
+  expect(layerMaxZoom(manifest, 'usable-lift-msl')).toBe(9);
+  expect(layerMaxZoom(manifest, 'usable-lift-agl')).toBe(9);
 });
 
-it('keeps legacy display and grid diagnostics while v5 reports each surface once', () => {
-  const patch = fixturePatch(fixtureManifest());
-  for (const build of [fixtureBuild(), fixtureBuild({ version: 4, patches: [patch] })]) {
-    const rows = buildDiagnosticRows(build);
-    expect(rows).toContainEqual(['Display', 'z0–7 · 256 px raster · overzoomed above z7']);
-    expect(rows).toContainEqual(['Grid', '1440 × 721 · 0.25° × 0.25° regular latitude/longitude']);
-    expect(rows.some(([label]) => label.startsWith('Surface '))).toBe(false);
-  }
-  const v5 = v5Build();
+it('reports each surface and its grid once', () => {
+  const v5 = fixtureBuild();
   const rows = buildDiagnosticRows(v5);
-  expect(rows).toContainEqual(['Usable lift depth (terrain AGL)', `m AGL · terrain-AGL · interval-flux-endpoint-profile · ${TERRAIN_COLUMN_METHOD.id}`]);
+  expect(rows).toContainEqual(['Usable lift depth (terrain AGL)', `m AGL · terrain-AGL · interval-flux-endpoint-profile · ${v5.manifest.descriptors.layers['usable-lift-agl'].methodId}`]);
   expect(rows.some(([label]) => label === 'Grid' || label === 'Display')).toBe(false);
   expect(rows.filter(([label]) => label.startsWith('Surface '))).toEqual([
     ['Surface gfs-native', '1440 × 721 · 0.25° × 0.25° · precip-rate · z0–7'],
-    ['Surface gfs-fine', '2880 × 1442 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9 · DSM · EGM2008']
+    ['Surface gfs-fine', '2880 × 1441 · 0.125° × 0.125° · usable-lift-msl, usable-lift-agl · z0–9 · DSM · EGM2008']
   ]);
 });
 
 it('orders viewport prefetch by forecast step, sibling layer, then perimeter', () => {
-  const build = v5Build(), activeLayer = 'usable-lift-agl' as const;
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
   const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] });
   const tile = (layer: string, frame: string, x = 3, y = 3) => `https://api.test/tiles/${build.manifest.model}/${build.manifest.buildId}/${layer}/${frame}/3/${x}/${y}.webp`;
   expect(urls.slice(0, 5)).toEqual([
@@ -141,7 +80,7 @@ it('orders viewport prefetch by forecast step, sibling layer, then perimeter', (
   expect(urls).not.toContain(tile(activeLayer, 'f006'));
 });
 it('uses owning surface zooms for overzoomed viewport prefetches', () => {
-  const build = v5Build(), viewportTiles = [{ z: 9, x: 256, y: 256 }];
+  const build = fixtureBuild(), viewportTiles = [{ z: 9, x: 256, y: 256 }];
   const rain = planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'f006', viewportTiles });
   expect(rain[0]).toContain('/precip-rate/f009/7/64/64.webp');
   expect(rain.every(url => !url.includes('usable-lift'))).toBe(true);
@@ -150,7 +89,7 @@ it('uses owning surface zooms for overzoomed viewport prefetches', () => {
   expect(lift[0]).toContain('/usable-lift-agl/f009/9/256/256.webp');
 });
 it('filters bounds and invalid tile coordinates and wraps only longitude-wrapping surfaces', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   build.manifest.descriptors.bounds = [-1, -1, 1, 1];
   expect(planViewportPrefetch({ build, activeLayer: 'usable-lift-agl', activeFrame: 'f006', viewportTiles: [{ z: 5, x: 0, y: 0 }] })).toEqual([]);
   build.manifest.descriptors.bounds = [-180, -85, 180, 85];
@@ -191,7 +130,7 @@ it('enumerates bounded viewport tiles across the antimeridian and at the poles',
 });
 
 it('selects the shared diurnal fields independently of wire page size', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   const native: LayerId[] = ['thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v', 'cloud-cover-total'];
   build.manifest.layers.push(...native);
   const selected = pointSeriesSelection(build);
@@ -203,7 +142,7 @@ it('selects the shared diurnal fields independently of wire page size', () => {
 });
 
 it('recovers terrain only when fine lift values share one uninterpolated basis', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   const layers = {
     'usable-lift-msl': { value: 2000, status: 'valid' as const, support: 4, interpolated: false, surfaceId: 'gfs-fine' },
     'usable-lift-agl': { value: 500, status: 'valid' as const, support: 4, interpolated: false, surfaceId: 'gfs-fine' }
@@ -219,7 +158,7 @@ it('recovers terrain only when fine lift values share one uninterpolated basis',
 });
 
 it('formats point altitude, wind vectors and regime without inventing missing terrain', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   const frame = { ...build.manifest.frames[0], layers: {
     'usable-lift-msl': { value: null, status: 'no-usable-lift' as const, support: 0, interpolated: false, surfaceId: 'gfs-fine' },
     'usable-lift-agl': { value: 0, status: 'no-usable-lift' as const, support: SUPPORT_CUMULUS, interpolated: false, surfaceId: 'gfs-fine' },
@@ -244,7 +183,7 @@ it.each([
   { fine: SUPPORT_OVERDEVELOPED, native: 0, top: 0, expected: 'OD' },
   { fine: 0, native: 0, top: SUPPORT_OVERDEVELOPED, expected: 'OD' }
 ])('preserves independent cloud support and unknown clear-sky conditions: $expected', ({ fine, native, top, expected }) => {
-  const build = v5Build(), sample = (value: number, support = 0, surfaceId = 'gfs-native') => ({ value, support, surfaceId, status: 'valid' as const, interpolated: false });
+  const build = fixtureBuild(), sample = (value: number, support = 0, surfaceId = 'gfs-native') => ({ value, support, surfaceId, status: 'valid' as const, interpolated: false });
   const frame = { ...build.manifest.frames[0], layers: {
     'usable-lift-msl': sample(2000, fine, 'gfs-fine'), 'usable-lift-agl': sample(500, fine, 'gfs-fine'),
     'thermal-velocity': sample(2, native), 'thermal-top-msl': sample(2500, top),
@@ -255,7 +194,7 @@ it.each([
 });
 
 it('keeps raster prefetch inside the map prefix while the native point axis continues', () => {
-  const build = v5Build();
+  const build = fixtureBuild();
   if (build.manifest.version !== 5) throw new Error('Expected v5');
   build.manifest.mapFrameCount = 2;
   const options = { build, activeLayer: 'usable-lift-agl' as const, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] };

@@ -1,4 +1,4 @@
-import { getProduct } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
 import type { ResolvableForecastProvider } from './provider.js';
 import { createIndexedGribProvider } from './indexed-grib/provider.js';
 import { createSplitGribProvider } from './split-grib/provider.js';

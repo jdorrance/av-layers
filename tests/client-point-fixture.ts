@@ -1,10 +1,9 @@
-import { CELL_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, SAMPLE_BLOCK_SIZE,
-  createRecipeIdentity, createWholeDomainDescriptors, getProduct, gridToGeographic, layerSurface, mapFrameCount,
-  manifestV5Schema, publishedSampleResponseSchema, renderedLayers, sourceIntervalHours, type LayerId, type ManifestV5 } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, SAMPLE_BLOCK_SIZE, gridToGeographic, mapFrameCount, profileResponseSchema, sampleResponseV5Schema, sourceIntervalHours,
+  type LayerId, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import type { PinnedBuild, SamplePayload } from '@av/client';
-import { profileResponseSchema, type ProfileResponse } from '@av/contracts';
 import { deriveSoaringViews } from '@av/soaring';
-import { fixtureBuild, fixtureManifest, fixturePatch } from './forecast-fixture';
+import { fixtureBuild, fixtureManifest } from './forecast-fixture';
 
 const PROFILE_LEVELS = 4;
 interface PointBuildOptions {
@@ -17,36 +16,15 @@ interface PointBuildOptions {
 
 /** GFS fields on a tiny grid with selectable surfaces and frame axes. */
 export function fixturePointBuild(options: PointBuildOptions = {}): PinnedBuild {
-  const base = fixtureManifest(), product = getProduct('gfs');
-  if (!product || base.grid.kind !== 'regular-latlon') throw new Error('Point fixture requires GFS');
-  const { version: _version, grid, coverage, samples: _samples, ...rest } = base;
-  const prefix = `builds/gfs/${base.buildId}`, cycle = Date.parse(base.cycle), frameHours = options.frameHours ?? product.frameHours;
+  const product = getProduct('gfs')!, cycle = Date.parse(fixtureManifest().cycle);
+  const frameHours = options.frameHours ?? product.frameHours;
   const count = options.mapFrameCount ?? mapFrameCount({ frameHours, mapEndHour: product.mapEndHour });
   const frames = frameHours.map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
     validTime: new Date(cycle + hour * 3600000).toISOString(), intervalEnd: new Date(cycle + hour * 3600000).toISOString(),
     intervalStart: new Date(cycle + (hour - sourceIntervalHours(product, hour)) * 3600000).toISOString() }));
-  const layers = [...(options.layers ?? product.layers)], descriptors = createWholeDomainDescriptors(product);
-  const surface = (kind: 'fine' | 'native') => {
-    const id = `gfs-${kind}`, hash = (kind === 'fine' ? 'b' : 'a').repeat(64);
-    const source = kind === 'fine' ? { ...grid, width: grid.width * 2, height: grid.height * 2, dx: grid.dx / 2, dy: grid.dy / 2 } : grid;
-    const selected = layers.filter(layer => layerSurface(layer) === kind);
-    const blockCount = Math.ceil(source.width / 16) * Math.ceil(source.height / 16), channelCount = selected.length * (kind === 'fine' ? count : frames.length);
-    return { id, kind, grid: source, gridHash: hash, coverage: { ...coverage, id, hash, gridHash: hash, maskKey: `coverage/${hash}/manifest.json`, maxZoom: kind === 'fine' ? 9 : 7 },
-      layers: selected, samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer',
-        channelCount, coverageHash: hash, blockCount, storedCells: blockCount,
-        shards: [{ firstBlock: 0, blockCount, storedCells: blockCount, bytes: blockCount * channelCount * CELL_BYTES, key: `${prefix}/surfaces/${id}/samples/0.bin`, sha256: hash }] },
-      ...(kind === 'fine' ? { terrain: { dataId: hash, key: `terrain/prepared/${hash}/manifest.json`, sha256: hash,
-        verticalDatum: 'EGM2008', surface: 'DSM', gridHash: hash, coverageHash: hash, layoutVersion: 1 } } : {}) };
-  };
-  const manifest = manifestV5Schema.parse({ ...rest, version: 5, descriptors, frames, mapFrameCount: count, layers,
-    recipe: createRecipeIdentity(product, 'a'.repeat(64)),
-    method: { ...base.method, id: [...new Set(layers.map(layer => descriptors.layers[layer].methodId))].join('+') },
-    surfaces: [surface('native'), surface('fine')].filter(item => item.layers.length),
-    artifacts: frames.slice(0, count).flatMap(frame => renderedLayers(layers).map(layer => ({ layer, frame: frame.id,
-      tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'a'.repeat(64) }))) });
-  if (options.profiles) attachProfiles(manifest, prefix, options.profileLevels);
-  return { manifest, expiresAtMs: Date.parse(manifest.expiresAt), templates: Object.fromEntries(renderedLayers(layers).map(layer =>
-    [layer, `https://api.test/tiles/gfs/${manifest.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`])) };
+  const build = fixtureBuild({ frames, mapFrameCount: count, layers: [...(options.layers ?? product.layers)] });
+  if (options.profiles) attachProfiles(build.manifest, `builds/gfs/${build.manifest.buildId}`, options.profileLevels);
+  return build;
 }
 
 /** Declare a native profile pack without the artifact bookkeeping the builder never serves. */
@@ -87,19 +65,17 @@ export function retainedProfileBuild(): PinnedBuild {
   return fixtureProfileBuild({ frameHours: retainedHours, mapFrameCount: 24 });
 }
 
-/** Retained single-surface reader with the same long forecast axis. */
-export function retainedLegacyPointBuild(version: 3 | 4 = 4): PinnedBuild {
-  const base = fixtureManifest({ layers: ['usable-lift-agl'], frames: retainedPointBuild().manifest.frames });
-  return fixtureBuild({ ...base, version, ...(version === 4 ? { patches: [fixturePatch(base)] } : {}) });
+/** Older v5 publication without an explicit map prefix. */
+export function retainedUnprefixedPointBuild(): PinnedBuild {
+  return fixtureBuild({ layers: ['usable-lift-agl'], frames: retainedPointBuild().manifest.frames });
 }
 
 /** Reply only with requested cells; fine fields become unavailable outside the map prefix. */
 export function fixturePointSample(build: PinnedBuild, input: string): SamplePayload {
   const m = build.manifest;
-  if (m.version !== 5) throw new Error('Point fixture requires v5');
   const url = new URL(input), frames = url.searchParams.get('frame')!.split(','), layers = url.searchParams.get('layers')!.split(',') as LayerId[];
   const values = FIXTURE_LAYER_VALUES;
-  return publishedSampleResponseSchema.parse({ version: 5, model: m.model, buildId: m.buildId,
+  return sampleResponseV5Schema.parse({ version: 5, model: m.model, buildId: m.buildId,
     lat: Number(url.searchParams.get('lat')), lon: Number(url.searchParams.get('lon')), method: m.method, source: m.source, expiresAt: m.expiresAt,
     surfaces: m.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })),
     frames: m.frames.filter(frame => frames.includes(frame.id)).map(frame => ({ ...frame, layers: Object.fromEntries(layers.map(layer => {
@@ -117,7 +93,6 @@ const FIXTURE_LAYER_VALUES: Partial<Record<LayerId, number>> = { 'usable-lift-ms
 /** Native profile column served for the same tiny grid as the scalar fixture. */
 export function fixtureProfileResponse(build: PinnedBuild, input: string): ProfileResponse {
   const m = build.manifest;
-  if (m.version !== 5) throw new Error('Profile fixture requires v5');
   const native = m.surfaces.find(surface => surface.kind === 'native');
   if (!native?.profiles) throw new Error('Profile fixture requires a native profile pack');
   const url = new URL(input), frames = url.searchParams.get('frame')!.split(','), layers = url.searchParams.get('layers')!.split(',') as LayerId[];

@@ -1,0 +1,158 @@
+{
+  "baseline": "ab80afb0e0d9a08e5845d15c1e807e7615de97a1",
+  "models": {
+    "gfs": {
+      "frames": [
+        {
+          "id": "f001",
+          "validTime": "2026-06-21T13:00:00.000Z",
+          "intervalStart": "2026-06-21T12:00:00.000Z",
+          "intervalEnd": "2026-06-21T13:00:00.000Z"
+        },
+        {
+          "id": "f002",
+          "validTime": "2026-06-21T14:00:00.000Z",
+          "intervalStart": "2026-06-21T13:00:00.000Z",
+          "intervalEnd": "2026-06-21T14:00:00.000Z"
+        }
+      ],
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "sfc-temp-c"
+      ],
+      "descriptorSha256": "30ece074e0b34e753d2f9ab2afd10634c9449dcb535f9335fb62de6932dab89f",
+      "storedMsl": true,
+      "surfaces": [
+        {
+          "kind": "native",
+          "coverage": "9602e94cfe31845217e4611b46d379987e883c7918cc50c819d46fe1ee404304",
+          "samples": [
+            "f5c76b931e34b4a1471d3064eb0134454821b98227849452fc22090252cd43a0"
+          ],
+          "profiles": [
+            "3e100f97daa2f53914dfb35c46a48e0da0b77fb1b9abc7edba927dfbf7f41b8c"
+          ]
+        },
+        {
+          "kind": "fine",
+          "coverage": "05acda96fe42946f5ce02968a862dbf39a9a160f183d21cae18b7924de535720",
+          "samples": [
+            "a1cbf640412cb5e19857524ad9176f4f088f8d7c247db5e86be393c5dcf0326f"
+          ]
+        }
+      ],
+      "pixels": {
+        "precip-rate/f001": "682fe913aab7b11d46bc83be7584df111ff858d490f9a3069340bc37bd71b3f0",
+        "usable-lift-msl/f001": "94c840e2fed52b28e7d4da5fa29ffac145623796384c18efe6cb3e81b68dfa2a",
+        "usable-lift-agl/f001": "ed33b0cdcd182c26fe0322561e479d663f9c6af349ffad27d3df536d4cac592f",
+        "precip-rate/f002": "ec8877b764f1b58bba3fb1523e1b9b36e1158eb40e6524649f797a5cb028fe7f",
+        "usable-lift-msl/f002": "94c840e2fed52b28e7d4da5fa29ffac145623796384c18efe6cb3e81b68dfa2a",
+        "usable-lift-agl/f002": "ed33b0cdcd182c26fe0322561e479d663f9c6af349ffad27d3df536d4cac592f"
+      }
+    },
+    "icon-eu": {
+      "frames": [
+        {
+          "id": "f001",
+          "validTime": "2026-06-21T13:00:00.000Z",
+          "intervalStart": "2026-06-21T12:00:00.000Z",
+          "intervalEnd": "2026-06-21T13:00:00.000Z"
+        },
+        {
+          "id": "f002",
+          "validTime": "2026-06-21T14:00:00.000Z",
+          "intervalStart": "2026-06-21T13:00:00.000Z",
+          "intervalEnd": "2026-06-21T14:00:00.000Z"
+        }
+      ],
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "sfc-temp-c"
+      ],
+      "descriptorSha256": "c9811e1ca33edf61fca5abde473f4512d5b0d461746fb86d25ddf0aaf5c12e35",
+      "storedMsl": true,
+      "surfaces": [
+        {
+          "kind": "native",
+          "coverage": "153882d455a315a541544fd0eac617750dea4c6bf187bf40a5b985c8b241dbc9",
+          "samples": [
+            "50c61399fb1abdbd3021459c4cc1369eef5b90529a74311fdbe26e988b9bc214"
+          ],
+          "profiles": [
+            "33805a53f7a87679fbb0a9d55963f808cde25ff2063e4c6a3383c6651a6c81ed"
+          ]
+        },
+        {
+          "kind": "fine",
+          "coverage": "a2b9a55c1bffbe2d29c19e9478e5890584c9a0978de7cb864a49fd6bdf1737d4",
+          "samples": [
+            "1562c2fec398fea57729017e918a391d4339fb4feabf45ad5f3b27d504428718"
+          ]
+        }
+      ],
+      "pixels": {
+        "precip-rate/f001": "66f496b0dedc819835c063d9d087e4b288fde0b4b914838c5fcf863d7d473bb0",
+        "usable-lift-msl/f001": "7c7984d59bb37910a9da3042faa7cccbbfced0f36364339ce59e1183f9868b78",
+        "usable-lift-agl/f001": "de0c062014108a5a835e2a369d07a7b8a4034f92d2cc44ebade2f34c15a8d9a3",
+        "precip-rate/f002": "c3e9949131956f4d81f04d57898e3d2a5916092c49039446448bd908a62803b2",
+        "usable-lift-msl/f002": "7c7984d59bb37910a9da3042faa7cccbbfced0f36364339ce59e1183f9868b78",
+        "usable-lift-agl/f002": "de0c062014108a5a835e2a369d07a7b8a4034f92d2cc44ebade2f34c15a8d9a3"
+      }
+    },
+    "rrfs": {
+      "frames": [
+        {
+          "id": "f001",
+          "validTime": "2026-06-21T13:00:00.000Z",
+          "intervalStart": "2026-06-21T12:00:00.000Z",
+          "intervalEnd": "2026-06-21T13:00:00.000Z"
+        },
+        {
+          "id": "f002",
+          "validTime": "2026-06-21T14:00:00.000Z",
+          "intervalStart": "2026-06-21T13:00:00.000Z",
+          "intervalEnd": "2026-06-21T14:00:00.000Z"
+        }
+      ],
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "sfc-temp-c"
+      ],
+      "descriptorSha256": "1015fa56a80684a14e0fa108084428f9675b6b65ed3d66d7780fc0286c31bdb6",
+      "storedMsl": true,
+      "surfaces": [
+        {
+          "kind": "native",
+          "coverage": "944288be21af0946bb4e3c8c3e30064f61f26d18c4eb0ef324649ac175009c76",
+          "samples": [
+            "41f12c207bb9a50855260affbba0149b49f07438b62e0fe410a919413f482d56"
+          ],
+          "profiles": [
+            "c3d30d5435f6665a2a3bfb0cbbe2345c63b18f9729d705ed3c89b665902d2121"
+          ]
+        },
+        {
+          "kind": "fine",
+          "coverage": "ed908587eb8badb72410e7f66f43c16fbf176411907d0088e29214b1a0b6b6ef",
+          "samples": [
+            "56607ebfe661e362f7b9caf3aac4e08c38082bb23f2f0cffeac5494b7f71cbdd"
+          ]
+        }
+      ],
+      "pixels": {
+        "precip-rate/f001": "eeb17051d754f3dc4284689eec2dcef188586eecaea9ff03826b29763ccc65ed",
+        "usable-lift-msl/f001": "c36145c0ec384e8e0d16628e151dfebd1f0e6cebec0772be0a686974ef613b3b",
+        "usable-lift-agl/f001": "9aa870e2d2f9b4796740938f79a146a59337e648808afe441d4bcec2c9aca412",
+        "precip-rate/f002": "fd5622baad64cf7911e29b6aa21b882adc5769a2e9d48b593f114ecabd72c2cc",
+        "usable-lift-msl/f002": "da9afeb03321b51f90027331c563f0cfe0f37878cac3ed52ed9637d0d74708a3",
+        "usable-lift-agl/f002": "58755d09940528935e0a862ba87fab2418ad5d5c71a22c5b0a50a9cc1e9b468b"
+      }
+    }
+  }
+}

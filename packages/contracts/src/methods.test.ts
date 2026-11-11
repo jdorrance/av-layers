@@ -1,6 +1,7 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema, getProduct } from './index.js';
+import { getProduct } from './products.js';
+import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema } from './index.js';
 import { deriveSoaringViews, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring';
 
 describe('implemented method snapshots', () => {

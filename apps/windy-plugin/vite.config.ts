@@ -1,3 +1,4 @@
+import { browserBundleBudget } from '../../scripts/browser-bundle.js';
 import { defineConfig } from 'vite';
 import { basename } from 'node:path';
 import config from './src/pluginConfig';
@@ -16,7 +17,7 @@ export default defineConfig({
     minify: 'esbuild',
     sourcemap: true
   },
-  plugins: [{
+  plugins: [browserBundleBudget(98_000), {
     name: 'windy-metadata',
     generateBundle() {
       for (const [fileName, data] of Object.entries({

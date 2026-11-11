@@ -124,6 +124,13 @@ it('fails if a local input disappears after admission instead of downloading unr
   expect((await readdir(input.root)).filter(name => name.startsWith('.serving-'))).toEqual([]);
 });
 
+it('checks each source receipt when frame counts share a layout', async () => {
+  const input = await fixture(), part = input.parts[1]!, shard = part.shards[0]!;
+  input.parts[1] = { ...part, shards: [{ ...shard, storedCells: shard.storedCells + 1 }, ...part.shards.slice(1)] };
+  await expect(writeServingGroups(input)).rejects.toThrow('Forecast shard surface layout mismatch');
+  expect(input.store.gets).toEqual([]);
+});
+
 it('lets the merger reject corrupted linked inputs before publishing serving objects', async () => {
   const input = await fixture(); await localInputs(input);
   const key = input.parts[0]!.shards[0]!.key, path = join(input.root, key), bytes = await readFile(path);

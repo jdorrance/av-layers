@@ -1,7 +1,8 @@
 import { validateLocalBuild } from './local-build.js';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { DEFAULT_MODEL, getProduct, mapFrameCount, layerSurface, modelIdSchema } from '@av/contracts';
+import { DEFAULT_MODEL, getProduct } from '@av/contracts/models';
+import { modelIdSchema } from '@av/contracts';
 import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
 
 export async function runBatch(args = process.argv.slice(2)): Promise<void> {
@@ -17,56 +18,36 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const { buildProduct } = await import('./build.js');
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
-    let terrain, refinement, wholeDomain;
-    if (values['terrain-ref']) {
-      const [{ readLocalFile }, { parseJson }, { preparedTerrainRefSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js'), import('./terrain/prepare.js')]);
-      terrain = parseJson(await readLocalFile(values['terrain-ref'], 16 * 1024), preparedTerrainRefSchema, 16 * 1024);
-    }
-    if (values['terrain-catalog-ref']) {
-      const [{ readLocalFile }, { parseJson, terrainAssetSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js')]);
-      const catalogRef = parseJson(await readLocalFile(values['terrain-catalog-ref'], 16 * 1024), terrainAssetSchema, 16 * 1024);
-      const directory = values['terrain-store-dir'];
-      const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : (await import('./storage.js')).r2Storage();
-      refinement = { catalogRef, storage };
-      wholeDomain = { catalogRef, storage };
-    }
-    console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], ...(terrain ? { terrain } : {}), ...(refinement ? { refinement } : {}), ...(wholeDomain ? { wholeDomain } : {}) }));
+    const catalog = values['terrain-catalog-ref'];
+    if (!catalog) throw new Error('--terrain-catalog-ref is required for configured forecasts');
+    const [{ readLocalFile }, { parseJson, terrainAssetSchema }] = await Promise.all([import('./local-file.js'), import('./terrain/contract.js')]);
+    const catalogRef = parseJson(await readLocalFile(catalog, 16 * 1024), terrainAssetSchema, 16 * 1024);
+    const directory = values['terrain-store-dir'];
+    const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : (await import('./storage.js')).r2Storage();
+    console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle, cacheDir: values['cache-dir'], wholeDomain: { catalogRef, storage } }));
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
-    const [{ loadCoverage }, { estimateCapacity, estimateRetention, prepareBuild }, { getForecastProvider }, { planRefinementCoverage }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js'), import('./refinement/coverage.js')]);
+    const [{ loadCoverage }, { estimateRetention }, { getForecastProvider }] = await Promise.all([import('./coverage.js'), import('./capacity.js'), import('./providers.js')]);
     const number = (value: string | undefined) => value === undefined ? undefined : Number(value);
     const retentionScenario = { cadenceHours: number(values['cadence-hours']), retentionDays: number(values['retention-days']) };
     const mask = await loadCoverage(product);
     const { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport, nativeSparseMask } = await import('./whole-domain/coverage.js');
     const plan = wholeDomainPlan(product);
-    if (plan) {
-      if ((['frames', 'layers', 'models', 'native-zoom'] as const).some(key => values[key] !== undefined)) {
-        throw new Error('Whole-domain capacity accepts only retention overrides');
-      }
-      const { violations: retentionViolations, ...retention } = estimateRetention(product.execution.schedule, retentionScenario);
-      const provider = getForecastProvider(product.modelId), fine = await loadBundledFineCoverage(product, plan);
-      const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
-      const { packedTerrainColumnBudget } = await import('@av/forecast/refinement');
-      const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES } = await import('./whole-domain/capacity.js');
-      const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
-      const native = nativeSparseMask(mask);
-      const capacity = admitWholeDomain({ product, plan, nativeBlocks: native.coverage.blockIds, nativeActive: active.length, nativeMask: mask, fine: fine.mask,
-        nativeMaskBytes: mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength, frames: product.frameHours.length, mapFrames: mapFrameCount(product), groupFrames: Math.ceil(product.frameHours.length / product.execution.shards), maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
-        auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
-        nativeLayers: product.layers.filter(layer => layerSurface(layer) === 'native').length,
-        fineLayers: product.layers.filter(layer => layerSurface(layer) === 'fine').length, columns, terrainBytes: fine.mask.coverage.offsets[fine.mask.coverage.blockIds.length]! * 5 });
-      const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity,
-        retention: { ...retention, retainedNumericBytes: retention.retainedPerModel * capacity.numericBytes },
-        violations: [...capacity.violations, ...retentionViolations] };
-      console.log(JSON.stringify(report, null, 2));
-      if (report.violations.length) process.exitCode = 1;
-      return;
-    }
-    const refinements = planRefinementCoverage({ product, mask });
-    const { layout, capacity } = prepareBuild(mask, product, { ...getForecastProvider(product.modelId), refinements });
-    const report = estimateCapacity(mask, product, layout.storedCells, { frames: number(values.frames), layers: number(values.layers), models: number(values.models), nativeZoom: number(values['native-zoom']), ...retentionScenario }, capacity.refinement);
-    console.log(JSON.stringify({ ...report, currentProductAdmission: { model: product.modelId, frames: product.frameHours.length, layers: product.layers.length, nativeZoom: product.maxNativeZoom, rasterWorkers: capacity.rasterWorkers, workingSet: capacity.workingSet, estimatedPeakBytes: capacity.estimatedPeakBytes, budgetBytes: capacity.budgets.peakRssBytes, scope: 'Configured refinement grids included. Scenario changes need their own memory estimate.' } }, null, 2));
+    if (!plan) throw new Error('Model requires a configured whole-domain grid');
+    const { violations: retentionViolations, ...retention } = estimateRetention(product.execution.schedule, retentionScenario);
+    const provider = getForecastProvider(product.modelId), fine = await loadBundledFineCoverage(product, plan);
+    const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+    const { packedTerrainColumnBudget } = await import('@av/forecast/refinement');
+    const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput } = await import('./whole-domain/capacity.js');
+    const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
+    const groups = partitionForecastHours(product.frameHours, product.execution.shards);
+    const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider,
+      { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns }, groups));
+    const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity,
+      retention: { ...retention, retainedNumericBytes: retention.retainedPerModel * capacity.numericBytes },
+      violations: [...capacity.violations, ...retentionViolations] };
+    console.log(JSON.stringify(report, null, 2));
     if (report.violations.length) process.exitCode = 1;
   } else if (command === 'input-proof') {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));

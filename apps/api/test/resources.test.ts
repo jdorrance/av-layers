@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ByteCache, MaterializedReads, readBoundedStream, readObjectBytes, inFlightAllocationBytes, reserveAllocation, binaryRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
+import { ByteCache, MaterializedReads, getR2Object, r2WaitDuration, readBoundedStream, readObjectBytes, inFlightAllocationBytes, reserveAllocation, binaryRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST } from '../src/resources';
 
 describe('serving resource bounds', () => {
   it('admits three distinct point pages while bounding their combined reads', async () => {
@@ -24,6 +24,29 @@ describe('serving resource bounds', () => {
     finally { release(); }
     await pending;
     expect(peak).toBe(8); expect(active).toBe(0); expect(completed).toBe(138);
+  });
+  it('counts overlapping R2 waits once and excludes gaps between them', async () => {
+    let time = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => time);
+    try {
+      const completions: Array<() => void> = [];
+      const bucket = { get: () => new Promise<null>(resolve => completions.push(() => resolve(null))) } as unknown as R2Bucket;
+      const metrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
+      const ctx = { metrics, waitUntil() {} };
+      const first = getR2Object(bucket, 'first', ctx);
+      time = 5;
+      const second = getR2Object(bucket, 'second', ctx);
+      time = 10;
+      completions[0]!(); await first;
+      expect(r2WaitDuration(metrics, 13)).toBe(13);
+      time = 20;
+      completions[1]!(); await second;
+      time = 25;
+      const third = getR2Object(bucket, 'third', ctx);
+      time = 27;
+      completions[2]!(); await third;
+      expect(r2WaitDuration(metrics, time)).toBe(22);
+    } finally { clock.mockRestore(); }
   });
   it('evicts by bytes and recency, expires entries and refuses oversized entries', () => {
     const cache = new ByteCache<string, number>(3, 10);

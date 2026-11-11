@@ -19,6 +19,10 @@ selected time falls outside the map forecast. Closing the pane ends point
 requests while the overlay continues following Windy's timeline until build expiry.
 For a standalone map, use [`@av/preview`](../preview/README.md).
 
+The [build check](vite.config.ts) bounds compressed plugin JavaScript and
+rejects server modules in the browser output. On Node 22.23.4, the production
+plugin measured 95.4 kB gzip.
+
 ## Source layout
 
 - [src/plugin.ts](src/plugin.ts): pane lifecycle and Windy map events.

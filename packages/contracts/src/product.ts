@@ -1,10 +1,9 @@
 import z from 'zod';
-import { gridSchema, type Grid } from './geometry.js';
+import { gridSchema } from './grid-schema.js';
+import { type Grid } from './geometry.js';
 import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, MAX_FORECAST_SHARDS } from './format.js';
-import { NATIVE_LAYER_IDS } from './native-layers.js';
+import { LAYER_IDS, type LayerId } from './layers.js';
 
-export const LAYER_IDS = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', ...NATIVE_LAYER_IDS] as const;
-export type LayerId = typeof LAYER_IDS[number];
 const capabilitiesSchema = z.object({
   verticalCoordinate: z.enum(['isobaric', 'model-levels']),
   maxVerticalLevels: z.number().int().positive().max(256),

@@ -1,7 +1,8 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { getProduct, parseBoundedJson } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { parseBoundedJson } from '@av/contracts';
 import { readLocalFile } from '../local-file.js';
 import { configuredRefinements } from './config.js';
 

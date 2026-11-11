@@ -22,8 +22,7 @@ import {
   validateNormalizedFrame
 } from '@av/forecast';
 import { loadCoverage } from '../coverage.js';
-import { prepareBuild } from '../capacity.js';
-import { createSplitGribProvider } from './provider.js';
+import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
 import { decodeSplitGribField } from './grib.js';
@@ -880,12 +879,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     // Night hours over Europe (00..01 UTC and 19..24 UTC in October) are omitted before acquisition
     expect(daylightHours).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
 
-    const { capacity } = prepareBuild(mask, regionalProduct, {
-      ...createSplitGribProvider(profile.model),
-      frameCount: daylightHours.length
-    });
-    expect(capacity.violations).toEqual([]);
-    expect(capacity.tilesByZoom).toEqual([1, 2, 4, 8, 16, 42, 134, 434, 1514, 5580, 21280].slice(0, profile.model.maxNativeZoom + 1));
+    expect(() => assertForecastInputs(mask, regionalProduct)).not.toThrow();
   });
 
   it.skipIf(!PROBE_DIR)(

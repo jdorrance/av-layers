@@ -34,10 +34,53 @@ export class ByteCache<K, V> {
   }
 }
 
-export interface RequestMetrics { r2Reads: number; r2Bytes: number; cacheHits: number; coalesced: number; responseCache?: 'hit' | 'miss' | 'bypass' }
+export interface RequestMetrics {
+  r2Reads: number;
+  r2Bytes: number;
+  cacheHits: number;
+  coalesced: number;
+  admitMs?: number;
+  r2WaitMs?: number;
+  responseCache?: 'hit' | 'miss' | 'bypass';
+  route?: string;
+  model?: string;
+  buildId?: string;
+  problemCode?: string;
+}
 export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metrics?: RequestMetrics; responseCacheEnabled?: boolean }
-export function countRead(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.r2Reads++; }
 export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.cacheHits++; }
+
+const activeR2Waits = new WeakMap<RequestMetrics, { started: number; count: number }>();
+
+function startR2Wait(metrics: RequestMetrics): () => void {
+  let wait = activeR2Waits.get(metrics);
+  if (!wait) {
+    wait = { started: performance.now(), count: 0 };
+    activeR2Waits.set(metrics, wait);
+  }
+  wait.count++;
+  return () => {
+    if (--wait.count > 0) return;
+    metrics.r2WaitMs = (metrics.r2WaitMs ?? 0) + (performance.now() - wait.started);
+    activeR2Waits.delete(metrics);
+  };
+}
+
+export function r2WaitDuration(metrics: RequestMetrics, finished: number): number | undefined {
+  const wait = activeR2Waits.get(metrics);
+  return wait ? (metrics.r2WaitMs ?? 0) + (finished - wait.started) : metrics.r2WaitMs;
+}
+
+export function getR2Object(bucket: R2Bucket, key: string, ctx?: WaitContext, options?: Omit<R2GetOptions, 'onlyIf'> & { onlyIf?: undefined }): Promise<R2ObjectBody | null>;
+export function getR2Object(bucket: R2Bucket, key: string, ctx: WaitContext | undefined, options: R2GetOptions): Promise<R2Object | R2ObjectBody | null>;
+export async function getR2Object(bucket: R2Bucket, key: string, ctx?: WaitContext, options?: R2GetOptions): Promise<R2Object | R2ObjectBody | null> {
+  const metrics = ctx?.metrics;
+  if (!metrics) return bucket.get(key, options);
+  const stopWait = startR2Wait(metrics);
+  metrics.r2Reads++;
+  try { return await bucket.get(key, options); }
+  finally { stopWait(); }
+}
 
 export function waitFor<T>(promise: Promise<T>, signal?: AbortSignal, discard?: (value: T) => void): Promise<T> {
   if (!signal) return promise;
@@ -207,7 +250,10 @@ export async function readObjectBytes(object: R2ObjectBody, limit: number, range
     void object.body.cancel().catch(() => {});
     throw new ResourceLimitError('Object exceeds byte budget');
   }
-  return readBoundedStream(object.body, range ? limit : object.size, ctx, { signal, reserved, exactLength: !range });
+  const metrics = ctx?.metrics;
+  const stopWait = metrics && startR2Wait(metrics);
+  try { return await readBoundedStream(object.body, range ? limit : object.size, ctx, { signal, reserved, exactLength: !range }); }
+  finally { stopWait?.(); }
 }
 
 export function estimateJsonBytes(value: unknown): number {

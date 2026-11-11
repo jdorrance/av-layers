@@ -13,6 +13,30 @@ import { readTile } from '../src/pmtiles';
 afterEach(() => { state.load = undefined; });
 
 describe('PMTiles tile admission', () => {
+  it('drops a disconnected queued tile and preserves a shared tile read', async () => {
+    state.compression = 1;
+    let release!: () => void, started = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    state.load = async () => { started++; await gate; return Uint8Array.of(1).buffer; };
+    const bucket = {} as R2Bucket;
+    const owner = new AbortController(), queued = new AbortController();
+    const first = readTile(bucket, 'archive', 4, 0, 0, undefined, owner.signal);
+    const joined = readTile(bucket, 'archive', 4, 0, 0);
+    const active = Array.from({ length: 7 }, (_, index) => readTile(bucket, 'archive', 4, index + 1, 0));
+    const waiting = readTile(bucket, 'archive', 4, 8, 0, undefined, queued.signal);
+    const ownerCanceled = expect(first).rejects.toThrow('Owner disconnected');
+    const queuedCanceled = expect(waiting).rejects.toThrow('Waiter disconnected');
+    try {
+      await vi.waitFor(() => expect(started).toBe(8));
+      owner.abort(new Error('Owner disconnected'));
+      queued.abort(new Error('Waiter disconnected'));
+      await Promise.all([ownerCanceled, queuedCanceled]);
+    } finally { release(); }
+    await expect(joined).resolves.toEqual(Uint8Array.of(1).buffer);
+    await Promise.all(active);
+    expect(started).toBe(8);
+  });
+
   it.each([false, true])('drains three viewport bursts inside eight reads, including owner failure=%s', async fail => {
     state.compression = 1;
     let active = 0, peak = 0, started = 0, finish!: () => void;

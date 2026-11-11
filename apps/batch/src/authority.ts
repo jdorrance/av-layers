@@ -1,4 +1,5 @@
-import { getProduct, type ModelId } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
+import { type ModelId } from '@av/contracts';
 
 const issued = Symbol('serialized GitHub workflow');
 export interface PublicationAuthority {

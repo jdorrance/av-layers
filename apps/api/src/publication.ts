@@ -1,7 +1,8 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, renderedLayers, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
-import { resolveCoverage, sha256 } from './coverage';
+import { getProduct } from '@av/contracts/models';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
-import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { binaryRead, getR2Object, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, waitFor, type WaitContext } from './resources';
 
 const POINTER_TTL_MS = 15_000;
 const NEGATIVE_POINTER_TTL_MS = 5_000;
@@ -10,11 +11,10 @@ type PointerEntry = { pointer: ModelPointer; fetchedAt: number } | { problem: Pr
 const pointerCache = new WeakMap<R2Bucket, ByteCache<ModelId, PointerEntry>>();
 const pointerReads = new WeakMap<R2Bucket, MaterializedReads<ModelPointer>>();
 const pointerStates = new WeakMap<ModelPointer | Problem, { until: number; identity: string }>();
-export type PublishedManifest = Manifest | ManifestV5;
-const manifestCache = new WeakMap<R2Bucket, ByteCache<string, PublishedManifest>>();
-const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: PublishedManifest; bytes: number }>>();
-const artifactIndexes = new WeakMap<PublishedManifest, Map<string, Manifest['artifacts'][number] & { channel: number }>>();
-const productValidations = new WeakMap<PublishedManifest, { product: ProductDefinition; pending: Promise<void> }>();
+const manifestCache = new WeakMap<R2Bucket, ByteCache<string, ManifestV5>>();
+const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: ManifestV5; bytes: number }>>();
+const artifactIndexes = new WeakMap<ManifestV5, Map<string, ManifestV5['artifacts'][number]>>();
+const productValidations = new WeakMap<ManifestV5, { product: ProductDefinition; pending: Promise<void> }>();
 
 function isOperationalReadFailure(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) return true;
@@ -22,7 +22,8 @@ function isOperationalReadFailure(error: unknown, signal: AbortSignal): boolean 
   return !/JSON|Object exceeds byte budget|Response exceeds byte budget/.test(error.message);
 }
 
-export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false, ctx?: WaitContext): Promise<ModelPointer> {
+export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<ModelPointer> {
+  waiterSignal?.throwIfAborted();
   let entries = pointerCache.get(bucket);
   if (!entries) { entries = new ByteCache(32, 1024 * 1024); pointerCache.set(bucket, entries); }
   const cached = entries.get(model);
@@ -42,8 +43,7 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
       signal.addEventListener('abort', abort, { once: true });
     });
     signal.throwIfAborted();
-    countRead(ctx);
-    const object = await bucket.get(`catalog/${model}/latest.json`);
+    const object = await getR2Object(bucket, `catalog/${model}/latest.json`, ctx);
     if (!object) {
       const problem = new Problem(503, 'publication-unavailable', `No publication available for ${model}`);
       const until = Date.now() + NEGATIVE_POINTER_TTL_MS;
@@ -64,19 +64,20 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     pointerStates.set(result.data, { until, identity });
     entries!.set(model, { pointer: result.data, fetchedAt }, decoded.estimatedBytes + 256, until);
     return result.data;
-  }, ctx);
+  }, ctx, waiterSignal);
 }
 
 export function pointerCacheState(value: ModelPointer | Problem): { until: number; identity: string } | undefined {
   return pointerStates.get(value);
 }
 
-export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext, currentPointer?: ModelPointer) {
+export async function admit(bucket: R2Bucket, model: ModelId, build: string, ctx?: WaitContext, currentPointer?: ModelPointer, waiterSignal?: AbortSignal) {
+  waiterSignal?.throwIfAborted();
   validateId(build);
-  let current = currentPointer ?? await pointer(bucket, model, false, ctx);
+  let current = currentPointer ?? await pointer(bucket, model, false, ctx, waiterSignal);
   let entry = current.retained.find(item => item.buildId === build);
   if (!entry) {
-    current = await pointer(bucket, model, true, ctx);
+    current = await pointer(bucket, model, true, ctx, waiterSignal);
     entry = current.retained.find(item => item.buildId === build);
   }
   if (!entry) return fail(404, 'not-retained', 'Build is expired or not retained');
@@ -91,8 +92,10 @@ export async function manifest(
   build: string,
   entry: Awaited<ReturnType<typeof admit>>,
   ctx?: WaitContext,
-  product: ProductDefinition | undefined = getProduct(model)
-): Promise<PublishedManifest> {
+  product: ProductDefinition | undefined = getProduct(model),
+  waiterSignal?: AbortSignal
+): Promise<ManifestV5> {
+  waiterSignal?.throwIfAborted();
   let entries = manifestCache.get(bucket);
   if (!entries) { entries = new ByteCache(64, 4 * 1024 * 1024); manifestCache.set(bucket, entries); }
   const cacheKey = `${model}/${build}`;
@@ -103,8 +106,7 @@ export async function manifest(
     let reads = manifestReads.get(bucket);
     if (!reads) { reads = new MaterializedReads(4); manifestReads.set(bucket, reads); }
     const loaded = await reads.run(cacheKey, async signal => {
-      countRead(ctx);
-      const object = await bucket.get(entry.manifestKey);
+      const object = await getR2Object(bucket, entry.manifestKey, ctx);
       if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
       let decoded: Awaited<ReturnType<typeof readObjectJson>>;
       try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal, MAX_MANIFEST_JSON_TOKENS); }
@@ -112,10 +114,20 @@ export async function manifest(
         if (isOperationalReadFailure(error, signal)) throw error;
         return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
       }
-      const parsed = (typeof decoded.value === 'object' && decoded.value !== null && 'version' in decoded.value && decoded.value.version === 5 ? manifestV5Schema : manifestSchema).safeParse(decoded.value);
+      const parsed = manifestV5Schema.safeParse(decoded.value);
       if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
-      return { manifest: parsed.data, bytes: decoded.estimatedBytes };
-    }, ctx);
+      const published = parsed.data;
+      provenanceReference(published);
+      const index = new Map<string, ManifestV5['artifacts'][number]>();
+      let bytes = decoded.estimatedBytes + 128;
+      for (const item of published.artifacts) {
+        const key = `${item.layer}/${item.frame}`;
+        index.set(key, item);
+        bytes += 64 + key.length * 2;
+      }
+      artifactIndexes.set(published, index);
+      return { manifest: published, bytes };
+    }, ctx, waiterSignal);
     m = loaded.manifest;
     decodedBytes = loaded.bytes;
   }
@@ -124,30 +136,13 @@ export async function manifest(
     fail(503, 'publication-invalid', 'Manifest does not match retained entry');
   }
   ensureLive(m.expiresAt);
-  await validateProduct(m, product);
-  const sampleLayout = m.version === 5 ? undefined : (await resolveCoverage(bucket, m, ctx)).layout;
-  if (!artifactIndexes.has(m)) {
-    provenanceReference(m);
-    try { if (m.version === 5) validateArtifactRecordsV5(m); else validateArtifactRecords(m); } catch { fail(503, 'publication-invalid', 'Invalid artifact records or sample pack metadata'); }
-    if (m.version !== 5 && m.samples.storedCells !== sampleLayout!.storedCells) fail(503, 'publication-invalid', 'Sample pack layout does not match coverage');
-    const frames = new Map(m.frames.map((frame, i) => [frame.id, i]));
-    const layers = new Map(m.layers.map((layer, i) => [layer, i]));
-    const index = new Map<string, Manifest['artifacts'][number] & { channel: number }>();
-    for (const item of m.artifacts) {
-      index.set(`${item.layer}/${item.frame}`, { ...item, channel: frames.get(item.frame)! * m.layers.length + layers.get(item.layer)! });
-    }
-    artifactIndexes.set(m, index);
-  }
-  if (decodedBytes) {
-    // Count validation state and artifact records retained with the manifest.
-    decodedBytes += 128;
-    for (const [key, item] of artifactIndexes.get(m)!) decodedBytes += 64 + key.length * 2 + estimateJsonBytes(item);
-    entries.set(cacheKey, m, decodedBytes, Date.parse(m.expiresAt));
-  }
+  await waitFor(validateProduct(m, product), waiterSignal);
+  ensureLive(m.expiresAt);
+  if (decodedBytes) entries.set(cacheKey, m, decodedBytes, Date.parse(m.expiresAt));
   return m;
 }
 
-async function validateProduct(m: PublishedManifest, product: ProductDefinition | undefined): Promise<void> {
+async function validateProduct(m: ManifestV5, product: ProductDefinition | undefined): Promise<void> {
   if (!product) fail(503, 'publication-invalid', 'Publication does not match admitted product');
   const cached = productValidations.get(m);
   if (cached?.product === product) return cached.pending;
@@ -160,35 +155,33 @@ async function validateProduct(m: PublishedManifest, product: ProductDefinition 
   }
 }
 
-async function checkProduct(m: PublishedManifest, product: ProductDefinition): Promise<void> {
+async function checkProduct(m: ManifestV5, product: ProductDefinition): Promise<void> {
   if (m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
-      || m.layers.some(layer => !product.layers.includes(layer))
-      || (m.version === 5 ? false
-        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > MAX_NATIVE_ZOOM || !sameGrid(m.grid, product.grid))) {
+      || m.layers.some(layer => !product.layers.includes(layer))) {
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
-  if (m.version === 5) {
-    const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
-    if (m.descriptors.layers['precip-rate']?.methodId === PRECIPITATION_METHOD.id) {
-      expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
-      expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
-    }
-    if (product.terrainSubdivisionFactor === undefined
-        || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
-    let plan: ReturnType<typeof planWholeDomainGrid>;
-    try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
-    catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }
-    for (const surface of m.surfaces) {
-      const expected = surface.kind === 'native' ? plan.native : plan.fine;
-      const gridHash = await sha256(new TextEncoder().encode(canonicalGridJson(expected)));
-      if (!sameGrid(surface.grid, expected) || surface.gridHash !== gridHash || surface.coverage.gridHash !== gridHash
-          || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > MAX_NATIVE_ZOOM) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
-    }
+  const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
+  // Display labels are immutable publication metadata.
+  for (const layer of m.layers) expected.layers[layer].label = m.descriptors.layers[layer].label;
+  if (m.descriptors.layers['precip-rate']?.methodId === PRECIPITATION_METHOD.id) {
+    expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
+    expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
+  }
+  if (product.terrainSubdivisionFactor === undefined
+      || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+  let plan: ReturnType<typeof planWholeDomainGrid>;
+  try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
+  catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }
+  for (const surface of m.surfaces) {
+    const expected = surface.kind === 'native' ? plan.native : plan.fine;
+    const gridHash = await sha256(new TextEncoder().encode(canonicalGridJson(expected)));
+    if (!sameGrid(surface.grid, expected) || surface.gridHash !== gridHash || surface.coverage.gridHash !== gridHash
+        || surface.coverage.id !== product.coverageId || surface.coverage.maxZoom > MAX_NATIVE_ZOOM) fail(503, 'publication-invalid', 'Publication surface does not match admitted product');
   }
 }
 
-export function provenanceReference(m: PublishedManifest) {
+export function provenanceReference(m: ManifestV5) {
   try {
     return getProvenanceReference(m);
   } catch {
@@ -196,28 +189,23 @@ export function provenanceReference(m: PublishedManifest) {
   }
 }
 
-export function servedSource(m: PublishedManifest, origin: string): Manifest['source'] {
+export function servedSource(m: ManifestV5, origin: string): ManifestV5['source'] {
   provenanceReference(m);
   return { ...m.source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` };
 }
 
-export function artifact(m: PublishedManifest, layer: LayerId, frame: string) {
+export function artifact(m: ManifestV5, layer: LayerId, frame: string) {
   validateId(frame);
-  if (!renderedLayers(m.layers, m.descriptors.layers).includes(layer) || !renderedFrames(m).some(f => f.id === frame)) fail(404, 'unknown-resource', 'Unknown frame or layer');
   const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);
-  if (!item) fail(503, 'publication-incomplete', 'Artifact missing from manifest');
-  const prefix = `builds/${m.model}/${m.buildId}`;
-  if (item.tilesKey !== `${prefix}/${layer}/${frame}.pmtiles`) {
-    fail(503, 'publication-invalid', 'Invalid artifact key');
-  }
+  if (!item) fail(404, 'unknown-resource', 'Unknown frame or layer');
   return item;
 }
 
-export function readProvenance(bucket: R2Bucket, m: PublishedManifest, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext, signal?: AbortSignal): Promise<Uint8Array> {
+export function readProvenance(bucket: R2Bucket, m: ManifestV5, reference: ReturnType<typeof provenanceReference>, ctx: WaitContext, signal?: AbortSignal): Promise<Uint8Array> {
   return readVerifiedProvenance(bucket, reference, value => { parseProvenance(value, m); }, ctx, signal);
 }
 
-export async function readProvenanceFrame(bucket: R2Bucket, m: PublishedManifest, frameId: string, ctx: WaitContext, signal?: AbortSignal) {
+export async function readProvenanceFrame(bucket: R2Bucket, m: ManifestV5, frameId: string, ctx: WaitContext, signal?: AbortSignal) {
   const frame = m.frames.find(frame => frame.id === frameId);
   if (!frame) return fail(404, 'unknown-resource', 'Unknown provenance frame');
   const index = await readProvenance(bucket, m, provenanceReference(m), ctx, signal);
@@ -238,8 +226,7 @@ export async function readProvenanceFrame(bucket: R2Bucket, m: PublishedManifest
 
 function readVerifiedProvenance(bucket: R2Bucket, reference: { key: string; sha256: string; bytes?: number }, verify: (value: unknown) => void, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   return binaryRead(bucket, `${reference.key}:${reference.sha256}`, async signal => {
-    countRead(ctx);
-    const object = await bucket.get(reference.key);
+    const object = await getR2Object(bucket, reference.key, ctx);
     if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
     if (signal.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
     const limit = reference.bytes ?? object.size;
