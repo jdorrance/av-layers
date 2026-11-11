@@ -107,15 +107,19 @@ export class WindyRasterLayer implements HostTileLayer {
     }
   };
   private readonly idle = (): void => {
+    // A clamped zoom can become idle without emitting moveend.
+    if (this.settled()) return;
     this.render();
     if (this.staging) this.abandonEmpty(this.staging);
     this.prefetch();
   };
-  private readonly settled = (): void => {
-    if (!this.moving || this.map?.maplibreMap.isMoving()) return;
+  private readonly settled = (): boolean => {
+    if (!this.moving || this.map?.maplibreMap.isMoving()) return false;
     this.moving = false;
     // A cached success from the previous viewport cannot prove this one has tiles.
-    if ((this.staging || this.retryEmpty) && (!this.build || this.build.expiresAtMs > Date.now())) this.stageOrReportError();
+    if ((!this.staging && !this.retryEmpty) || (this.build && this.build.expiresAtMs <= Date.now())) return false;
+    this.stageOrReportError();
+    return true;
   };
 
   constructor(private readonly api: NativeRasterApi, baseUrl: string, private url: string, private options: WindyTileOptions, protocol?: RasterTileProtocol) {
@@ -131,6 +135,7 @@ export class WindyRasterLayer implements HostTileLayer {
     if (this.map) throw new Error('Forecast raster layer is already mounted');
     if (!this.protocol) throw new Error('Forecast raster layer is disposed');
     this.map = map;
+    this.moving = map.maplibreMap.isMoving();
     map.maplibreMap.on('render', this.render); map.maplibreMap.on('idle', this.idle);
     map.maplibreMap.on('sourcedata', this.sourceData);
     map.maplibreMap.on('movestart', this.move);

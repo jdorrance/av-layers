@@ -184,16 +184,15 @@ async function loadSplitGribField(
   return { decoded, compressedBytes: buffer.byteLength, sha256: sha256Hex(buffer), cacheHit: false };
 }
 
+type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'representation'>>;
+
 /** Recover the configured trailing flux mean and orientation. */
 export function recoverSplitGribFlux(source: SplitSource, role: 'sensibleHeatFlux' | 'latentHeatFlux',
-  current: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'>,
-  previous: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> | null,
-  hour: number
+  current: WindowField, previous: WindowField | null, hour: number
 ): { readonly values: Float32Array; readonly missing: Uint8Array } {
   return recoverWindow(source, current, previous, hour, 'mean', source.upstream.fields[role].scale);
 }
 
-type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'representation'>>;
 function recoverWindow(source: SplitSource, current: WindowField, previous: WindowField | null, hour: number,
   statistic: 'mean' | 'accumulation', outputSign: 1 | -1 = 1
 ): { readonly values: Float32Array; readonly missing: Uint8Array } {
@@ -216,6 +215,11 @@ function recoverWindow(source: SplitSource, current: WindowField, previous: Wind
     packingErrorPrevious: previous?.representation?.packingError ?? 0,
     outputSign
   });
+}
+
+function frameValues({ values }: DecodedSplitGribField): Float32Array {
+  if (!(values instanceof Float32Array)) throw new Error('Split GRIB frame values require Float32 data');
+  return values;
 }
 
 /** Build midpoint heights from configured interfaces and verify ground agreement. */
@@ -390,7 +394,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       );
       return {
         cycle,
-        terrainM: hsurfRes.decoded.values,
+        terrainM: frameValues(hsurfRes.decoded),
         missingTerrain: hsurfRes.decoded.missing,
         hgtM,
         missingHgt,
@@ -512,15 +516,15 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       grid: source.grid,
       activeIndices: new Uint32Array(activeIndices),
       terrainM: target?.terrainM ?? new Float32Array(staticGeom.terrainM),
-      surfacePressurePa: psRes.decoded.values,
-      temp2mK: t2mRes.decoded.values,
-      specificHumidity2mKgKg: qv2mRes.decoded.values,
+      surfacePressurePa: frameValues(psRes.decoded),
+      temp2mK: frameValues(t2mRes.decoded),
+      specificHumidity2mKgKg: frameValues(qv2mRes.decoded),
       sensibleHeatFluxWm2: target?.sensibleHeatFluxWm2 ?? sensible.values,
       latentHeatFluxWm2: target?.latentHeatFluxWm2 ?? latent.values,
       ...(precipitationOutput ? { precipitationMmPerHour: precipitationOutput.values } : {}),
-      pressurePa: modelPResults.map(r => r.decoded.values),
+      pressurePa: modelPResults.map(r => frameValues(r.decoded)),
       hgtM: target?.hgtM ?? staticGeom.hgtM.map(arr => new Float32Array(arr)),
-      tempK: modelTResults.map(r => r.decoded.values),
+      tempK: modelTResults.map(r => frameValues(r.decoded)),
       ...(Object.keys(auxSurface).length ? { auxSurface } : {}),
       ...(Object.keys(auxLevels).length ? { auxLevels } : {}),
       missing: {

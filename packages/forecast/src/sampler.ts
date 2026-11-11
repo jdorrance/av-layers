@@ -1,4 +1,4 @@
-import { CELL_BYTES, getBit, gridSchema, isCovered, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
+import { CELL_BYTES, getBit, gridSchema, isCovered, lambertConformalGridSchema, prepareGridGeometry, snapGridCoordinate, sparseCoverageLookup, withinGeographicBounds, LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type CoverageMask, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid, type LayerId, type LayerSpec, type SparseCoverage } from '@av/contracts';
 
 export interface GridField { values: Float32Array; flags: Uint8Array }
 export interface PackedGridField extends GridField { coverage: SparseCoverage }
@@ -185,9 +185,23 @@ function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: num
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
+const lambertGridFields = lambertConformalGridSchema.keyof().options;
+const lambertGeometries = new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
+function lambertGeometry(grid: Grid): GridGeometry | null {
+  if (grid.kind !== 'lambert-conformal') return null;
+  const cached = lambertGeometries.get(grid);
+  if (cached && lambertGridFields.every(field => grid[field] === cached.snapshot[field])) return cached.geometry;
+  const snapshot = Object.fromEntries(lambertGridFields.map(field => [field, grid[field]])) as LambertConformalGrid;
+  const geometry = prepareGridGeometry(snapshot);
+  lambertGeometries.set(grid, { snapshot, geometry });
+  return geometry;
+}
+
 export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | null {
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
-  const located = locate(grid, grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null, lat, lon);
+  let geometry: GridGeometry | null;
+  try { geometry = lambertGeometry(grid); } catch { return null; }
+  const located = locate(grid, geometry, lat, lon);
   if (!located) return null;
   const { column: x0, row: y0, fractionX: fx, fractionY: fy } = located;
   const contributors: Contributor[] = [];
@@ -243,7 +257,9 @@ export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: Lay
 export function samplingCovered(mask: SamplingMask, lat: number, lon: number): boolean {
   if (!('coverage' in mask)) return isCovered(mask, lat, lon);
   if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
-  const located = locate(mask.grid, mask.grid.kind === 'lambert-conformal' ? prepareGridGeometry(mask.grid) : null, lat, lon);
+  let geometry: GridGeometry | null;
+  try { geometry = lambertGeometry(mask.grid); } catch { return false; }
+  const located = locate(mask.grid, geometry, lat, lon);
   if (!located) return false;
   const { column, row, fractionX: fx, fractionY: fy } = located;
   const next = mask.grid.wrapLongitude ? (column + 1) % mask.grid.width : column + 1;
@@ -502,7 +518,7 @@ export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array
   const grid = mask.grid, total = latitudes.length;
   if (latitudes.length !== longitudes.length || total < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
   validateSamplingMask(mask);
-  const geometry = grid.kind === 'lambert-conformal' ? prepareGridGeometry(grid) : null;
+  const geometry = lambertGeometry(grid);
   const lowerX = new Uint32Array(total), lowerY = new Uint32Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();

@@ -28,7 +28,7 @@
     "input:proof": "node --import tsx apps/batch/src/cli.ts input-proof",
     "sample-preview": "node --import tsx scripts/sample-preview.ts",
     "dev": "node --import tsx scripts/dev-fixture.ts",
-    "masks:build": "uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py",
+    "masks:build": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py",
     "tools:pmtiles": "node scripts/setup-pmtiles.mjs",
     "docs:generate": "node --import tsx scripts/generate-reference.ts",
     "docs:check": "node --import tsx scripts/generate-reference.ts --check",

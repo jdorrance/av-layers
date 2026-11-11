@@ -3,6 +3,7 @@ import { splitSource } from './source.js';
 const profile = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 2, height: 2 } });
 import { execFileSync } from 'node:child_process';
 import { expect, it } from 'vitest';
+import { recoverSplitGribFlux } from './acquire.js';
 import { decodeCcsdsSamples } from './codec/ccsds.js';
 import { decodeSplitGribField } from './grib.js';
 
@@ -174,4 +175,33 @@ it('ignores unused bitmap padding bits when validating coverage', () => {
   const decoded = decodeSplitGribField(profile, bytes, Uint32Array.of(0, 1, 2, 3));
   expect([...decoded.values]).toEqual([280, 281, NaN, 301]);
   expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
+});
+
+it('recovers late-lead statistical windows from one Float64 array per field', () => {
+  const makeStat = (endHour: number, reference: number, delta: number): Uint8Array => {
+    const base = simpleField(8, 0, [250 + delta, 250, 250, 250]);
+    const s4 = new Uint8Array(58), v4 = new DataView(s4.buffer);
+    v4.setUint32(0, 58); s4[4] = 4; v4.setUint16(7, 8);
+    s4[11] = 2; s4[17] = 1; v4.setUint32(18, 0); s4[22] = 1; s4[28] = 255;
+    const end = new Date(Date.UTC(2026, 0, 1) + endHour * 3_600_000);
+    v4.setUint16(34, end.getUTCFullYear()); s4[36] = end.getUTCMonth() + 1; s4[37] = end.getUTCDate();
+    s4[38] = end.getUTCHours(); s4[41] = 1; s4[46] = 0; s4[47] = 2; s4[48] = 1;
+    v4.setUint32(49, endHour); s4[53] = 255;
+    const out = new Uint8Array(base.length + 24);
+    out.set(base.subarray(0, 16 + 21 + 72), 0);
+    out.set(s4, 16 + 21 + 72);
+    out.set(base.subarray(16 + 21 + 72 + 34), 16 + 21 + 72 + 58);
+    const view = new DataView(out.buffer);
+    view.setBigUint64(8, BigInt(out.length));
+    view.setFloat32(16 + 21 + 72 + 58 + 11, reference);
+    return out;
+  };
+  const reference = 134_217_728; // 2^27: exact in Float32, while +123 loses low bits in Float32.
+  const prev = decodeSplitGribField(profile, makeStat(71, reference, 0), Uint32Array.of(0));
+  const curr = decodeSplitGribField(profile, makeStat(72, reference, 123), Uint32Array.of(0));
+  expect(curr.values).toBeInstanceOf(Float64Array);
+  expect(curr.values[0]! - prev.values[0]!).toBe(123);
+  const recovered = recoverSplitGribFlux(profile, 'sensibleHeatFlux', curr, prev, 72);
+  expect(recovered.values).toBeInstanceOf(Float32Array);
+  expect(recovered.values[0]).toBe(Math.fround((reference + 72 * 123) * profile.upstream.fields.sensibleHeatFlux.scale));
 });

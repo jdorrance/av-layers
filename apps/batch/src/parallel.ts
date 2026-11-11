@@ -1,8 +1,9 @@
-import { mkdir, readdir, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import z from 'zod';
 import { profileRecordBytes, prepareShardedSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
-import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
+import { assertSampleLayoutBindingV5, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, getProduct, getProvenanceReference, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sameJsonValue, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestSchema, parseBoundedJson, parseProvenance, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
 import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES, prepareBuild, type PreparedBuild } from './capacity.js';
 import { createBuildStamp, finishForecast, type BuildOptions } from './build.js';
@@ -96,7 +97,7 @@ const wholeDomainReceiptSchema = z.strictObject({
   metrics: metricsSchema
 });
 type WholeDomainReceipt = z.infer<typeof wholeDomainReceiptSchema>;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const same = sameJsonValue;
 const planHash = (plan: BuildPlan) => sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES));
 function assertReceiptFrames(receipt: Pick<z.infer<typeof receiptSchema>, 'provenance' | 'metrics'>, plan: BuildPlan, shard: number, product: ForecastInputs['product']) {
   const hours = plan.groups[shard]!, frames = hours.map(hour => forecastFrame(plan.cycle, hour, sourceIntervalHours(product, hour)));
@@ -299,6 +300,17 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   return { plan, prepared, identity, product };
 }
 
+async function writeReceipt(path: string, receipt: unknown): Promise<string> {
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
+    await rename(tmp, path);
+    return path;
+  } finally {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 /** One job owns one group; completion is recorded only after its pack and archives finish. */
 export async function buildShard(options: ForecastInputs & { plan: BuildPlan; shard: number; out: string; cacheDir?: string; signal?: AbortSignal; store?: ObjectStorage }): Promise<string> {
   const deadline = options.plan.deadlineAt ?? new Date(Date.parse(options.plan.createdAt) + BUILD_BUDGETS.elapsedMs).toISOString();
@@ -351,10 +363,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
           shards: surface.shards!.map(item => ({ ...item, key: item.key })),
           ...(surface.profiles ? { profiles: { levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards } } : {}) })), metrics: withProcessPeakRss(result.metrics), ...(objects.length ? { objects } : {}) });
       options.signal?.throwIfAborted();
-      const path = localPath(root, `${prefix}/receipt.json`);
-      await writeFile(path + '.tmp', encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
-      await rename(path + '.tmp', path);
-      return path;
+      return await writeReceipt(localPath(root, `${prefix}/receipt.json`), receipt);
     }
     const result = await buildFrames({ ...options, terrain: plan.terrain, prepared: prepared as PreparedBuild, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
       hours: plan.groups[shard], samplesKey: `${prefix}/samples.bin`, journalPrefix: prefix, refinementPrefix: `${prefix}/refinements` });
@@ -363,10 +372,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       provenance: result.receipts, metrics: withProcessPeakRss(result.metrics),
       ...(result.refinements?.length ? { refinements: result.refinements.map(({ id, samples }) => ({ id, sampleSha256: samples.sha256 })) } : {}) });
     options.signal?.throwIfAborted();
-    const path = localPath(root, `${prefix}/receipt.json`);
-    await writeFile(path + '.tmp', encodeBoundedJson(receipt, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS), { flag: 'wx' });
-    await rename(path + '.tmp', path);
-    return path;
+    return await writeReceipt(localPath(root, `${prefix}/receipt.json`), receipt);
   } catch (error) {
     await writeFile(localPath(root, `${prefix}/worker-failure.json`), JSON.stringify({ buildId: plan.buildId, shard, cancelled: options.signal?.aborted ?? false, error: failureReason(error) })).catch(() => {});
     throw error;

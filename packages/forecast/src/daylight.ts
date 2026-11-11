@@ -22,7 +22,7 @@ export function buildIntervalDaylightTimestampsMs(
   endMs: number
 ): readonly number[] {
   if (!Number.isFinite(endMs)) {
-    return [];
+    throw new RangeError('Daylight interval requires a finite end timestamp');
   }
   if (Number.isFinite(startMs) && startMs < endMs) {
     return [startMs, 0.5 * (startMs + endMs), endMs];

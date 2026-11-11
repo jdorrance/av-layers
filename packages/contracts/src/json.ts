@@ -41,3 +41,17 @@ export function encodeBoundedJson(value: unknown, limit: number, maxTokens = MAX
   parseBoundedJson(bytes, maxTokens);
   return bytes;
 }
+
+/** Compare JSON-compatible values structurally without depending on object property insertion order. */
+export function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left)) {
+    return Array.isArray(right) && left.length === right.length && left.every((value, index) => sameJsonValue(value, right[index]));
+  }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(right)) return false;
+  const entries = Object.entries(left).filter(([, value]) => value !== undefined);
+  const fields = right as Record<string, unknown>;
+  const rightKeys = Object.keys(fields).filter(key => fields[key] !== undefined);
+  return entries.length === rightKeys.length &&
+    entries.every(([key, value]) => Object.hasOwn(fields, key) && sameJsonValue(value, fields[key]));
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build coverage bitsets from pinned Natural Earth 1:50m admin-0.
 
-uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 \
+uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 \
   --with pyshp==2.3.1 python scripts/masks/build_masks.py --source ne_50m_admin_0_countries.zip
 """
 
@@ -303,7 +303,7 @@ def write_atomic(path: Path, data: bytes) -> None:
 
 def regeneration_command(args: argparse.Namespace) -> str:
     command = [
-        "uv", "run", "--python", "3.14.7",
+        "uv", "run", "--python", "3.12",
         "--with", "shapely==2.1.2", "--with", "pyproj==3.7.2", "--with", "pyshp==2.3.1",
         "python", "scripts/masks/build_masks.py",
         "--config", str(args.config), "--model", args.model, "--output", str(args.output),

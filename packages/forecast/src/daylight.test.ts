@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { CoverageMask, ProductDefinition, RegularLatLonGrid } from '@av/contracts';
-import { resolveProductFrameHours } from './daylight.js';
+import { buildIntervalDaylightTimestampsMs, resolveProductFrameHours } from './daylight.js';
 
 const product: Pick<ProductDefinition, 'frameHours' | 'intervalHours' | 'capabilities'> = {
   frameHours: [2, 8, 14, 22], intervalHours: 1,
@@ -23,6 +23,8 @@ it('preserves complete no-lift forecasts during polar night', () => {
   expect(resolveProductFrameHours(product, polarMask, '2026-12-21T00:00:00Z')).toEqual(product.frameHours);
 });
 
-it('rejects an invalid cycle before selecting output hours', () => {
+it('rejects an invalid cycle or non-finite daylight interval end timestamp', () => {
   expect(() => resolveProductFrameHours(product, mask, 'invalid')).toThrow('Invalid forecast cycle');
+  expect(() => buildIntervalDaylightTimestampsMs(0, NaN)).toThrow('Daylight interval requires a finite end timestamp');
+  expect(() => buildIntervalDaylightTimestampsMs(NaN, Date.UTC(2026, 5, 21, 12))).not.toThrow();
 });

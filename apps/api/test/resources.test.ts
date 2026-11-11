@@ -149,6 +149,22 @@ it('holds outgoing body permits until consumption or cancellation', async () => 
   await Promise.all(responses.slice(1).map(response => response.body!.cancel()));
 });
 
+it('admits a text response before allocating its encoded UTF-8 body', async () => {
+  const { response } = await import('../src/http');
+  const holding = response(new Uint8Array(4 * 1024 * 1024), 'application/octet-stream');
+  const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+  try {
+    expect(() => response('A☃💨', 'text/plain')).toThrow('Outgoing response');
+    expect(encode).not.toHaveBeenCalled();
+  } finally {
+    encode.mockRestore();
+    await holding.body!.cancel();
+  }
+  const admitted = response('A☃💨', 'text/plain');
+  expect(admitted.headers.get('content-length')).toBe('8');
+  expect(await admitted.text()).toBe('A☃💨');
+});
+
 it('reserves cache-owned body sizes after Content-Length is stripped and rejects corrupt metadata', async () => {
   const { boundCachedResponse, createBoundedResponse, forkResponseForCache } = await import('../src/resources');
   const size = 20 * 1024;

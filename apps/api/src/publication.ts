@@ -1,4 +1,4 @@
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, renderedLayers, gridSchema, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProduct, renderedFrames, renderedLayers, getProvenanceReference, manifestSchema, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, validateArtifactRecords, validateArtifactRecordsV5, type LayerId, type Manifest, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { resolveCoverage, sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
 import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
@@ -160,23 +160,12 @@ async function validateProduct(m: PublishedManifest, product: ProductDefinition 
   }
 }
 
-function sameDescriptorValue(left: unknown, right: unknown): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left)) {
-    return Array.isArray(right) && left.length === right.length && left.every((value, index) => sameDescriptorValue(value, right[index]));
-  }
-  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(right)) return false;
-  const entries = Object.entries(left), fields = right as Record<string, unknown>;
-  return entries.length === Object.keys(fields).length &&
-    entries.every(([key, value]) => Object.hasOwn(fields, key) && sameDescriptorValue(value, fields[key]));
-}
-
 async function checkProduct(m: PublishedManifest, product: ProductDefinition): Promise<void> {
   if (m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.layers.some(layer => !product.layers.includes(layer))
       || (m.version === 5 ? false
-        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > MAX_NATIVE_ZOOM || JSON.stringify(m.grid) !== JSON.stringify(gridSchema.parse(product.grid)))) {
+        : m.coverage.id !== product.coverageId || m.coverage.maxZoom > MAX_NATIVE_ZOOM || !sameGrid(m.grid, product.grid))) {
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
   if (m.version === 5) {
@@ -186,7 +175,7 @@ async function checkProduct(m: PublishedManifest, product: ProductDefinition): P
       expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
     }
     if (product.terrainSubdivisionFactor === undefined
-        || !sameDescriptorValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+        || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
     let plan: ReturnType<typeof planWholeDomainGrid>;
     try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
     catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }

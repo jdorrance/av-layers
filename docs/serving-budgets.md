@@ -2,9 +2,8 @@
 
 The API bounds concurrent requests, R2 range reads, cache memory, and response
 allocations in [apps/api/src/resources.ts](../apps/api/src/resources.ts).
-[Whole-domain measurements](whole-domain-refinement-progress.md) record current
-validation evidence; [project status](status.md) records live deployments. Limits
-apply to the combined work across all grids selected by a request.
+[Project status](status.md) records live deployments. Limits apply to the
+combined work across all grids selected by a request.
 
 ## Cache and in-flight limits
 

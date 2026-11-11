@@ -58,7 +58,10 @@ export function response(body: BodyInit | null, type: string, expiresAt?: string
   let size = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ? body.byteLength : 1024 * 1024;
   if (typeof body === 'string') {
     size = 0;
-    for (const character of body) { const code = character.codePointAt(0)!; size += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4; }
+    for (const character of body) {
+      const codePoint = character.codePointAt(0)!;
+      size += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    }
   }
   if (etag) headers.set('etag', `"${etag}"`);
   return createBoundedResponse(size, () => {

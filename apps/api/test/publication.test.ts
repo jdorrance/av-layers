@@ -80,4 +80,23 @@ describe('validated publication reuse', () => {
     expect(cache.match).toHaveBeenCalledTimes(matches);
     await expired.arrayBuffer();
   });
+
+  it.each([new Error('R2 backend timeout'), new TypeError('R2 transport failure')])('returns a retryable status for a storage $name', async error => {
+    const fixture = createV5Fixture();
+    fixture.get.mockRejectedValueOnce(error);
+    const outage = await fixture.request(`/v1/models/${fixture.manifest.model}/latest`);
+    expect(outage.status).toBe(503);
+    expect(await outage.json()).toMatchObject({ title: 'publication-unavailable', status: 503 });
+  });
+
+  it('returns a retryable status for an incomplete R2 provenance body', async () => {
+    const fixture = createV5Fixture(), get = fixture.get.getMockImplementation()!;
+    fixture.get.mockImplementation(async (key, options) => {
+      if (!key.endsWith('/provenance.json')) return get(key, options);
+      return { size: fixture.objects.get(key)!.byteLength, body: new ReadableStream({ start(controller) { controller.enqueue(Uint8Array.of(123)); controller.close(); } }) };
+    });
+    const result = await fixture.request(`/v1/models/${fixture.manifest.model}/runs/${fixture.buildId}/provenance`);
+    expect(result.status).toBe(503);
+    expect(await result.json()).toMatchObject({ title: 'publication-unavailable', status: 503 });
+  });
 });

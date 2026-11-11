@@ -78,18 +78,21 @@ export class RasterOverlay {
     this.moving = true;
     this.cancelPrefetch();
   };
-  private readonly settled = (): void => {
-    const moved = this.moving;
+  private readonly settled = (): boolean => {
+    if (!this.moving || this.map.isMoving?.()) return false;
     this.moving = false;
     const selection = this.requested;
-    if (!moved || (!this.staging && !this.retryEmpty) || !selection || selection.build.expiresAtMs <= Date.now()) return;
+    if ((!this.staging && !this.retryEmpty) || !selection || selection.build.expiresAtMs <= Date.now()) return false;
     // The renderer can cache a loaded tile after it leaves the viewport without emitting an abort.
     const staging = this.staging;
     this.staging = null;
     this.drop(staging);
     try { this.select(selection.build, selection.layer, selection.frame); } catch { /* select reports a failed replacement. */ }
+    return true;
   };
   private readonly idle = (): void => {
+    // A clamped zoom can become idle without emitting moveend.
+    if (this.settled()) return;
     this.render();
     if (this.staging) this.abandonEmpty(this.staging);
     this.prefetch();
@@ -105,6 +108,7 @@ export class RasterOverlay {
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (build.expiresAtMs <= Date.now()) { this.clear(); return; }
+    this.moving ||= this.map.isMoving?.() ?? false;
     this.retryEmpty = false;
     this.requested = { build, layer, frame };
     if (this.active?.build === build && this.active.layer === layer && this.active.frame === frame) {
@@ -171,7 +175,7 @@ export class RasterOverlay {
 
   private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }
   private tilesSettled(slot: Slot): boolean {
-    return !this.moving && !slot.pending.size && slot.build.expiresAtMs > Date.now() && this.map.isSourceLoaded(slot.id);
+    return !this.moving && !this.map.isMoving?.() && !slot.pending.size && slot.build.expiresAtMs > Date.now() && this.map.isSourceLoaded(slot.id);
   }
   private abandonEmpty(slot: Slot): void {
     if (slot !== this.staging || slot.successful || !this.tilesSettled(slot)) return;

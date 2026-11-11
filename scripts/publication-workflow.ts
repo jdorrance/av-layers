@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { getProduct, publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -284,7 +284,7 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
     if (sha256(descriptorBytes) !== current.coverage.hash) throw new Error('Resume coverage descriptor hash mismatch');
     const descriptor = sparseCoverageDescriptorSchema.parse(parseBoundedJson(descriptorBytes));
     if (descriptor.id !== current.coverage.id || descriptor.gridHash !== current.gridHash || !sameGrid(descriptor.grid, current.grid)
-        || JSON.stringify(descriptor.bounds) !== JSON.stringify(manifest.descriptors.bounds)
+        || !sameJsonValue(descriptor.bounds, manifest.descriptors.bounds)
         || (plan.execution ? descriptor.maxZoom < current.coverage.maxZoom : descriptor.maxZoom !== current.coverage.maxZoom)
         || (current.kind === 'fine' && descriptor.maxZoom !== frozen.fineCoverage.maxZoom)) throw new Error('Resume coverage descriptor binding mismatch');
     const { sparse: sparseFile, tiles: tilesFile } = descriptor.files;
@@ -327,7 +327,7 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     const manifest = publishedManifestSchema.parse(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS));
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
-    const product = getProduct(manifest.model), same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+    const product = getProduct(manifest.model), same = sameJsonValue;
     if (manifest.version === 5) {
       const { readBuildPlan } = await import('../apps/batch/src/parallel.js');
       const plan = await readBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {

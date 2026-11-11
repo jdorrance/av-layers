@@ -173,6 +173,30 @@ describe('point sampling', () => {
       expect(out).toEqual(sampleGrid(lambert, field, latitudes[i], longitudes[i], 'precip-rate', mask, false));
     }
   });
+  it('refreshes Lambert geometry when the grid origin changes', () => {
+    const lambert: Grid = { kind: 'lambert-conformal', earthRadiusM: 6371229, width: 8, height: 8,
+      centralMeridianDeg: 10, latitudeOfOriginDeg: 40, standardParallel1Deg: 38, standardParallel2Deg: 42,
+      x0M: 0, y0M: 0, dxM: 1000, dyM: -1000, wrapLongitude: false };
+    const { lat, lon } = prepareGridGeometry(lambert).gridToGeographic(3, 3)!;
+    const latitudes = Float64Array.of(lat), longitudes = Float64Array.of(lon);
+    const dense = coverage(lambert);
+    const output = new Uint8Array(dense.output.length), halo = new Uint8Array(dense.halo.length);
+    setBit(output, 27); setBit(halo, 26);
+    const sparse = { grid: lambert, tiles: dense.tiles, maxZoom: 0,
+      coverage: sparseCoverageFromDense({ ...lambert, gridHash: 'a'.repeat(64), output, halo }) };
+
+    expect(planSample(lambert, lat, lon)?.contributors.map(cell => cell.index)).toEqual([27]);
+    expect(samplingCovered(sparse, lat, lon)).toBe(true);
+    lambert.x0M += lambert.dxM;
+    expect(planSample(lambert, lat, lon)?.contributors.map(cell => cell.index)).toEqual([26]);
+    expect(samplingCovered(sparse, lat, lon)).toBe(false);
+    expect(preparePointSampling(dense, latitudes, longitudes).contributors).toEqual(Uint32Array.of(26));
+
+    lambert.x0M = NaN;
+    expect(planSample(lambert, lat, lon)).toBeNull();
+    expect(samplingCovered(sparse, lat, lon)).toBe(false);
+    expect(() => preparePointSampling(dense, latitudes, longitudes)).toThrow('Invalid prepared grid');
+  });
   it.each([1000, -1000])('preserves projected bounds, ordered contributors and live mixed-status samples at dy=%i', dyM => {
     const grid: Grid = { kind: 'lambert-conformal', width: 6, height: 6, earthRadiusM: 6371229,
       centralMeridianDeg: 180, latitudeOfOriginDeg: 40, standardParallel1Deg: 38, standardParallel2Deg: 42,

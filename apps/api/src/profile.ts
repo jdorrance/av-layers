@@ -17,6 +17,10 @@ import { servedSource, type PublishedManifest } from './publication';
 import { readPointCoordinates, sampleChannelGroups, selectSampleFields } from './point-query';
 
 interface ReadJob extends PackedRange { apply(bytes: Uint8Array): void }
+const DERIVED_LAYERS: readonly LayerId[] = [
+  'sfc-temp-c', 'sfc-dewpoint-c', 'pbl-height-agl', 'wind-10m-u', 'wind-10m-v',
+  'thermal-top-msl', 'thermal-velocity', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'
+];
 
 export async function serveProfile(request: Request, bucket: R2Bucket, ctx: WaitContext, manifest: PublishedManifest, url: URL): Promise<Response> {
   if (manifest.version !== 5) fail(409, 'profile-unavailable', 'This build has no native profiles');
@@ -43,18 +47,22 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       const point = donor ? geometry.gridToGeographic(donor.column, donor.row) : null;
       const cell = donor && point ? { index: donor.index, lat: point.lat, lon: point.lon, surfaceId: surface.id } : null;
       const plan: SamplePlan | null = donor && cell ? { contributors: [{ ...donor, weight: 1 }], byteRange: { offset: 0, length: 0 } } : null;
-      const values = new Map<string, Record<string, unknown>>(), columns = new Map<string, NativeProfile>(), jobs: ReadJob[] = [];
+      const readLayers = surface.layers.filter(layer => layers.includes(layer) || DERIVED_LAYERS.includes(layer));
+      const values = new Map<string, Record<string, unknown>>(), allValues = new Map<string, Record<string, { value: number | null; status: string }>>(), columns = new Map<string, NativeProfile>(), jobs: ReadJob[] = [];
       for (const frame of frames) {
         values.set(frame.id, Object.fromEntries(layers.map(layer => [layer, { value: null, status: 'outside-domain', support: 0, interpolated: false, surfaceId: surface.id }])));
+        allValues.set(frame.id, {});
         columns.set(frame.id, { modelTerrainM: null, surfacePressureHpa: null, status: 'outside-domain', levels: [] });
       }
       if (plan) {
-        for (const { jobs: samples, layout, channels, shards } of sampleChannelGroups(m, surface, coverage, frames, layers)) {
+        for (const { jobs: samples, layout, channels, shards } of sampleChannelGroups(m, surface, coverage, frames, readLayers)) {
           const packed = planShardedPackedSample(layout, plan, channels, shards), shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const { frameId, layer, channel } of samples) {
               const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer], m.tool.useStoredMslNoLift === true);
-              values.get(frameId)![layer] = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
+              const formatted = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
+              allValues.get(frameId)![layer] = formatted;
+              if (layers.includes(layer)) values.get(frameId)![layer] = formatted;
             }
           } });
         }
@@ -82,9 +90,9 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       await readPackedRanges(bucket, ctx, request.signal, m.expiresAt, 'profile', jobs, (job, bytes) => job.apply(bytes));
       const result = { version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle, createdAt: m.createdAt, expiresAt: m.expiresAt,
         lat, lon, cell, method: m.method, source: servedSource(m, url.origin), frames: frames.map(frame => {
-          const column = columns.get(frame.id)!, fields = values.get(frame.id)!;
+          const column = columns.get(frame.id)!, fields = values.get(frame.id)!, fullFields = allValues.get(frame.id)!;
           const value = (layer: LayerId): number | null => {
-            const sample = fields[layer] as { value: number | null; status: string } | undefined;
+            const sample = fullFields[layer];
             return sample?.status === 'valid' ? sample.value : null;
           };
           const native = { terrainM: column.modelTerrainM ?? NaN, surfacePressureHpa: column.surfacePressureHpa, surfaceTemperatureC: value('sfc-temp-c') ?? NaN,
@@ -94,9 +102,10 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
               uMps: level.uWindMps, vMps: level.vWindMps })) };
           const storedTopM = value('thermal-top-msl'), terrainM = column.modelTerrainM, thermalVelocityMps = value('thermal-velocity');
           // V1 stores whole-metre terrain alongside the Float32 scalar top.
-          const thermalTopM = storedTopM !== null && Math.round(storedTopM) === terrainM && (thermalVelocityMps ?? 0) <= 0
+          const thermalTopM = storedTopM !== null && terrainM !== null && Math.round(storedTopM) === terrainM && (storedTopM < terrainM || (thermalVelocityMps ?? 0) <= 0)
             ? terrainM : storedTopM;
-          const layerTop = terrainM === null ? null : thermalTopM !== null && thermalTopM > terrainM ? thermalTopM
+          const hasConvectiveTop = thermalTopM !== null && terrainM !== null && (thermalTopM > terrainM || (thermalTopM === terrainM && (thermalVelocityMps ?? 0) > 0));
+          const layerTop = terrainM === null ? null : hasConvectiveTop ? thermalTopM
             : native.pblHeightM !== null && native.pblHeightM >= 0 ? terrainM + native.pblHeightM : thermalTopM === terrainM ? terrainM : null;
           const thermalTopRhPercent = thermalTopM !== null && terrainM !== null && thermalTopM >= terrainM
             ? nativeColumnHumidityAtHeight(native, thermalTopM) : null;
@@ -112,5 +121,5 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       if (encoded.byteLength > MAX_POINT_RESPONSE_BYTES) fail(429, 'sample-limit', 'Profile response exceeds the byte budget');
       return response(encoded, 'application/json; charset=utf-8', m.expiresAt, await waitFor(sha256(encoded), request.signal));
     } finally { for (const release of releases) release(); }
-  }, 'profile-v2');
+  }, 'profile-v3');
 }

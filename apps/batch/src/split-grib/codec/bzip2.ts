@@ -155,6 +155,8 @@ export function isBzip2Compressed(bytes: Uint8Array): boolean {
   );
 }
 
+let scratchTt = new Uint32Array(0);
+
 /**
  * Decompress a bzip2 buffer in pure TypeScript and verify block and stream CRCs.
  */
@@ -165,7 +167,8 @@ export function decompressBzip2(compressed: Uint8Array, maxOutputBytes: number):
   }
   const blockSize100k = compressed[3]! - 0x30;
   const maxBlockBytes = blockSize100k * 100_000;
-  const tt = new Uint32Array(maxBlockBytes);
+  if (scratchTt.length < maxBlockBytes) scratchTt = new Uint32Array(maxBlockBytes);
+  const tt = scratchTt;
 
   const reader = new BitReader(compressed.subarray(4));
   const chunks: Uint8Array[] = [];
@@ -306,29 +309,21 @@ export function decompressBzip2(compressed: Uint8Array, maxOutputBytes: number):
     while (nextSym !== eob) {
       if (nextSym === 0 || nextSym === 1) {
         // RUNA (0) / RUNB (1) bijective base-2 run-length encoding of zeros
-        let es = -1;
-        let n = 1;
+        const remainingBlockBytes = maxBlockBytes - nblock;
+        let runLength = 0, weight = 1;
         do {
-          if (nextSym === 0) {
-            es += n;
-          } else {
-            es += 2 * n;
+          runLength += (nextSym + 1) * weight;
+          if (runLength > remainingBlockBytes) {
+            throw new Error("bzip2 block overflow during RLE1");
           }
-          n <<= 1;
+          weight *= 2;
           nextSym = nextHuffmanSymbol();
         } while (nextSym === 0 || nextSym === 1);
 
-        es += 1;
         const uc = seqToUnseq[mtfSymbol[0]!]!;
-        unzftab[uc]! += es;
-        if (nblock + es > maxBlockBytes) {
-          throw new Error("bzip2 block overflow during RLE1");
-        }
-        while (es > 0) {
-          tt[nblock] = uc;
-          nblock += 1;
-          es -= 1;
-        }
+        unzftab[uc]! += runLength;
+        tt.fill(uc, nblock, nblock + runLength);
+        nblock += runLength;
       } else {
         if (nblock >= maxBlockBytes) {
           throw new Error("bzip2 block overflow");
@@ -394,6 +389,7 @@ export function decompressBzip2(compressed: Uint8Array, maxOutputBytes: number):
     };
 
     for (let i = 0; i < nblock; i += 1) {
+      if (tPos >= nblock) throw new Error("bzip2 BWT pointer exceeds the current block");
       const c = tt[tPos]! & 0xff;
       tPos = tt[tPos]! >>> 8;
 
