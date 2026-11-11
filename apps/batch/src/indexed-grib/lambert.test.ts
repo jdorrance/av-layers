@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
 import { expect, it, vi } from 'vitest';
-import { geographicToGrid, type Grid, type ModelDefinition } from '@av/contracts';
+import { geographicToGrid, type Grid, type LambertConformalGrid, type ModelDefinition } from '@av/contracts';
 import { parseFields, sampleFieldValuesAsync } from '@azohra/meteo.grib';
 import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
+import { ARMENIA_LAMBERT, NEW_ZEALAND_LAMBERT } from '../../../../tests/lambert-fixtures.js';
 import { indexedSource } from './source.js';
 import { acquireIndexedGribFrame, contractIndexToNativeIndex } from './acquire.js';
 import { inspectIndexedGribField } from './admission.js';
@@ -54,7 +55,7 @@ it('requires every configured Lambert geometry fact and refuses unsupported scan
   for (const change of [{ width: grid.width - 1 }, { height: grid.height - 1 }, { earthRadiusM: grid.earthRadiusM + 1 },
     { centralMeridianDeg: grid.centralMeridianDeg + 1 }, { latitudeOfOriginDeg: grid.latitudeOfOriginDeg + 1 },
     { standardParallel1Deg: grid.standardParallel1Deg + 1 }, { standardParallel2Deg: grid.standardParallel2Deg + 1 },
-    { x0M: grid.x0M + 0.01 }, { y0M: grid.y0M + grid.dyM }, { dxM: -grid.dxM }, { dyM: -grid.dyM }]) {
+    { x0M: grid.x0M + 1 }, { y0M: grid.y0M + grid.dyM }, { dxM: -grid.dxM }, { dyM: -grid.dyM }]) {
     expect(() => inspectIndexedGribField(indexedSource({ ...model, grid: { ...grid, ...change } }), bytes, options)).toThrow(/grid|earth|Lambert/i);
   }
   for (const scanning of [0, 65, 80, 96, 192]) {
@@ -65,6 +66,75 @@ it('requires every configured Lambert geometry fact and refuses unsupported scan
   expect(() => indexedSource({ ...model, upstream: { ...model.upstream, nativeLongitudeOrigin: 0 } })).toThrow(/first cell/);
   const { nativeLongitudeOrigin: _origin, ...regularUpstream } = INDEXED_PRODUCT.upstream;
   expect(() => indexedSource({ ...INDEXED_PRODUCT, upstream: regularUpstream })).toThrow(/requires a native longitude origin/);
+});
+
+function projectedField(grid: LambertConformalGrid, firstLat: number, firstLon: number, pole: number) {
+  const copy = Buffer.from(bytes), { section3 } = parseFields(copy)[0]!;
+  const section = Buffer.from(section3.buffer, section3.byteOffset, section3.byteLength);
+  const angle = (offset: number, degrees: number) => {
+    const magnitude = Math.round(Math.abs(degrees) * 1e6);
+    section.writeUInt32BE(degrees < 0 ? 0x80000000 + magnitude : magnitude, offset);
+  };
+  section.writeUInt32BE(grid.width * grid.height, 6);
+  section[14] = grid.earthRadiusM === 6371229 ? 6 : 1;
+  section[15] = 0;
+  section.writeUInt32BE(grid.earthRadiusM, 16);
+  section.writeUInt32BE(grid.width, 30);
+  section.writeUInt32BE(grid.height, 34);
+  angle(38, firstLat);
+  angle(42, firstLon);
+  angle(47, grid.latitudeOfOriginDeg);
+  angle(51, grid.centralMeridianDeg);
+  section.writeUInt32BE(grid.dxM * 1000, 55);
+  section.writeUInt32BE(grid.dyM * 1000, 59);
+  section[63] = pole;
+  section[64] = 64;
+  angle(65, grid.standardParallel1Deg);
+  angle(69, grid.standardParallel2Deg);
+  section.fill(0, 73, 81);
+  return { copy, section };
+}
+
+// First cells from PROJ 9.6.0 `proj -I`, then rounded to GRIB2 microdegrees.
+it.each([
+  { name: 'Armenia UPP', grid: { ...ARMENIA_LAMBERT, earthRadiusM: 6371229, latitudeOfOriginDeg: 39 },
+    firstLat: 36.936305558247, firstLon: 41.465860843988, pole: 0 },
+  { name: 'New Zealand with an explicit Earth radius', grid: NEW_ZEALAND_LAMBERT,
+    firstLat: -47.959521734691, firstLon: 164.479954540709, pole: 128 },
+  { name: 'a southern cone with a northern projection origin', grid: { ...NEW_ZEALAND_LAMBERT, latitudeOfOriginDeg: 2 },
+    firstLat: -3.491826927915, firstLon: 168.048475396235, pole: 128 }
+])('admits quantized Lambert first cells for $name and rejects altered geometry', ({ grid, firstLat, firstLon, pole }) => {
+  const { copy, section } = projectedField(grid, firstLat, firstLon, pole);
+  const defaultPole = indexedSource({ ...model, grid });
+  expect(() => inspectIndexedGribField(defaultPole, copy, options)).toThrow(/Lambert geometry/);
+  const source = indexedSource({ ...model, grid, upstream: { ...model.upstream, lambertSouthPoleLatitude: 0 } });
+  const admitted = inspectIndexedGribField(source, copy, options);
+  expect(admitted.grid).toMatchObject({ kind: 'lambert', projectionCentreFlag: pole, southPoleLatitude: 0 });
+  const first = source.geometry.geographicToGrid(admitted.grid.latitudeOfFirstGridPoint, admitted.grid.longitudeOfFirstGridPoint)!;
+  expect(Math.hypot(first.x * grid.dxM, first.y * grid.dyM)).toBeGreaterThan(0.003);
+  for (const invalidFlag of [pole ^ 0x80, pole | 0x40, pole | 0x01]) {
+    section[63] = invalidFlag;
+    expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
+  }
+  section[63] = pole;
+  section.writeUInt32BE(0x80000000 + 90_000_000, 73);
+  expect(inspectIndexedGribField(defaultPole, copy, options).grid).toMatchObject({ southPoleLatitude: -90 });
+  expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
+  section.writeUInt32BE(0, 73);
+  const origin = section.readUInt32BE(47);
+  section.writeUInt32BE(origin + 1, 47);
+  expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
+  section.writeUInt32BE(origin, 47);
+  section.writeUInt32BE(section.readUInt32BE(42) + 10, 42);
+  expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert first cell/);
+});
+
+it('checks the GRIB producer subcentre when the source config specifies it', () => {
+  const { subCentre } = parseFields(bytes)[0]!.identification;
+  const sourceWith = (subCentre: number) => indexedSource({ ...model, upstream: { ...model.upstream, subCentre } });
+  expect(inspectIndexedGribField(sourceWith(subCentre), bytes, options).receipt.identification.subCentre).toBe(subCentre);
+  expect(() => inspectIndexedGribField(sourceWith((subCentre + 1) % 65536), bytes, options)).toThrow(/producer/);
+  expect(() => sourceWith(65536)).toThrow(/subCentre/);
 });
 
 // Preserve the source grid and bitmap; other roles use synthetic constants to exercise full-session admission.

@@ -8,6 +8,8 @@ import { sha256 } from './transport.ts';
 import type { DecodedFieldReceipt, IndexedGribFieldSpec } from './types.ts';
 
 const SUPPORTED_PACKING = new Set([0, 2, 3, 40]);
+const LAMBERT_FIRST_CELL_TOLERANCE_M = 0.25;
+const LAMBERT_ANGLE_TOLERANCE_DEG = 1e-10;
 
 function refuse(code: 'source-conflict' | 'unsupported-grid' | 'unsupported-earth' | 'unsupported-packing', message: string): never {
   throw new IndexedGribError(code, message);
@@ -43,19 +45,23 @@ function validateGrid(source: IndexedSource, grid: Grid): void {
       refuse('unsupported-grid', 'Indexed GRIB grid geometry or scanning mode is unsupported');
     }
   } else {
+    const southernCone = expected.standardParallel1Deg + expected.standardParallel2Deg < 0;
+    const projectionCentreFlag = southernCone ? 0x80 : 0;
     if (grid.kind !== 'lambert' || grid.gridDefinitionTemplateNumber !== 30 ||
-      grid.projectionCentreFlag !== (expected.latitudeOfOriginDeg < 0 ? 128 : 0) ||
-      normalizeLon(grid.loV) !== expected.centralMeridianDeg || grid.laD !== expected.latitudeOfOriginDeg ||
-      grid.latin1 !== expected.standardParallel1Deg || grid.latin2 !== expected.standardParallel2Deg ||
+      grid.projectionCentreFlag !== projectionCentreFlag ||
+      Math.abs(normalizeLon(grid.loV - expected.centralMeridianDeg)) > LAMBERT_ANGLE_TOLERANCE_DEG ||
+      Math.abs(grid.laD - expected.latitudeOfOriginDeg) > LAMBERT_ANGLE_TOLERANCE_DEG ||
+      Math.abs(grid.latin1 - expected.standardParallel1Deg) > LAMBERT_ANGLE_TOLERANCE_DEG ||
+      Math.abs(grid.latin2 - expected.standardParallel2Deg) > LAMBERT_ANGLE_TOLERANCE_DEG ||
       grid.scanningMode !== ((expected.dxM < 0 ? 128 : 0) | (expected.dyM > 0 ? 64 : 0)) ||
       grid.dxM * (grid.iScansNegatively ? -1 : 1) !== expected.dxM ||
       grid.dyM * (grid.jScansPositively ? 1 : -1) !== expected.dyM ||
-      grid.southPoleLatitude !== -90 || normalizeLon(grid.southPoleLongitude) !== 0) {
+      grid.southPoleLatitude !== (source.upstream.lambertSouthPoleLatitude ?? -90) || normalizeLon(grid.southPoleLongitude) !== 0) {
       refuse('unsupported-grid', 'Indexed GRIB Lambert geometry or scanning mode is unsupported');
     }
     const first = source.geometry.geographicToGrid(grid.latitudeOfFirstGridPoint, grid.longitudeOfFirstGridPoint);
-    // Allow projection rounding within one millionth of a cell.
-    if (!first || Math.abs(first.x) > 1e-6 || Math.abs(first.y) > 1e-6) {
+    // GRIB2 encodes the first latitude and longitude in whole microdegrees.
+    if (!first || Math.hypot(first.x * expected.dxM, first.y * expected.dyM) > LAMBERT_FIRST_CELL_TOLERANCE_M) {
       refuse('unsupported-grid', 'Indexed GRIB Lambert first cell differs from the configured grid');
     }
   }
@@ -138,7 +144,8 @@ export function inspectIndexedGribField(source: IndexedSource, bytes: Uint8Array
   }
   const field = fields[0]!;
   const id = field.identification;
-  if (field.discipline !== 0 || id.centre !== source.upstream.centre || !sameRun(cycle, id)) {
+  if (field.discipline !== 0 || id.centre !== source.upstream.centre ||
+    (source.upstream.subCentre !== undefined && id.subCentre !== source.upstream.subCentre) || !sameRun(cycle, id)) {
     throw new IndexedGribError('source-conflict', `Wrong Indexed GRIB producer/discipline/run for ${spec.key}`);
   }
   const grid = parseGrid(field.section3);
