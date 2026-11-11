@@ -56,7 +56,7 @@ function validateGrid(source: IndexedSource, grid: Grid): void {
       grid.scanningMode !== ((expected.dxM < 0 ? 128 : 0) | (expected.dyM > 0 ? 64 : 0)) ||
       grid.dxM * (grid.iScansNegatively ? -1 : 1) !== expected.dxM ||
       grid.dyM * (grid.jScansPositively ? 1 : -1) !== expected.dyM ||
-      (grid.southPoleLatitude !== -90 && grid.southPoleLatitude !== 0) || normalizeLon(grid.southPoleLongitude) !== 0) {
+      grid.southPoleLatitude !== (source.upstream.lambertSouthPoleLatitude ?? -90) || normalizeLon(grid.southPoleLongitude) !== 0) {
       refuse('unsupported-grid', 'Indexed GRIB Lambert geometry or scanning mode is unsupported');
     }
     const first = source.geometry.geographicToGrid(grid.latitudeOfFirstGridPoint, grid.longitudeOfFirstGridPoint);

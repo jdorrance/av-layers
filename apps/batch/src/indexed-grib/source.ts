@@ -14,6 +14,7 @@ const auxLevelsSchema = z.partialRecord(z.enum(Object.keys(AUX_LEVEL_UNITS) as [
 const upstreamSchema = z.object({
   protocol: z.literal('indexed-grib2'), provider: z.string().min(1), centre: z.number().int().nonnegative(),
   subCentre: z.number().int().min(0).max(65535).optional(),
+  lambertSouthPoleLatitude: z.literal([-90, 0]).optional(),
   urlTemplate: z.string().url(), nativeLongitudeOrigin: z.number().finite().optional(),
   products: z.record(z.string().min(1), z.string().min(1)), surfaceProduct: z.string().min(1),
   pressureLevelsHpa: z.record(z.string().min(1), levels),
@@ -42,6 +43,7 @@ export function indexedSource(model: ModelDefinition) {
   let columnOffset = 0;
   if (grid.kind === 'regular-latlon') {
     if (upstream.nativeLongitudeOrigin === undefined) throw new Error('Regular indexed GRIB input requires a native longitude origin');
+    if (upstream.lambertSouthPoleLatitude !== undefined) throw new Error('Lambert southern pole requires a Lambert grid');
     const offset = normalizeLon(grid.lon0 - upstream.nativeLongitudeOrigin) / grid.dx;
     columnOffset = Math.round(offset);
     if (Math.abs(offset - columnOffset) > 1e-7 || (!grid.wrapLongitude && columnOffset !== 0)) throw new Error('Native longitude origin must align with the configured grid columns');

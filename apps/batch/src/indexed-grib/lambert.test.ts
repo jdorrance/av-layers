@@ -105,7 +105,9 @@ it.each([
     firstLat: -3.491826927915, firstLon: 168.048475396235, pole: 128 }
 ])('admits quantized Lambert first cells for $name and rejects altered geometry', ({ grid, firstLat, firstLon, pole }) => {
   const { copy, section } = projectedField(grid, firstLat, firstLon, pole);
-  const source = indexedSource({ ...model, grid });
+  const defaultPole = indexedSource({ ...model, grid });
+  expect(() => inspectIndexedGribField(defaultPole, copy, options)).toThrow(/Lambert geometry/);
+  const source = indexedSource({ ...model, grid, upstream: { ...model.upstream, lambertSouthPoleLatitude: 0 } });
   const admitted = inspectIndexedGribField(source, copy, options);
   expect(admitted.grid).toMatchObject({ kind: 'lambert', projectionCentreFlag: pole, southPoleLatitude: 0 });
   const first = source.geometry.geographicToGrid(admitted.grid.latitudeOfFirstGridPoint, admitted.grid.longitudeOfFirstGridPoint)!;
@@ -115,6 +117,10 @@ it.each([
     expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
   }
   section[63] = pole;
+  section.writeUInt32BE(0x80000000 + 90_000_000, 73);
+  expect(inspectIndexedGribField(defaultPole, copy, options).grid).toMatchObject({ southPoleLatitude: -90 });
+  expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
+  section.writeUInt32BE(0, 73);
   const origin = section.readUInt32BE(47);
   section.writeUInt32BE(origin + 1, 47);
   expect(() => inspectIndexedGribField(source, copy, options)).toThrow(/Lambert geometry/);
