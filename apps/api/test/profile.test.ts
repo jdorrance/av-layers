@@ -195,11 +195,16 @@ describe('native profile API', () => {
     assertReleased(f);
   });
 
-  it('retains all profile levels when selecting fewer scalar channels and frames', async () => {
+  it('retains all profile levels and derived soaring diagnostics when selecting fewer scalar channels', async () => {
     const f = fixture(), body = await read(await f.request(path(f, 'lat=8.8&lon=-115.3125&frame=h002&layers=wind-10m-v,wind-10m-u')));
     expect(body.frames.map(frame => frame.id)).toEqual(['h002']);
     expect(Object.keys(body.frames[0]!.layers)).toEqual(['wind-10m-u', 'wind-10m-v']);
     expect(body.frames[0]!.profile.levels).toHaveLength(2);
+    expect(body.frames[0]!.derived.usableLiftTopV2M).not.toBeNull();
+    expect(body.frames[0]!.derived.blTopWindSpeedMps).not.toBeNull();
+    expect(body.frames[0]!.derived.cuPotentialM).toBe(-650);
+    expect(body.frames[0]!.derived.cumulus).toBe(false);
+    assertReleased(f);
   });
 
   it('retains nocturnal profiles, clouds and winds while thermal outputs remain zero', async () => {
@@ -219,7 +224,8 @@ describe('native profile API', () => {
   it.each([
     { terrain: 500.4, top: 500.4, velocity: 0, packed: 500, topWind: Math.hypot(3, 12), shear: 8 },
     { terrain: 500.6, top: 500.6, velocity: 0, packed: 501, topWind: Math.hypot(3, 12.02), shear: 8.02 },
-    { terrain: 500.4, top: 500.45, velocity: 2, packed: 500, topWind: 5, shear: 0 }
+    { terrain: 500.4, top: 500.45, velocity: 2, packed: 500, topWind: 5, shear: 0 },
+    { terrain: 500.6, top: 500.8, velocity: 0.2, packed: 501, topWind: 5, shear: 0 }
   ])('selects the native layer top across V1 terrain rounding for terrain $terrain and top $top', async ({ terrain, top, velocity, packed, topWind, shear }) => {
     const f = attachNativeProfiles(createV5Fixture({ nativeLayers: layers,
       nativeValue: (layer, frame, x) => layer === 'thermal-velocity' ? velocity : layer === 'thermal-top-msl' ? top
@@ -235,6 +241,7 @@ describe('native profile API', () => {
     expect(frame.layers['thermal-top-msl']!.value).toBe(Math.fround(top));
     expect(frame.derived.blTopWindSpeedMps).toBeCloseTo(topWind, 5);
     expect(frame.derived.blWindShearMps).toBeCloseTo(shear, 5);
+    if (velocity > 0) expect(frame.derived.overdeveloped).not.toBeNull();
     assertReleased(f);
   });
 

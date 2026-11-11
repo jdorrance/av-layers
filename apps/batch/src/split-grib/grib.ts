@@ -41,6 +41,7 @@ export interface DecodedSplitGribField {
   };
   readonly expandedBytes: number;
   readonly values: Float32Array;
+  readonly preciseValues?: Float64Array;
   readonly missing: Uint8Array;
 }
 
@@ -267,10 +268,12 @@ export function decodeSplitGribField(source: SplitSource,
   if (codedValueCount !== presentCount) throw new Error('GRIB2 coded value count differs from grid/bitmap coverage');
 
   if (drt === 42 && s5.byteLength < 25) throw new Error(`Truncated GRIB2 Section 5.42 (${s5.byteLength} bytes)`);
+  const retainPrecise = !target && product.templateNumber === 8;
+  const allocValues = (length: number): Float64Array | Float32Array => retainPrecise ? new Float64Array(length) : new Float32Array(length);
   let fullValues: Float64Array | Float32Array;
   if ((drt === 0 || drt === 42) && bitsPerValue === 0) {
     // ecCodes treats zero-bit 5.0/5.42 fields as the unscaled reference value.
-    fullValues = new Float32Array(pointCount).fill(referenceValue);
+    fullValues = allocValues(pointCount).fill(referenceValue);
     if (hasBitmap) for (let i = 0; i < pointCount; i++) {
       if (!(bitmapBytes![i >> 3]! & (0x80 >> (i & 7)))) fullValues[i] = NaN;
     }
@@ -280,7 +283,7 @@ export function decodeSplitGribField(source: SplitSource,
     const rsi = s5View.getUint16(23, false);
     const payload = field.section7.subarray(5);
 
-    const decodedCoded = new Float32Array(codedValueCount);
+    const decodedCoded = allocValues(codedValueCount);
     if (codedValueCount > 0) {
       const rawSamples = decodeCcsdsSamples(payload, {
         bitsPerSample: bitsPerValue,
@@ -297,7 +300,7 @@ export function decodeSplitGribField(source: SplitSource,
     if (!hasBitmap) {
       fullValues = decodedCoded;
     } else {
-      const expanded = new Float32Array(pointCount);
+      const expanded = allocValues(pointCount);
       let codedIdx = 0;
       for (let i = 0; i < pointCount; i += 1) {
         const present = (bitmapBytes![i >> 3]! & (0x80 >> (i & 7))) !== 0;
@@ -313,7 +316,7 @@ export function decodeSplitGribField(source: SplitSource,
   } else if (drt === 0 && !hasBitmap && bitsPerValue === 8) {
     const payload = field.section7.subarray(5);
     if (payload.byteLength < codedValueCount) throw new Error('Truncated GRIB2 simple-packing payload');
-    const decoded = new Float32Array(pointCount);
+    const decoded = allocValues(pointCount);
     for (let i = 0; i < pointCount; i += 1) {
       decoded[i] = (referenceValue + payload[i]! * binaryScale) * decimalScale;
     }
@@ -323,6 +326,7 @@ export function decodeSplitGribField(source: SplitSource,
   }
 
   const outValues = target?.values ?? new Float32Array(activeIndices.length);
+  const outPrecise = retainPrecise ? new Float64Array(activeIndices.length) : undefined;
   const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
   if (outValues.length !== activeIndices.length || outMissing.length !== activeIndices.length) throw new RangeError('Split GRIB target length mismatch');
 
@@ -338,9 +342,11 @@ export function decodeSplitGribField(source: SplitSource,
     const value = fullValues[sourceIdx]!;
     if (Number.isFinite(value)) {
       outValues[i] = value;
+      if (outPrecise) outPrecise[i] = value;
       outMissing[i] = 0;
     } else {
       outValues[i] = NaN;
+      if (outPrecise) outPrecise[i] = NaN;
       outMissing[i] = 1;
     }
   }
@@ -365,6 +371,7 @@ export function decodeSplitGribField(source: SplitSource,
     },
     expandedBytes: gribBytes.byteLength,
     values: outValues,
+    ...(outPrecise ? { preciseValues: outPrecise } : {}),
     missing: outMissing
   };
 }

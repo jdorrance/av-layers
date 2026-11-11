@@ -337,6 +337,23 @@ it('commits a viewport that loaded some tiles and reports the tiles that failed'
   f.layer.remove();
 });
 
+it('waits until moveend when mounted while the map is already moving', async () => {
+  const f = fixture(), statuses = vi.fn();
+  f.move(true);
+  f.layer.onStatus(statuses); f.layer.addTo(f.map);
+  const midMove = f.natives[0];
+  f.complete(midMove);
+  expect(midMove.setOpacity).not.toHaveBeenCalled();
+  f.move(false);
+  const settled = f.natives.at(-1)!;
+  expect(settled).not.toBe(midMove);
+  f.complete(settled);
+  await Promise.resolve();
+  expect(settled.setOpacity).toHaveBeenCalledWith(0.5);
+  expect(statuses).toHaveBeenLastCalledWith('ready', url('f003'));
+  f.layer.remove();
+});
+
 it('bounds handover to the frozen committed slot and one replacement slot', () => {
   const f = fixture();
   f.layer.addTo(f.map); f.complete();

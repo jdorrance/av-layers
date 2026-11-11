@@ -80,4 +80,16 @@ describe('validated publication reuse', () => {
     expect(cache.match).toHaveBeenCalledTimes(matches);
     await expired.arrayBuffer();
   });
+
+  it('distinguishes runtime programming errors from storage failures', async () => {
+    const fixture = createV5Fixture();
+    vi.spyOn(fixture.bucket, 'get').mockRejectedValueOnce(new TypeError('unexpected undefined property'));
+    const bug = await fixture.request(`/v1/models/${fixture.manifest.model}/latest`);
+    expect(bug.status).toBe(500);
+    expect(await bug.json()).toMatchObject({ title: 'internal-error', status: 500 });
+    vi.spyOn(fixture.bucket, 'get').mockRejectedValueOnce(new Error('R2 backend timeout'));
+    const outage = await fixture.request(`/v1/models/${fixture.manifest.model}/latest`);
+    expect(outage.status).toBe(503);
+    expect(await outage.json()).toMatchObject({ title: 'publication-unavailable', status: 503 });
+  });
 });

@@ -1,5 +1,12 @@
 import { expect, it } from 'vitest';
-import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, ResourceLimitError } from './json.js';
+import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, ResourceLimitError, sameJsonValue } from './json.js';
+
+it('compares JSON structures independently of object key order', () => {
+  expect(sameJsonValue({ b: [1, { y: true, x: null }], a: 'ok' }, { a: 'ok', b: [1, { x: null, y: true }] })).toBe(true);
+  expect(sameJsonValue({ a: 1, b: undefined }, { a: 1 })).toBe(true);
+  expect(sameJsonValue({ a: 1, b: null }, { a: 1 })).toBe(false);
+  expect(sameJsonValue([1, 2], { 0: 1, 1: 2 })).toBe(false);
+});
 
 it('admits an exact byte boundary and rejects the next byte before metadata can be committed', () => {
   const exact = { s: 'x'.repeat(MAX_PROVENANCE_BYTES - 8) };

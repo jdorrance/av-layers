@@ -155,6 +155,8 @@ export function isBzip2Compressed(bytes: Uint8Array): boolean {
   );
 }
 
+let scratchTt = new Uint32Array(0);
+
 /**
  * Decompress a bzip2 buffer in pure TypeScript and verify block and stream CRCs.
  */
@@ -165,7 +167,8 @@ export function decompressBzip2(compressed: Uint8Array, maxOutputBytes: number):
   }
   const blockSize100k = compressed[3]! - 0x30;
   const maxBlockBytes = blockSize100k * 100_000;
-  const tt = new Uint32Array(maxBlockBytes);
+  if (scratchTt.length < maxBlockBytes) scratchTt = new Uint32Array(maxBlockBytes);
+  const tt = scratchTt;
 
   const reader = new BitReader(compressed.subarray(4));
   const chunks: Uint8Array[] = [];

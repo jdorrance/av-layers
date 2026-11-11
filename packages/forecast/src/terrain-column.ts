@@ -585,6 +585,7 @@ function columnDeriver(source: Grid, target: Grid, activeIndices: Uint32Array, m
           if (probe) Object.assign(probe, { referenceTerrainM: h0, surfaceTemperatureK: t0, groundEnvironmentK: ef,
             surfacePressurePa: p0, humidityKgKg: q0, sensibleHeatFluxWm2: sh, latentHeatFluxWm2: lh });
         } else {
+          // Hydrostatic state uses damped surfaceEnvironmentAtGroundC; parcel lift uses undamped environmentAtGroundC.
           const tf = ef + excess;
           const r0 = q0 / (1 - q0), tv = (t0 + tf) / 2 * (1 + r0 / EPSILON) / (1 + r0);
           const pf = p0 * Math.exp(-G * (h - hSup) / (RD * tv));

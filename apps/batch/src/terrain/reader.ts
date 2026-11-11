@@ -93,20 +93,30 @@ export async function createTerrainReader(options: {
     if (entry) { cache.delete(key); cache.set(key, entry); }
     return entry;
   }
-  function evict<T>(cache: Map<string, Cached<T>>): number {
+  function evictSettled<T>(cache: Map<string, Cached<T>>): number | null {
     for (const [key, entry] of cache) {
       if (entry.settled) { cache.delete(key); return entry.pixels; }
     }
-    throw new Error('Terrain concurrent reads exceed cache budget');
+    return null;
   }
   async function imageFor(tile: TerrainTile): Promise<GeoTIFFImage> {
     signal.throwIfAborted();
     const key = tile.id;
     const hit = touch(opened, key);
     if (hit) return hit.promise;
-    while (opened.size >= limits.maxOpenTiles) evict(opened);
+    while (opened.size >= limits.maxOpenTiles) {
+      if (evictSettled(opened) === null) {
+        const pending = opened.values().next();
+        if (pending.done) break;
+        await pending.value.promise.catch(() => {});
+        signal.throwIfAborted();
+        const concurrent = touch(opened, key);
+        if (concurrent) return concurrent.promise;
+      }
+    }
     const entry: Cached<GeoTIFFImage> = { promise: Promise.resolve(null as never), settled: false, pixels: 0 };
     entry.promise = (async () => {
+      try {
       const previous = etags.get(key), reserved = previous ? 0 : tile.asset.bytes;
       if (reserved) spend('readBytesBound', reserved, limits.maxReadBytes);
       let actual = 0, expectedEtag: string;
@@ -168,11 +178,11 @@ export async function createTerrainReader(options: {
       signal.throwIfAborted();
       validateImage(image, tile, catalog.packing.blockSize);
       return image;
+      } finally { entry.settled = true; }
     })();
     opened.set(key, entry);
     try { return await entry.promise; }
     catch (error) { if (opened.get(key) === entry) opened.delete(key); throw error; }
-    finally { entry.settled = true; }
   }
   async function blockFor(tile: TerrainTile, column: number, row: number): Promise<Block> {
     signal.throwIfAborted();
@@ -183,22 +193,34 @@ export async function createTerrainReader(options: {
     if (hit) { stats.cacheHits++; return hit.promise; }
     const pixels = size * size;
     if (pixels > limits.maxCachedPixels) throw new Error('Terrain block exceeds cache budget');
-    while (cachedPixels + pixels > limits.maxCachedPixels) cachedPixels -= evict(blocks);
+    while (cachedPixels + pixels > limits.maxCachedPixels) {
+      const evicted = evictSettled(blocks);
+      if (evicted !== null) cachedPixels -= evicted;
+      else {
+        const pending = blocks.values().next();
+        if (pending.done) break;
+        await pending.value.promise.catch(() => {});
+        signal.throwIfAborted();
+        const concurrent = touch(blocks, key);
+        if (concurrent) { stats.cacheHits++; return concurrent.promise; }
+      }
+    }
     spend('decodedPixels', pixels, limits.maxDecodedPixels);
     cachedPixels += pixels;
     const entry: Cached<Block> = { promise: Promise.resolve(null as never), settled: false, pixels };
     entry.promise = (async () => {
-      const image = await imageFor(tile);
-      const width = Math.min(size, tile.geometry.width - col), height = Math.min(size, tile.geometry.height - top);
-      const values = await image.readRasters({ window: [col, top, col + width, top + height], samples: [0], interleave: true, signal });
-      signal.throwIfAborted();
-      if (!(values instanceof Float32Array) || values.length !== width * height) throw new Error('Invalid native terrain block');
-      return { values, width, height, col, row: top };
+      try {
+        const image = await imageFor(tile);
+        const width = Math.min(size, tile.geometry.width - col), height = Math.min(size, tile.geometry.height - top);
+        const values = await image.readRasters({ window: [col, top, col + width, top + height], samples: [0], interleave: true, signal });
+        signal.throwIfAborted();
+        if (!(values instanceof Float32Array) || values.length !== width * height) throw new Error('Invalid native terrain block');
+        return { values, width, height, col, row: top };
+      } finally { entry.settled = true; }
     })();
     blocks.set(key, entry);
     try { return await entry.promise; }
     catch (error) { if (blocks.get(key) === entry) { blocks.delete(key); cachedPixels -= pixels; } throw error; }
-    finally { entry.settled = true; }
   }
   function tileAt(latitude: number, longitude: number) {
     return tiles.get(`${cellSouth(latitude)}/${Math.floor(wrap(longitude))}`);

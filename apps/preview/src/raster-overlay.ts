@@ -105,6 +105,7 @@ export class RasterOverlay {
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (build.expiresAtMs <= Date.now()) { this.clear(); return; }
+    this.moving ||= (this.map as { isMoving?: () => boolean }).isMoving?.() ?? false;
     this.retryEmpty = false;
     this.requested = { build, layer, frame };
     if (this.active?.build === build && this.active.layer === layer && this.active.frame === frame) {
@@ -171,7 +172,8 @@ export class RasterOverlay {
 
   private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }
   private tilesSettled(slot: Slot): boolean {
-    return !this.moving && !slot.pending.size && slot.build.expiresAtMs > Date.now() && this.map.isSourceLoaded(slot.id);
+    const mapMoving = (this.map as { isMoving?: () => boolean }).isMoving?.() ?? false;
+    return !this.moving && !mapMoving && !slot.pending.size && slot.build.expiresAtMs > Date.now() && this.map.isSourceLoaded(slot.id);
   }
   private abandonEmpty(slot: Slot): void {
     if (slot !== this.staging || slot.successful || !this.tilesSettled(slot)) return;

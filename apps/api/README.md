@@ -33,8 +33,8 @@ pnpm --filter @av/api build
 `/samples?points=lat,lon;lat,lon` batches coordinates in request order.
 `/profile?lat=...&lon=...` returns scalars, vertical levels, and derived
 diagnostics for the native grid cell identified by `cell`. `frame` selects
-times and `layers` selects scalar inputs. Omitted dependencies produce null
-derived values. See [sampling and profiles](../../docs/data.md#time-and-retention).
+times and `layers` selects returned scalar channels while `derived` retains the
+cell's complete soaring diagnostics. See [sampling and profiles](../../docs/data.md#time-and-retention).
 V5 point routes default to the first frame. For complete timelines, page the
 frames or use `frame=all` with a layer subset that fits the value budget.
 See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.

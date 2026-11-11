@@ -11,6 +11,7 @@ function fixture() {
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
   const loaded = new Set<string>();
+  let moving = false;
   const map = {
     on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
     off: (name: string, listener: (event: never) => void) => handlers.get(name)?.delete(listener),
@@ -22,15 +23,20 @@ function fixture() {
     removeLayer: (id: string) => opacity.delete(id),
     setPaintProperty: (id: string, _property: string, value: number) => opacity.set(id, value),
     isSourceLoaded: (id: string) => loaded.has(id),
+    isMoving: () => moving,
     getZoom: () => 0,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   };
   const states: OverlayState[] = [];
   const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
-  const emit = (name: string, event: object = {}) => { for (const handler of handlers.get(name) ?? []) handler(event as never); };
+  const emit = (name: string, event: object = {}) => {
+    if (name === 'movestart') moving = true;
+    if (name === 'moveend') moving = false;
+    for (const handler of handlers.get(name) ?? []) handler(event as never);
+  };
   const stage = () => [...sources.keys()].at(-1)!;
   const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); await Promise.resolve(); };
-  return { overlay, emit, complete, stage, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
+  return { overlay, map, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
@@ -220,6 +226,25 @@ it('rechecks camera readiness and expires old imagery while a new model is loadi
   f.emit('moveend'); await f.complete(); expect(f.sources.size).toBe(1);
   vi.advanceTimersByTime(1001); expect(f.sources.size).toBe(0);
   f.overlay.destroy();
+});
+
+it('waits until moveend when first selected while the map is already moving', async () => {
+  const f = fixture(), b = build();
+  f.overlay.destroy();
+  f.setMoving(true);
+  const states: OverlayState[] = [];
+  const overlay = new RasterOverlay(f.map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
+  try {
+    overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    const midMove = f.stage();
+    await f.complete(midMove);
+    expect(states.at(-1)?.displayed).toBeNull();
+    f.emit('moveend');
+    const settled = f.stage();
+    expect(settled).not.toBe(midMove);
+    await f.complete(settled);
+    expect(states.at(-1)?.displayed?.frame).toBe(b.manifest.frames[0].id);
+  } finally { overlay.destroy(); }
 });
 
 it('allows a healthy replacement to finish after the displayed source reports an error', async () => {

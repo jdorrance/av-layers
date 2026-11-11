@@ -23,7 +23,7 @@ After changing a grid or coverage policy, generate its native and fine masks:
 
 ```sh
 pnpm masks:build --model MODEL
-uv run --python 3.14.7 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 \
+uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 \
   python scripts/masks/build_fine_masks.py --model MODEL
 ```
 

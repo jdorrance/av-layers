@@ -64,7 +64,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–9.
-- Execution: 20 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["35 4,10,16,22 * * *"]`.
+- Execution: 20 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["0 5,11,17,23 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Source interval changes at hour 123 to 3 hours.

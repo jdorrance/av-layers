@@ -186,14 +186,14 @@ async function loadSplitGribField(
 
 /** Recover the configured trailing flux mean and orientation. */
 export function recoverSplitGribFlux(source: SplitSource, role: 'sensibleHeatFlux' | 'latentHeatFlux',
-  current: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'>,
-  previous: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> | null,
+  current: Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'preciseValues' | 'representation'>>,
+  previous: (Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'preciseValues' | 'representation'>>) | null,
   hour: number
 ): { readonly values: Float32Array; readonly missing: Uint8Array } {
   return recoverWindow(source, current, previous, hour, 'mean', source.upstream.fields[role].scale);
 }
 
-type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'representation'>>;
+type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'preciseValues' | 'representation'>>;
 function recoverWindow(source: SplitSource, current: WindowField, previous: WindowField | null, hour: number,
   statistic: 'mean' | 'accumulation', outputSign: 1 | -1 = 1
 ): { readonly values: Float32Array; readonly missing: Uint8Array } {
@@ -205,9 +205,9 @@ function recoverWindow(source: SplitSource, current: WindowField, previous: Wind
     throw new Error(`Split GRIB window recovery for f${hour} requires companion f${hour - sourceIntervalHours(source.model.forecast, hour)}`);
   }
   return recoverTrailingWindow({
-    currentValues: current.values,
+    currentValues: current.preciseValues ?? current.values,
     currentMissing: current.missing,
-    companionValues: previousHour > start ? previous!.values : null,
+    companionValues: previousHour > start ? previous!.preciseValues ?? previous!.values : null,
     companionMissing: previousHour > start ? previous!.missing : null,
     currentHours: hour - start,
     previousHours: previousHour - start,

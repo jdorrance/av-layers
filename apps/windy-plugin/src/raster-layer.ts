@@ -131,6 +131,7 @@ export class WindyRasterLayer implements HostTileLayer {
     if (this.map) throw new Error('Forecast raster layer is already mounted');
     if (!this.protocol) throw new Error('Forecast raster layer is disposed');
     this.map = map;
+    this.moving = map.maplibreMap.isMoving();
     map.maplibreMap.on('render', this.render); map.maplibreMap.on('idle', this.idle);
     map.maplibreMap.on('sourcedata', this.sourceData);
     map.maplibreMap.on('movestart', this.move);
