@@ -92,3 +92,31 @@ control points. [support.ts](../packages/forecast/src/support.ts) resolves
 neighboring cells for stencil operations, and
 [coverage.ts](../apps/batch/src/coverage.ts) separates public output cells from
 halo cells. Finish with `pnpm docs:generate` and `pnpm verify`.
+
+## Publish an external indexed GRIB2 cycle
+
+Configure an event-driven indexed GRIB2 product with an R2 source URL template.
+Keep its encoded grid and GRIB field identities in the model registry. Use the
+producer's actual Earth shape, grid origin, scanning mode, and wind orientation.
+The [indexed reader](../apps/batch/src/indexed-grib/README.md) specifies
+normalization and interval handling.
+
+1. Upload the configured GRIB2 files and their byte-offset `.idx` inventories
+   under `upstream/<model>/<YYYYMMDD>/<HH>/`. Include every configured product
+   and hour, with the companion hours needed for cumulative intervals. Create
+   objects conditionally and attach their SHA-256 as R2 custom metadata.
+2. Create the cycle's immutable `_ready.json` after every input is available.
+   Record the model, cycle, creation time, sorted hours, and each GRIB and index
+   key, byte length, SHA-256, and R2 ETag. The
+   [ready schema](../apps/batch/src/indexed-grib/ready.ts) owns field names and bounds.
+3. Advance `upstream/<model>/latest.json` with the previously observed ETag or
+   create it conditionally when absent. Include the cycle, ready key, and ready
+   SHA-256. Preserve monotonic cycle ordering on a concurrent update.
+4. Dispatch `upstream-cycle-ready` through the repository API after the
+   commit. Send `environment`, `model`, and `cycle` in `client_payload`.
+   Use a trusted dispatcher with repository access and scope storage write
+   credentials to that producer's upstream prefix.
+
+Check the ready receipt, explicit cycle, and resulting live serving receipt in
+staging before registering a production source. Retain source objects while a
+build can still read or retry the cycle.
