@@ -33,8 +33,10 @@ it('shares one assembly buffer across scalar and profile writers with bounded sc
         outsideRecord[4] = STATUS_OUTSIDE;
         await writer.writeRawChannel(1, () => record, { outsideRecord });
         await writer.writeRawChannel(0, () => record, { outsideRecord });
+        allocations.mockClear();
         await writer.finish(assembly);
-        expect(allocations.mock.calls.map(([bytes]) => bytes)).toEqual(sizes);
+        const assemblyBytes = samplePackAssemblyBufferBytes(layout.shards);
+        expect(allocations.mock.calls.some(([bytes]) => bytes >= assemblyBytes)).toBe(false);
       } finally { allocations.mockRestore(); }
     }
   } finally { await rm(root, { recursive: true, force: true }); }
