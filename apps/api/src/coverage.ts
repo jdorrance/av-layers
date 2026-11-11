@@ -1,6 +1,6 @@
 import { MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_SPARSE_COVERAGE_BYTES, assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, assertSparseCoverageHalo, canonicalGridJson, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, sameGrid, type ForecastSurfaceV5, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
 import { SAMPLE_SHARD_TARGET_BYTES, prepareShardedSamplePackLayout, type ShardedSamplePackLayout } from '@av/forecast';
-import { countRead, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
+import { getR2Object, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
 export interface FrameGroupShard {
@@ -89,8 +89,7 @@ async function readVerifiedBlob(bucket: R2Bucket, key: string, digest: string, l
     countCacheHit(ctx);
     return cached;
   }
-  countRead(ctx);
-  const object = await bucket.get(key);
+  const object = await getR2Object(bucket, key, ctx);
   if (!object) throw new CoverageError(`${label} missing`);
   const bytes = await readObjectBytes(object, limit, false, ctx, signal, reserved);
   if (await sha256(bytes) !== digest) throw new CoverageError(`${label} hash mismatch`);

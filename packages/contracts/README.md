@@ -32,7 +32,7 @@ encoded coverage to its grid and validates its halo.
 
 - [`@av/contracts/publication`](src/publication.ts): v5 manifests, pointers,
   point samples and provenance. [Regional publication](src/regional-publication.ts)
-  reads historical builds for recovery and evaluation.
+  reads archived regional controls for evaluation.
 - [`@av/contracts/models`](src/products.ts): validated source and build settings.
 - [`@av/contracts/model-options`](src/model-options.ts): generated browser choices.
 - [`@av/contracts/format`](src/format.ts), [`geometry`](src/geometry.ts) and
@@ -53,7 +53,8 @@ intervals, grids, coverage, capabilities, schedules and parallelism.
 [products.ts](src/products.ts) validates the registry and resolves defaults.
 Run `pnpm docs:generate` after configuration changes to update workflow schedules
 and the reference. `terrainSubdivisionFactor` configures whole-domain lift grids.
-[layers.ts](src/layers.ts) defines layer units and palettes,
+[layers.ts](src/layers.ts) defines ordered layer IDs, descriptors, default
+surfaces, and palettes,
 and [methods.ts](src/methods.ts) defines method descriptors and required inputs.
 See [extensions](../../docs/extensions.md) to add a model or layer.
 

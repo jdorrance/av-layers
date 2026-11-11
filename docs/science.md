@@ -164,9 +164,8 @@ local validation.
 
 The [evaluation command](../apps/batch/src/refinement/README.md#evaluation)
 records paired fields, status/support changes and station comparisons.
-[Whole-domain admission](../apps/batch/src/whole-domain/capacity.ts) and
-[legacy patch admission](../apps/batch/src/capacity.ts) account for the retained mappings,
-solver workspace and fallback fields.
+[Whole-domain admission](../apps/batch/src/whole-domain/capacity.ts) accounts
+for the retained mappings, solver workspace and fallback fields.
 
 ## Reconstruction and storage
 

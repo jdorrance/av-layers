@@ -39,6 +39,8 @@ export interface RequestMetrics {
   r2Bytes: number;
   cacheHits: number;
   coalesced: number;
+  admitMs?: number;
+  r2WaitMs?: number;
   responseCache?: 'hit' | 'miss' | 'bypass';
   route?: string;
   model?: string;
@@ -46,8 +48,22 @@ export interface RequestMetrics {
   problemCode?: string;
 }
 export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metrics?: RequestMetrics; responseCacheEnabled?: boolean }
-export function countRead(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.r2Reads++; }
 export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.cacheHits++; }
+
+function recordR2Wait(metrics: RequestMetrics, started: number): void {
+  metrics.r2WaitMs = (metrics.r2WaitMs ?? 0) + (performance.now() - started);
+}
+
+export function getR2Object(bucket: R2Bucket, key: string, ctx?: WaitContext, options?: Omit<R2GetOptions, 'onlyIf'> & { onlyIf?: undefined }): Promise<R2ObjectBody | null>;
+export function getR2Object(bucket: R2Bucket, key: string, ctx: WaitContext | undefined, options: R2GetOptions): Promise<R2Object | R2ObjectBody | null>;
+export async function getR2Object(bucket: R2Bucket, key: string, ctx?: WaitContext, options?: R2GetOptions): Promise<R2Object | R2ObjectBody | null> {
+  const metrics = ctx?.metrics;
+  if (!metrics) return bucket.get(key, options);
+  const started = performance.now();
+  metrics.r2Reads++;
+  try { return await bucket.get(key, options); }
+  finally { recordR2Wait(metrics, started); }
+}
 
 export function waitFor<T>(promise: Promise<T>, signal?: AbortSignal, discard?: (value: T) => void): Promise<T> {
   if (!signal) return promise;
@@ -217,7 +233,10 @@ export async function readObjectBytes(object: R2ObjectBody, limit: number, range
     void object.body.cancel().catch(() => {});
     throw new ResourceLimitError('Object exceeds byte budget');
   }
-  return readBoundedStream(object.body, range ? limit : object.size, ctx, { signal, reserved, exactLength: !range });
+  const metrics = ctx?.metrics;
+  const started = metrics ? performance.now() : 0;
+  try { return await readBoundedStream(object.body, range ? limit : object.size, ctx, { signal, reserved, exactLength: !range }); }
+  finally { if (metrics) recordR2Wait(metrics, started); }
 }
 
 export function estimateJsonBytes(value: unknown): number {

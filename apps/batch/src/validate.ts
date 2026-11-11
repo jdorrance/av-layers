@@ -5,13 +5,11 @@ import { resolve } from 'node:path';
 import type { PMTiles } from 'pmtiles';
 import { openArchive, Compression, TileType } from './archive-reader.js';
 import { getProduct } from '@av/contracts/models';
-import { CELL_BYTES, STATUS_OUTSIDE, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, expectedTiles, getBit, layerSurface, renderedLayers, sourceIntervalHours, mapFrameCount, sameGrid, publishedManifestSchema, matchesFrameIntervals, RETENTION_DAYS, validateArtifactRecords, validateSampleCell, validateSampleFlags, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct, type CoverageMask, type LayerId, type Manifest, type ManifestV5, type PublishedManifest, type ProductDefinition } from '@av/contracts';
-import { prepareSamplePackLayout, prepareShardedSamplePackLayout, resolveProductFrameHours, validateProfileRecord, type ShardedSampleBlock } from '@av/forecast';
+import { CELL_BYTES, STATUS_OUTSIDE, SAMPLE_BLOCK_SIZE, RASTER_TILE_SIZE, MAX_TILE_BYTES, coverageAtZoom, encodeBoundedJson, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, expectedTiles, layerSurface, renderedLayers, sourceIntervalHours, mapFrameCount, sameGrid, manifestV5Schema, matchesFrameIntervals, RETENTION_DAYS, validateSampleCell, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, sparseCoverageLookup, createWholeDomainDescriptors, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct, type CoverageMask, type ManifestV5, type ProductDefinition } from '@av/contracts';
+import { prepareShardedSamplePackLayout, resolveProductFrameHours, validateProfileRecord, type ShardedSampleBlock } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import { decodeWebp } from './webp.js';
-import { describeCoverage, describeSparseCoverage, loadCoverage, readGridCoverage, readSparseCoverage } from './coverage.js';
-import { forecastGrids, type ForecastGrid } from '@av/contracts';
-import { validateRefinementCoverage } from './refinement/coverage.js';
+import { describeCoverage, describeSparseCoverage, loadCoverage, readSparseCoverage } from './coverage.js';
 import { localPath, readLocalFile, type createLocalFileReader } from './local-file.js';
 import { readLocalProvenance, readFrameProvenance } from './frame-provenance.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
@@ -27,11 +25,11 @@ export const sha256 = (data: Uint8Array): string => createHash('sha256').update(
 
 /** An in-process validation result, never a serialized trust token. Upload still rechecks each file. */
 const validationSeal = Symbol('ValidatedBuild');
-export interface ValidatedBuild<T extends PublishedManifest = PublishedManifest> { readonly [validationSeal]: true; readonly root: string; readonly manifest: T; readonly hash: string }
+export interface ValidatedBuild { readonly [validationSeal]: true; readonly root: string; readonly manifest: ManifestV5; readonly hash: string }
 const seals = new WeakSet<object>();
 const remoteSeals = new WeakMap<object, ObjectStorage>();
-const manifestHash = (manifest: PublishedManifest): string => sha256(Buffer.from(JSON.stringify(manifest)));
-function validatedResult<T extends PublishedManifest>(root: string, manifest: T, remoteStore?: ObjectStorage): ValidatedBuild<T> {
+const manifestHash = (manifest: ManifestV5): string => sha256(Buffer.from(JSON.stringify(manifest)));
+function validatedResult(root: string, manifest: ManifestV5, remoteStore?: ObjectStorage): ValidatedBuild {
   const result = { [validationSeal]: true as const, root: resolve(root), manifest, hash: manifestHash(manifest) };
   Object.defineProperty(result, validationSeal, { enumerable: false });
   seals.add(result);
@@ -39,7 +37,7 @@ function validatedResult<T extends PublishedManifest>(root: string, manifest: T,
   return Object.freeze(result);
 }
 
-export function assertValidatedBuild(root: string, manifest: PublishedManifest, result: ValidatedBuild, remoteStore?: ObjectStorage): void {
+export function assertValidatedBuild(root: string, manifest: ManifestV5, result: ValidatedBuild, remoteStore?: ObjectStorage): void {
   if (!seals.has(result) || result[validationSeal] !== true || result.root !== resolve(root) || result.hash !== manifestHash(result.manifest) || result.hash !== manifestHash(manifest)) throw new Error('Build validation result is missing or changed');
   if (remoteStore && remoteSeals.get(result) !== remoteStore) throw new Error('Build validation result does not cover this remote store');
 }
@@ -54,12 +52,9 @@ export function assertTerrainManifestBinding(manifest: ManifestV5, terrain: NonN
 }
 
 /** Attach timings after validation while preserving the validated forecast metadata. */
-export function finalizeValidatedMetrics(root: string, result: ValidatedBuild<Manifest>, metrics: Manifest['metrics']): ValidatedBuild<Manifest>;
-export function finalizeValidatedMetrics(root: string, result: ValidatedBuild<ManifestV5>, metrics: Manifest['metrics']): ValidatedBuild<ManifestV5>;
-export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, metrics: Manifest['metrics']): ValidatedBuild;
-export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, metrics: Manifest['metrics']): ValidatedBuild {
+export function finalizeValidatedMetrics(root: string, result: ValidatedBuild, metrics: ManifestV5['metrics']): ValidatedBuild {
   assertValidatedBuild(root, result.manifest, result);
-  const manifest = publishedManifestSchema.parse({ ...result.manifest, metrics: structuredClone(metrics) });
+  const manifest = manifestV5Schema.parse({ ...result.manifest, metrics: structuredClone(metrics) });
   encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   return validatedResult(root, manifest, remoteSeals.get(result));
 }
@@ -118,92 +113,9 @@ export async function validateArchive(path: string, mask: Pick<CoverageMask, 'ti
   }
 }
 
-/** Validate all packed blocks, including byte-exact equality of duplicated halo/wrap cells. */
-export async function validateSamplePack(path: string, manifest: Pick<Manifest, 'frames'> & ForecastGrid, mask: CoverageMask): Promise<void> {
-  const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo, manifest.samples.blockSize);
-  const { samples } = manifest, channels = manifest.frames.length * manifest.layers.length, stride = channels * CELL_BYTES;
-  if (samples.channelCount !== channels || samples.storedCells !== layout.storedCells || samples.bytes !== layout.storedCells * stride || samples.bytes > BUILD_BUDGETS.samplePackBytes) {
-    throw new Error('Invalid sample pack layout');
-  }
-  const pack = await readLocalFile(path, BUILD_BUDGETS.samplePackBytes, samples.bytes);
-  if (pack.byteLength !== samples.bytes) throw new Error(`Invalid samples ${samples.key}`);
-  const view = new DataView(pack.buffer, pack.byteOffset, pack.byteLength);
-  const specs = Array.from({ length: channels }, (_, i) => manifest.descriptors.layers[manifest.layers[i % manifest.layers.length]]);
-  const firstOffset = new Int32Array(layout.cellCount).fill(-1);
-  for (let slot = 0; slot < layout.blockSlots; slot++) {
-    const block = layout.block(slot);
-    if (!block) continue;
-    const total = block.width * block.height;
-    for (let i = 0; i < total; i++) {
-      const x = i % block.width, y = (i - x) / block.width;
-      const index = (block.row + y) * mask.grid.width + ((block.column + x) % mask.grid.width);
-      const active = getBit(mask.output, index) || getBit(mask.halo, index), offset = (block.cellOffset + i) * stride;
-      for (let channel = 0; channel < channels; channel++) {
-        validateSampleCell(view, offset + channel * CELL_BYTES, specs[channel], samples.key, active);
-      }
-      const prior = firstOffset[index];
-      if (prior < 0) firstOffset[index] = offset;
-      else if (!pack.subarray(offset, offset + stride).equals(pack.subarray(prior, prior + stride))) {
-        throw new Error(`Duplicate sample cell differs: ${samples.key} cell ${index}`);
-      }
-    }
-  }
-  if (sha256(pack) !== samples.sha256) throw new Error(`Invalid samples hash ${samples.key}`);
-}
-
-export function validateSamples(samples: Buffer, mask: CoverageMask, layer: LayerId, key: string): void {
-  validateSampleFlags(samples, mask.grid.width * mask.grid.height * CELL_BYTES, layer, mask, key);
-}
-
-export async function validateBuild(root: string, raw: ManifestV5, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild<ManifestV5>>;
-export async function validateBuild(root: string, raw: Manifest, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition): Promise<ValidatedBuild<Manifest>>;
-export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild>;
-export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, expectedCoverageHash?: string, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild> {
-  const manifest = publishedManifestSchema.parse(raw);
+export async function validateBuild(root: string, raw: unknown, mask: CoverageMask, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild> {
+  const manifest = manifestV5Schema.parse(raw);
   encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
-  if (manifest.version === 5) return validateBuildV5(root, manifest, mask, trustedProduct, remote);
-  if (remote) throw new Error('Receipt validation requires a v5 manifest');
-  const product = trustedProduct ?? getProduct(manifest.model);
-  if (!product || manifest.model !== product.modelId || manifest.recipe.id !== product.id || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key]) || !sameGrid(manifest.grid, product.grid) || manifest.coverage.maxZoom !== product.maxNativeZoom) {
-    throw new Error('Unsupported model, grid or zoom');
-  }
-  const admittedHash = expectedCoverageHash ?? describeCoverage(await loadCoverage(product), product).hash;
-  if (manifest.coverage.id !== product.coverageId || manifest.coverage.hash !== admittedHash || describeCoverage(mask, product).hash !== admittedHash) {
-    throw new Error('Coverage identity mismatch');
-  }
-  if (manifest.coverage.maskKey !== `coverage/${manifest.coverage.hash}/manifest.json` || !sameGrid(mask.grid, manifest.grid) || JSON.stringify(manifest.descriptors.bounds) !== JSON.stringify(mask.bounds ?? product.bounds)) throw new Error('Coverage descriptor binding mismatch');
-  const cycle = Date.parse(manifest.cycle), created = Date.parse(manifest.createdAt), expiry = Date.parse(manifest.expiresAt);
-  if (!(created < expiry) || expiry > created + RETENTION_DAYS * 86400000 || !Number.isFinite(cycle)) throw new Error('Invalid build timestamps');
-  const expectedHours = resolveProductFrameHours(product, mask, manifest.cycle);
-  const frames = expectedHours.map(hour => `f${String(hour).padStart(3, '0')}`);
-  if (manifest.frames.length !== frames.length || manifest.layers.length !== product.layers.length || product.layers.some((layer, i) => manifest.layers[i] !== layer)) {
-    throw new Error('Incomplete frame or layer set');
-  }
-  for (let i = 0; i < frames.length; i++) {
-    const frame = manifest.frames[i];
-    const hour = expectedHours[i], end = cycle + hour * 3600000;
-    if (frame.id !== frames[i] || Date.parse(frame.intervalStart) !== end - sourceIntervalHours(product, hour) * 3600000 || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) {
-      throw new Error(`Invalid frame interval ${frame.id}`);
-    }
-  }
-  validateArtifactRecords(manifest);
-  await readLocalProvenance(root, manifest);
-  if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.samples.bytes, 0) > BUILD_BUDGETS.samplePackBytes) throw new Error('Aggregate sample packs exceed the build byte budget');
-  if (forecastGrids(manifest).reduce((sum, grid) => sum + grid.grid.width * grid.grid.height, 0) > BUILD_BUDGETS.gridCells) throw new Error('Aggregate forecast grids exceed the cell budget');
-  await validateSamplePack(localPath(root, manifest.samples.key), manifest, mask);
-  for (const patch of manifest.patches ?? []) {
-    const patchMask = await readGridCoverage(root, patch);
-    validateRefinementCoverage(mask, patchMask, { geometry: patch.geometry, bounds: patch.descriptors.bounds });
-    await validateSamplePack(localPath(root, patch.samples.key), { ...patch, frames: manifest.frames }, patchMask);
-  }
-  for (const artifact of manifest.artifacts) {
-    if (await fileSha256(localPath(root, artifact.tilesKey)) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
-    await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(mask, manifest.coverage.maxZoom));
-  }
-  return validatedResult(root, manifest);
-}
-
-async function validateBuildV5(root: string, manifest: ManifestV5, mask: CoverageMask, trustedProduct?: ProductDefinition, remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal }): Promise<ValidatedBuild<ManifestV5>> {
   const product = trustedProduct ?? getProduct(manifest.model), plan = product && wholeDomainPlan(product);
   if (!product || !plan || product.modelId !== manifest.model || manifest.recipe.id !== product.id
       || (Object.keys(product.source) as (keyof ProductDefinition['source'])[]).some(key => manifest.recipe.source[key] !== product.source[key])

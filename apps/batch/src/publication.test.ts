@@ -1,14 +1,14 @@
-import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
+import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { mkdtemp, mkdir, readFile, rm, truncate, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MAX_PROVENANCE_BYTES, RETENTION_DAYS, createProductDescriptors, createProductMethodId, createRecipeIdentity, type Manifest, type ModelPointer } from '@av/contracts';
+import { MAX_PROVENANCE_BYTES, RETENTION_DAYS, createWholeDomainDescriptors, createRecipeIdentity, type ManifestV5, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
 import { BUILD_BUDGETS } from './capacity.js';
-import { writeCoverage } from './coverage.js';
+import { writeNativeCoverage } from './whole-domain/coverage.js';
 import type { ObjectStorage } from './storage.js';
 
 const publicationPolicy = vi.hoisted(() => ({ minHorizonHours: 6 }));
@@ -27,13 +27,13 @@ vi.mock('node:fs/promises', async importOriginal => {
 
 vi.mock('./validate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('./validate.js')>();
-  return { ...actual, validateBuild: vi.fn(async (root: string, manifest: Manifest) => ({ root: resolve(root), manifest, hash: actual.sha256(Buffer.from(JSON.stringify(manifest))) })) };
+  return { ...actual, validateBuild: vi.fn(async (root: string, manifest: ManifestV5) => ({ root: resolve(root), manifest, hash: actual.sha256(Buffer.from(JSON.stringify(manifest))) })) };
 });
 
 import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
 import { localPath, sha256 } from './validate.js';
-import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
+import { fixtureManifest } from '../../../tests/forecast-fixture.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date; metadata?: Record<string, string> }>();
@@ -74,45 +74,45 @@ const id = '20261030T060000Z-12345678-1234-4234-8234-123456789abc';
 const temp: string[] = [];
 afterEach(async () => { await Promise.all(temp.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
-async function fixture(): Promise<{ root: string; manifest: Manifest }> {
+async function fixture(): Promise<{ root: string; manifest: ManifestV5 }> {
   const root = await mkdtemp(join(tmpdir(), 'av-publish-test-')); temp.push(root);
-  const bytes = Buffer.from('test artifact contents long enough to exercise a 32-byte tail range'.padEnd(120, '.')), hash = sha256(bytes), prefix = `builds/gfs/${id}`;
-  const frames = Array.from({ length: 8 }, (_, i) => ({ id: `f${String((i + 1) * 3).padStart(3, '0')}`, validTime: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString(), intervalStart: new Date(Date.parse('2026-10-30T00:00:00.000Z') + i * 10800000).toISOString(), intervalEnd: new Date(Date.parse('2026-10-30T00:00:00.000Z') + (i + 1) * 10800000).toISOString() }));
-  const artifacts = INDEXED_PRODUCT.layers.flatMap(layer => frames.map(frame => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash })));
-  for (const key of [...artifacts.map(a => a.tilesKey), `${prefix}/samples.bin`]) { const path = localPath(root, key); await mkdir(dirname(path), { recursive: true }); await writeFile(path, bytes); }
-  const coverageHash = await writeCoverage(root, { grid: INDEXED_GRID, bounds: INDEXED_PRODUCT.bounds, output: new Uint8Array(129780), halo: new Uint8Array(129780), tiles: new Uint8Array(2731), maxZoom: 7 }, INDEXED_PRODUCT);
-  const manifest: Manifest = { version: 3, descriptors: createProductDescriptors(INDEXED_PRODUCT), recipe: createRecipeIdentity(INDEXED_PRODUCT, hash), model: 'gfs', buildId: id, cycle: '2026-10-30T00:00:00.000Z', createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: createProductMethodId(INDEXED_PRODUCT), hash }, coverage: { id: INDEXED_PRODUCT.coverageId, hash: coverageHash, maskKey: `coverage/${coverageHash}/manifest.json`, maxZoom: 7 }, grid: INDEXED_GRID, frames, layers: [...INDEXED_PRODUCT.layers], artifacts, samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 24, bytes: 120, key: `${prefix}/samples.bin`, sha256: hash }, source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash }, tool: {}, palettes: ['lift'], metrics: {} };
-  {
-    const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: id, cycle: manifest.cycle, frames: [{ hour: 3 }] }));
-    await writeFile(localPath(root, provenanceKey), receipt);
-    manifest.source = { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) };
+  const bytes = Buffer.from('test artifact contents long enough to exercise a 32-byte tail range'.padEnd(120, '.'));
+  const hash = sha256(bytes), prefix = `builds/gfs/${id}`, cycle = '2026-10-30T00:00:00.000Z';
+  const validAt = (hour: number) => new Date(Date.parse(cycle) + hour * 3600000).toISOString();
+  const frames = Array.from({ length: 8 }, (_, i) => {
+    const hour = (i + 1) * 3, end = validAt(hour);
+    return { id: `f${String(hour).padStart(3, '0')}`, validTime: end, intervalStart: validAt(hour - 3), intervalEnd: end };
+  });
+  const layers = ['precip-rate'] as const, grid = { kind: 'regular-latlon' as const, width: 3, height: 1, earthRadiusM: 6371229,
+    lat0: 0, lon0: 0, dx: 1, dy: -1, wrapLongitude: false };
+  const product = { ...INDEXED_PRODUCT, grid, layers: [...layers] };
+  const coverage = await writeNativeCoverage(root, { grid, bounds: product.bounds, output: Uint8Array.of(7), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 }, product);
+  const { gridHash } = coverage.descriptor, samplesKey = `${prefix}/surfaces/native/samples/0.bin`;
+  const descriptors = createWholeDomainDescriptors({ ...product, layers: INDEXED_PRODUCT.layers });
+  const artifacts = frames.map(frame => ({ layer: layers[0], frame: frame.id, tilesKey: `${prefix}/${layers[0]}/${frame.id}.pmtiles`, tilesSha256: hash }));
+  for (const key of [...artifacts.map(a => a.tilesKey), samplesKey]) {
+    const path = localPath(root, key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, bytes);
   }
+  const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: 'gfs', buildId: id, cycle, frames: [{ hour: 3 }] }));
+  await writeFile(localPath(root, provenanceKey), receipt);
+  const manifest: ManifestV5 = { version: 5, descriptors, recipe: createRecipeIdentity(product, hash), model: 'gfs', buildId: id,
+    cycle, createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: descriptors.layers[layers[0]]!.methodId, hash },
+    frames, layers: [...layers], artifacts, source: { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) }, tool: {}, palettes: ['lift'], metrics: {},
+    surfaces: [{ id: 'native', kind: 'native', grid, gridHash, layers: [...layers], coverage: { id: product.coverageId, hash: coverage.hash, maskKey: `coverage/${coverage.hash}/manifest.json`, maxZoom: 0, gridHash },
+      samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', blockCount: 1, storedCells: 3,
+        channelCount: frames.length, coverageHash: coverage.hash,
+        shards: [{ firstBlock: 0, blockCount: 1, storedCells: 3, bytes: bytes.byteLength, key: samplesKey, sha256: hash }] } }] };
   return { root, manifest };
 }
 
-async function addPatch(root: string, manifest: Manifest) {
-  const patch = fixturePatch(manifest);
-  const hash = await writeCoverage(root, { grid: patch.grid, bounds: patch.descriptors.bounds,
-    output: Uint8Array.of(16, 0), halo: Uint8Array.of(239, 1), tiles: new Uint8Array(2731), maxZoom: 7 },
-  { coverageId: patch.coverage.id, coverageDescription: 'Synthetic refinement', bounds: patch.descriptors.bounds, supportHaloCells: 1 });
-  patch.coverage = { ...patch.coverage, hash, maskKey: `coverage/${hash}/manifest.json` };
-  const bytes = Buffer.alloc(patch.samples.bytes);
-  for (let offset = 4; offset < bytes.length; offset += 5) bytes[offset] = 1;
-  patch.samples.sha256 = sha256(bytes);
-  await mkdir(dirname(localPath(root, patch.samples.key)), { recursive: true });
-  await writeFile(localPath(root, patch.samples.key), bytes);
-  manifest.version = 4; manifest.patches = [patch];
-  return patch;
-}
-
 describe('immutable publication', () => {
-  it('lists legacy numeric packs before tiles with the declared digests and media types', () => {
-    const manifest = fixtureManifest(), patch = fixturePatch(manifest);
-    const base = { key: manifest.samples.key, sha256: manifest.samples.sha256, bytes: manifest.samples.bytes, contentType: 'application/octet-stream' };
-    const refined = { key: patch.samples.key, sha256: patch.samples.sha256, bytes: patch.samples.bytes, contentType: 'application/octet-stream' };
-    const tiles = manifest.artifacts.map(tile => ({ key: tile.tilesKey, sha256: tile.tilesSha256, contentType: 'application/vnd.pmtiles' }));
-    expect(forecastObjects(manifest)).toEqual([base, ...tiles]);
-    expect(forecastObjects({ ...manifest, version: 4, patches: [patch] })).toEqual([base, refined, ...tiles]);
+  it('rejects a legacy manifest before accessing storage', async () => {
+    const store = new MemoryStore();
+    await expect(publish(store, '.', fixtureManifest(), { authority, now: () => now })).rejects.toThrow(/version/);
+    expect(store.gets).toEqual([]);
+    expect(store.objects.size).toBe(0);
   });
 
   it('lists indexed provenance objects with their lengths and JSON media type', () => {
@@ -142,25 +142,25 @@ describe('immutable publication', () => {
     await expect(putImmutable(store, 'shard', bytes, 'application/octet-stream')).resolves.toBeUndefined();
   });
 
-  it('publishes every patch before committing the one model pointer and verifies it during rollback', async () => {
-    const { root, manifest } = await fixture(), patch = await addPatch(root, manifest), store = new MemoryStore();
+  it('publishes sparse coverage and sample shards before committing the pointer and verifies them during rollback', async () => {
+    const { root, manifest } = await fixture(), surface = manifest.surfaces[0], store = new MemoryStore();
     store.beforePut = key => {
       if (key === 'catalog/gfs/latest.json') {
-        expect(store.objects.has(patch.samples.key)).toBe(true);
-        expect(store.objects.has(patch.coverage.maskKey)).toBe(true);
+        expect(store.objects.has(surface.samples.shards[0]!.key)).toBe(true);
+        expect(store.objects.has(surface.coverage.maskKey)).toBe(true);
       }
     };
     await publish(store, root, manifest, { authority, now: () => now });
     await expect(rollback(store, 'gfs', id, authority, now)).resolves.toBeUndefined();
     const pointer = store.objects.get('catalog/gfs/latest.json')!.bytes.slice();
-    store.objects.get(patch.samples.key)!.bytes[0] ^= 1;
+    store.objects.get(surface.samples.shards[0]!.key)!.bytes[0] ^= 1;
     await expect(rollback(store, 'gfs', id, authority, now)).rejects.toThrow('Rollback object corrupt');
     expect(store.objects.get('catalog/gfs/latest.json')!.bytes).toEqual(pointer);
   });
 
-  it.each(['samples', 'coverage'] as const)('keeps the pointer uncommitted after a patch %s upload failure', async kind => {
-    const { root, manifest } = await fixture(), patch = await addPatch(root, manifest), store = new MemoryStore();
-    store.failKey = kind === 'samples' ? patch.samples.key : patch.coverage.maskKey;
+  it.each(['samples', 'coverage'] as const)('keeps the pointer uncommitted after a surface %s upload failure', async kind => {
+    const { root, manifest } = await fixture(), surface = manifest.surfaces[0], store = new MemoryStore();
+    store.failKey = kind === 'samples' ? surface.samples.shards[0]!.key : surface.coverage.maskKey;
     await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow('injected failure');
     expect(store.objects.has('catalog/gfs/latest.json')).toBe(false);
     expect(store.objects.has(`builds/gfs/${id}/manifest.json`)).toBe(false);
@@ -252,7 +252,10 @@ describe('immutable publication', () => {
   it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before writes', async defect => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     if (defect === 'old cycle') manifest.cycle = '2026-10-29T00:00:00.000Z';
-    else manifest.frames = manifest.frames.map(frame => ({ ...frame, validTime: new Date(now + 3600000).toISOString() }));
+    else {
+      manifest.mapFrameCount = 2;
+      manifest.artifacts = manifest.artifacts.slice(0, manifest.mapFrameCount);
+    }
     await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow('useful forecast horizon');
     expect(store.objects.size).toBe(0);
   });
@@ -312,10 +315,10 @@ describe('immutable publication', () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });
     expect(JSON.parse(Buffer.from((await store.get('catalog/gfs/latest.json'))!.bytes).toString()).latestBuildId).toBe(id);
-    expect(store.objects.size).toBe(32);
-    expect(store.checksums).toHaveLength(31);
+    expect(store.objects.size).toBe(forecastObjects(manifest).length + 6);
+    expect(store.checksums).toHaveLength(forecastObjects(manifest).length + 5);
     const artifactGets = store.gets.filter(call => call.key.startsWith(`builds/gfs/${id}/`) && !call.key.endsWith('/manifest.json') && !call.key.endsWith('/provenance.json'));
-    expect(artifactGets).toHaveLength(25);
+    expect(artifactGets).toHaveLength(forecastObjects(manifest).length);
     expect(artifactGets.every(call => call.range?.length === 32)).toBe(true);
     await expect(publish(store, root, manifest, { authority, now: () => now })).resolves.toBeUndefined();
   });
@@ -352,7 +355,7 @@ describe('immutable publication', () => {
     release();
     await result;
     expect(maximum).toBe(4);
-    expect(store.checksums).toHaveLength(31);
+    expect(store.checksums).toHaveLength(forecastObjects(manifest).length + 5);
   });
   it('drains active uploads after failure without admitting more files or committing', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
@@ -420,8 +423,8 @@ describe('immutable publication', () => {
   it('rejects an interior change when R2 reports its recomputed single-PUT MD5 ETag', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     const put = store.put.bind(store), target = manifest.artifacts[0].tilesKey;
-    store.put = async (key, bytes, condition, contentType, contentMd5) => {
-      await put(key, bytes, condition, contentType, contentMd5);
+    store.put = async (key, bytes, condition, contentType, contentMd5, metadata) => {
+      await put(key, bytes, condition, contentType, contentMd5, metadata);
       if (key === target) {
         const object = store.objects.get(key)!;
         const originalTail = object.bytes.slice(-32);
@@ -463,8 +466,8 @@ describe('immutable publication', () => {
   it('cannot detect interior corruption when a dishonest backend returns a stale MD5 ETag', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     const put = store.put.bind(store), target = manifest.artifacts[0].tilesKey;
-    store.put = async (key, bytes, condition, contentType, contentMd5) => {
-      await put(key, bytes, condition, contentType, contentMd5);
+    store.put = async (key, bytes, condition, contentType, contentMd5, metadata) => {
+      await put(key, bytes, condition, contentType, contentMd5, metadata);
       if (key === target) store.objects.get(key)!.bytes[0] ^= 1;
     };
     await publish(store, root, manifest, { authority, now: () => now });
@@ -574,12 +577,12 @@ describe('immutable publication', () => {
     await rollback(store, 'gfs', id, authority, now);
     expect(JSON.parse(Buffer.from(store.objects.get('catalog/gfs/latest.json')!.bytes).toString()).latestBuildId).toBe(id);
     expect(store.gets.some(call => call.key.endsWith('/provenance.json'))).toBe(true);
-    expect(store.gets.some(call => call.key.endsWith('/output.bin') && !!call.range)).toBe(true);
+    expect(store.gets.some(call => call.key.endsWith('/tiles.bin') && !!call.range)).toBe(true);
   });
-  it.each(['missing descriptor', 'corrupt descriptor', 'missing output', 'corrupt output', 'missing halo', 'corrupt halo', 'missing tiles', 'corrupt tiles'])('preserves latest when rollback coverage has %s', async defect => {
+  it.each(['missing descriptor', 'corrupt descriptor', 'missing sparse', 'corrupt sparse', 'missing tiles', 'corrupt tiles'])('preserves latest when rollback coverage has %s', async defect => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     await publish(store, root, manifest, { authority, now: () => now });
-    const name = defect.split(' ')[1], key = name === 'descriptor' ? manifest.coverage.maskKey : `coverage/${manifest.coverage.hash}/${name}.bin`;
+    const name = defect.split(' ')[1], key = name === 'descriptor' ? manifest.surfaces[0].coverage.maskKey : `coverage/${manifest.surfaces[0].coverage.hash}/${name}.bin`;
     if (defect.startsWith('missing')) store.objects.delete(key);
     else store.objects.get(key)!.bytes[0] ^= 1;
     const pointer = store.objects.get('catalog/gfs/latest.json')!.bytes.slice(), writes: string[] = [];
@@ -654,7 +657,7 @@ describe('immutable publication', () => {
   });
   it('refuses a missing local artifact and does not commit', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    await rm(localPath(root, manifest.samples.key));
+    await rm(localPath(root, manifest.surfaces[0].samples.shards[0]!.key));
     await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow();
     expect(await store.get('catalog/gfs/latest.json')).toBeNull();
   });
@@ -771,7 +774,7 @@ it('cancels rollback verification before any pointer write', async () => {
   const { root, manifest } = await fixture(), store = new MemoryStore(), controller = new AbortController();
   await publish(store, root, manifest, { authority, now: () => now });
   const before = store.objects.get('catalog/gfs/latest.json')!.bytes.slice(), get = store.get.bind(store), outcomes: string[] = [];
-  store.get = async (...args) => { const result = await get(...args); if (args[0].endsWith('/output.bin')) controller.abort(new Error('cancel verification')); return result; };
+  store.get = async (...args) => { const result = await get(...args); if (args[0].endsWith('/tiles.bin')) controller.abort(new Error('cancel verification')); return result; };
   const put = vi.spyOn(store, 'put');
   await expect(rollback(store, 'gfs', id, authority, now, { signal: controller.signal, onPointerOutcome: outcome => outcomes.push(outcome) })).rejects.toThrow('cancel verification');
   expect(put).not.toHaveBeenCalled(); expect(outcomes).toEqual([]);

@@ -49,7 +49,7 @@ The [whole-domain producer](../whole-domain/prepare.ts) stages cached values in
 sparse coverage offset order with coverage files in the frozen plan. Shards
 validate their identities and load them before weather acquisition. Local
 forecast builds prepare a missing cache on first use.
-[Regional evaluation](../refinement/README.md) retains polygon-grid preparation.
+[Regional evaluation](../refinement/README.md) replays saved polygon-grid terrain.
 
 Prepare a configured model locally and upload its verified arrays to R2:
 

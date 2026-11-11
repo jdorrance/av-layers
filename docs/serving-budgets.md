@@ -88,9 +88,12 @@ concurrent requests share a single R2 read and complete if the initiating client
 disconnects.
 
 Response headers `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`,
-`X-Av-Coalesced`, `X-Av-Response-Cache`, and `Server-Timing: worker` report
-per-request storage and cache activity. Set `AV_REQUEST_METRICS=true` for
-structured route logs.
+`X-Av-Coalesced` and `X-Av-Response-Cache` report storage and cache activity.
+`Server-Timing` reports total Worker wall time, pinned manifest admission
+(`admit`), and the sum of R2 get and body waits owned by the request (`r2`).
+Parallel reads can overlap. The health probe records these spans when present.
+Measure decode CPU locally because the deployed Worker clock advances on I/O.
+Set `AV_REQUEST_METRICS=true` for structured route logs.
 
 Sustained load tests run for 5 minutes per cache mode (`AV_RESPONSE_CACHE=on` vs
 `off`) at 10 req/s (90% tiles, 4% samples, 6% metadata, max 20 concurrent,

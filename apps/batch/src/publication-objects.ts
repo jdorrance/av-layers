@@ -1,4 +1,4 @@
-import { forecastGrids, type PublishedManifest, type parseProvenance } from '@av/contracts';
+import type { ManifestV5, parseProvenance } from '@av/contracts';
 
 interface ForecastObject {
   key: string;
@@ -8,10 +8,8 @@ interface ForecastObject {
 }
 
 /** List numeric packs before raster archives in publication order. */
-export function forecastObjects(manifest: PublishedManifest): ForecastObject[] {
-  const packs = manifest.version === 5
-    ? manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])])
-    : forecastGrids(manifest).map(grid => grid.samples);
+export function forecastObjects(manifest: ManifestV5): ForecastObject[] {
+  const packs = manifest.surfaces.flatMap(surface => [...surface.samples.shards, ...(surface.profiles?.groups.flatMap(group => group.shards) ?? [])]);
   return [
     ...packs.map(({ key, sha256, bytes }) => ({ key, sha256, bytes, contentType: 'application/octet-stream' })),
     ...manifest.artifacts.map(({ tilesKey: key, tilesSha256: sha256 }) => ({ key, sha256, contentType: 'application/vnd.pmtiles' }))

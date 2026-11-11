@@ -25,7 +25,7 @@ export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
   profileGroups?: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'];
   remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
-  onValidated?: (result: ValidatedBuild<ManifestV5>, path: string) => Promise<void>;
+  onValidated?: (result: ValidatedBuild, path: string) => Promise<void>;
 }
 
 function rendererTotals(metrics: WholeDomainFrameResult['metrics']['renderer']) {
@@ -90,7 +90,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     };
     const tValidate = Date.now();
     phase = 'validate';
-    const validated = await validateBuild(root, manifestV5Schema.parse(base), options.mask, undefined, product, options.remote);
+    const validated = await validateBuild(root, manifestV5Schema.parse(base), options.mask, product, options.remote);
     const completed = finalizeValidatedMetrics(root, validated, {
       elapsedMs: Date.now() - started,
       renderer: rendererTotals(result.metrics.renderer),

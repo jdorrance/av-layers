@@ -2,7 +2,7 @@ import { getProduct } from '@av/contracts/models';
 import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { sha256 } from './coverage';
 import { Problem, fail, validateId, ensureLive } from './http';
-import { binaryRead, countRead, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, waitFor, type WaitContext } from './resources';
+import { binaryRead, getR2Object, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, waitFor, type WaitContext } from './resources';
 
 const POINTER_TTL_MS = 15_000;
 const NEGATIVE_POINTER_TTL_MS = 5_000;
@@ -43,8 +43,7 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
       signal.addEventListener('abort', abort, { once: true });
     });
     signal.throwIfAborted();
-    countRead(ctx);
-    const object = await bucket.get(`catalog/${model}/latest.json`);
+    const object = await getR2Object(bucket, `catalog/${model}/latest.json`, ctx);
     if (!object) {
       const problem = new Problem(503, 'publication-unavailable', `No publication available for ${model}`);
       const until = Date.now() + NEGATIVE_POINTER_TTL_MS;
@@ -107,8 +106,7 @@ export async function manifest(
     let reads = manifestReads.get(bucket);
     if (!reads) { reads = new MaterializedReads(4); manifestReads.set(bucket, reads); }
     const loaded = await reads.run(cacheKey, async signal => {
-      countRead(ctx);
-      const object = await bucket.get(entry.manifestKey);
+      const object = await getR2Object(bucket, entry.manifestKey, ctx);
       if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
       let decoded: Awaited<ReturnType<typeof readObjectJson>>;
       try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal, MAX_MANIFEST_JSON_TOKENS); }
@@ -226,8 +224,7 @@ export async function readProvenanceFrame(bucket: R2Bucket, m: ManifestV5, frame
 
 function readVerifiedProvenance(bucket: R2Bucket, reference: { key: string; sha256: string; bytes?: number }, verify: (value: unknown) => void, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   return binaryRead(bucket, `${reference.key}:${reference.sha256}`, async signal => {
-    countRead(ctx);
-    const object = await bucket.get(reference.key);
+    const object = await getR2Object(bucket, reference.key, ctx);
     if (!object) fail(503, 'publication-incomplete', 'Provenance is missing');
     if (signal.aborted) { void object.body?.cancel?.(signal.reason); throw signal.reason; }
     const limit = reference.bytes ?? object.size;

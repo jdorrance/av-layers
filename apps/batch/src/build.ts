@@ -32,9 +32,9 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
   const prepared = await prepareWholeDomain({ product: options.product, mask: options.mask, out: options.out,
     maxLevels: options.provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
   const coverageHash = prepared.native.hash;
-  const identity = await buildIdentity(options.product, coverageHash, undefined, [], undefined, {
+  const identity = await buildIdentity(options.product, coverageHash, { wholeDomain: {
     k: prepared.plan.k, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash,
-    nativeCoverageHash: prepared.native.hash, terrain: prepared.terrain });
+    nativeCoverageHash: prepared.native.hash, terrain: prepared.terrain } });
   const preparation = { elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 };
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
   const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix });

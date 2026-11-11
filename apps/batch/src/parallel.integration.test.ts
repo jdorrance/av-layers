@@ -108,7 +108,7 @@ describe('forecast hour-group builds', () => {
     }
     const provenance = JSON.parse(await readFile(localPath(out, manifest.source.provenanceKey), 'utf8'));
     expect(provenance.frames.map((frame: { hour: number }) => frame.hour)).toEqual(product.frameHours);
-    const validated = await validateBuild(out, manifest, mask, undefined, product);
+    const validated = await validateBuild(out, manifest, mask, product);
     expect(() => assertValidatedBuild(out, manifest, validated)).not.toThrow();
     expect(onValidated).toHaveBeenCalledExactlyOnceWith(expect.any(Object), path);
     expect(() => assertValidatedBuild(out, manifest, onValidated.mock.calls[0][0])).not.toThrow();

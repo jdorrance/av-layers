@@ -935,6 +935,7 @@ describe('read-only worker', () => {
     vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('R2 backend timeout'));
     const res = await call('/v1/models/gfs/latest');
     expect(res.status).toBe(503);
+    expect(res.headers.get('server-timing')).toMatch(/worker;dur=\d+\.\d+, r2;dur=\d+\.\d+/);
     expect(log).toHaveBeenCalledTimes(1);
     expect(JSON.parse(log.mock.calls[0][0])).toMatchObject({
       event: 'api-request', method: 'GET', route: '/v1/models/:model/latest', model: 'gfs',
@@ -949,6 +950,7 @@ describe('read-only worker', () => {
     }, ctx);
     const valid = await request('GET');
     expect(valid.status).toBe(200); await valid.arrayBuffer();
+    expect(valid.headers.get('server-timing')).toContain('admit;dur=');
     const early = await request('POST');
     expect(early.status).toBe(405); await early.arrayBuffer();
     expect(log).toHaveBeenCalledTimes(2);

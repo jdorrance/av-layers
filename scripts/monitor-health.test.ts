@@ -29,11 +29,16 @@ afterEach(() => vi.restoreAllMocks());
 it('keeps identity and expiry findings when a later serving probe fails', async () => {
   const manifest = fixture(); manifest.expiresAt = new Date(0).toISOString();
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.cycle));
-  vi.spyOn(serving, 'probeApi').mockImplementation(async options => { options.observeManifest?.(manifest); throw new Error('sample unavailable'); });
+  vi.spyOn(serving, 'probeApi').mockImplementation(async options => {
+    options.observeManifest?.(manifest);
+    options.observeClient?.({ route: 'sample', attempts: 2, elapsedMs: 250, outcome: 'failure' });
+    throw new Error('sample unavailable');
+  });
   const result = await monitor('https://api.example');
   expect(result).toMatchObject({ healthy: false, model: DEFAULT_PRODUCT.modelId, buildId: manifest.buildId, sourceRevision: manifest.recipe.sourceRevision });
   expect(result.findings.join(';')).toContain('expired-publication');
   expect(result.findings.join(';')).toContain('sample unavailable');
+  expect(result.clientRequests.sample).toEqual({ count: 1, retries: 1, failed: 1, maxElapsedMs: 250 });
 });
 
 it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId', async product => {

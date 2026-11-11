@@ -13,8 +13,9 @@ import { tilePixels } from '../parallel-fixtures.js';
 import { buildForecast } from './build.js';
 import { buildShard, createBuildPlan, finalizeBuild } from './parallel.js';
 import type { ForecastProvider } from './provider.js';
-import { assertValidatedBuild } from './validate.js';
+import { assertValidatedBuild, sha256 } from './validate.js';
 import { nativeSparseMask } from './whole-domain/coverage.js';
+import golden from './whole-domain/fixtures/golden-parity.json' with { type: 'json' };
 
 const roots: string[] = [];
 async function temporaryRoot() {
@@ -59,7 +60,7 @@ it.each([
   { model: 'gfs', grid: wrapping, bounds: [-180, 70, 180, 72], lat: 71.5, lon: 179 },
   { model: 'icon-eu', grid: regional, bounds: [10, 70, 12, 72], lat: 71.5, lon: 10.5 },
   { model: 'rrfs', grid: gridSchema.parse(lambert.grid), bounds: [-180, -85, 180, 85], lat: 45, lon: -90 }
-] satisfies { model: string; grid: Grid; bounds: ProductDefinition['bounds']; lat: number; lon: number }[])('preserves $model scalar records, profiles and pixels through sharded assembly', async ({ model, grid, bounds, lat, lon }) => {
+] satisfies { model: keyof typeof golden.models; grid: Grid; bounds: ProductDefinition['bounds']; lat: number; lon: number }[])('preserves $model scalar records, profiles and pixels from the baseline through sharded assembly', async ({ model, grid, bounds, lat, lon }) => {
   const serial = await temporaryRoot(), parallel = await temporaryRoot();
   const product = configured(model, grid, bounds), mask = denseFixtureMask(product, grid);
   const close = vi.fn(async () => {});
@@ -79,6 +80,23 @@ it.each([
   const plan = await createBuildPlan({ ...options, out: parallel, wholeDomain: await syntheticWholeDomain(parallel, product) });
   for (const [shard] of plan.groups.entries()) await buildShard({ ...options, out: parallel, plan, shard });
   const left = await readManifest(serialPath), right = await readManifest(await finalizeBuild({ ...options, out: parallel, plan }));
+  const expected = golden.models[model];
+  const hashes = (shards: readonly { key: string }[]) => Promise.all(shards.map(async shard => sha256(await readFile(join(serial, shard.key)))));
+  expect({
+    frames: left.frames,
+    layers: left.layers,
+    descriptorSha256: sha256(Buffer.from(JSON.stringify(left.descriptors))),
+    storedMsl: left.tool.useStoredMslNoLift,
+    surfaces: await Promise.all(left.surfaces.map(async surface => ({
+      kind: surface.kind,
+      coverage: surface.coverage.hash,
+      samples: await hashes(surface.samples.shards),
+      ...(surface.profiles ? { profiles: await hashes(surface.profiles.groups.flatMap(group => group.shards)) } : {})
+    })))
+  }, `Recorded at ${golden.baseline}`).toEqual({
+    frames: expected.frames, layers: expected.layers, descriptorSha256: expected.descriptorSha256,
+    storedMsl: expected.storedMsl, surfaces: expected.surfaces
+  });
   expect(close).toHaveBeenCalledTimes(3);
   expect(right.frames).toEqual(left.frames);
   expect(right.layers).toEqual(left.layers);
@@ -92,9 +110,11 @@ it.each([
     expect(target.samples.format).toBe('frame-group-block-shards-v1');
     expect(source.samples.shards.map(shard => shard.sha256)).toEqual(target.samples.shards.map(shard => shard.sha256));
   }
-  for (const [index, artifact] of left.artifacts.entries()) {
-    expect(await tilePixels(serial, artifact)).toEqual(await tilePixels(parallel, right.artifacts[index]));
-  }
+  const pixelHashes = async (root: string, manifest: ManifestV5) => Object.fromEntries(await Promise.all(manifest.artifacts.map(async artifact => [
+    `${artifact.layer}/${artifact.frame}`, sha256(await tilePixels(root, artifact))
+  ])));
+  expect(await pixelHashes(serial, left), `Recorded at ${golden.baseline}`).toEqual(expected.pixels);
+  expect(await pixelHashes(parallel, right)).toEqual(expected.pixels);
 
   const indices = nativeSparseMask(mask).coverage.blockIds, point = planSample(grid, lat, lon)!;
   const native = (manifest: ManifestV5) => manifest.surfaces.find(surface => surface.kind === 'native')!;

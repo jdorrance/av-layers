@@ -3,7 +3,7 @@ import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { getProduct } from '@av/contracts/models';
-import { publishedManifestSchema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5, type PublishedManifest } from '@av/contracts';
+import { manifestV5Schema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5 } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { checkPerformance } from '../apps/batch/src/capacity.js';
@@ -41,21 +41,33 @@ export async function downloadForecastArtifact(runId: string, root = 'output'): 
   return revision;
 }
 
-function logForecastFailure(authority: PublicationAuthority, phase: string, started: number, error: unknown, detail: {
-  buildId?: string; shard?: number; publication?: string; cancelled: boolean;
-}): void {
-  const { name, code } = failureReason(error);
+type ForecastPhase = 'terrain' | 'plan' | 'shard' | 'finalize' | 'resume' | 'publish' | 'maintenance' | 'serving';
+type PublicationState = 'not-attempted' | 'unconfirmed' | 'committed';
+type ForecastEvent = {
+  phase: ForecastPhase;
+  buildId?: string;
+  shard?: number;
+  publication?: PublicationState;
+} & (
+  { event: 'forecast-failure'; cancelled: boolean; error: ReturnType<typeof failureReason> }
+  | { event: 'forecast-stage'; outcome: 'complete' | 'skipped' }
+  | { event: 'forecast-published'; r2UploadWallMs?: number; casCommitWallMs?: number }
+);
+
+function logForecastEvent(authority: PublicationAuthority, started: number, detail: ForecastEvent): void {
   const attempt = process.env.GITHUB_RUN_ATTEMPT;
-  console.error(JSON.stringify({ event: 'forecast-failure', phase, model: authority.model, environment: authority.environment,
+  const entry = JSON.stringify({ model: authority.model, environment: authority.environment,
     runId: authority.runId, attempt: /^\d+$/.test(attempt ?? '') ? attempt : undefined, ...detail,
-    elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024, error: { name, code } }));
+    elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024 });
+  if (detail.event === 'forecast-failure') console.error(entry);
+  else console.log(entry);
 }
 
 /** Build and artifact-resume use the same writer, cancellation and durable outcome protocol. */
 export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'finalize' | 'resume', work: (run: {
   root: string; signal: AbortSignal; store: ObjectStorage; model: string;
   identifyBuild(buildId: string): void;
-  commit(manifest: PublishedManifest, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean }): Promise<void>;
+  commit(manifest: ManifestV5, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean }): Promise<void>;
 }) => Promise<T>, store?: ObjectStorage): Promise<T> {
   const { revision } = workflowContext();
   const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
@@ -63,9 +75,9 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
   const abort = (): void => controller.abort(new Error('Publication interrupted'));
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
   let publicationPath: string | undefined, committed = false, publicationAttempted = false;
-  let phase: string = operation, buildId: string | undefined;
+  let phase: ForecastPhase = operation, buildId: string | undefined;
   try {
-    return await work({ root, signal: controller.signal, store: storage, model: authority.model, identifyBuild(id) { buildId = id; }, async commit(manifest, path, resumedFromRun, validated, options) {
+    const result = await work({ root, signal: controller.signal, store: storage, model: authority.model, identifyBuild(id) { buildId = id; }, async commit(manifest, path, resumedFromRun, validated, options) {
       buildId = manifest.buildId;
       phase = 'publish';
       if (options?.deadlineAt && Date.now() >= Date.parse(options.deadlineAt)) throw new Error('Forecast publication deadline exceeded');
@@ -84,8 +96,7 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
       await publish(storage, root, manifest, { authority, signal, allowSameCycle: process.env.ALLOW_SAME_CYCLE === 'true', validated, ...options, timings });
       committed = true;
       await writeFile(publicationPath, JSON.stringify({ version: 1, status: 'committed', publication: 'committed', buildId: manifest.buildId, resumedFromRun, elapsedMs: Date.now() - started, publicationWallMs: Date.now() - started, ...timings, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024, validationReused }, null, 2));
-      console.log(JSON.stringify({ event: 'forecast-published', model: authority.model, environment: authority.environment,
-        runId: authority.runId, attempt: process.env.GITHUB_RUN_ATTEMPT, buildId, elapsedMs: Date.now() - started, ...timings }));
+      logForecastEvent(authority, started, { event: 'forecast-published', phase, buildId, publication: 'committed', ...timings });
       // Record commit first; cancellation or maintenance failure must never masquerade as failed publication.
       phase = 'maintenance';
       if (signal.aborted) {
@@ -114,10 +125,13 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
         throw new Error(`Publication committed; serving verification failed: ${String(error)}`, { cause: error });
       }
     } });
+    logForecastEvent(authority, workflowStarted, { event: 'forecast-stage', phase: operation, buildId,
+      publication: committed ? 'committed' : 'not-attempted', outcome: operation === 'plan' && result === null ? 'skipped' : 'complete' });
+    return result;
   } catch (error) {
     const publication = committed ? 'committed' : publicationAttempted ? 'unconfirmed' : 'not-attempted';
     const cancelled = controller.signal.aborted;
-    logForecastFailure(authority, phase, workflowStarted, error, { buildId, publication, cancelled });
+    logForecastEvent(authority, workflowStarted, { event: 'forecast-failure', phase, buildId, publication, cancelled, error: failureReason(error) });
     try {
       await mkdir(root, { recursive: true });
       await writeFile(join(root, 'failure.json'), JSON.stringify({ at: new Date().toISOString(), revision, authority, publicationPath, publication, cancelled, error: String(error) }, null, 2));
@@ -150,9 +164,10 @@ async function publishedTerrainRef(store: ObjectStorage, model: string, signal?:
     if (Date.parse(latest.expiresAt) <= Date.now()) return;
     throw new Error('Published terrain manifest is missing');
   }
-  const manifest = publishedManifestSchema.parse(parseBoundedJson(object.bytes, MAX_MANIFEST_JSON_TOKENS));
-  if (manifest.model !== model || manifest.buildId !== latest.buildId || manifest.cycle !== latest.cycle || manifest.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
-  if (manifest.version !== 5) return;
+  const raw = record(parseBoundedJson(object.bytes, MAX_MANIFEST_JSON_TOKENS), 'Published terrain manifest');
+  if (raw.model !== model || raw.buildId !== latest.buildId || raw.cycle !== latest.cycle || raw.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
+  if (raw.version === 3 || raw.version === 4) return;
+  const manifest = manifestV5Schema.parse(raw);
   const terrain = manifest.surfaces.find(surface => surface.id === 'fine')?.terrain;
   return terrain ? { key: terrain.key, sha256: terrain.sha256 } : undefined;
 }
@@ -249,8 +264,10 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
     const shardSetupWallMs = Date.now() - started;
     await buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal, store: scopedStore });
     await writeFile(join('output', 'shards', String(shard), 'workflow-metrics.json'), JSON.stringify({ shardSetupWallMs, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
+    logForecastEvent(authority, started, { event: 'forecast-stage', phase: 'shard', buildId, shard, outcome: 'complete' });
   } catch (error) {
-    logForecastFailure(authority, 'shard', started, error, { buildId, shard, cancelled: controller.signal.aborted });
+    logForecastEvent(authority, started, { event: 'forecast-failure', phase: 'shard', buildId, shard,
+      cancelled: controller.signal.aborted, error: failureReason(error) });
     throw error;
   } finally {
     process.off('SIGINT', abort); process.off('SIGTERM', abort);
@@ -295,8 +312,8 @@ export async function assertV5ResumeIdentity(manifest: ManifestV5, plan: BuildPl
       || surface.gridHash !== frozen.fineCoverage.gridHash || terrain.key !== frozen.terrain.key || terrain.sha256 !== frozen.terrain.sha256) {
     throw new Error('Resume whole-domain coverage or terrain identity differs');
   }
-  const identity = await buildIdentity(product, frozen.nativeCoverageHash, undefined, [], undefined,
-    { k: frozen.k, nativeCoverageHash: frozen.nativeCoverageHash, fineCoverageHash: frozen.fineCoverage.hash, fineGridHash: frozen.fineCoverage.gridHash, terrain: frozen.terrain });
+  const identity = await buildIdentity(product, frozen.nativeCoverageHash, { wholeDomain:
+    { k: frozen.k, nativeCoverageHash: frozen.nativeCoverageHash, fineCoverageHash: frozen.fineCoverage.hash, fineGridHash: frozen.fineCoverage.gridHash, terrain: frozen.terrain } });
   if (identity.recipe.hash !== manifest.recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
   for (const current of manifest.surfaces) {
     signal?.throwIfAborted();
@@ -345,71 +362,40 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       }
       throw error;
     });
-    const manifest = publishedManifestSchema.parse(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS));
+    const raw = record(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS), 'Resume manifest');
+    if (raw.version === 3 || raw.version === 4) throw new Error('Resume requires a whole-domain v5 build; start a fresh forecast without resume-run-id');
+    const manifest = manifestV5Schema.parse(raw);
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
-    const product = getProduct(manifest.model), same = sameJsonValue;
-    if (manifest.version === 5) {
-      const { readBuildPlan } = await import('../apps/batch/src/parallel.js');
-      const plan = await readBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          throw new Error('Resume artifact is incomplete: missing plan.json for whole-domain build; start a fresh forecast without resume-run-id', { cause: error });
-        }
-        throw error;
-      });
-      if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
-          || plan.createdAt !== manifest.createdAt || !same(plan.recipe, manifest.recipe)) {
-        throw new Error('Resume plan differs from the retained whole-domain manifest');
+    const { readBuildPlan } = await import('../apps/batch/src/parallel.js');
+    const plan = await readBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+        throw new Error('Resume artifact is incomplete: missing plan.json for whole-domain build; start a fresh forecast without resume-run-id', { cause: error });
       }
-      const committedOnly = Boolean(plan.deadlineAt && Date.now() >= Date.parse(plan.deadlineAt));
-      if (committedOnly) {
-        const pointer = (await readPointer(store, model, signal)).pointer;
-        const retained = pointer?.retained.find(item => item.buildId === manifest.buildId);
-        if (pointer?.latestBuildId !== manifest.buildId || retained?.manifestKey !== `builds/${model}/${manifest.buildId}/manifest.json` || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Forecast publication deadline exceeded');
-      }
-      const deadlineAt = committedOnly ? new Date(Date.now() + 5 * 60_000).toISOString() : plan.deadlineAt;
-      const deadlineSignal = deadlineAt ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Date.parse(deadlineAt) - Date.now()))]) : signal;
-      const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
-      let receiptsOnly = false;
-      if (grouped) for (const object of forecastObjects(manifest)) {
-        try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
-        catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
-        if (receiptsOnly) break;
-      }
-      await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
-      deadlineSignal.throwIfAborted();
-      await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
-      return;
+      throw error;
+    });
+    if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
+        || plan.createdAt !== manifest.createdAt || !sameJsonValue(plan.recipe, manifest.recipe)) {
+      throw new Error('Resume plan differs from the retained whole-domain manifest');
     }
-    let terrain;
-    if (manifest.source.terrain !== undefined) {
-      const { preparedTerrainRefSchema } = await import('../apps/batch/src/terrain/prepare.js');
-      terrain = preparedTerrainRefSchema.parse(manifest.source.terrain);
+    const committedOnly = Boolean(plan.deadlineAt && Date.now() >= Date.parse(plan.deadlineAt));
+    if (committedOnly) {
+      const pointer = (await readPointer(store, model, signal)).pointer;
+      const retained = pointer?.retained.find(item => item.buildId === manifest.buildId);
+      if (pointer?.latestBuildId !== manifest.buildId || retained?.manifestKey !== `builds/${model}/${manifest.buildId}/manifest.json` || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Forecast publication deadline exceeded');
     }
-    let refinements;
-    if (manifest.version === 4) {
-      const { readLegacyBuildPlan } = await import('../apps/batch/src/parallel.js');
-      const plan = await readLegacyBuildPlan(join(root, 'plan.json')).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          throw new Error('Resume artifact is incomplete: missing plan.json for refined build; start a fresh forecast without resume-run-id', { cause: error });
-        }
-        throw error;
-      });
-      if (plan.model !== manifest.model || plan.buildId !== manifest.buildId || plan.cycle !== manifest.cycle
-          || plan.createdAt !== manifest.createdAt || plan.coverageHash !== manifest.coverage.hash
-          || !same(plan.recipe, manifest.recipe) || !same(plan.terrain, terrain)
-          || !same(plan.refinements?.map(input => ({ id: input.id, grid: input.grid, coverage: input.coverage,
-            geometry: input.geometry, bounds: input.bounds, terrain: { key: input.terrain.key, sha256: input.terrain.sha256 } })),
-          manifest.patches!.map(patch => ({ id: patch.id, grid: patch.grid, coverage: patch.coverage,
-            geometry: patch.geometry, bounds: patch.descriptors.bounds, terrain: { key: patch.terrain.key, sha256: patch.terrain.sha256 } })))) {
-        throw new Error('Resume plan differs from the retained refined manifest');
-      }
-      refinements = plan.refinements;
+    const deadlineAt = committedOnly ? new Date(Date.now() + 5 * 60_000).toISOString() : plan.deadlineAt;
+    const deadlineSignal = deadlineAt ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Date.parse(deadlineAt) - Date.now()))]) : signal;
+    const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
+    let receiptsOnly = false;
+    if (grouped) for (const object of forecastObjects(manifest)) {
+      try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
+      catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
+      if (receiptsOnly) break;
     }
-    const identity = product && (refinements ? await buildIdentity(product, manifest.coverage.hash, terrain, refinements) : await buildIdentity(product, manifest.coverage.hash, terrain));
-    if (!identity || manifest.recipe.hash !== identity.recipe.hash) throw new Error('Resume recipe differs from current code/configuration; build a fresh forecast');
-    signal.throwIfAborted();
-    await commit(manifest, path, runId);
+    await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
+    deadlineSignal.throwIfAborted();
+    await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
   }, store);
 }
 

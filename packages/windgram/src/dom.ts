@@ -1,4 +1,4 @@
-import type { WindgramView } from './scene.ts';
+import type { WindgramView } from './model.ts';
 import { sceneData } from './scene-store.ts';
 import { chartStyles } from './chart-styles.ts';
 import { mountWindgram as mount, type WindgramMountOptions } from './windgram-dom.ts';

@@ -5,7 +5,6 @@ import z from 'zod';
 import { profileRecordBytes, prepareShardedSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { getProduct } from '@av/contracts/models';
 import { artifactSchema, assertSampleLayoutBindingV5, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, matchesFrameIntervals, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sameJsonValue, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestV5Schema, parseBoundedJson, SAMPLE_BLOCK_SIZE, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
-import { MAX_REFINEMENT_ZONES } from '@av/contracts/refinement';
 import { assertForecastInputs, BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES } from './capacity.js';
 import { createBuildStamp, type BuildOptions } from './build.js';
 import { loadCoverage } from './coverage.js';
@@ -15,10 +14,8 @@ import { createLocalFileReader, readLocalFile } from './local-file.js';
 import { getForecastProvider } from './providers.js';
 import { localPath, sha256, validateArchive, validateSampleGroup } from './validate.js';
 import { failureReason } from './failure.js';
-import { preparedTerrainRefSchema } from './terrain/prepare.js';
 import { sparseTerrainRefSchema, validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { stageSparsePreparedTerrain } from './terrain/staging.js';
-import { refinementInputSchema } from './refinement/prepare.js';
 import type { ObjectStorage } from './storage.js';
 import { admitWholeDomain, planWholeDomainCapacity } from './whole-domain/capacity.js';
 import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
@@ -56,17 +53,6 @@ const planSchema = buildPlanBase.superRefine((plan, ctx) => {
   if (plan.deadlineAt !== undefined && Date.parse(plan.deadlineAt) !== Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs) ctx.addIssue({ code: 'custom', message: 'Invalid forecast plan deadline' });
 });
 export type BuildPlan = z.infer<typeof planSchema>;
-const legacyPlanSchema = buildPlanBase.omit({ wholeDomain: true, preparation: true }).extend({
-  version: z.literal(1),
-  terrain: preparedTerrainRefSchema.optional(),
-  refinements: z.array(refinementInputSchema).min(1).max(MAX_REFINEMENT_ZONES).optional()
-}).refine(plan => plan.deadlineAt === undefined || Date.parse(plan.deadlineAt) === Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs, 'Invalid forecast plan deadline');
-export type LegacyBuildPlan = z.infer<typeof legacyPlanSchema>;
-
-/** Read a historical plan only for publication recovery of an existing v4 build. */
-export async function readLegacyBuildPlan(path: string): Promise<LegacyBuildPlan> {
-  return legacyPlanSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
-}
 
 interface PlanOptions {
   out: string; cycle: string; shards?: number; signal?: AbortSignal;
@@ -219,8 +205,8 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
     columns: prepared.columns, terrainBytes: prepared.terrain.arrayBytes });
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const frozen = frozenWholeDomain(prepared);
-  const identity = await buildIdentity(product, prepared.native.hash, undefined, [], undefined,
-    { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain });
+  const identity = await buildIdentity(product, prepared.native.hash, { wholeDomain:
+    { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain } });
   const preparation = preparationSchema.parse({ elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 });
   const dependencies: ObjectReceipt[] = [];
   if (options.store) {
@@ -267,8 +253,8 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
         const bytes = mask[name];
         return !Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).equals(prepared.nativeMask[name]);
       })) throw new Error('Forecast plan coverage changed');
-  const identity = await buildIdentity(product, plan.coverageHash, undefined, [], undefined,
-    { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain });
+  const identity = await buildIdentity(product, plan.coverageHash, { wholeDomain:
+    { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain } });
   if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
   return { plan, prepared, identity, product };
 }

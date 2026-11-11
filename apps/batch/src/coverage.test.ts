@@ -6,14 +6,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getProduct } from '@av/contracts/models';
-import { canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, createRecipeIdentity, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
+import { canonicalGridJson, coverageIndices, sparseCoverageFromDense, type CoverageMask } from '@av/contracts';
 import { resolveProductFrameHours } from '@av/forecast';
 import { validateBuild } from './validate.js';
 
-function manifest(hash: string) {
-  const timestamp = '2026-10-30T00:00:00.000Z', digest = '0'.repeat(64);
-  return { version: 3, descriptors: createProductDescriptors(INDEXED_PRODUCT), recipe: createRecipeIdentity(INDEXED_PRODUCT, digest), model: 'gfs', buildId: 'test', cycle: timestamp, createdAt: timestamp, expiresAt: '2026-10-31T00:00:00.000Z', method: { id: createProductMethodId(INDEXED_PRODUCT), hash: digest }, coverage: { id: 'soaring-land-v1', hash, maskKey: `coverage/${hash}/manifest.json`, maxZoom: INDEXED_PRODUCT.maxNativeZoom }, grid: INDEXED_GRID, frames: [{ id: 'f003', validTime: timestamp, intervalStart: timestamp, intervalEnd: timestamp }], layers: ['precip-rate'], artifacts: [{ layer: 'precip-rate', frame: 'f003', tilesKey: 'tile', tilesSha256: digest }], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 1, bytes: 5, key: 'builds/gfs/test/samples.bin', sha256: digest }, source: { provider: 'NOAA', provenanceKey: 'builds/gfs/test/provenance.json', provenanceSha256: digest }, tool: {}, palettes: ['rain'], metrics: {} };
-}
+import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 
 describe('coverage integrity', () => {
   it('uses identical bundled/published descriptors and rejects changed persisted bitsets', async () => {
@@ -52,19 +49,14 @@ describe('coverage integrity', () => {
       expect(describeCoverage(mask, configured).hash).toBe(hash);
     }
   });
-  it('rejects a modified output, halo or tile bitset during validation', async () => {
-    const original = await loadCoverage(INDEXED_PRODUCT), hash = describeCoverage(original, INDEXED_PRODUCT).hash;
+  it('rejects a modified output, halo or tile bitset during v5 validation', async () => {
+    const product = getProduct('gfs')!, original = await loadCoverage(product);
+    const manifest = fixtureManifestV5({ layers: [...product.layers] });
     for (const name of ['output', 'halo', 'tiles'] as const) {
       const changed: CoverageMask = { ...original, [name]: Uint8Array.from(original[name]) };
       changed[name][0] ^= 1;
-      await expect(validateBuild('.', manifest(hash), changed)).rejects.toThrow('Coverage identity mismatch');
+      await expect(validateBuild('.', manifest, changed)).rejects.toThrow('Native coverage identity mismatch');
     }
-  });
-  it('rejects a stale manifest hash even when the coverage id matches', async () => {
-    const mask = await loadCoverage(INDEXED_PRODUCT), actual = describeCoverage(mask, INDEXED_PRODUCT).hash;
-    const stale = '11c546afed8452c496c6923edac5207e314064a6dd252791c09d0ee7e888cf6f';
-    expect(actual).not.toBe(stale);
-    await expect(validateBuild('.', manifest(stale), mask)).rejects.toThrow('Coverage identity mismatch');
   });
 });
 

@@ -270,14 +270,18 @@ it('pages the extended native timeline and probes full profiles and point batche
   const profile = vi.spyOn(ApiClient.prototype, 'profile').mockImplementation(async (_build, request) => ({ cell: {},
     frames: (request.frames as string[]).map(id => ({ id, profile: { status: 'valid', levels: [{}] } })) } as unknown as ProfileResponse));
   const samples = vi.spyOn(ApiClient.prototype, 'samples').mockResolvedValue({ version: 1, model: manifest.model, buildId: manifest.buildId, expiresAt: manifest.expiresAt, points: [] });
-  await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl: async input => {
+  const observeProbe = vi.fn();
+  await probeApi({ baseUrl: 'https://api.example', model: manifest.model, observeProbe, fetchImpl: async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest);
-    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
+    return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
+      'server-timing': 'worker;dur=18.25, admit;dur=2.00, r2;dur=7.50', 'x-av-r2-reads': '2', 'x-av-response-cache': 'miss' } });
   } });
+  expect(observeProbe).toHaveBeenCalledWith('tile', expect.objectContaining({ responseCache: 'miss', r2Reads: 2,
+    serverTimingMs: { worker: 18.25, admit: 2, r2: 7.5 } }));
   for (const [, request] of sample.mock.calls) {
     expect(request.frames).not.toBe('all');
     expect(request.frames!.length * request.layers!.length).toBeLessThanOrEqual(manifest.descriptors.maxSampleValues);

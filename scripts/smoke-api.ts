@@ -1,6 +1,6 @@
 import { DEFAULT_PROBE_TIMEOUT_MS, MAX_PROVENANCE_BYTES, maxProfileFrames, parseFrameProvenance, parseProvenance,
   renderedFrames, renderedLayers, type LayerId, type ManifestV5 } from '@av/contracts';
-import { ApiClient, type PinnedBuild } from '@av/client';
+import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -120,7 +120,10 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
 
 const measuredRoutes = ['latest', 'sample', 'profile', 'tile', 'provenance'] as const;
 type MeasuredRoute = typeof measuredRoutes[number];
-export interface ProbeReading { status: number; elapsedMs: number; responseCache?: string; r2Reads?: number; r2Bytes?: number }
+export interface ProbeReading {
+  status: number; elapsedMs: number; responseCache?: string; r2Reads?: number; r2Bytes?: number;
+  serverTimingMs?: Partial<Record<'worker' | 'admit' | 'r2', number>>;
+}
 
 function requestReading(path: string, response: Response, startedAt: number): [MeasuredRoute, ProbeReading] | undefined {
   const name = path.startsWith('/tiles/') ? 'tile' : path.slice(path.lastIndexOf('/') + 1);
@@ -132,9 +135,12 @@ function requestReading(path: string, response: Response, startedAt: number): [M
     return Number.isSafeInteger(value) ? value : undefined;
   };
   const cache = response.headers.get('x-av-response-cache');
+  const timings = (response.headers.get('server-timing') ?? '').matchAll(/(?:^|,)\s*(worker|admit|r2);dur=(\d+(?:\.\d+)?)(?=\s*(?:,|$))/g);
+  const serverTimingMs = Object.fromEntries(Array.from(timings, ([, name, value]) => [name, Number(value)]).filter(([, value]) => Number.isFinite(value)));
   return [route, { status: response.status, elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
     responseCache: cache && ['hit', 'miss', 'bypass', 'not-applicable'].includes(cache) ? cache : undefined,
-    r2Reads: counter('x-av-r2-reads'), r2Bytes: counter('x-av-r2-bytes') }];
+    r2Reads: counter('x-av-r2-reads'), r2Bytes: counter('x-av-r2-bytes'),
+    ...(Object.keys(serverTimingMs).length ? { serverTimingMs } : {}) }];
 }
 
 /** One live serving check for deployment and monitoring, pinned to a single immutable build. */
@@ -143,6 +149,7 @@ export async function probeApi(options: {
   expectedModels?: readonly string[]; expectedBuild?: Pick<ManifestV5, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
   fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: ManifestV5) => void;
   observeProbe?: (route: MeasuredRoute, reading: ProbeReading) => void;
+  observeClient?: (metric: ApiClientMetric) => void;
 }): Promise<ManifestV5> {
   const baseUrl = options.baseUrl.replace(/\/+$/, ''), request = options.fetchImpl ?? fetch;
   const fetchImpl: typeof fetch = options.observeProbe ? async (input, init) => {
@@ -161,7 +168,7 @@ export async function probeApi(options: {
   const catalog = await json('/v1/catalog') as { models?: Array<{ model?: string; available?: boolean; error?: string }> };
   invariant(Array.isArray(catalog.models) && catalog.models.some(item => item.model === options.model && item.available === true), `Catalog reports no publication for ${options.model}`);
   invariant(options.expectedModels?.every(model => catalog.models?.some(item => item.model === model)) ?? true, 'Catalog omitted a registered forecast model');
-  const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS, now: options.now });
+  const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS, now: options.now, onMetric: options.observeClient });
   const build = await client.latest(options.model, { requireLive: options.requireLive ?? true, signal: options.signal });
   const { manifest } = build, frame = manifest.frames[0].id;
   if (options.expectedBuild) {

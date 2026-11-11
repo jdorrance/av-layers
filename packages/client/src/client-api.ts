@@ -55,6 +55,15 @@ export interface ApiClientOptions {
   now?: () => number;
   requestTimeoutMs?: number;
   retryDelayMs?: number;
+  /** Observe completed JSON transport requests, including any retry and body read. */
+  onMetric?: (metric: ApiClientMetric) => void;
+}
+
+export interface ApiClientMetric {
+  route: 'latest' | 'sample' | 'samples' | 'profile';
+  elapsedMs: number;
+  attempts: number;
+  outcome: 'success' | 'failure' | 'aborted';
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -159,6 +168,7 @@ export class ApiClient {
   private readonly now: () => number;
   private readonly requestTimeoutMs: number;
   private readonly retryDelayMs: number;
+  private readonly onMetric: ApiClientOptions['onMetric'];
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = normalizeBaseUrl(requireString(options.baseUrl, 'baseUrl'));
@@ -166,19 +176,23 @@ export class ApiClient {
     this.now = options.now ?? Date.now;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.retryDelayMs = options.retryDelayMs ?? 200;
+    this.onMetric = options.onMetric;
     if (!(this.requestTimeoutMs > 0) || !Number.isFinite(this.requestTimeoutMs) || this.retryDelayMs < 0 || !Number.isFinite(this.retryDelayMs)) throw new RangeError('Invalid request timing budget');
   }
 
-  private async getJson(path: string, signal?: AbortSignal): Promise<unknown> {
+  private async getJson(route: ApiClientMetric['route'], path: string, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw signal.reason;
+    const started = this.onMetric ? performance.now() : 0;
+    let attempts = 0, outcome: ApiClientMetric['outcome'] = 'failure';
     const controller = new AbortController();
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => controller.abort(new ApiError(408, 'deadline-exceeded', 'Request deadline exceeded')), this.requestTimeoutMs);
     const canceled = new Promise<never>((_, reject) => controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }));
     const load = async () => {
-      for (let attempt = 0; ; attempt++) {
+      for (;;) {
         controller.signal.throwIfAborted();
+        attempts++;
         try {
           const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal });
           if (!response.ok) throw await readError(response, controller.signal);
@@ -186,17 +200,27 @@ export class ApiClient {
         } catch (error) {
           controller.signal.throwIfAborted();
           const retryable = error instanceof TypeError || (error instanceof ApiError && [502, 503, 504].includes(error.status));
-          if (attempt > 0 || !retryable) throw error;
+          if (attempts >= 2 || !retryable) throw error;
           await Promise.race([new Promise(resolve => setTimeout(resolve, this.retryDelayMs * (1 + Math.random() / 2))), canceled]);
         }
       }
     };
-    try { return await Promise.race([load(), canceled]); }
-    finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+    try {
+      const result = await Promise.race([load(), canceled]);
+      outcome = 'success';
+      return result;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      try {
+        this.onMetric?.({ route, attempts, elapsedMs: performance.now() - started,
+          outcome: signal?.aborted && outcome === 'failure' ? 'aborted' : outcome });
+      } catch { /* Observer failures leave the request result intact. */ }
+    }
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const parsed = latestV5Schema.safeParse(await this.getJson(`/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
+    const parsed = latestV5Schema.safeParse(await this.getJson('latest', `/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
     if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
     const raw = parsed.data;
     const pointer = raw.pointer;
@@ -247,7 +271,7 @@ export class ApiClient {
       layers: layers.join(',')
     });
     const path = `${pointPath(build, 'sample')}?${params}`;
-    const raw = await this.getJson(path, request.signal);
+    const raw = await this.getJson('sample', path, request.signal);
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
     const parsed = sampleResponseV5Schema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
@@ -263,7 +287,7 @@ export class ApiClient {
     for (const point of request.points) validatePoint(point);
     const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, build.manifest.layers, request.points.length);
     const params = new URLSearchParams({ points: request.points.map(point => `${point.lat},${point.lon}`).join(';'), frame: frameQuery, layers: layers.join(',') });
-    const raw = await this.getJson(`${pointPath(build, 'samples')}?${params}`, request.signal);
+    const raw = await this.getJson('samples', `${pointPath(build, 'samples')}?${params}`, request.signal);
     assertNotExpired(build.manifest.expiresAt, this.now());
     const parsed = multiPointSampleResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('multi-point sample response does not match contract schema');
@@ -288,7 +312,7 @@ export class ApiClient {
     if (layers.some(layer => !native.layers.includes(layer))) throw new RangeError('Profile layers must belong to the native surface');
     if (estimateProfileResponseBytes(expectedFrames.length, native.profiles.levelCount, layers.length) > MAX_POINT_RESPONSE_BYTES) throw new RangeError('Selected profile response exceeds byte budget');
     const params = new URLSearchParams({ lat: String(request.lat), lon: String(request.lon), frame: frameQuery, layers: layers.join(',') });
-    const raw = await this.getJson(`${pointPath(build, 'profile')}?${params}`, request.signal);
+    const raw = await this.getJson('profile', `${pointPath(build, 'profile')}?${params}`, request.signal);
     assertNotExpired(build.manifest.expiresAt, this.now());
     const parsed = profileResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('profile response does not match contract schema');

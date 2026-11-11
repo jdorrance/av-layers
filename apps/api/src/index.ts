@@ -324,10 +324,13 @@ registerJsonRoute(
 async function pinnedManifest(c: Context<Env>) {
   const model = modelId(c), buildId = requiredParam(c, 'buildId');
   const signal = c.req.raw.signal;
-  const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx, undefined, signal);
   const metrics = (c.executionCtx as WaitContext).metrics;
-  if (metrics) metrics.buildId = buildId;
-  return manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal);
+  const started = performance.now();
+  try {
+    const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx, undefined, signal);
+    if (metrics) metrics.buildId = buildId;
+    return await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal);
+  } finally { if (metrics) metrics.admitMs = performance.now() - started; }
 }
 
 registerJsonRoute(
@@ -460,7 +463,10 @@ return {
     const complete = (result: Response) => {
       const elapsed = performance.now() - start;
       result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');
-      result.headers.set('server-timing', `worker;dur=${elapsed.toFixed(2)}`);
+      const timing = [`worker;dur=${elapsed.toFixed(2)}`];
+      if (metrics.admitMs !== undefined) timing.push(`admit;dur=${metrics.admitMs.toFixed(2)}`);
+      if (metrics.r2WaitMs !== undefined) timing.push(`r2;dur=${metrics.r2WaitMs.toFixed(2)}`);
+      result.headers.set('server-timing', timing.join(', '));
       for (const [name, value] of Object.entries({ 'r2-reads': metrics.r2Reads, 'r2-bytes': metrics.r2Bytes, 'cache-hits': metrics.cacheHits, coalesced: metrics.coalesced })) {
         result.headers.set(`x-av-${name}`, String(value));
       }

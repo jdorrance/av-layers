@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, forecastGrids, manifestSchema, manifestV5Schema, parseFrameProvenance, publishedManifestSchema, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './index.js';
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, manifestSchema, manifestV5Schema, parseFrameProvenance, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './index.js';
 
 function refined(): Manifest {
   const manifest = fixtureManifest();
@@ -47,7 +47,6 @@ describe('refined forecast publications', () => {
     expect(manifest.model).toBe(base.model);
     expect(manifest.frames).toEqual(base.frames);
     expect(manifest.artifacts).toEqual(base.artifacts);
-    expect(forecastGrids(manifest)).toEqual([manifest, manifest.patches![0]]);
   });
 
   it('requires a matching version and a nonempty, bounded patch list', () => {
@@ -119,13 +118,11 @@ function v5(): ManifestV5 {
 
 describe('v5 forecast publications', () => {
   it('pins the stored MSL no-lift rule without restricting other tool metadata', () => {
-    for (const manifest of [refined(), v5()]) {
-      const tool = { ...manifest.tool, node: 'v22.23.4' };
-      expect(publishedManifestSchema.parse({ ...manifest, tool }).tool).toEqual(tool);
-      const corrected = { ...tool, useStoredMslNoLift: true };
-      expect(publishedManifestSchema.parse({ ...manifest, tool: corrected }).tool).toEqual(corrected);
-      expect(publishedManifestSchema.safeParse({ ...manifest, tool: { ...tool, useStoredMslNoLift: 'true' } }).success).toBe(false);
-    }
+    const manifest = v5(), tool = { ...manifest.tool, node: 'v22.23.4' };
+    expect(manifestV5Schema.parse({ ...manifest, tool }).tool).toEqual(tool);
+    const corrected = { ...tool, useStoredMslNoLift: true };
+    expect(manifestV5Schema.parse({ ...manifest, tool: corrected }).tool).toEqual(corrected);
+    expect(manifestV5Schema.safeParse({ ...manifest, tool: { ...tool, useStoredMslNoLift: 'true' } }).success).toBe(false);
   });
 
   it('binds uneven frame groups to complete surface-specific block partitions', () => {
@@ -233,12 +230,11 @@ function sampleResponseV5() {
 }
 
 describe('published transport contracts', () => {
-  it('publishes v3, v4 and v5 manifests through one union while leaving legacy schemas unchanged', () => {
-    for (const manifest of [fixtureManifest(), refined(), v5()]) {
-      expect(publishedManifestSchema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);
-    }
-    expect(manifestSchema.safeParse(v5()).success).toBe(false);
-    expect((publishedManifestSchema.parse(v5()) as ManifestV5).surfaces).toHaveLength(2);
+  it('admits only v5 on the current transport', () => {
+    const manifest = v5();
+    expect(manifestV5Schema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);
+    expect(manifestV5Schema.safeParse(fixtureManifest()).success).toBe(false);
+    expect(manifestV5Schema.safeParse(refined()).success).toBe(false);
   });
 
   it('transports v5 samples in manifest surface order with per-value ownership', () => {

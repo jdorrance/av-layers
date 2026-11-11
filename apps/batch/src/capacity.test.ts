@@ -1,13 +1,11 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { MAX_NATIVE_ZOOM, MAX_SAMPLE_VALUES, type CoverageMask, type Manifest, type ManifestV5 } from '@av/contracts';
-import { BUILD_BUDGETS, checkPerformance, estimateCapacity, estimateRetention, normalizedFrameBytes, prepareBuild } from './capacity.js';
-import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from './raster-pool.js';
+import { type CoverageMask, type ManifestV5 } from '@av/contracts';
+import { assertForecastInputs, BUILD_BUDGETS, checkPerformance, estimateRetention, MAX_V5_SHARD_BYTES, normalizedFrameBytes } from './capacity.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
 
 const TILES_BY_ZOOM = [1, 4];
 const TOTAL_TILES = 30;
@@ -17,9 +15,6 @@ it('counts auxiliary fields in the shared normalized-frame memory estimate', () 
   const resources = { maxLevels: 25, auxiliarySurfaceFields: 8, auxiliaryLevelFields: 4 };
   expect(normalizedFrameBytes(100, 'isobaric', resources)).toBe(100 * (7 + 8 + 6 * 25) * 5);
   expect(normalizedFrameBytes(100, 'model-levels', resources)).toBe(100 * (7 + 8 + 7 * 25) * 5);
-  const { mask, product } = input();
-  const { capacity, indices } = prepareBuild(mask, product, resources);
-  expect(capacity.workingSet.normalizedFrame).toBe(normalizedFrameBytes(indices.active.length, product.capabilities.verticalCoordinate, resources));
   expect(() => normalizedFrameBytes(100, 'isobaric', { ...resources, auxiliaryLevelFields: -1 })).toThrow('dimensions');
 });
 
@@ -55,16 +50,15 @@ function input() {
   return { mask, product };
 }
 
-function receipt(): Manifest {
+function receipt(): ManifestV5 {
   return {
     buildId: 'fixture',
     cycle: '2026-10-30T00:00:00Z',
-    grid: { width: 2, height: 2 },
-    coverage: { maxZoom: 1 },
-    artifacts: new Array(6).fill({}),
-    samples: { bytes: SAMPLE_PACK_BYTES },
+    version: 5, artifacts: new Array(6).fill({}),
+    surfaces: [{ kind: 'native', grid: { width: 2, height: 2 }, coverage: { maxZoom: 1 }, layers: ['precip-rate'],
+      samples: { storedCells: 6, channelCount: 6, shards: [{ storedCells: 6, bytes: SAMPLE_PACK_BYTES }] } }],
     metrics: { elapsedMs: 90_000, peakRssBytes: 1_300_000_000, tiles: [...TILES_BY_ZOOM] }
-  } as unknown as Manifest;
+  } as unknown as ManifestV5;
 }
 
 describe('build capacity admission and performance budgets', () => {
@@ -77,70 +71,13 @@ describe('build capacity admission and performance budgets', () => {
   });
   it('rejects empty public coverage before opening a provider', async () => {
     const { mask, product } = input();
-    expect(() => prepareBuild({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, product, { maxLevels: 1 })).toThrow('before acquisition');
+    expect(() => assertForecastInputs({ ...mask, output: new Uint8Array(mask.output.length), halo: new Uint8Array(mask.halo.length) }, product)).toThrow('before acquisition');
   });
-  it('counts selected frames and layers before acquisition', () => {
-    const { mask, product: base } = input();
-    const product = { ...base, execution: { ...base.execution, schedule: ['25 0,6,12,18 * * *'] } };
-    const { capacity, layout, indices } = prepareBuild(mask, product, { maxLevels: 1 });
-    expect(indices.active.length).toBe(4);
-    expect(capacity).toMatchObject({
-      tilesByZoom: TILES_BY_ZOOM,
-      tiles: TOTAL_TILES,
-      quarterSamples: TOTAL_TILES * 256 * 256 * 4,
-      samplePackBytes: SAMPLE_PACK_BYTES,
-      cadenceHours: 6,
-      retainedPerModel: 28,
-      retainedSampleBytes: 28 * SAMPLE_PACK_BYTES,
-      point: { reads: 1, worstCaseRangeBytes: 570, values: 6 },
-      violations: []
-    });
-    expect(estimateCapacity(mask, product, layout.storedCells, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
-    expect(estimateCapacity(mask, product, layout.storedCells, { cadenceHours: 0.5 }).violations).toContain('retention leaves no room for a replacement build');
-    expect(capacity.rasterWorkers).toBe(rasterWorkerCount(undefined, product.execution.workers));
-    expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
-    expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? mask.grid.width * mask.grid.height * 3 * 5 + mask.output.byteLength + mask.halo.byteLength + mask.tiles.byteLength : 0);
-    expect(capacity.estimatedPeakBytes).toBe(Object.values(capacity.workingSet).reduce((total, bytes) => total + bytes, 0));
-  });
-  it('projects tile growth and rejects untrusted targets and excessive work', () => {
-    const { mask, product } = input(), { layout } = prepareBuild(mask, product, { maxLevels: 1 });
-    const doubled = estimateCapacity(mask, product, layout.storedCells, { frames: 4, layers: 6, models: 2 });
-    expect(doubled.tiles).toBe(TOTAL_TILES * 8);
-    expect(doubled.totalSamplePackBytes).toBe(SAMPLE_PACK_BYTES * 8);
-    const deeper = estimateCapacity(mask, product, layout.storedCells, { nativeZoom: product.maxNativeZoom + 12 });
-    expect(deeper.tiles).toBeGreaterThan(BUILD_BUDGETS.tiles);
-    expect(deeper.violations.join()).toContain('configured product target');
-    expect(deeper.violations).toContain('tile budget exceeded');
-    expect(() => prepareBuild({ ...mask, maxZoom: MAX_NATIVE_ZOOM + 1 }, product, { maxLevels: 1 })).toThrow('zoom');
-  });
-  it('accounts for per-column model pressures and retained provider geometry', () => {
-    const { mask, product: base } = input(), provider = { maxLevels: 3, retainedGeometryFields: 4 };
-    const product = { ...base, capabilities: { ...base.capabilities, verticalCoordinate: 'model-levels' as const } };
-    const { capacity, indices } = prepareBuild(mask, product, provider);
-    const bytesPerField = new Float32Array(indices.active.length).byteLength + new Uint8Array(indices.active.length).byteLength;
-    const isobaric = { ...product, capabilities: { ...product.capabilities, verticalCoordinate: 'isobaric' as const } };
-    const sharedPressure = prepareBuild(mask, isobaric, provider).capacity;
-    expect(capacity.workingSet.normalizedFrame - sharedPressure.workingSet.normalizedFrame).toBe(bytesPerField * provider.maxLevels);
-    expect(capacity.workingSet.retainedGeometry).toBe(bytesPerField * (provider.maxLevels + 1));
-    expect(capacity.estimatedPeakBytes).toBeLessThan(BUILD_BUDGETS.peakRssBytes);
-    for (const retainedGeometryFields of [-1, 0.5, NaN, 258]) {
-      expect(() => prepareBuild(mask, product, { ...provider, retainedGeometryFields })).toThrow('retained geometry budget');
-    }
-  });
-  it('reserves prepared terrain validation and resident arrays only when requested', async () => {
-    const { mask, product } = input(), provider = { maxLevels: 1 };
-    const baseline = prepareBuild(mask, product, provider).capacity;
-    const staged = prepareBuild(mask, product, { ...provider, terrainBytes: 5120 }).capacity;
-    expect(baseline.workingSet.preparedTerrain).toBe(0);
-    expect(staged.estimatedPeakBytes - baseline.estimatedPeakBytes).toBe(10240);
-    for (const terrainBytes of [-1, 0.5, NaN, 20_000_001]) {
-      expect(() => prepareBuild(mask, product, { ...provider, terrainBytes })).toThrow('prepared terrain byte budget');
-    }
-  });
-  it('rejects invalid scenarios and oversized point products', async () => {
-    const { mask, product } = input(), { layout } = prepareBuild(mask, product, { maxLevels: 1 });
-    for (const frames of [0, -1, 1.5, NaN, Infinity]) expect(() => estimateCapacity(mask, product, layout.storedCells, { frames })).toThrow('Invalid capacity');
-    expect(estimateCapacity(mask, product, layout.storedCells, { layers: MAX_SAMPLE_VALUES }).violations.join()).toContain('result budget');
+  it('keeps enough retention room for the next scheduled build', () => {
+    const schedule = ['25 0,6,12,18 * * *'];
+    expect(estimateRetention(schedule)).toMatchObject({ cadenceHours: 6, retainedPerModel: 28, violations: [] });
+    expect(estimateRetention(schedule, { cadenceHours: 1 })).toMatchObject({ retainedPerModel: 168, violations: [] });
+    expect(estimateRetention(schedule, { cadenceHours: 0.5 }).violations).toContain('retention leaves no room for a replacement build');
   });
   it.each([2_413_241, 2_427_607])('admits the measured hourly build duration %i ms', elapsedMs => {
     const manifest = receipt();
@@ -151,7 +88,7 @@ describe('build capacity admission and performance budgets', () => {
     const result = checkPerformance(receipt());
     expect(result.passed).toBe(true);
     expect(result.observed.tiles).toBe(TOTAL_TILES);
-    expect(result.budgets).toEqual(BUILD_BUDGETS);
+    expect(result.budgets).toEqual({ ...BUILD_BUDGETS, samplePackBytes: MAX_V5_SHARD_BYTES });
     for (const key of ['elapsedMs', 'peakRssBytes'] as const) {
       for (const value of [undefined, NaN, -1, BUILD_BUDGETS[key] + 1]) {
         const manifest = receipt();
@@ -167,7 +104,7 @@ describe('build capacity admission and performance budgets', () => {
     manifest.metrics.tiles = [...TILES_BY_ZOOM.slice(0, -1), Math.ceil(BUILD_BUDGETS.tiles / manifest.artifacts.length)];
     expect(checkPerformance(manifest).passed).toBe(false);
     manifest.metrics.tiles = [...TILES_BY_ZOOM];
-    manifest.samples.bytes = BUILD_BUDGETS.samplePackBytes + 1;
+    manifest.surfaces[0]!.samples.shards[0]!.bytes = MAX_V5_SHARD_BYTES + 1;
     expect(checkPerformance(manifest).passed).toBe(false);
   });
   it('checks v5 frame-group shard bytes using each group channel count', () => {
@@ -182,14 +119,5 @@ describe('build capacity admission and performance budgets', () => {
     expect(result.observed.emittedSampleBytes).toBe(300);
     manifest.surfaces[0]!.samples.shards[1]!.bytes++;
     expect(checkPerformance(manifest).failures).toContain('invalid v5 shard size');
-  });
-  it('applies one aggregate grid and numeric byte budget to base plus refinements', () => {
-    const manifest = receipt(), patch = fixturePatch(fixtureManifest());
-    manifest.patches = [patch];
-    const result = checkPerformance(manifest);
-    expect(result.observed.gridCells).toBe(4 + 9);
-    expect(result.observed.samplePackBytes).toBe(manifest.samples.bytes + patch.samples.bytes);
-    patch.samples.bytes = BUILD_BUDGETS.samplePackBytes - manifest.samples.bytes + 1;
-    expect(checkPerformance(manifest).passed).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import type { WindgramView } from './scene.ts';
+import type { WindgramView } from './model.ts';
 import { sceneData } from './scene-store.ts';
 import type { WindgramSvgOptions } from './scene-types.ts';
 import { renderWindgramSvg as renderSvg } from './windgram-chart.ts';

@@ -1,7 +1,7 @@
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
 import { DEFAULT_SOARING_PARAMETERS, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring/parameters';
 import { DEFAULT_HORIZON_DEG } from '@av/solar/parameters';
-import { ALL_HOURS_PRECIP_METHOD_ID, LIFT_METHOD_ID, NATIVE_LAYERS, NATIVE_LAYER_IDS, nativeMethodId, type NativeLayerId, type NativeMethodGroup } from './layers.js';
+import { ALL_HOURS_PRECIP_METHOD_ID, LIFT_METHOD_ID, LAYER_IDS, nativeLayerMethodGroup, nativeMethodId, type LayerId, type NativeMethodGroup } from './layers.js';
 import type { ProductDefinition } from './product.js';
 
 const auxiliaryInputs = {
@@ -183,7 +183,7 @@ function nativeMethodsForCoordinate(coordinate: 'isobaric' | 'model-levels') {
     const inputs: readonly NormalizedInputId[] = group === 'surface' || group === 'cloud' ? nativeInputs[group] : [...nativeInputs[group], pressure];
     return [group, Object.freeze({ id, requiredInputs: Object.freeze(inputs),
       inputs: Object.freeze(Object.fromEntries(inputs.map(input => [input, NORMALIZED_INPUTS[input]]))),
-      outputs: Object.freeze(NATIVE_LAYER_IDS.filter(layer => NATIVE_LAYERS[layer].methodGroup === group)),
+      outputs: Object.freeze(LAYER_IDS.filter(layer => nativeLayerMethodGroup(layer) === group)),
       spatialSupport: 'column' as const,
       parameters: NATIVE_METHOD_PARAMETERS,
       caveats: Object.freeze([
@@ -196,7 +196,7 @@ function nativeMethodsForCoordinate(coordinate: 'isobaric' | 'model-levels') {
       ]) })];
   }))) as Readonly<Record<NativeMethodGroup, {
     id: string; requiredInputs: readonly NormalizedInputId[]; inputs: Readonly<Record<string, (typeof NORMALIZED_INPUTS)[NormalizedInputId]>>;
-    outputs: readonly NativeLayerId[]; spatialSupport: 'column'; parameters: typeof NATIVE_METHOD_PARAMETERS; caveats: readonly string[];
+    outputs: readonly LayerId[]; spatialSupport: 'column'; parameters: typeof NATIVE_METHOD_PARAMETERS; caveats: readonly string[];
   }>>;
 }
 export const NATIVE_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
@@ -204,8 +204,8 @@ export const NATIVE_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   'model-levels': nativeMethodsForCoordinate('model-levels')
 });
 export function nativeMethodForLayer(layer: string, coordinate: 'isobaric' | 'model-levels') {
-  if (!Object.hasOwn(NATIVE_LAYERS, layer)) return undefined;
-  return NATIVE_METHODS_BY_VERTICAL_COORDINATE[coordinate][NATIVE_LAYERS[layer as NativeLayerId].methodGroup];
+  const group = nativeLayerMethodGroup(layer);
+  return group === undefined ? undefined : NATIVE_METHODS_BY_VERTICAL_COORDINATE[coordinate][group];
 }
 const nativeMethods = Object.fromEntries(Object.values(NATIVE_METHODS_BY_VERTICAL_COORDINATE).flatMap(groups =>
   Object.values(groups).map(method => [method.id, method])

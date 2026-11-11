@@ -235,12 +235,16 @@ describe('ApiClient.sample', () => {
 describe('bounded request lifecycle', () => {
   it('retries a transient read once and never retries invalid JSON or not-retained responses', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('busy', { status: 503 })).mockResolvedValueOnce(jsonResponse(latestPayload()));
-    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created), retryDelayMs: 0 });
+    const onMetric = vi.fn().mockImplementationOnce(() => { throw new Error('Observer failed'); });
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created), retryDelayMs: 0, onMetric });
     expect((await client.latest('gfs')).manifest.buildId).toBe(latestPayload().pointer.latestBuildId);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     for (const response of [new Response('invalid'), new Response('{}', { status: 404 })]) {
       fetchImpl.mockReset().mockResolvedValue(response); await expect(client.latest('gfs')).rejects.toThrow(); expect(fetchImpl).toHaveBeenCalledTimes(1);
     }
+    expect(onMetric.mock.calls.map(([metric]) => [metric.route, metric.attempts, metric.outcome])).toEqual([
+      ['latest', 2, 'success'], ['latest', 1, 'failure'], ['latest', 1, 'failure']
+    ]);
   });
   it('aborts on its deadline and preserves caller cancellation', async () => {
     let signal: AbortSignal | undefined;

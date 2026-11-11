@@ -3,98 +3,61 @@ import { loadCoverage } from './coverage.js';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import * as models from '@av/contracts/models';
-import { CELL_BYTES, createProductDescriptors, createProductMethodId, createRecipeIdentity, getBit, isCovered, LIFT_METHOD, manifestSchema, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Manifest, type ProductDefinition } from '@av/contracts';
-import { packCells, prepareSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
+import { describe, expect, it, vi } from 'vitest';
+import { CELL_BYTES, createWholeDomainDescriptors, createRecipeIdentity, getBit, isCovered, setBit, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, validateSampleFlags, type CoverageMask, type ProductDefinition } from '@av/contracts';
+import { packCells, prepareShardedSamplePackLayout, resolveProductFrameHours, sampleGrid, unpackCells } from '@av/forecast';
 import { deriveFrame } from '@av/forecast';
-import { describeCoverage, writeCoverage } from './coverage.js';
+import { describeCoverage } from './coverage.js';
 import type { NormalizedFrame } from '@av/forecast';
-import { publish } from './publication.js';
-import { workflowAuthority } from './authority.js';
-import { createSamplePackBuilder } from './sample-pack.js';
-import { runConcurrent, sha256, validateBuild, validateSamplePack, validateSamples } from './validate.js';
-
-async function writeTestSamplePack(output: string, inputs: string[], layout: ReturnType<typeof prepareSamplePackLayout>) {
-  const builder = createSamplePackBuilder(layout, inputs.length);
-  for (let i = 0; i < inputs.length; i++) builder.writeChannel(i, unpackCells(await readFile(inputs[i])));
-  return builder.finish(output);
-}
+import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
+import { forecastFrame } from './frame-build.js';
+import { createShardedSamplePackWriter } from './sample-pack-v5.js';
+import { runConcurrent, sha256, validateBuild, validateSampleGroup } from './validate.js';
+import { nativeSparseMask } from './whole-domain/coverage.js';
 
 describe('build provenance validation', () => {
-  const currentProduct = models.getProduct;
-  beforeEach(() => { vi.spyOn(models, 'getProduct').mockImplementation(model => [INDEXED_PRODUCT, SPLIT_PRODUCT].find(product => product.modelId === model) ?? currentProduct(model)); });
-  afterEach(() => { vi.restoreAllMocks(); });
-  async function fixture(product: ProductDefinition = INDEXED_PRODUCT) {
-    const manifest = manifestSchema.parse(JSON.parse(await readFile(new URL('../../../scripts/fixtures/manifest.contract.json', import.meta.url), 'utf8')));
-    manifest.model = product.modelId;
-    manifest.grid = product.grid;
-    manifest.layers = [...product.layers];
-    manifest.descriptors = createProductDescriptors(product);
-    manifest.recipe = createRecipeIdentity(product, manifest.recipe.hash);
-    manifest.method.id = createProductMethodId(product);
-    manifest.samples.key = `builds/${manifest.model}/${manifest.buildId}/samples.bin`;
-    const mask = await loadCoverage(product);
-    manifest.coverage.id = product.coverageId;
-    manifest.coverage.maxZoom = product.maxNativeZoom;
-    manifest.coverage.hash = describeCoverage(mask, product).hash;
-    manifest.coverage.maskKey = `coverage/${manifest.coverage.hash}/manifest.json`;
-    manifest.createdAt = manifest.cycle;
-    manifest.expiresAt = new Date(Date.parse(manifest.createdAt) + 7 * 86400000).toISOString();
-    const cycleMs = Date.parse(manifest.cycle);
-    const expectedHours = resolveProductFrameHours(product, mask, manifest.cycle);
-    manifest.frames = expectedHours.map(hour => ({
-      id: `f${String(hour).padStart(3, '0')}`,
-      validTime: new Date(cycleMs + hour * 3600000).toISOString(),
-      intervalStart: new Date(cycleMs + (hour - product.intervalHours) * 3600000).toISOString(),
-      intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
-    }));
-    manifest.artifacts = manifest.frames.flatMap(frame =>
-      manifest.layers.map(layer => ({
-        layer,
-        frame: frame.id,
-        tilesKey: `builds/${manifest.model}/${manifest.buildId}/${layer}/${frame.id}.pmtiles`,
-        tilesSha256: '0'.repeat(64)
-      }))
-    );
-    manifest.samples.channelCount = manifest.artifacts.length;
-    manifest.samples.storedCells = prepareSamplePackLayout(mask.grid, mask.output, mask.halo, manifest.samples.blockSize).storedCells;
-    manifest.samples.bytes = manifest.samples.storedCells * manifest.artifacts.length * CELL_BYTES;
+  async function fixture(registered: ProductDefinition = INDEXED_PRODUCT, useAllHours = false) {
+    const product = { ...registered, id: `${registered.id}-validation-fixture`, mapEndHour: undefined };
+    const mask = await loadCoverage(product), cycle = '2026-10-30T00:00:00.000Z';
+    const hours = useAllHours ? product.frameHours : resolveProductFrameHours(product, mask, cycle);
+    const manifest = fixtureManifestV5({ model: product.modelId, cycle,
+      descriptors: createWholeDomainDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
+      frames: hours.map(hour => forecastFrame(cycle, hour, product.intervalHours)), layers: [...product.layers] });
+    for (const surface of manifest.surfaces) surface.coverage.maxZoom = mask.maxZoom;
     const root = await mkdtemp(join(tmpdir(), 'av-validate-'));
-    await writeCoverage(root, mask, product);
     const key = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;
     const receipt = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [] };
     const bytes = Buffer.from(JSON.stringify(receipt));
     manifest.source = { provider: 'fixture', provenanceKey: key, provenanceSha256: sha256(bytes) };
     await mkdir(dirname(join(root, key)), { recursive: true });
     await writeFile(join(root, key), bytes);
-    return { root, manifest, mask, key, receipt };
+    return { root, manifest, mask, product, key, receipt };
   }
 
   it.each(['missing key', 'missing hash', 'wrong key', 'invalid hash'])('rejects an invalid reference: %s', async defect => {
-    const { root, manifest, mask } = await fixture();
+    const { root, manifest, mask, product } = await fixture();
     try {
       if (defect === 'missing key') delete (manifest.source as Record<string, unknown>).provenanceKey;
       if (defect === 'missing hash') delete (manifest.source as Record<string, unknown>).provenanceSha256;
       if (defect === 'wrong key') manifest.source.provenanceKey = 'builds/gfs/another/provenance.json';
       if (defect === 'invalid hash') manifest.source.provenanceSha256 = 'invalid';
-      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject(defect === 'wrong key' ? { message: 'Invalid provenance reference' } : { name: 'ZodError' });
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toMatchObject(defect === 'wrong key' ? { message: 'Invalid provenance reference' } : { name: 'ZodError' });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it.each(['missing', 'corrupt'])('rejects the %s receipt itself, not a missing forecast artifact', async defect => {
-    const { root, manifest, mask, key } = await fixture();
+    const { root, manifest, mask, product, key } = await fixture();
     try {
       if (defect === 'missing') await rm(join(root, key));
       else await writeFile(join(root, key), 'corrupt receipt');
-      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject(defect === 'missing'
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toMatchObject(defect === 'missing'
         ? { code: 'ENOENT', path: join(root, key) }
         : { message: `Invalid provenance hash ${key}` });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it.each(['cycle', 'model', 'buildId', 'version'] as const)('rejects a hash-valid wrong %s before reading artifacts or uploading objects', async field => {
-    const { root, manifest, mask, key, receipt } = await fixture();
+  it.each(['cycle', 'model', 'buildId', 'version'] as const)('rejects a hash-valid wrong %s before reading artifacts', async field => {
+    const { root, manifest, mask, product, key, receipt } = await fixture();
     try {
       const values = { cycle: '2026-10-29T00:00:00.000Z', model: 'hrrr', buildId: 'another', version: 99 };
       const bytes = Buffer.from(JSON.stringify({ ...receipt, [field]: values[field] }));
@@ -103,69 +66,39 @@ describe('build provenance validation', () => {
       const expected = field === 'version'
         ? { name: 'ZodError', issues: expect.arrayContaining([expect.objectContaining({ path: ['version'] })]) }
         : { message: 'Provenance does not match manifest' };
-      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject(expected);
-      const store = { get: vi.fn(async () => null), head: vi.fn(async () => null), put: vi.fn(async () => {}), list: vi.fn(async () => []), delete: vi.fn(async () => {}) };
-      await expect(publish(store, root, manifest, { authority: workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' }), now: () => Date.parse(manifest.createdAt) + 1000 })).rejects.toMatchObject(expected);
-      expect(store.put).not.toHaveBeenCalled();
-      expect(store.head).not.toHaveBeenCalled();
-      expect(store.get).toHaveBeenCalledExactlyOnceWith('catalog/gfs/latest.json', undefined, 128 * 1024, undefined);
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toMatchObject(expected);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('rejects hash-valid invalid JSON before artifact reads', async () => {
-    const { root, manifest, mask, key } = await fixture();
+    const { root, manifest, mask, product, key } = await fixture();
     try {
       const bytes = Buffer.from('not JSON');
       manifest.source.provenanceSha256 = sha256(bytes);
       await writeFile(join(root, key), bytes);
-      await expect(validateBuild(root, manifest, mask)).rejects.toBeInstanceOf(SyntaxError);
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toBeInstanceOf(SyntaxError);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('admits valid sidecar provenance and continues to artifact validation', async () => {
-    const { root, manifest, mask } = await fixture();
+    const { root, manifest, mask, product } = await fixture();
     try {
-      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.samples.key) });
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-
-  it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('validates retained $modelId methods against their snapshots instead of current product constants', async product => {
-    const { root, manifest, mask } = await fixture(product);
-    try {
-      const layer = manifest.descriptors.layers['usable-lift-msl'];
-      const previousId = layer.methodId, previous = manifest.descriptors.methods[previousId];
-      delete manifest.descriptors.methods[previousId];
-      previous.id = product.modelId === 'icon-eu' ? LIFT_METHOD.id : 'retained-dry-column-v0';
-      manifest.descriptors.methods[previous.id] = previous;
-      for (const descriptor of Object.values(manifest.descriptors.layers)) {
-        if (descriptor.methodId === previousId) descriptor.methodId = previous.id;
-      }
-      manifest.method.id = [...new Set(manifest.layers.map(id => manifest.descriptors.layers[id].methodId))].join('+');
-      await expect(validateBuild(root, manifest, mask)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.samples.key) });
-      manifest.method.id = 'unrelated-method-v1';
-      await expect(validateBuild(root, manifest, mask)).rejects.toThrow('published descriptor snapshots');
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toMatchObject({ code: 'ENOENT', path: join(root, manifest.surfaces[0]!.coverage.maskKey) });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('rejects unfiltered night frames for a regional-daylight product', async () => {
-    const { root, manifest, mask } = await fixture(SPLIT_PRODUCT);
+    const { root, manifest, mask, product } = await fixture(SPLIT_PRODUCT, true);
     try {
-      const cycleMs = Date.parse(manifest.cycle);
-      manifest.frames = SPLIT_PRODUCT.frameHours.map(hour => ({
-        id: `f${String(hour).padStart(3, '0')}`,
-        validTime: new Date(cycleMs + hour * 3600000).toISOString(),
-        intervalStart: new Date(cycleMs + (hour - SPLIT_PRODUCT.intervalHours) * 3600000).toISOString(),
-        intervalEnd: new Date(cycleMs + hour * 3600000).toISOString()
-      }));
-      await expect(validateBuild(root, manifest, mask)).rejects.toThrow('Incomplete frame or layer set');
+      await expect(validateBuild(root, manifest, mask, product)).rejects.toThrow('Incomplete frame set');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('rejects legacy inline provenance without the required immutable sidecar', async () => {
-    const { root, manifest, mask, receipt } = await fixture();
+    const { root, manifest, mask, product, receipt } = await fixture();
     try {
       const raw = { ...manifest, source: { provider: 'noaa', frames: receipt.frames } };
-      await expect(validateBuild(root, raw, mask)).rejects.toMatchObject({ name: 'ZodError' });
+      await expect(validateBuild(root, raw, mask, product)).rejects.toMatchObject({ name: 'ZodError' });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
@@ -217,7 +150,7 @@ describe('packed sample and concurrent archive validation', () => {
       await writeFile(path, packCells(field));
       const bytes = await readFile(path);
       expect(bytes.length).toBe(width * height * CELL_BYTES);
-      expect(() => validateSamples(bytes, mask, 'precip-rate', path)).not.toThrow();
+      expect(() => validateSampleFlags(bytes, width * height * CELL_BYTES, 'precip-rate', mask, path)).not.toThrow();
       const restored = unpackCells(bytes), lat = INDEXED_GRID.lat0 + Math.floor(output / width) * INDEXED_GRID.dy, lon = INDEXED_GRID.lon0 + (output % width) * INDEXED_GRID.dx;
       expect(isCovered(mask, lat, lon + 0.1)).toBe(true);
       const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask, false);
@@ -226,71 +159,43 @@ describe('packed sample and concurrent archive validation', () => {
       expect(isCovered(mask, lat, lon + 0.25)).toBe(false);
       expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
       bytes[outside * CELL_BYTES + 4] = STATUS_VALID;
-      expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
+      expect(() => validateSampleFlags(bytes, width * height * CELL_BYTES, 'precip-rate', mask, path)).toThrow('Sample coverage mismatch');
       bytes[outside * CELL_BYTES + 4] = STATUS_OUTSIDE;
       bytes[output * CELL_BYTES + 4] = STATUS_OUTSIDE;
-      expect(() => validateSamples(bytes, mask, 'precip-rate', path)).toThrow('Sample coverage mismatch');
+      expect(() => validateSampleFlags(bytes, width * height * CELL_BYTES, 'precip-rate', mask, path)).toThrow('Sample coverage mismatch');
       expect([mask.output, mask.halo, mask.tiles].map(sha256)).toEqual(hashes);
       expect(describeCoverage(mask, INDEXED_PRODUCT).hash).toBe(coverageHash);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-  it('checks channels, values, flags, coverage, length and digest including wrap halos', async () => {
+  it('checks sparse records for invalid flags, coverage, length and digest', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-validate-pack-'));
     try {
-      const mask: CoverageMask = { grid: { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 1, dx: 90, dy: -1, wrapLongitude: true }, output: new Uint8Array(2), halo: new Uint8Array(2), tiles: new Uint8Array(1), maxZoom: 0 };
+      const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 1, dx: 90, dy: -1, wrapLongitude: false };
+      const mask: CoverageMask = { grid, output: new Uint8Array(2), halo: new Uint8Array(2), tiles: Uint8Array.of(1), maxZoom: 0 };
       setBit(mask.output, 0); setBit(mask.halo, 3);
+      const coverage = nativeSparseMask(mask).coverage;
+      const layout = prepareShardedSamplePackLayout(grid, coverage.blockIds, 1);
+      const writer = createShardedSamplePackWriter(layout, coverage, { root, model: 'gfs', buildId: 'test', surfaceId: 'native' });
       const flags = new Uint8Array(12).fill(STATUS_OUTSIDE); flags[0] = 0; flags[3] = 0;
-      const input = join(root, 'flat.bin'), output = join(root, 'pack.bin');
-      await writeFile(input, packCells({ values: new Float32Array(12).fill(2), flags }));
-      const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
-      const packed = await writeTestSamplePack(output, [input], layout);
-      const manifest = { descriptors: createProductDescriptors(INDEXED_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
-      await expect(validateSamplePack(output, manifest, mask)).resolves.toBeUndefined();
-      const original = await readFile(output);
+      await writer.writeChannel(0, { values: new Float32Array(12).fill(2), flags });
+      const [shard] = await writer.finish();
+      const path = join(root, shard!.key), original = await readFile(path);
+      const descriptors = createWholeDomainDescriptors(INDEXED_PRODUCT);
+      const validate = (sha256 = shard!.sha256, channels = 1) => validateSampleGroup(root, { grid, layers: ['precip-rate'] }, coverage, descriptors,
+        { channels, shards: [{ ...shard!, sha256 }] });
+      await expect(validate()).resolves.toBeUndefined();
       for (const [offset, flag, message] of [[4, 1, 'lift flags'], [9, 0, 'coverage'], [4, 128, 'lift flags']] as const) {
-        const corrupt = Buffer.from(original); corrupt[offset] = flag; await writeFile(output, corrupt);
-        await expect(validateSamplePack(output, { ...manifest, samples: { ...manifest.samples, sha256: sha256(corrupt) } }, mask)).rejects.toThrow(message);
+        const corrupt = Buffer.from(original); corrupt[offset] = flag; await writeFile(path, corrupt);
+        await expect(validate(sha256(corrupt))).rejects.toThrow(message);
       }
-      const corrupt = Buffer.from(original); corrupt.writeFloatLE(NaN, 0); await writeFile(output, corrupt);
-      await expect(validateSamplePack(output, manifest, mask)).rejects.toThrow('non-finite');
-      await writeFile(output, original.subarray(0, -1));
-      await expect(validateSamplePack(output, manifest, mask)).rejects.toThrow('changed length');
-      await writeFile(output, original);
-      await expect(validateSamplePack(output, { ...manifest, samples: { ...manifest.samples, sha256: '0'.repeat(64) } }, mask)).rejects.toThrow('hash');
-      await expect(validateSamplePack(output, { ...manifest, samples: { ...manifest.samples, channelCount: 2 } }, mask)).rejects.toThrow('layout');
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
-
-  it('rejects self-hashed divergent horizontal, vertical, wrap and bit-exact halo copies', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'av-pack-boundaries-'));
-    try {
-      const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 33, height: 33, lon0: 0, lat0: 32, dx: 1, dy: -1, wrapLongitude: true };
-      const mask: CoverageMask = { grid, output: new Uint8Array(Math.ceil(1089 / 8)).fill(255), halo: new Uint8Array(Math.ceil(1089 / 8)), tiles: Uint8Array.of(1), maxZoom: 0 };
-      const layout = prepareSamplePackLayout(grid, mask.output, mask.halo), input = join(root, 'flat.bin'), path = join(root, 'samples.bin');
-      const flat = Buffer.from(packCells({ values: new Float32Array(1089).fill(2), flags: new Uint8Array(1089) }));
-      flat.writeUInt32LE(0x80000000, 0);
-      flat.writeUInt32LE(0x7fc01234, 5); flat[9] = 2;
-      await writeFile(input, flat);
-      const packed = await writeTestSamplePack(path, [input], layout);
-      const manifest = { descriptors: createProductDescriptors(INDEXED_PRODUCT), frames: [{ id: 'f003' }], layers: ['precip-rate'], samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: layout.storedCells, channelCount: 1, key: 'samples.bin', ...packed } } as unknown as Manifest;
-      await expect(validateSamplePack(path, manifest, mask)).resolves.toBeUndefined();
-      const original = await readFile(path);
-      const cases = [
-        { rank: 16, bits: 0x40400000 },
-        { rank: 16 * 17 + 2, bits: 0x40400000 },
-        { rank: layout.block(2)!.cellOffset + 1, bits: 0 },
-        { rank: layout.block(3)!.cellOffset + 1, bits: 0x7fc05678 }
-      ];
-      const verticalNan = (16 * grid.width + 1) * 5;
-      flat.writeUInt32LE(0x7fc01234, verticalNan); flat[verticalNan + 4] = 2;
-      await writeFile(input, flat); await rm(path);
-      const updated = await writeTestSamplePack(path, [input], layout), withNan = await readFile(path);
-      for (const [i, entry] of cases.entries()) {
-        const bytes = Buffer.from(i === 3 ? withNan : original); bytes.writeUInt32LE(entry.bits, entry.rank * 5);
-        await writeFile(path, bytes);
-        await expect(validateSamplePack(path, { ...manifest, samples: { ...manifest.samples, ...updated, sha256: sha256(bytes) } }, mask)).rejects.toThrow('Duplicate sample cell differs');
-      }
+      const corrupt = Buffer.from(original); corrupt.writeFloatLE(NaN, 0); await writeFile(path, corrupt);
+      await expect(validate(sha256(corrupt))).rejects.toThrow('non-finite');
+      await writeFile(path, original.subarray(0, -1));
+      await expect(validate()).rejects.toThrow('changed length');
+      await writeFile(path, original);
+      await expect(validate('0'.repeat(64))).rejects.toThrow('hash');
+      await expect(validate(undefined, 2)).rejects.toThrow('layout');
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

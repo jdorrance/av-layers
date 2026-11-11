@@ -1,7 +1,7 @@
 import { CELL_BYTES } from './format.js';
 import { getBit } from './bits.js';
 import type { CoverageMask } from './coverage.js';
-import type { LayerSpec } from './layer-schemas.js';
+import type { LayerProperties, LayerSpec } from './layer-schemas.js';
 export type { LayerSpec } from './layer-schemas.js';
 
 export const SAMPLE_STATUSES = ['valid', 'no-usable-lift', 'unavailable', 'outside-domain'] as const;
@@ -35,44 +35,25 @@ export type PaletteId = keyof typeof PALETTES;
 export const LIFT_METHOD_ID = 'dry-lenschow-1p2-v2';
 export const ALL_HOURS_PRECIP_METHOD_ID = 'trailing-precipitation-rate-v2';
 
-/** Native point channels and their physical method groups. */
-export const NATIVE_LAYERS = {
-  'thermal-velocity': { label: 'Thermal velocity', quantity: 'thermal-velocity', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'soaring' },
-  'thermal-top-msl': { label: 'Thermal top', quantity: 'thermal-top', units: 'm MSL', verticalReference: 'MSL', methodGroup: 'soaring' },
-  'pbl-height-agl': { label: 'Boundary-layer height', quantity: 'boundary-layer-height', units: 'm AGL', verticalReference: 'model-AGL', methodGroup: 'soaring' },
-  'sensible-heat-flux': { label: 'Sensible heat flux', quantity: 'upward-sensible-heat-flux', units: 'W/m2', verticalReference: 'surface', methodGroup: 'soaring' },
-  'latent-heat-flux': { label: 'Latent heat flux', quantity: 'upward-latent-heat-flux', units: 'W/m2', verticalReference: 'surface', methodGroup: 'soaring' },
-  'surface-lcl-msl': { label: 'Surface LCL', quantity: 'lifting-condensation-level', units: 'm MSL', verticalReference: 'MSL', methodGroup: 'cloud' },
-  'cape-jkg': { label: 'CAPE', quantity: 'convective-available-potential-energy', units: 'J/kg', verticalReference: 'surface', methodGroup: 'surface' },
-  'cloud-cover-total': { label: 'Total cloud cover', quantity: 'cloud-cover-total', units: '%', verticalReference: 'surface', methodGroup: 'surface' },
-  'cloud-cover-low': { label: 'Low cloud cover', quantity: 'cloud-cover-low', units: '%', verticalReference: 'surface', methodGroup: 'surface' },
-  'sfc-temp-c': { label: 'Surface temperature', quantity: 'air-temperature', units: 'degC', verticalReference: 'surface', methodGroup: 'surface' },
-  'sfc-dewpoint-c': { label: 'Surface dewpoint', quantity: 'dew-point-temperature', units: 'degC', verticalReference: 'surface', methodGroup: 'surface' },
-  'mslp-hpa': { label: 'Mean sea-level pressure', quantity: 'air-pressure', units: 'hPa', verticalReference: 'MSL', methodGroup: 'surface' },
-  'wind-10m-u': { label: '10 m eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
-  'wind-10m-v': { label: '10 m northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
-  'wind-gust-10m': { label: '10 m wind gust', quantity: 'wind-gust', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
-  'bl-mean-wind-u': { label: 'Boundary-layer mean eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
-  'bl-mean-wind-v': { label: 'Boundary-layer mean northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL', methodGroup: 'wind' },
-} as const;
-
-export type NativeLayerId = keyof typeof NATIVE_LAYERS;
-export type NativeMethodGroup = (typeof NATIVE_LAYERS)[NativeLayerId]['methodGroup'];
-export const NATIVE_LAYER_IDS = Object.keys(NATIVE_LAYERS) as NativeLayerId[];
+export type NativeMethodGroup = 'soaring' | 'cloud' | 'surface' | 'wind';
 export const nativeMethodId = (group: NativeMethodGroup, coordinate: 'isobaric' | 'model-levels' = 'isobaric') =>
   `native-${group}${coordinate === 'model-levels' ? '-model-levels' : ''}-v1`;
 
-export function isNativeThermalLayer(id: string): boolean {
-  return id === 'thermal-velocity' || id === 'thermal-top-msl';
+function nativeLayer(methodGroup: NativeMethodGroup,
+  spec: Pick<LayerProperties, 'label' | 'quantity' | 'units' | 'verticalReference'> & Partial<Pick<LayerProperties, 'timeSupport' | 'supportsLiftFlags'>>) {
+  const { label, quantity, units, verticalReference, timeSupport = 'valid-time', supportsLiftFlags = false } = spec;
+  return {
+    surface: 'native', methodGroup, spec: {
+      label, quantity, units, verticalReference, kind: 'scalar', timeSupport,
+      methodId: nativeMethodId(methodGroup), delivery: 'samples-only', supportsNoLift: false,
+      supportsLiftFlags, noLiftSampleValue: null, zeroOnNoLiftInterpolation: false, hideNonPositiveValues: false
+    }
+  } as const;
 }
 
-export function nativeLayerTimeSupport(id: NativeLayerId): 'valid-time' | 'interval-mean' | 'interval-flux-endpoint-profile' {
-  return id.endsWith('heat-flux') ? 'interval-mean' : isNativeThermalLayer(id) ? 'interval-flux-endpoint-profile' : 'valid-time';
-}
-
-const renderedLayerDefinitions = {
+/** Publication channel order, descriptors and default storage surfaces. */
+const LAYER_REGISTRY = {
   'usable-lift-msl': { surface: 'fine', spec: {
-      id: 'usable-lift-msl',
       label: 'Usable lift top (MSL)', quantity: 'usable-lift-top', verticalReference: 'MSL',
       timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD_ID,
       kind: 'scalar',
@@ -85,7 +66,6 @@ const renderedLayerDefinitions = {
       hideNonPositiveValues: false
   } },
   'usable-lift-agl': { surface: 'fine', spec: {
-      id: 'usable-lift-agl',
       label: 'Usable lift depth (model AGL)', quantity: 'usable-lift-top', verticalReference: 'model-AGL',
       timeSupport: 'interval-flux-endpoint-profile', methodId: LIFT_METHOD_ID,
       kind: 'scalar',
@@ -98,7 +78,6 @@ const renderedLayerDefinitions = {
       hideNonPositiveValues: true
   } },
   'precip-rate': { surface: 'native', spec: {
-      id: 'precip-rate',
       label: 'Precipitation rate', quantity: 'precipitation-rate', verticalReference: 'surface',
       timeSupport: 'interval-mean', methodId: ALL_HOURS_PRECIP_METHOD_ID,
       kind: 'scalar',
@@ -110,33 +89,58 @@ const renderedLayerDefinitions = {
       zeroOnNoLiftInterpolation: false,
       hideNonPositiveValues: false
   } },
-} as const;
+  'thermal-velocity': nativeLayer('soaring', {
+    label: 'Thermal velocity', quantity: 'thermal-velocity', units: 'm/s', verticalReference: 'model-AGL',
+    timeSupport: 'interval-flux-endpoint-profile', supportsLiftFlags: true
+  }),
+  'thermal-top-msl': nativeLayer('soaring', {
+    label: 'Thermal top', quantity: 'thermal-top', units: 'm MSL', verticalReference: 'MSL',
+    timeSupport: 'interval-flux-endpoint-profile', supportsLiftFlags: true
+  }),
+  'pbl-height-agl': nativeLayer('soaring', { label: 'Boundary-layer height', quantity: 'boundary-layer-height', units: 'm AGL', verticalReference: 'model-AGL' }),
+  'sensible-heat-flux': nativeLayer('soaring', {
+    label: 'Sensible heat flux', quantity: 'upward-sensible-heat-flux', units: 'W/m2', verticalReference: 'surface', timeSupport: 'interval-mean'
+  }),
+  'latent-heat-flux': nativeLayer('soaring', {
+    label: 'Latent heat flux', quantity: 'upward-latent-heat-flux', units: 'W/m2', verticalReference: 'surface', timeSupport: 'interval-mean'
+  }),
+  'surface-lcl-msl': nativeLayer('cloud', { label: 'Surface LCL', quantity: 'lifting-condensation-level', units: 'm MSL', verticalReference: 'MSL' }),
+  'cape-jkg': nativeLayer('surface', { label: 'CAPE', quantity: 'convective-available-potential-energy', units: 'J/kg', verticalReference: 'surface' }),
+  'cloud-cover-total': nativeLayer('surface', { label: 'Total cloud cover', quantity: 'cloud-cover-total', units: '%', verticalReference: 'surface' }),
+  'cloud-cover-low': nativeLayer('surface', { label: 'Low cloud cover', quantity: 'cloud-cover-low', units: '%', verticalReference: 'surface' }),
+  'sfc-temp-c': nativeLayer('surface', { label: 'Surface temperature', quantity: 'air-temperature', units: 'degC', verticalReference: 'surface' }),
+  'sfc-dewpoint-c': nativeLayer('surface', { label: 'Surface dewpoint', quantity: 'dew-point-temperature', units: 'degC', verticalReference: 'surface' }),
+  'mslp-hpa': nativeLayer('surface', { label: 'Mean sea-level pressure', quantity: 'air-pressure', units: 'hPa', verticalReference: 'MSL' }),
+  'wind-10m-u': nativeLayer('wind', { label: '10 m eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL' }),
+  'wind-10m-v': nativeLayer('wind', { label: '10 m northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL' }),
+  'wind-gust-10m': nativeLayer('wind', { label: '10 m wind gust', quantity: 'wind-gust', units: 'm/s', verticalReference: 'model-AGL' }),
+  'bl-mean-wind-u': nativeLayer('wind', { label: 'Boundary-layer mean eastward wind', quantity: 'eastward-wind', units: 'm/s', verticalReference: 'model-AGL' }),
+  'bl-mean-wind-v': nativeLayer('wind', { label: 'Boundary-layer mean northward wind', quantity: 'northward-wind', units: 'm/s', verticalReference: 'model-AGL' }),
+} as const satisfies Record<string, { surface: 'native' | 'fine'; spec: LayerProperties; methodGroup?: NativeMethodGroup }>;
 
-type RenderedLayerId = keyof typeof renderedLayerDefinitions;
-export type LayerId = RenderedLayerId | NativeLayerId;
-const renderedLayerIds = Object.keys(renderedLayerDefinitions) as RenderedLayerId[];
-export const LAYER_IDS: readonly LayerId[] = [...renderedLayerIds, ...NATIVE_LAYER_IDS];
+export type LayerId = keyof typeof LAYER_REGISTRY;
+export const LAYER_IDS: readonly LayerId[] = Object.keys(LAYER_REGISTRY) as LayerId[];
+export const LAYERS: Readonly<Record<LayerId, LayerSpec>> =
+  Object.fromEntries(LAYER_IDS.map(id => [id, { id, ...LAYER_REGISTRY[id].spec }])) as Record<LayerId, LayerSpec>;
 
-export const LAYERS: Readonly<Record<LayerId, LayerSpec>> = {
-  ...Object.fromEntries(renderedLayerIds.map(id => [id, renderedLayerDefinitions[id].spec satisfies LayerSpec])) as Record<RenderedLayerId, LayerSpec>,
-  ...Object.fromEntries(NATIVE_LAYER_IDS.map(id => {
-    const { label, quantity, units, verticalReference, methodGroup } = NATIVE_LAYERS[id];
-    return [id, { id, label, quantity, units, verticalReference, kind: 'scalar',
-      timeSupport: nativeLayerTimeSupport(id),
-      methodId: nativeMethodId(methodGroup), delivery: 'samples-only', supportsNoLift: false,
-      supportsLiftFlags: isNativeThermalLayer(id), noLiftSampleValue: null,
-      zeroOnNoLiftInterpolation: false, hideNonPositiveValues: false } satisfies LayerSpec];
-  })) as Record<NativeLayerId, LayerSpec>
-};
+export function nativeLayerMethodGroup(id: string): NativeMethodGroup | undefined {
+  const entry = isLayerId(id) ? LAYER_REGISTRY[id] : undefined;
+  return entry && 'methodGroup' in entry ? entry.methodGroup : undefined;
+}
+
+export function isNativeThermalLayer(id: string): boolean {
+  const entry = isLayerId(id) ? LAYER_REGISTRY[id] : undefined;
+  return entry?.surface === 'native' && entry.spec.supportsLiftFlags;
+}
 
 export function isPaletteId(value: string): value is PaletteId {
   return Object.hasOwn(PALETTES, value);
 }
 export function isLayerId(value: string): value is LayerId {
-  return Object.hasOwn(LAYERS, value);
+  return Object.hasOwn(LAYER_REGISTRY, value);
 }
 export function layerSurface(layer: LayerId): 'native' | 'fine' {
-  return Object.hasOwn(renderedLayerDefinitions, layer) ? renderedLayerDefinitions[layer as RenderedLayerId].surface : 'native';
+  return LAYER_REGISTRY[layer].surface;
 }
 export function renderedLayers(layers: readonly LayerId[], descriptors: Readonly<Record<string, Pick<LayerSpec, 'delivery'>>> = LAYERS): LayerId[] {
   return layers.filter(id => descriptors[id]?.delivery !== 'samples-only');

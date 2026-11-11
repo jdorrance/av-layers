@@ -1,12 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { getProduct } from '@av/contracts/models';
-import { assertCoverageBinding, assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, forecastGrids, renderedFrames, getProvenanceReference, publishedManifestSchema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, validateArtifactRecords, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type PublishedManifest, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, renderedFrames, getProvenanceReference, manifestV5Schema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
-import { loadCoverage, readCoverage, readSparseCoverage } from './coverage.js';
+import { loadCoverage, readSparseCoverage } from './coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
@@ -31,7 +31,7 @@ export function buildIdTime(id: string): number {
   return time;
 }
 
-function assertLifetime(manifest: PublishedManifest, now: number): void {
+function assertLifetime(manifest: ManifestV5, now: number): void {
   const start = buildIdTime(manifest.buildId);
   if (Date.parse(manifest.createdAt) < start || Date.parse(manifest.createdAt) >= start + 1000 || now < start || now - start > MAX_BUILD_LIFETIME_MS || Date.parse(manifest.expiresAt) <= now) {
     throw new Error('Build is outside its publication lifetime');
@@ -51,7 +51,7 @@ async function casPointer(store: ObjectStorage, model: ModelId, pointer: ModelPo
   await store.put(pointerKey(model), encodeBoundedJson(pointer, MAX_POINTER_BYTES), etag ? { ifMatch: etag } : { ifNoneMatch: '*' }, 'application/json');
 }
 
-export function assertUsefulHorizon(manifest: PublishedManifest, now: number): void {
+export function assertUsefulHorizon(manifest: Pick<ManifestV5, 'model' | 'cycle' | 'frames' | 'mapFrameCount'>, now: number): void {
   const product = getProduct(manifest.model);
   if (!product) throw new Error('No trusted publication recipe');
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
@@ -64,8 +64,7 @@ export function assertUsefulHorizon(manifest: PublishedManifest, now: number): v
 }
 
 export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
-  const now = options.now ?? Date.now, manifest = publishedManifestSchema.parse(raw);
-  if (options.receiptsOnly && manifest.version !== 5) throw new Error('Receipt publication requires a v5 manifest');
+  const now = options.now ?? Date.now, manifest = manifestV5Schema.parse(raw);
   if (options.validated) assertValidatedBuild(root, manifest, options.validated, options.receiptsOnly ? store : undefined);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
@@ -84,20 +83,12 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   check();
   const retained = (captured.pointer?.retained ?? []).filter(item => Date.parse(item.expiresAt) > now());
   if (!alreadyRetained && retained.length >= MAX_RETAINED_BUILDS) throw new Error('Retained build limit reached');
-  if (manifest.version === 5 && options.receiptsOnly && !options.validated) {
-    const { verifyBuildReceipts } = await import('./parallel.js');
-    const objects = await verifyBuildReceipts(root, manifest, store, options.signal);
+  if (!options.validated) {
     const product = getProduct(manifest.model);
     if (!product) throw new Error('No trusted publication recipe');
-    await validateBuild(root, manifest, await loadCoverage(product), undefined, product, { store, objects, signal: options.signal });
-  } else if (!options.validated) {
-    if (manifest.version === 5) {
-      const product = getProduct(manifest.model);
-      if (!product) throw new Error('No trusted publication recipe');
-      await validateBuild(root, manifest, await loadCoverage(product));
-    } else await validateBuild(root, manifest, await readCoverage(root, manifest.coverage.hash), manifest.coverage.hash);
+    const objects = options.receiptsOnly ? await (await import('./parallel.js')).verifyBuildReceipts(root, manifest, store, options.signal) : undefined;
+    await validateBuild(root, manifest, await loadCoverage(product), product, objects && { store, objects, signal: options.signal });
   }
-  if (manifest.version !== 5) validateArtifactRecords(manifest);
   const uploadStarted = Date.now();
   const prefix = `builds/${manifest.model}/${manifest.buildId}/`;
   const localProvenance = await readLocalProvenance(root, manifest);
@@ -108,24 +99,12 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (!size || size > MAX_UPLOAD_ARTIFACT_BYTES) throw new Error(`Artifact exceeds per-file upload limit: ${file.key}`);
     return { ...file, size };
   }));
-  if (manifest.version === 5 && !options.receiptsOnly) await publishV5Dependencies(store, root, manifest, check, options.signal);
-  else if (manifest.version !== 5) for (const grid of forecastGrids(manifest)) {
-    const coverageBytes = await readLocalFile(localPath(root, grid.coverage.maskKey), MAX_COVERAGE_DESCRIPTOR_BYTES);
-    if (sha256(coverageBytes) !== grid.coverage.hash) throw new Error('Coverage descriptor hash mismatch');
-    const descriptor = coverageDescriptorSchema.parse(decode(coverageBytes));
-    assertCoverageBinding(descriptor, grid);
-    for (const name of ['output', 'halo', 'tiles'] as const) {
-      const objectKey = `${coveragePrefix(grid.coverage.hash)}/${name}.bin`, bytes = await readLocalFile(localPath(root, objectKey), MAX_COVERAGE_BITSET_BYTES, descriptor.files[name].bytes);
-      if (bytes.byteLength !== descriptor.files[name].bytes || sha256(bytes) !== descriptor.files[name].sha256) throw new Error(`Coverage ${name} hash mismatch`);
-      check(); await putImmutable(store, objectKey, bytes, 'application/octet-stream', options.signal);
-    }
-    check(); await putImmutable(store, grid.coverage.maskKey, coverageBytes, 'application/json', options.signal);
-  }
+  if (!options.receiptsOnly) await publishV5Dependencies(store, root, manifest, check, options.signal);
   await uploadBounded(sized, MAX_UPLOAD_RESERVED_BYTES, async file => {
     check();
     const bytes = await readLocalFile(localPath(root, file.key), MAX_UPLOAD_ARTIFACT_BYTES, file.size);
     if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
-    check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal, manifest.version === 5 && file.contentType === 'application/octet-stream');
+    check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal, file.contentType === 'application/octet-stream');
   });
   const provenanceBytes = localProvenance.bytes;
   check(); await putImmutable(store, provenance.key, provenanceBytes, 'application/json', options.signal);
@@ -246,7 +225,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   const object = await store.get(retained.manifestKey, undefined, MAX_MANIFEST_BYTES, options.signal);
   check();
   if (!object) throw new Error('Rollback manifest missing');
-  const manifest = publishedManifestSchema.parse(decode(object.bytes, MAX_MANIFEST_JSON_TOKENS));
+  const manifest = manifestV5Schema.parse(decode(object.bytes, MAX_MANIFEST_JSON_TOKENS));
   if (manifest.buildId !== target || manifest.model !== model || manifest.cycle !== retained.cycle || manifest.expiresAt !== retained.expiresAt) {
     throw new Error('Rollback manifest does not match pointer');
   }
@@ -262,25 +241,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
     const value = parseFrameProvenance(decode(object.bytes, MAX_PROVENANCE_JSON_TOKENS), manifest, manifest.frames[index]!);
     if (value.hour !== reference.hour) throw new Error('Rollback provenance hour mismatch');
   }
-  if (manifest.version === 5) await verifyV5Dependencies(store, manifest, options.signal);
-  else {
-  validateArtifactRecords(manifest);
-  const grids = forecastGrids(manifest);
-  for (const grid of grids) {
-    const coverage = await store.get(grid.coverage.maskKey, undefined, MAX_COVERAGE_DESCRIPTOR_BYTES, options.signal);
-    check();
-    if (!coverage || sha256(coverage.bytes) !== grid.coverage.hash) throw new Error('Rollback coverage descriptor missing or corrupt');
-    const descriptor = coverageDescriptorSchema.parse(decode(coverage.bytes));
-    assertCoverageBinding(descriptor, grid);
-    for (const name of ['output', 'halo', 'tiles'] as const) {
-      const file = descriptor.files[name], key = `${coveragePrefix(grid.coverage.hash)}/${name}.bin`;
-      await verifyRemoteHash(store, key, file.sha256, file.bytes, file.bytes, options.signal);
-    }
-  }
-  for (const { key, sha256: hash, bytes } of forecastObjects(manifest)) {
-    await verifyRemoteHash(store, key, hash, MAX_UPLOAD_ARTIFACT_BYTES, bytes, options.signal);
-  }
-  }
+  await verifyV5Dependencies(store, manifest, options.signal);
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   check();
   options.onPointerOutcome?.('unconfirmed'); // Persist intent before a request whose response may be lost.

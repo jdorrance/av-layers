@@ -1,23 +1,23 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import z from 'zod';
 import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
 import { buildForecast } from './build.js';
 import { describeSparseCoverage } from './coverage.js';
-import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan, type WholeDomainReceipt } from './parallel.js';
+import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
 import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
 import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
 import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, checkPerformance } from './capacity.js';
-import { fixtureProvider } from '../parallel-fixtures.js';
+import { fixtureProvider, PublicationStore } from '../parallel-fixtures.js';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import type { ForecastProvider } from './provider.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain } from './whole-domain/prepare.js';
@@ -29,7 +29,6 @@ import { assertUsefulHorizon, cleanup, publish, rollback, type CleanupSummary } 
 import { forecastObjects } from './publication-objects.js';
 import { createLocalFileReader, readLocalFile } from './local-file.js';
 import type { ArchiveTarget } from './render.js';
-import type { ObjectStorage } from './storage.js';
 
 const publicationPolicy = vi.hoisted(() => ({ minHorizonHours: 6 }));
 vi.mock('@av/contracts/models', async importOriginal => {
@@ -86,28 +85,11 @@ vi.mock('./terrain/reader.js', async importOriginal => ({
 
 const CYCLE = '2026-06-21T00:00:00.000Z';
 const temporary: string[] = [];
+const sharedRoots: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterAll(async () => { await Promise.all(sharedRoots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function root(name: string): Promise<string> { const path = await mkdtemp(join(tmpdir(), `av-${name}-`)); temporary.push(path); return path; }
-
-class PublicationStore implements ObjectStorage {
-  objects = new Map<string, { bytes: Uint8Array; etag: string; metadata?: Record<string, string> }>();
-  failKey = '';
-  failAfterPointer = false;
-  async get(key: string, range?: { offset: number; length: number }) {
-    const item = this.objects.get(key);
-    return item ? { bytes: range ? item.bytes.slice(range.offset, range.offset + range.length) : item.bytes.slice(), etag: item.etag } : null;
-  }
-  async head(key: string) { const item = this.objects.get(key); return item ? { size: item.bytes.length, etag: item.etag, metadata: item.metadata } : null; }
-  async put(key: string, bytes: Uint8Array, condition: { ifMatch?: string; ifNoneMatch?: '*' }, _type?: string, _md5?: string, metadata?: Record<string, string>) {
-    if (key === this.failKey) throw new Error('injected upload failure');
-    const previous = this.objects.get(key);
-    if ((condition.ifNoneMatch && previous) || (condition.ifMatch && condition.ifMatch !== previous?.etag)) throw new Error('precondition failed');
-    this.objects.set(key, { bytes: Buffer.from(bytes), etag: `"${createHash('md5').update(bytes).digest('hex')}"`, metadata });
-    if (key === 'catalog/gfs/latest.json' && this.failAfterPointer) { this.failAfterPointer = false; throw new Error('lost pointer response'); }
-  }
-  async list(prefix: string) { return [...this.objects].filter(([key]) => key.startsWith(prefix)).map(([key, item]) => ({ key, size: item.bytes.length, lastModified: new Date(0) })); }
-  async delete(keys: string[]) { for (const key of keys) this.objects.delete(key); }
-}
+async function sharedRoot(name: string): Promise<string> { const path = await mkdtemp(join(tmpdir(), `av-${name}-`)); sharedRoots.push(path); return path; }
 
 async function verifySampleServing(store: PublicationStore, manifest: Awaited<ReturnType<typeof readV5>>, configured: ProductDefinition) {
   const bucket = { async get(key: string, options?: { range?: { offset: number; length: number } }) {
@@ -181,22 +163,23 @@ function sizedManifest(manifest: ReturnType<typeof manifestV5Schema.parse>, size
     bytes: size.bytes, key: `${surface.samples.shards[0]!.key.replace(/\/0\.bin$/, '')}/${index}.bin`, sha256: 'a'.repeat(64) }));
   return copy;
 }
-async function buildPerformanceFixture() {
-  const setup = await fixture(), out = await root('wd-perf');
+async function buildSerialFixture() {
+  const setup = await fixture(), out = await sharedRoot('wd-serial-fixture');
   const path = await buildForecast({ out, cycle: CYCLE, product, mask: nativeMask, provider: fixtureProvider().provider, wholeDomain: setup });
-  return readV5(path);
+  return { out, manifest: await readV5(path) };
 }
 
-let performanceFixture: ReturnType<typeof buildPerformanceFixture> | undefined;
+let serialFixture: ReturnType<typeof buildSerialFixture> | undefined;
+const sealedSerial = () => serialFixture ??= buildSerialFixture();
 async function builtManifest() {
-  return structuredClone(await (performanceFixture ??= buildPerformanceFixture()));
+  return structuredClone((await sealedSerial()).manifest);
 }
 
 describe('whole-domain v5 production', () => {
   it('rejects independently valid duplicate cells while allowing a nonduplicate change', async () => {
-    const setup = await fixture(), out = await root('wd-duplicate');
-    const path = await buildForecast({ out, cycle: CYCLE, product, mask: nativeMask, provider: fixtureProvider().provider, wholeDomain: setup });
-    const manifest = await readV5(path), native = surface(manifest, 'native');
+    const sealed = await sealedSerial(), out = await root('wd-duplicate');
+    await cp(sealed.out, out, { recursive: true });
+    const manifest = structuredClone(sealed.manifest), native = surface(manifest, 'native');
     const layout = prepareShardedSamplePackLayout(native.grid, nativeSparseMask(nativeMask).coverage.blockIds, native.samples.channelCount);
     const first = layout.block(0), last = layout.block(1), stride = native.samples.channelCount * 5;
     const shard = native.samples.shards[0], shardPath = join(out, shard.key), original = await readFile(shardPath);
@@ -207,7 +190,7 @@ describe('whole-domain v5 production', () => {
         await writeFile(shardPath, bytes);
         const changed = structuredClone(manifest);
         surface(changed, 'native').samples.shards[0].sha256 = sha256(bytes);
-        const result = validateBuild(out, changed, nativeMask, undefined, product);
+        const result = validateBuild(out, changed, nativeMask, product);
         if (duplicate) await expect(result).rejects.toThrow('Duplicate sample cell differs');
         else await expect(result).resolves.toBeDefined();
       }
@@ -216,17 +199,17 @@ describe('whole-domain v5 production', () => {
       const changed = structuredClone(manifest);
       await writeFile(shardPath, bytes);
       surface(changed, 'native').samples.shards[0].sha256 = sha256(bytes);
-      await expect(validateBuild(out, changed, nativeMask, undefined, product)).resolves.toBeDefined();
+      await expect(validateBuild(out, changed, nativeMask, product)).resolves.toBeDefined();
       bytes.writeUInt32LE(0x7fc00001, a);
       await writeFile(shardPath, bytes);
       surface(changed, 'native').samples.shards[0].sha256 = sha256(bytes);
-      await expect(validateBuild(out, changed, nativeMask, undefined, product)).rejects.toThrow('Duplicate sample cell differs');
+      await expect(validateBuild(out, changed, nativeMask, product)).rejects.toThrow('Duplicate sample cell differs');
       bytes.writeUInt32LE(0x7fc00000, a);
       bytes[a + 4] = 0;
       bytes.writeFloatLE(1, a); bytes.writeFloatLE(1, b);
       await writeFile(shardPath, bytes);
       surface(changed, 'native').samples.shards[0].sha256 = sha256(bytes);
-      await expect(validateBuild(out, changed, nativeMask, undefined, product)).rejects.toThrow('Duplicate sample cell differs');
+      await expect(validateBuild(out, changed, nativeMask, product)).rejects.toThrow('Duplicate sample cell differs');
     } finally { await writeFile(shardPath, original); }
   }, 60_000);
 
@@ -246,7 +229,7 @@ describe('whole-domain v5 production', () => {
       await writeFile(shardPath, bytes);
       const changed = structuredClone(manifest);
       surface(changed, 'fine').samples.shards[first.shard].sha256 = sha256(bytes);
-      await expect(validateBuild(out, changed, nativeMask, undefined, product)).rejects.toThrow('Duplicate sample cell differs');
+      await expect(validateBuild(out, changed, nativeMask, product)).rejects.toThrow('Duplicate sample cell differs');
     } finally { shardTarget.bytes = 0; }
   }, 60_000);
 
@@ -279,7 +262,7 @@ describe('whole-domain v5 production', () => {
     bytes.writeFloatLE(42, offset);
     await writeFile(shardPath, bytes);
     surface(manifest, 'fine').samples.shards[first.shard].sha256 = sha256(bytes);
-    await expect(validateBuild(out, manifest, mask, undefined, configured)).rejects.toThrow('Duplicate sample cell differs');
+    await expect(validateBuild(out, manifest, mask, configured)).rejects.toThrow('Duplicate sample cell differs');
   }, 60_000);
 
   it('binds bundled fine coverage to product policy before loading sparse assets', async () => {
@@ -371,22 +354,22 @@ describe('whole-domain v5 production', () => {
         await writeFile(terrainPath, bytes);
         const changed = structuredClone(manifest), changedTerrain = surface(changed, 'fine').terrain!;
         changedTerrain.sha256 = sha256(bytes);
-        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow();
+        await expect(validateBuild(out, changed, masterMask, publishedProduct)).rejects.toThrow();
       }
       await writeFile(terrainPath, terrainBytes);
       for (const field of ['dataId', 'verticalDatum', 'surface', 'sha256', 'key'] as const) {
         const changed = structuredClone(manifest), changedTerrain = surface(changed, 'fine').terrain!;
         changedTerrain[field] = field === 'key' ? `terrain/prepared/${'f'.repeat(64)}/manifest.json` : field === 'dataId' || field === 'sha256' ? 'f'.repeat(64) : 'wrong';
-        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow();
+        await expect(validateBuild(out, changed, masterMask, publishedProduct)).rejects.toThrow();
       }
       for (const field of ['terrainMethod', 'terrainClearance'] as const) {
         const changed = structuredClone(manifest);
         changed.tool[field] = 'wrong';
-        await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
+        await expect(validateBuild(out, changed, masterMask, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
       }
       const changed = structuredClone(manifest);
       changed.source.terrain = { dataId: 'f'.repeat(64), key: terrain.key, sha256: terrain.sha256, arrayBytes: 1 };
-      await expect(validateBuild(out, changed, masterMask, undefined, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
+      await expect(validateBuild(out, changed, masterMask, publishedProduct)).rejects.toThrow('Terrain source or method mismatch');
     } finally { await writeFile(terrainPath, terrainBytes); }
 
     const old = modelPointerSchema.parse(JSON.parse(Buffer.from(pointer).toString()));
@@ -468,13 +451,13 @@ describe('whole-domain v5 production', () => {
     const wrongMethod = structuredClone(serial);
     wrongMethod.descriptors = createProductDescriptors(product);
     wrongMethod.method.id = createProductMethodId(product);
-    await expect(validateBuild(serialRoot, wrongMethod, nativeMask, undefined, configured)).rejects.toThrow('Unsupported model, grid or layers');
+    await expect(validateBuild(serialRoot, wrongMethod, nativeMask, configured)).rejects.toThrow('Unsupported model, grid or layers');
     const wrongGround = structuredClone(serial);
     wrongGround.descriptors.layers['usable-lift-agl'].verticalReference = 'model-AGL';
-    await expect(validateBuild(serialRoot, wrongGround, nativeMask, undefined, configured)).rejects.toThrow('Unsupported model, grid or layers');
+    await expect(validateBuild(serialRoot, wrongGround, nativeMask, configured)).rejects.toThrow('Unsupported model, grid or layers');
     const wrongClearance = structuredClone(serial);
     wrongClearance.tool.terrainClearance = TERRAIN_COLUMN_METHOD.id;
-    await expect(validateBuild(serialRoot, wrongClearance, nativeMask, undefined, configured)).rejects.toThrow('Terrain source or method mismatch');
+    await expect(validateBuild(serialRoot, wrongClearance, nativeMask, configured)).rejects.toThrow('Terrain source or method mismatch');
     expect(surface(serial, 'native').layers).toEqual(['precip-rate']);
     expect(surface(serial, 'fine').layers).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(surface(serial, 'fine').terrain).toMatchObject({ coverageHash: surface(serial, 'fine').coverage.hash, layoutVersion: 1 });
@@ -524,110 +507,6 @@ describe('whole-domain v5 production', () => {
     }
     expect(coverageIndices(nativeMask).output.length).toBe(cells - 1);
     expect(plan.wholeDomain).toBeDefined();
-  }, 60_000);
-
-  it.each(['complete', 'failure', 'abort'] as const)('bounds serving receipt HEADs and drains admitted work: %s', async mode => {
-    const controller = new AbortController(), pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
-    let running: ReturnType<typeof verifyBuildReceipts> | undefined;
-    shardTarget.bytes = 5000;
-    try {
-      const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], terrainSubdivisionFactor: 4 };
-      const setup = await fixture(configured), out = await root('wd-receipt-heads'), store = new PublicationStore(), source = fixtureProvider();
-      const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
-      const plan = await createBuildPlan({ ...inputs, cycle: CYCLE, wholeDomain: setup, shards: 2 });
-      for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ ...inputs, plan, shard });
-      const manifest = await readV5(await finalizeBuild({ ...inputs, plan }));
-      const keys = manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => shard.key)), serving = new Set(keys);
-      expect(keys.length).toBeGreaterThan(4);
-      const head = store.head.bind(store), started: string[] = [];
-      let active = 0, peak = 0, settled = false;
-      vi.spyOn(store, 'head').mockImplementation(async key => {
-        if (!serving.has(key)) return head(key);
-        started.push(key); active++; peak = Math.max(peak, active);
-        try {
-          await new Promise<void>((resolve, reject) => { pending.set(key, { resolve, reject }); });
-          return await head(key);
-        } finally { active--; }
-      });
-      running = verifyBuildReceipts(out, manifest, store, controller.signal, inputs);
-      void running.then(() => { settled = true; }, () => { settled = true; });
-      await vi.waitFor(() => expect(pending.size).toBe(4));
-      if (mode === 'complete') {
-        let completed = 0;
-        while (completed < keys.length) {
-          const batch = [...pending.values()]; pending.clear(); completed += batch.length;
-          for (const gate of batch.reverse()) gate.resolve();
-          if (completed < keys.length) await vi.waitFor(() => expect(pending.size).toBe(Math.min(4, keys.length - completed)));
-        }
-        const objects = await running;
-        expect(objects.slice(0, keys.length).map(object => object.key)).toEqual(keys);
-      } else {
-        const error = new Error(`receipt HEAD ${mode}`);
-        if (mode === 'failure') { pending.get(keys[0])!.reject(error); pending.delete(keys[0]); }
-        else controller.abort(error);
-        await new Promise<void>(resolve => setImmediate(resolve));
-        expect(settled).toBe(false);
-        expect(started).toHaveLength(4);
-        for (const gate of pending.values()) gate.resolve(); pending.clear();
-        await expect(running).rejects.toThrow(error.message);
-        expect(started).toHaveLength(4);
-      }
-      expect(peak).toBe(4); expect(active).toBe(0);
-    } finally {
-      controller.abort(new Error('receipt HEAD test cleanup'));
-      for (const gate of pending.values()) gate.resolve();
-      await running?.catch(() => {});
-      shardTarget.bytes = 0;
-    }
-  }, 60_000);
-
-  it('rejects prebranch g-key receipts during finalize and receipt-only resume before payload mutation', async () => {
-    const setup = await fixture(), out = await root('wd-legacy-receipts'), store = new PublicationStore(), source = fixtureProvider();
-    const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], layers: [...product.layers, 'sfc-temp-c'] };
-    const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
-    const inputs = { out, product: configured, mask: nativeMask, provider: source.provider, store };
-    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ ...inputs, plan, shard });
-    const manifest = await readV5(await finalizeBuild({ ...inputs, plan }));
-    for (const surface of manifest.surfaces) for (const item of surface.samples.shards) {
-      await rm(join(out, item.key)); store.objects.delete(item.key);
-    }
-    const originals = new Map<string, Uint8Array>();
-    const receipts: WholeDomainReceipt[] = [];
-    for (let shard = 0; shard < plan.groups.length; shard++) {
-      const path = join(out, `shards/${shard}/receipt.json`);
-      const receipt = JSON.parse(await readFile(path, 'utf8')) as WholeDomainReceipt;
-      for (const surface of receipt.surfaces) for (const item of surface.shards) {
-        const previous = item.key, legacy = previous.replace('/samples/src-g', '/samples/g'), object = store.objects.get(previous)!;
-        await rename(join(out, previous), join(out, legacy)); store.objects.delete(previous); store.objects.set(legacy, object);
-        originals.set(legacy, object.bytes.slice());
-        item.key = legacy;
-        receipt.objects!.find(object => object.key === previous)!.key = legacy;
-      }
-      await writeFile(path, JSON.stringify(receipt));
-      receipts.push(receipt);
-    }
-    for (const surface of manifest.surfaces) {
-      if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Expected grouped samples');
-      let firstFrame = 0;
-      surface.samples.shards = receipts.flatMap(receipt => {
-        const part = receipt.surfaces.find(part => part.id === surface.id);
-        if (!part) throw new Error('Missing legacy surface');
-        const frameCount = plan.groups[receipt.shard].length, start = firstFrame;
-        firstFrame += frameCount;
-        return part.shards.map((item, blockShard) => ({ ...item, group: receipt.shard, firstFrame: start, frameCount, blockShard }));
-      });
-    }
-    const legacy = manifestV5Schema.parse(manifest);
-    const put = vi.spyOn(store, 'put');
-    const stale = { ...plan, recipe: { ...plan.recipe, hash: '0'.repeat(64), sourceRevision: '93e69f6d8ba9a1a8368d1e8d48d7adecff56a2de', sourceDirty: false } };
-    await expect(finalizeBuild({ ...inputs, plan: stale })).rejects.toThrow('recipe or source revision changed; start a fresh forecast');
-    await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('Legacy forecast sample receipts');
-    await expect(verifyBuildReceipts(out, legacy, store, undefined, inputs)).rejects.toThrow('Legacy forecast sample receipts');
-    expect(put).not.toHaveBeenCalled();
-    for (const [key, bytes] of originals) {
-      expect(await readFile(join(out, key))).toEqual(Buffer.from(bytes));
-      expect(store.objects.get(key)!.bytes).toEqual(bytes);
-    }
   }, 60_000);
 
   it('reuses a finalized remote seal only for its validated store without repeating object HEADs', async () => {
@@ -801,7 +680,7 @@ describe('whole-domain v5 production', () => {
     const shard = manifest.surfaces[0].samples.shards[0], object = store.objects.get(shard.key)!;
     object.metadata = {};
     await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).rejects.toThrow('Remote object receipt mismatch');
-    await expect(validateBuild(out, manifest, nativeMask, undefined, configured, {
+    await expect(validateBuild(out, manifest, nativeMask, configured, {
       store, objects: (await Promise.all(plan.groups.map(async (_, index) => JSON.parse(await readFile(join(out, 'shards', String(index), 'receipt.json'), 'utf8'))))).flatMap(receipt => receipt.objects)
     })).rejects.toThrow('Remote receipt artifact set mismatch');
     store.objects.set(savedInput, savedBytes);
@@ -1270,7 +1149,7 @@ it('emits all native channels and profiles with serial/parallel parity and close
   expect(readProfileRecord(serialBytes.subarray(0, profiles.recordBytes))).toMatchObject({ status: 'valid', levels: expect.any(Array) });
   const missing = structuredClone(serial);
   delete surface(missing, 'native').profiles;
-  await expect(validateBuild(serialRoot, missing, nativeMask, undefined, configured)).rejects.toThrow('Native profiles are required');
+  await expect(validateBuild(serialRoot, missing, nativeMask, configured)).rejects.toThrow('Native profiles are required');
 
   const store = new PublicationStore(), inputs = { product: configured, mask: nativeMask, provider: source.provider };
   const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
@@ -1305,7 +1184,7 @@ it('emits all native channels and profiles with serial/parallel parity and close
   await writeFile(path, corrupt);
   const changed = structuredClone(serial);
   surface(changed, 'native').profiles!.groups[0].shards[0].sha256 = sha256(corrupt);
-  await expect(validateBuild(serialRoot, changed, nativeMask, undefined, configured)).rejects.toThrow('Duplicate sample cell differs');
+  await expect(validateBuild(serialRoot, changed, nativeMask, configured)).rejects.toThrow('Duplicate sample cell differs');
   await writeFile(path, serialBytes);
 }, 60_000);
 
@@ -1364,5 +1243,5 @@ it('keeps map bytes fixed across skipped hours, source intervals and native-only
   expect(surface(parallel, 'native').profiles!.groups.map(group => [group.firstFrame, group.frameCount])).toEqual([[0, 3], [3, 2]]);
   await expect(verifyBuildReceipts(parallelRoot, parallel, store, undefined, inputs)).resolves.toBeDefined();
   const invalid = structuredClone(parallel); invalid.mapFrameCount = 2;
-  await expect(validateBuild(parallelRoot, invalid, nativeMask, undefined, configured)).rejects.toThrow();
+  await expect(validateBuild(parallelRoot, invalid, nativeMask, configured)).rejects.toThrow();
 }, 60_000);

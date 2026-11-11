@@ -1,6 +1,6 @@
 import { MAX_SAMPLE_RANGE_BYTES } from '@av/contracts';
 import { ensureLive, fail } from './http';
-import { binaryRead, countRead, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, readObjectBytes, type WaitContext } from './resources';
+import { binaryRead, getR2Object, MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST, readObjectBytes, type WaitContext } from './resources';
 
 interface ByteRange { offset: number; length: number }
 interface Pack { key: string; bytes: number }
@@ -28,8 +28,7 @@ async function readPackedRange(
   const { shard: pack, offset, length } = range;
   const key = `${pack.key}:${pack.sha256}:${offset}:${length}`;
   const bytes = await binaryRead(bucket, key, async ownerSignal => {
-    countRead(ctx);
-    const object = await bucket.get(pack.key, { range: { offset, length } });
+    const object = await getR2Object(bucket, pack.key, ctx, { range: { offset, length } });
     if (!object || !('body' in object)) fail(503, 'publication-incomplete', rangeMessages[kind].missing);
     if (object.size !== pack.bytes || object.customMetadata?.sha256 !== pack.sha256 || !object.range
       || !('offset' in object.range) || object.range.offset !== offset || !('length' in object.range) || object.range.length !== length) {

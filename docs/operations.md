@@ -243,8 +243,11 @@ Inspect the run's uploaded receipt artifacts:
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
 checks each model's live API integrity, configured cycle age, remaining horizon
-and expiry. The report records observed response cache state, storage reads and
-time to headers for sampled routes. Actions reports publisher and cleanup failures:
+and expiry. The report records response cache state, storage reads, Worker
+timings, and client JSON duration and retries. In Actions, correlate `forecast-stage`,
+`forecast-published`, and `forecast-failure` by model, build, run and attempt.
+
+Use the report and artifacts to choose a recovery action.
 
 - **Upstream lag, shrinking horizon, or expiry:** publish a newer upstream cycle.
 - **Serving integrity:** check Worker deployment and retained R2 build objects,

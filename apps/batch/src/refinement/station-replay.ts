@@ -607,7 +607,7 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
     const first = modelInputs[0], product = getProduct(first.model)!;
     const coverageHash = first.control.manifest.patches?.[0]?.coverage.hash;
     if (!coverageHash) throw new Error('Control coverage hash is missing');
-    const identityBefore = await buildIdentity(product, coverageHash, undefined, [], repoRoot);
+    const identityBefore = await buildIdentity(product, coverageHash, { root: repoRoot });
     const controls = await Promise.all(modelInputs.map(input => controlInfo(input.control, input.path, input.model)));
     const observationsByTime = new Map<number, StationObservation[]>();
     for (const observation of frozen.observations) {
@@ -824,7 +824,7 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
         temperatureGate.push(temperatureGateEvidence({ model, variant: candidateId, baseline: baselineId, paired }));
       }
     }
-    const identityAfter = await buildIdentity(product, coverageHash, undefined, [], repoRoot);
+    const identityAfter = await buildIdentity(product, coverageHash, { root: repoRoot });
     assertBuildComponentsUnchanged(identityBefore.components, identityAfter.components);
     const candidate: StationReplayReport['candidate'] = {
       revision: identityBefore.recipe.sourceRevision,

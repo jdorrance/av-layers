@@ -5,13 +5,13 @@ import { layerIdSchema } from './layer-schemas.js';
 import { LAYER_IDS } from './layers.js';
 import type { CoverageDescriptor } from './coverage.js';
 import { MAX_REFINEMENT_ZONES, refinementGeometrySchema, parseRefinementConfig } from './refinement.js';
-import { coverageReferenceSchema, descriptorSchema, manifestV5Schema, methodIdentitySchema,
+import { coverageReferenceSchema, descriptorSchema, methodIdentitySchema,
   modelIdSchema, publicationShape } from './publication.js';
 
 const key = publicationShape.buildId, sha256 = methodIdentitySchema.shape.hash;
 
 /** Channels follow frames, then layers, in manifest order; the coverage determines block offsets. */
-export const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
+const samplePackSchema = z.object({ format: z.literal('cell-major-blocks-v1'), blockSize: z.literal(SAMPLE_BLOCK_SIZE), storedCells: z.number().int().positive(), channelCount: z.number().int().positive(), bytes: z.number().int().positive(), key, sha256 });
 export const refinementPatchSchema = z.strictObject({
   id: modelIdSchema,
   grid: gridSchema,
@@ -43,10 +43,7 @@ export const manifestSchema = z.object({
 });
 export type Manifest = z.infer<typeof manifestSchema>;
 
-export const publishedManifestSchema = z.union([manifestSchema, manifestV5Schema]);
-export type PublishedManifest = z.infer<typeof publishedManifestSchema>;
-export type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'samples' | 'layers' | 'descriptors' | 'method'>;
-export function forecastGrids(manifest: Manifest): ForecastGrid[] { return [manifest, ...(manifest.patches ?? [])]; }
+type ForecastGrid = Pick<Manifest, 'grid' | 'coverage' | 'descriptors'>;
 
 /** A coverage hash binds its geometry and public extent to one numeric surface. */
 export function assertCoverageBinding(descriptor: CoverageDescriptor, surface: Pick<ForecastGrid, 'grid' | 'coverage'> & { descriptors: Pick<ForecastGrid['descriptors'], 'bounds'> }): void {
