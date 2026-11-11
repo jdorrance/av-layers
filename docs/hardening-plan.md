@@ -154,7 +154,7 @@ per-frame receipts also have independent versions.
    each model in staging and again after production deployment. Use a
    known covered tile to exercise the archive path. Exercise deployed and
    candidate clients across the deploy order and recovery revision. The
-   current deploy smoke samples one model.
+   deploy workflow probes every configured model before deploying Pages.
    [Smoke probe](../scripts/smoke-api.ts)
 4. Remove unreachable v3/v4 serving branches, v1 plan and shard receipt
    paths, and legacy writer code after their respective gates pass. Preserve

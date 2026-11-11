@@ -88,10 +88,15 @@ function planGroups(input: ServingPlan): PlannedGroup[] {
     if (part.firstFrame !== cursor || !Number.isSafeInteger(part.frameCount) || part.frameCount < 1) throw new Error('Sample serving group has a frame gap');
     cursor += part.frameCount;
   }
-  for (const part of input.parts) {
-    const layout = prepareShardedSamplePackLayout(input.grid, input.blockIds, part.frameCount * input.layers, MAX_V5_SHARD_BYTES);
-    assertHourLayout(layout, part.shards);
+  const layoutsByFrameCount = new Map<number, ShardedSamplePackLayout>();
+  function layoutForFrames(frameCount: number): ShardedSamplePackLayout {
+    const existing = layoutsByFrameCount.get(frameCount);
+    if (existing) return existing;
+    const layout = prepareShardedSamplePackLayout(input.grid, input.blockIds, frameCount * input.layers, MAX_V5_SHARD_BYTES);
+    layoutsByFrameCount.set(frameCount, layout);
+    return layout;
   }
+  for (const part of input.parts) assertHourLayout(layoutForFrames(part.frameCount), part.shards);
   const groups: PlannedGroup[] = [];
   for (let firstFrame = 0, group = 0; firstFrame < cursor; group++) {
     const frameCount = Math.min(SERVING_GROUP_FRAMES, cursor - firstFrame), end = firstFrame + frameCount;
@@ -105,7 +110,7 @@ function planGroups(input: ServingPlan): PlannedGroup[] {
       covered = to;
     }
     if (covered !== end) throw new Error('Sample serving group has a frame gap');
-    const layout = prepareShardedSamplePackLayout(input.grid, input.blockIds, frameCount * input.layers, MAX_V5_SHARD_BYTES);
+    const layout = layoutForFrames(frameCount);
     const shards = layout.shards.map((shard, blockShard): PlannedShard => ({
       group, firstFrame, frameCount, blockShard, firstBlock: shard.firstBlock, blockCount: shard.blockCount,
       storedCells: shard.byteLength / (layout.channelCount * CELL_BYTES), bytes: shard.byteLength,

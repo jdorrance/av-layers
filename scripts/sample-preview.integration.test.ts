@@ -47,8 +47,10 @@ it('persists a v5 build across local Worker sessions and serves its pinned artif
       expect(Buffer.from(await tile.arrayBuffer()).subarray(8, 12).toString()).toBe('WEBP');
       const observeProbe = vi.fn();
       await expect(probeApi({ baseUrl: origin, model, requireLive: false, observeProbe })).resolves.toMatchObject({ buildId });
-      expect(observeProbe).toHaveBeenCalledWith('sample', expect.objectContaining({ status: 200, elapsedMs: expect.any(Number),
-        r2Reads: expect.any(Number), r2Bytes: expect.any(Number), responseCache: expect.any(String) }));
+      for (const route of ['sample', 'samples']) {
+        expect(observeProbe).toHaveBeenCalledWith(route, expect.objectContaining({ status: 200, elapsedMs: expect.any(Number),
+          r2Reads: expect.any(Number), r2Bytes: expect.any(Number), responseCache: expect.any(String) }));
+      }
     } finally { await worker.stop(); }
   } finally {
     await local.dispose();

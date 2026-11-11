@@ -162,6 +162,8 @@ async function checkProduct(m: ManifestV5, product: ProductDefinition): Promise<
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
   const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
+  // Display labels are immutable publication metadata.
+  for (const layer of m.layers) expected.layers[layer].label = m.descriptors.layers[layer].label;
   if (m.descriptors.layers['precip-rate']?.methodId === PRECIPITATION_METHOD.id) {
     expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
     expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));

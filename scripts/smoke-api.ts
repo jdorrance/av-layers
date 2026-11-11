@@ -118,7 +118,7 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
   }
 }
 
-const measuredRoutes = ['latest', 'sample', 'profile', 'tile', 'provenance'] as const;
+const measuredRoutes = ['latest', 'sample', 'samples', 'profile', 'tile', 'provenance'] as const;
 type MeasuredRoute = typeof measuredRoutes[number];
 export interface ProbeReading {
   status: number; elapsedMs: number; responseCache?: string; r2Reads?: number; r2Bytes?: number;
