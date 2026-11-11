@@ -21,16 +21,4 @@ longitude offset. CAPE and gust labels follow the pinned layer descriptors.
 [`point-windgram.ts`](src/point-windgram.ts) owns the panel and its lifecycle.
 [`scalar-point.ts`](src/scalar-point.ts) renders the scalar fallback.
 
-`@av/windgram/model` converts validated point frames, builds a chart view, and
-reads weather at a selected height without a browser document.
-
-```ts
-import { buildWindgramView, createPointForecast, readWindgram } from '@av/windgram/model';
-
-const forecast = createPointForecast(build, point)(build.manifest.frames, framesById);
-const view = buildWindgramView(forecast, { unitSystem: 'metric', timeZone: forecast.site.timeZone });
-const reading = readWindgram(view, 0, 1500);
-```
-
-`readWindgram` accepts a zero-based chart hour and metres MSL.
-Each reading names its units and uses `null` for missing weather.
+The headless [model](src/model.ts) converts validated frames into a chart view.

@@ -28,9 +28,9 @@ import { serveProfile } from './profile';
 import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveSparseTiles, sha256 } from './coverage';
-import { type RequestMetrics, boundResponse, ResourceLimitError, waitFor, type WaitContext } from './resources';
+import { type RequestMetrics, boundResponse, r2WaitDuration, ResourceLimitError, waitFor, type WaitContext } from './resources';
 import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
-import { Problem, fail, query, response, json, finish, cached, validIp, handleError } from './http';
+import { Problem, fail, query, response, json, finish, cached, validIp, canceledRequest, handleError } from './http';
 import { apiDocs } from './api-docs';
 
 type Env = {
@@ -461,11 +461,12 @@ return {
     const start = performance.now();
     const metrics: RequestMetrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
     const complete = (result: Response) => {
-      const elapsed = performance.now() - start;
+      const finished = performance.now(), elapsed = finished - start;
+      const r2WaitMs = r2WaitDuration(metrics, finished);
       result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');
       const timing = [`worker;dur=${elapsed.toFixed(2)}`];
       if (metrics.admitMs !== undefined) timing.push(`admit;dur=${metrics.admitMs.toFixed(2)}`);
-      if (metrics.r2WaitMs !== undefined) timing.push(`r2;dur=${metrics.r2WaitMs.toFixed(2)}`);
+      if (r2WaitMs !== undefined) timing.push(`r2;dur=${r2WaitMs.toFixed(2)}`);
       result.headers.set('server-timing', timing.join(', '));
       for (const [name, value] of Object.entries({ 'r2-reads': metrics.r2Reads, 'r2-bytes': metrics.r2Bytes, 'cache-hits': metrics.cacheHits, coalesced: metrics.coalesced })) {
         result.headers.set(`x-av-${name}`, String(value));
@@ -474,7 +475,7 @@ return {
       if (env.AV_REQUEST_METRICS === 'true' || (!aborted && result.status >= 500)) {
         const method = ['GET', 'HEAD', 'OPTIONS'].includes(request.method) ? request.method : 'other';
         console.log(JSON.stringify({ event: 'api-request', deploymentId: env.AV_DEPLOYMENT_ID, method,
-          status: result.status, elapsedMs: Math.round(elapsed * 100) / 100, route: 'unmatched', responseCache: 'not-applicable', ...metrics,
+          status: result.status, elapsedMs: Math.round(elapsed * 100) / 100, route: 'unmatched', responseCache: 'not-applicable', ...metrics, r2WaitMs,
           ...(aborted ? { aborted: true } : {}) }));
       }
       return result;
@@ -513,10 +514,13 @@ return {
     let result: Response;
     try { result = boundResponse(finish(request, await app.fetch(req, env, observed as unknown as Parameters<typeof app.fetch>[2]))); }
     catch (error) {
-      const limited = error instanceof ResourceLimitError;
-      result = limited
-        ? reject(503, 'resource-limit', 'Serving resource budget exceeded')
-        : reject(500, 'internal-error', 'Internal server error');
+      const canceled = canceledRequest(request, error);
+      if (canceled) result = finish(request, canceled);
+      else if (error instanceof ResourceLimitError) result = reject(503, 'resource-limit', 'Serving resource budget exceeded');
+      else {
+        console.error('Worker response failed', error);
+        result = reject(500, 'internal-error', 'Internal server error');
+      }
     }
     return complete(result);
   }

@@ -4,7 +4,7 @@ import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
-import { buildWindgramView, createPointForecast, readWindgram } from '@av/windgram/model';
+import { buildWindgramView, createPointForecast, readWindgram } from './model.ts';
 import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';

@@ -17,10 +17,10 @@ import { failureReason } from './failure.js';
 import { sparseTerrainRefSchema, validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { stageSparsePreparedTerrain } from './terrain/staging.js';
 import type { ObjectStorage } from './storage.js';
-import { admitWholeDomain, planWholeDomainCapacity } from './whole-domain/capacity.js';
+import { admitWholeDomain, partitionForecastHours, planWholeDomainCapacity, wholeDomainCapacityInput, wholeDomainSurfaceLayers } from './whole-domain/capacity.js';
 import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
 import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
-import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, wholeDomainSurfaceLayers, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
+import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
 import { readFrameProvenance } from './frame-provenance.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { writeServingGroups } from './serving-groups.js';
@@ -177,12 +177,6 @@ async function stagePlanTerrainOnce(root: string, plan: BuildPlan, whole: WholeD
 }
 
 
-function partition(hours: readonly number[], count: number): number[][] {
-  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_FORECAST_SHARDS) throw new Error('Invalid forecast shard count');
-  const n = Math.min(count, hours.length);
-  return Array.from({ length: n }, (_, i) => hours.slice(Math.ceil(i * hours.length / n), Math.ceil((i + 1) * hours.length / n)));
-}
-
 /** Freeze the resolved cycle and complete-product admission. No provider data is acquired here. */
 export async function createBuildPlan(options: PlanOptions & ForecastInputs): Promise<BuildPlan> {
   options.signal?.throwIfAborted();
@@ -193,16 +187,10 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   const { product, provider, mask } = options, root = resolve(options.out);
   assertForecastInputs(mask, product);
   if (typeof options.cycle !== 'string' || !Number.isFinite(Date.parse(options.cycle))) throw new Error('A resolved forecast cycle is required');
-  const groups = partition(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? product.execution.shards);
+  const groups = partitionForecastHours(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? product.execution.shards);
   const execution = { zoom: product.maxNativeZoom, workers: product.execution.workers };
   const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
-  const capacity = admitWholeDomain({ product, plan: prepared.plan, nativeBlocks: prepared.native.mask.coverage.blockIds,
-    nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask, fine: prepared.fine.mask,
-    maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
-    auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
-    nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
-    frames: groups.flat().length, mapFrames: mapFrameCount({ ...product, frameHours: groups.flat() }), groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: prepared.nativeSurfaceLayers.length, fineLayers: prepared.fineSurfaceLayers.length,
-    columns: prepared.columns, terrainBytes: prepared.terrain.arrayBytes });
+  const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const frozen = frozenWholeDomain(prepared);
   const identity = await buildIdentity(product, prepared.native.hash, { wholeDomain:
@@ -241,7 +229,7 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   assertForecastInputs(mask, product);
   if (plan.model !== product.modelId || plan.providerId !== provider.id
       || !plan.buildId.startsWith(plan.createdAt.replace(/[-:]/g, '').slice(0, 15) + 'Z-')
-      || !same(plan.groups, partition(resolveProductFrameHours(product, mask, plan.cycle), plan.groups.length))) {
+      || !same(plan.groups, partitionForecastHours(resolveProductFrameHours(product, mask, plan.cycle), plan.groups.length))) {
     throw new Error('Invalid forecast plan identity or frame groups');
   }
   const age = Date.now() - Date.parse(plan.createdAt);
@@ -341,7 +329,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const entries = await readdir(localPath(root, 'shards'), { withFileTypes: true });
   const expected = plan.groups.map((_, i) => String(i));
   if (entries.some(entry => !entry.isDirectory()) || !same(entries.map(entry => entry.name).sort(), expected.sort())) throw new Error('Missing or extra forecast shard directories');
-  const whole = prepared, totalFrames = plan.groups.flat().length;
+  const whole = prepared;
   if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
   const receipts: WholeDomainReceipt[] = [];
   for (let shard = 0; shard < plan.groups.length; shard++) {
@@ -350,13 +338,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     assertWholeDomainReceipt(receipt, plan, shard, options.product, whole, options.provider.maxLevels);
     receipts.push(receipt);
   }
-  const capacityInput = { product: options.product, plan: whole.plan, nativeBlocks: whole.native.mask.coverage.blockIds,
-    nativeActive: whole.acquisitionActive.length, nativeMask: whole.native.mask, fine: whole.fine.mask, maxLevels: options.provider.maxLevels, retainedGeometryFields: options.provider.retainedGeometryFields ?? 0,
-    auxiliarySurfaceFields: options.provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: options.provider.auxiliaryLevelFields ?? 0,
-    nativeMaskBytes: whole.nativeMask.output.byteLength + whole.nativeMask.halo.byteLength + whole.nativeMask.tiles.byteLength,
-    frames: totalFrames, mapFrames: mapFrameCount({ ...options.product, frameHours: plan.groups.flat() }), groupFrames: Math.max(...plan.groups.map(group => group.length)), nativeLayers: whole.nativeSurfaceLayers.length, fineLayers: whole.fineSurfaceLayers.length,
-    columns: whole.columns, terrainBytes: whole.terrain.arrayBytes };
-  const { capacity, layouts, profileLayout } = planWholeDomainCapacity(capacityInput);
+  const { capacity, layouts, profileLayout } = planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, whole, plan.groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
     coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });

@@ -29,7 +29,11 @@ export async function monitor(baseUrl: string, model = DEFAULT_MODEL) {
   try {
     if (!getProduct(model)) throw new Error('Unknown forecast model');
     await probeApi({ baseUrl, model, requireLive: false,
-      observeProbe(route, reading) { probes[route] ??= reading; },
+      observeProbe(route, reading) {
+        const previous = probes[route];
+        const success = (status: number) => status >= 200 && status < 300;
+        if (!previous || (!success(previous.status) && success(reading.status))) probes[route] = reading;
+      },
       observeClient({ route, attempts, outcome, elapsedMs }) {
         const totals = clientRequests[route] ??= { count: 0, retries: 0, failed: 0, maxElapsedMs: 0 };
         totals.count++;

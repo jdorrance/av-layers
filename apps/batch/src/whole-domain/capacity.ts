@@ -1,10 +1,12 @@
-import { CELL_BYTES, coverageAtZoom, LAYERS, layerSurface, MAX_TILE_BYTES, RASTER_TILE_SIZE, renderedLayers, TERRAIN_COLUMN_METHOD, type CoverageMask, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
+import { CELL_BYTES, coverageAtZoom, LAYERS, layerSurface, mapFrameCount, MAX_FORECAST_SHARDS, MAX_TILE_BYTES, RASTER_TILE_SIZE, renderedLayers, TERRAIN_COLUMN_METHOD, type CoverageMask, type LayerId, type ProductDefinition, type SparseCoverageMask, type WholeDomainGrid } from '@av/contracts';
 import { prepareShardedSamplePackLayout, profileRecordBytes, type ShardedSamplePackLayout } from '@av/forecast';
 import type { PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, normalizedFrameBytes } from '../capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from '../raster-pool.js';
 import { ASSET_MAX_BYTES } from '../terrain/contract.js';
 import { samplePackWriterBufferBytes } from '../sample-pack-v5.js';
+import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/prepare.js';
+import type { ForecastProvider } from '../provider.js';
 
 export const MAX_PACKED_COLUMN_BYTES = 512 * 1024 * 1024;
 
@@ -27,6 +29,43 @@ export interface WholeDomainCapacityInput {
   fineLayers: number;
   columns: Pick<PreparedPackedTerrainColumns, 'byteLength' | 'workspaceBufferBytes' | 'workspaceObjectBudgetBytes' | 'outputBufferBytes'>;
   terrainBytes: number;
+}
+
+type CapacityGeometry = {
+  plan: WholeDomainGrid;
+  native: { mask: SparseCoverageMask };
+  nativeMask: CoverageMask;
+  fine: { mask: SparseCoverageMask };
+  acquisitionActive: Uint32Array;
+  columns: WholeDomainCapacityInput['columns'];
+  terrain?: { arrayBytes: number };
+};
+
+export function partitionForecastHours(hours: readonly number[], count: number): number[][] {
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_FORECAST_SHARDS) throw new Error('Invalid forecast shard count');
+  const n = Math.min(count, hours.length);
+  return Array.from({ length: n }, (_, i) => hours.slice(Math.ceil(i * hours.length / n), Math.ceil((i + 1) * hours.length / n)));
+}
+
+export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: LayerId[]; fine: LayerId[] } {
+  return { native: product.layers.filter(layer => layerSurface(layer) === 'native'), fine: product.layers.filter(layer => layerSurface(layer) === 'fine') };
+}
+
+export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields'>,
+  geometry: CapacityGeometry, groups: readonly (readonly number[])[]): WholeDomainCapacityInput & { mapFrames: number } {
+  const hours = groups.flat(), fine = geometry.fine.mask;
+  const nativeBlocks = geometry.native.mask.coverage.blockIds, dense = geometry.nativeMask;
+  const layers = wholeDomainSurfaceLayers(product);
+  return {
+    product, plan: geometry.plan, nativeBlocks, nativeActive: geometry.acquisitionActive.length,
+    nativeMask: geometry.native.mask, fine, columns: geometry.columns,
+    nativeMaskBytes: dense.output.byteLength + dense.halo.byteLength + dense.tiles.byteLength,
+    terrainBytes: geometry.terrain?.arrayBytes ?? fine.coverage.offsets[fine.coverage.blockIds.length]! * PREPARED_TERRAIN_CELL_BYTES,
+    maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+    auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
+    frames: hours.length, mapFrames: mapFrameCount({ ...product, frameHours: hours }),
+    groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: layers.native.length, fineLayers: layers.fine.length
+  };
 }
 
 export function wholeDomainSampleGroupLayouts(input: Omit<WholeDomainCapacityInput, 'nativeMask'>): { native: ShardedSamplePackLayout | null; fine: ShardedSamplePackLayout | null } {

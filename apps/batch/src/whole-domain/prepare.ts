@@ -1,9 +1,9 @@
-import { canonicalGridJson, layerSurface, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageMask, type LayerId, type ProductDefinition, type SparseCoverageMask, type SparseCoverageDescriptor, type WholeDomainGrid } from '@av/contracts';
+import { canonicalGridJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageMask, type LayerId, type ProductDefinition, type SparseCoverageMask, type SparseCoverageDescriptor, type WholeDomainGrid } from '@av/contracts';
 import { createHash } from 'node:crypto';
 import { preparePackedTerrainColumns, type PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { describeSparseCoverage, readSparseCoverage } from '../coverage.js';
 import type { SparseTerrainRef } from '../terrain/sparse.js';
-import { MAX_PACKED_COLUMN_BYTES } from './capacity.js';
+import { MAX_PACKED_COLUMN_BYTES, wholeDomainSurfaceLayers } from './capacity.js';
 import { acquisitionSupport, loadBundledFineCoverage, stageFineCoverage, wholeDomainPlan, writeNativeCoverage } from './coverage.js';
 import { loadWholeDomainTerrain, prepareWholeDomainTerrain, type WholeDomainTerrainOptions } from './terrain.js';
 
@@ -40,10 +40,6 @@ function sharedFineCoverage(fine: WholeDomainCoverage): WholeDomainCoverage {
   const coverage = fine.mask.coverage;
   return { ...fine, mask: { ...fine.mask, tiles: bytes(fine.mask.tiles), coverage: { ...coverage,
     blockIds: words(coverage.blockIds), offsets: words(coverage.offsets), output: bytes(coverage.output), halo: bytes(coverage.halo) } } };
-}
-
-export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: LayerId[]; fine: LayerId[] } {
-  return { native: product.layers.filter(layer => layerSurface(layer) === 'native'), fine: product.layers.filter(layer => layerSurface(layer) === 'fine') };
 }
 
 export async function prepareWholeDomain(options: {

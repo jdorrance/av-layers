@@ -361,7 +361,7 @@ describe('native profile API', () => {
       { BUCKET: f.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' }, { waitUntil: promise => owners.push(promise) });
     await reading; controller.abort();
     const response = await pending;
-    expect(response.status).toBe(503); await response.body?.cancel();
+    expect(response.status).toBe(499); await response.body?.cancel();
     expect(coverageMemory(f.bucket).leaseRefs).toBe(0);
     release(); await Promise.all(owners); assertReleased(f);
   });

@@ -283,8 +283,6 @@ function assertPackedLayoutBindingV5(
   if (nextBlock !== binding.blockIds.length || totalCells !== pack.storedCells) throw new Error('Incomplete sample block ranges');
 }
 
-/** One numerical surface; every surface inherits the parent model's frame axis. */
-/** Every admitted alpha build has one immutable provenance sidecar. */
 export function getProvenanceReference(
   manifest: Pick<ManifestV5, 'model' | 'buildId' | 'source'>
 ): { key: string; sha256: string } {

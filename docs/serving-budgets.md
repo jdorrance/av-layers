@@ -90,8 +90,8 @@ disconnects.
 Response headers `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`,
 `X-Av-Coalesced` and `X-Av-Response-Cache` report storage and cache activity.
 `Server-Timing` reports total Worker wall time, pinned manifest admission
-(`admit`), and the sum of R2 get and body waits owned by the request (`r2`).
-Parallel reads can overlap. The health probe records these spans when present.
+(`admit`), and elapsed time spent waiting on R2 reads owned by the request
+(`r2`). Overlapping waits count once. The health probe records these spans.
 Measure decode CPU locally because the deployed Worker clock advances on I/O.
 Set `AV_REQUEST_METRICS=true` for structured route logs.
 

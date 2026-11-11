@@ -10,7 +10,7 @@ import { createRenderer } from '../render.js';
 import { summarizeFields } from '../summary.js';
 import { fileSha256, localPath } from '../validate.js';
 import { forecastFrame, type BuildStamp, type ForecastInputs, type FrameBuildOptions } from '../frame-build.js';
-import { planWholeDomainCapacity, type WholeDomainCapacity } from './capacity.js';
+import { planWholeDomainCapacity, wholeDomainCapacityInput, type WholeDomainCapacity } from './capacity.js';
 import { writeFrameProvenance } from '../frame-provenance.js';
 import { createShardedSamplePackWriter } from '../sample-pack-v5.js';
 import type { ShardedSamplePackShard } from '../sample-pack-v5.js';
@@ -86,13 +86,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   };
   try {
     const nativeLayers = prepared.nativeSurfaceLayers.length, fineLayers = prepared.fineSurfaceLayers.length;
-    const nativeBlocks = prepared.native.mask.coverage.blockIds;
-    const capacityInput = { product, plan: prepared.plan, nativeBlocks, nativeActive: prepared.acquisitionActive.length, nativeMask: prepared.native.mask,
-      maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
-      auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
-      fine: prepared.fine.mask, nativeMaskBytes: prepared.nativeMask.output.byteLength + prepared.nativeMask.halo.byteLength + prepared.nativeMask.tiles.byteLength,
-      frames: options.hours?.length ?? product.frameHours.length, mapFrames: mapFrameCount({ ...product, frameHours: options.hours ?? product.frameHours }), nativeLayers, fineLayers, columns: prepared.columns,
-      terrainBytes: prepared.terrain.arrayBytes };
+    const capacityInput = wholeDomainCapacityInput(product, provider, prepared, [options.hours ?? product.frameHours]);
     const admission = planWholeDomainCapacity(capacityInput);
     if (admission.capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${admission.capacity.violations.join('; ')}`);
     phase = 'load-terrain';
@@ -106,7 +100,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const hours = options.hours ?? resolveProductFrameHours(product, mask, cycle, { ...deriveOptions, outputIndices });
     const mapFrames = mapFrameCount({ ...product, frameHours: hours });
     const { capacity, layouts, profileLayout } = hours.length === capacityInput.frames && mapFrames === capacityInput.mapFrames
-      ? admission : planWholeDomainCapacity({ ...capacityInput, frames: hours.length, mapFrames });
+      ? admission : planWholeDomainCapacity(wholeDomainCapacityInput(product, provider, prepared, [hours]));
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
     const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
       createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,

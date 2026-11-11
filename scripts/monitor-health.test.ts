@@ -41,6 +41,21 @@ it('keeps identity and expiry findings when a later serving probe fails', async 
   expect(result.clientRequests.sample).toEqual({ count: 1, retries: 1, failed: 1, maxElapsedMs: 250 });
 });
 
+it('reports the first successful response when a probe retries', async () => {
+  const manifest = fixture();
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(manifest.cycle));
+  vi.spyOn(serving, 'probeApi').mockImplementation(async options => {
+    options.observeManifest?.(manifest);
+    options.observeProbe?.('latest', { status: 503, elapsedMs: 20 });
+    options.observeProbe?.('latest', { status: 200, elapsedMs: 8, responseCache: 'hit' });
+    options.observeProbe?.('latest', { status: 200, elapsedMs: 11 });
+    return manifest;
+  });
+  const result = await monitor('https://api.example');
+  expect(result.healthy).toBe(true);
+  expect(result.probes.latest).toMatchObject({ status: 200, elapsedMs: 8, responseCache: 'hit' });
+});
+
 it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId', async product => {
   const manifest = fixture(product), cycle = Date.parse(manifest.cycle);
   const deadline = cycle + Math.min(product.freshness.maxCycleAgeHours, product.frameHours.at(-1)! - product.freshness.minHorizonHours) * HOUR;

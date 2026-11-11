@@ -5,8 +5,7 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./model": "./src/model.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@av/client": "workspace:*",

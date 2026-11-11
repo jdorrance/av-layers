@@ -932,7 +932,9 @@ describe('read-only worker', () => {
   });
   it('reports one structured event with a matched route and stable failure code', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(bucket, 'get').mockRejectedValueOnce(new Error('R2 backend timeout'));
+    const failure = new TypeError('R2 backend timeout');
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(bucket, 'get').mockRejectedValueOnce(failure);
     const res = await call('/v1/models/gfs/latest');
     expect(res.status).toBe(503);
     expect(res.headers.get('server-timing')).toMatch(/worker;dur=\d+\.\d+, r2;dur=\d+\.\d+/);
@@ -942,6 +944,7 @@ describe('read-only worker', () => {
       status: 503, problemCode: 'publication-unavailable', r2Reads: 1
     });
     expect(log.mock.calls[0][0]).not.toContain('R2 backend timeout');
+    expect(errorLog).toHaveBeenCalledExactlyOnceWith('Worker request failed', failure);
 
     log.mockClear();
     const path = `/v1/models/gfs/runs/${primary}/sample?lat=0&lon=0&layers=precip-rate`;
@@ -960,5 +963,32 @@ describe('read-only worker', () => {
     expect(JSON.parse(log.mock.calls[1][0])).toMatchObject({ route: 'unmatched', status: 405, problemCode: 'method-not-allowed' });
     expect(log.mock.calls.flat().join(' ')).not.toContain('lat=0');
     await Promise.all(pending.splice(0));
+  });
+
+  it('records client cancellation without a publication failure', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const controller = new AbortController();
+    const signal = controller.signal;
+    let release!: (value: null) => void, reading!: () => void;
+    const read = new Promise<null>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { reading = resolve; });
+    vi.spyOn(bucket, 'get').mockImplementationOnce(() => { reading(); return read; });
+    const path = `/tiles/gfs/${primary}/precip-rate/f001/0/0/0.webp`;
+    const pendingResponse = app.fetch(new Request(`https://api.example${path}`, { signal }), {
+      BUCKET: bucket as unknown as R2Bucket, SAMPLE_RATE_LIMITER: limiter, AV_REQUEST_METRICS: 'true'
+    }, ctx);
+    await started;
+    controller.abort(new DOMException('Map moved', 'AbortError'));
+    try {
+      const res = await pendingResponse;
+      expect(res.status).toBe(499);
+      expect(res.body).toBeNull();
+      expect(log).toHaveBeenCalledTimes(1);
+      const event = JSON.parse(log.mock.calls[0][0]);
+      expect(event).toMatchObject({ status: 499, aborted: true });
+      expect(event).not.toHaveProperty('problemCode');
+      expect(errorLog).not.toHaveBeenCalled();
+    } finally { release(null); await Promise.all(pending.splice(0)); }
   });
 });
