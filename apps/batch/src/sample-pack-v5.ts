@@ -95,6 +95,10 @@ function writerBuffers(layout: ShardedSamplePackLayout) {
     chunk: Math.min(sectionBytes, Math.floor(MAX_WRITE_CHUNK_BYTES / layout.recordBytes) * layout.recordBytes) };
 }
 
+export function samplePackAssemblyBufferBytes(shards: ShardedSamplePackLayout['shards']): number {
+  return shards.reduce((maximum, shard) => Math.max(maximum, shard.byteLength), 0);
+}
+
 /** Reusable block and chunk buffers retained by one serialized writer. */
 export function samplePackWriterBufferBytes(layout: ShardedSamplePackLayout): number {
   const buffers = writerBuffers(layout);
@@ -334,14 +338,17 @@ export function createShardedSamplePackWriter(
       return writeSource(channel, records, rawOptions);
     },
 
-    finish(): Promise<readonly ShardedSamplePackShard[]> {
+    /** Borrow the assembly buffer until finish resolves or rejects. */
+    finish(assembly?: Buffer): Promise<readonly ShardedSamplePackShard[]> {
       return run(async () => {
         if (closed || finished || failed) check();
         try { check(); } catch (error) { return fail(error); }
         if (completed !== layout.channelCount) return fail(new Error(`Incomplete sample pack: ${completed}/${layout.channelCount} channels`));
         const descriptors: ShardedSamplePackShard[] = [];
         try {
-          const workspace = Buffer.allocUnsafe(layout.shards.reduce((maximum, shard) => Math.max(maximum, shard.byteLength), 0));
+          const requiredBytes = samplePackAssemblyBufferBytes(layout.shards);
+          if (assembly && assembly.byteLength < requiredBytes) throw new RangeError('Sample shard assembly buffer is too small');
+          const workspace = assembly ?? Buffer.allocUnsafe(requiredBytes);
           for (let shard = 0; shard < layout.shards.length; shard++) {
             check();
             const descriptor = layout.shards[shard], shardBytes = descriptor.byteLength;

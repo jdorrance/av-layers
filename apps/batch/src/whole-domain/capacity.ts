@@ -4,7 +4,7 @@ import type { PreparedPackedTerrainColumns } from '@av/forecast/refinement';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, normalizedFrameBytes } from '../capacity.js';
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from '../raster-pool.js';
 import { ASSET_MAX_BYTES } from '../terrain/contract.js';
-import { samplePackWriterBufferBytes } from '../sample-pack-v5.js';
+import { samplePackAssemblyBufferBytes, samplePackWriterBufferBytes } from '../sample-pack-v5.js';
 import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/prepare.js';
 import type { ForecastProvider } from '../provider.js';
 
@@ -117,7 +117,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   const profileBytes = (profileLayout?.storedCells ?? 0) * frames * profileRecordBytes(maxLevels);
   const numericBytes = nativeSampleBytes + fineSampleBytes + profileBytes;
   const shards = [...(layouts.native?.shards ?? []), ...(layouts.fine?.shards ?? []), ...(profileLayout?.shards ?? [])];
-  const largestShard = shards.reduce((max, shard) => Math.max(max, shard.byteLength), 0);
+  const largestShard = samplePackAssemblyBufferBytes(shards);
   const largestShardBlocks = shards.reduce((max, shard) => Math.max(max, shard.blockCount), 0);
   const auxiliarySurface = input.auxiliarySurfaceFields ?? 0, auxiliaryLevels = input.auxiliaryLevelFields ?? 0;
   if (![auxiliarySurface, auxiliaryLevels].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 32)) throw new RangeError('Invalid auxiliary field capacity');
@@ -185,5 +185,5 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     nativeSampleBytes, fineSampleBytes, profileBytes, numericBytes, rasterWorkers, deriveWorkers, prefetchFrameCount,
     deriveFrameCopyBytes: deriveWorkers ? deriveJobCopyBytes + Math.max(0, BUILD_BUDGETS.peakRssBytes - estimatedPeakBytes) : 0,
     rasterSharedInputBytes: sharedInputBytes, workingSet, estimatedPeakBytes, violations };
-  return { capacity, layouts, profileLayout };
+  return { capacity, layouts, profileLayout, assemblyBufferBytes: largestShard };
 }
