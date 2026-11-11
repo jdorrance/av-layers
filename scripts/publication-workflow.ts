@@ -16,6 +16,7 @@ import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { isTransientStorageError, r2Storage, type ObjectStorage } from '../apps/batch/src/storage.js';
 import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/validate.js';
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
+import { completeForecastControlShard, downloadForecastControlReceipts, forecastPlanSignal } from './forecast-control.js';
 import { terrainCatalogInput } from './terrain-inputs.js';
 
 const TERRAIN_ATTEMPTS = 3;
@@ -262,7 +263,10 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
       delete: async () => { throw new Error('Shard storage cannot delete objects'); }
     };
     const shardSetupWallMs = Date.now() - started;
-    await buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal, store: scopedStore });
+    const build = () => buildForecastShard('output/plan.json', shard, { out: 'output', cacheDir: `.cache/${authority.model}`, signal: controller.signal, store: scopedStore });
+    if (scopedStore) await completeForecastControlShard(scopedStore, plan, shard, join('output', 'shards', String(shard), 'receipt.json'), build,
+      forecastPlanSignal(plan, controller.signal), process.env.RETAIN_FULL_ARTIFACTS === 'true' ? 'output' : undefined);
+    else await build();
     await writeFile(join('output', 'shards', String(shard), 'workflow-metrics.json'), JSON.stringify({ shardSetupWallMs, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
     logForecastEvent(authority, started, { event: 'forecast-stage', phase: 'shard', buildId, shard, outcome: 'complete' });
   } catch (error) {
@@ -281,6 +285,7 @@ export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
     const { finalizeForecastBuild, readBuildPlan } = await import('../apps/batch/src/parallel.js');
     const plan = await readBuildPlan(join(root, 'plan.json'));
     identifyBuild(plan.buildId);
+    await downloadForecastControlReceipts(store, root, plan, forecastPlanSignal(plan, signal));
     await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: plan.deadlineAt, receiptsOnly: true }) });
   }, store);
 }
@@ -405,7 +410,7 @@ export function forecastArtifactRevision(raw: unknown, repository: string, runId
   const run = object(raw);
   if (!run || !Number.isSafeInteger(run.id) || String(run.id) !== runId || !/^[1-9]\d*$/.test(runId)
       || run.path !== '.github/workflows/forecast.yml' || run.head_branch !== 'main' || typeof run.head_sha !== 'string' || !/^[a-f0-9]{40}$/.test(run.head_sha)
-      || (run.event !== 'schedule' && run.event !== 'workflow_dispatch') || run.status !== 'completed' || !Number.isSafeInteger(run.run_attempt) || (run.run_attempt as number) < 1
+      || (run.event !== 'schedule' && run.event !== 'workflow_dispatch' && run.event !== 'repository_dispatch') || run.status !== 'completed' || !Number.isSafeInteger(run.run_attempt) || (run.run_attempt as number) < 1
       || object(run.repository)?.full_name !== repository || object(run.head_repository)?.full_name !== repository) throw new Error('Source run is not a completed authorized main forecast');
   return run.head_sha;
 }

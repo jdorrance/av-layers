@@ -88,7 +88,10 @@ describe('declarative workflows', () => {
   });
 
   it('scopes terrain, planning, publication and maintenance credentials to the selected environment', () => {
-    expect(workflow('forecast.yml')['run-name']).toBe("Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}");
+    const forecast = workflow('forecast.yml');
+    expect(record(forecast.on).repository_dispatch).toEqual({ types: ['upstream-cycle-ready'] });
+    const dispatch = list(record(record(forecast.jobs).select).steps).map(record).find(step => step.id === 'dispatch');
+    expect(dispatch).toMatchObject({ if: "github.event_name == 'repository_dispatch'", run: 'node --import tsx scripts/forecast-dispatch.ts' });
     expect(workflow('maintenance.yml')['run-name']).toBe("Maintenance ${{ inputs.environment || 'production' }} ${{ inputs.model }} ${{ inputs.action }}");
     const forecastJobs = record(workflow('forecast-model.yml').jobs);
     for (const name of ['terrain', 'prepare', 'build-publish']) {
@@ -102,7 +105,8 @@ describe('declarative workflows', () => {
     const caller = record(record(workflow('forecast.yml').jobs).forecast), lock = record(caller.concurrency);
     expect(workflow('forecast.yml').concurrency).toBeUndefined();
     expect(workflow('forecast-model.yml').concurrency).toBeUndefined();
-    expect(workflow('maintenance.yml').concurrency).toEqual({ ...lock, group: String(lock.group).replace('matrix.model', 'inputs.model') });
+    expect(lock.group).toBe('forecast-${{ needs.select.outputs.environment }}-${{ matrix.model }}');
+    expect(workflow('maintenance.yml').concurrency).toEqual({ ...lock, group: "forecast-${{ inputs.environment || 'production' }}-${{ inputs.model }}" });
     for (const name of ['forecast.yml', 'health.yml', 'maintenance.yml']) {
       const model = record(record(record(record(workflow(name).on).workflow_dispatch).inputs).model);
       expect(model).toMatchObject({ type: 'string', required: true });
@@ -124,22 +128,22 @@ describe('declarative workflows', () => {
     expect(shard.environment).toBe('${{ inputs.environment }}');
     expect(shard.permissions).toEqual({ contents: 'read' });
     const caller = record(record(workflow('forecast.yml').jobs).forecast);
-    expect(caller.concurrency).toEqual({ group: "forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}", 'cancel-in-progress': false });
+    expect(caller.concurrency).toEqual({ group: 'forecast-${{ needs.select.outputs.environment }}-${{ matrix.model }}', 'cancel-in-progress': false });
     expect(record(caller.with).parallelism).toBe('${{ matrix.parallelism }}');
     const selection = list(record(record(workflow('forecast.yml').jobs).select).steps).map(record).find(step => step.id === 'models')!;
     expect(record(selection.env).MODEL_SCHEDULE).toBe("${{ github.event.schedule || '' }}");
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY']) expect(env[key]).toBeUndefined();
     for (const env of [record(forecast.env), record(shard.env)]) for (const key of ['R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'FORECAST_SHARD_CREDENTIAL_KEY']) expect(env[key]).toBeUndefined();
     const shardBuild = list(shard.steps).map(record).find(step => step.run === 'pnpm operations forecast-shard')!;
-    const selected = '${{ secrets[needs.prepare.outputs.credential-secret] }}';
+    const selected = '${{ secrets.FORECAST_SHARD_CREDENTIAL_KEY }}';
     expect(record(shardBuild.env)).toEqual({ FORECAST_SHARD_CREDENTIAL_KEY: selected });
     const prepareStep = list(record(jobs.prepare).steps).map(record).find(step => step.run === 'pnpm operations forecast-plan')!;
-    expect(record(prepareStep.env)).toEqual({ CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}', GH_CREDENTIAL_ISSUER_TOKEN: '${{ secrets.GH_CREDENTIAL_ISSUER_TOKEN }}' });
+    expect(record(prepareStep.env)).toEqual({ CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}', FORECAST_SHARD_CREDENTIAL_KEY: selected });
     for (const env of [record(forecast.env), record(shard.env), record(publisher.env), record(prepare.env)]) {
       for (const key of ['CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN']) expect(env[key]).toBeUndefined();
       expect(Object.keys(env).filter(key => /^FORECAST_.+_SHARD_CREDENTIAL_KEY$/.test(key))).toEqual([]);
     }
-    expect(record(jobs.prepare).outputs).toEqual({ ready: '${{ steps.plan.outputs.ready }}', shards: '${{ steps.plan.outputs.shards }}', artifact: '${{ steps.plan.outputs.artifact }}', 'credential-secret': '${{ steps.plan.outputs.credential-secret }}' });
+    expect(record(jobs.prepare).outputs).toEqual({ ready: '${{ steps.plan.outputs.ready }}', shards: '${{ steps.plan.outputs.shards }}', artifact: '${{ steps.plan.outputs.artifact }}' });
     expect(record(publisher.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeUndefined();
     for (const step of list(publisher.steps).map(record)) expect(step.env && record(step.env).FORECAST_SHARD_CREDENTIAL_KEY).toBeFalsy();
     expect(publisher.needs).toEqual(['prepare', 'shard']);
@@ -148,12 +152,8 @@ describe('declarative workflows', () => {
     expect(record(publisher.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
     const steps = list(publisher.steps).map(record);
     expect(steps.find(step => step.run === 'pnpm operations forecast')?.if).toBeUndefined();
-    const download = steps.find(step => step.name === 'Download forecast shards')!;
-    expect(download.uses).toBe('actions/download-artifact@v4');
-    expect(download.if).toBe("${{ !inputs['resume-run-id'] }}");
-    expect(record(download.with)).toEqual({ pattern: '${{ needs.prepare.outputs.artifact }}-shard-*', 'merge-multiple': true, path: 'output/shards' });
-    const shardUpload = list(shard.steps).map(record).find(step => step.name === 'Upload completed shard')!;
-    expect(String(record(shardUpload.with).path).trim()).toBe('output/shards/');
+    expect(steps.filter(step => step.uses === 'actions/download-artifact@v4' && step.name !== 'Download retained shard payloads').map(step => step.name)).toEqual(['Download build plan']);
+    expect(list(shard.steps).map(record).some(step => step.name === 'Upload completed shard')).toBe(false);
     const plan = list(record(jobs.prepare).steps).map(record).find(step => step.uses === 'actions/upload-artifact@v4' && step.if === "steps.plan.outputs.ready == 'true'")!;
     expect(String(record(plan.with).path)).toContain('output/coverage/');
     expect(String(record(plan.with).path)).toContain('output/shard-credentials.json');

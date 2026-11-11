@@ -1,10 +1,12 @@
 name: Forecast
-run-name: Forecast ${{ inputs.environment || 'production' }} ${{ inputs.model || 'all' }}
+run-name: Forecast ${{ github.event_name == 'repository_dispatch' && 'external cycle' || format('{0} {1}', inputs.environment || 'production', inputs.model || 'all') }}
 on:
   schedule:
     - cron: 35 4,10,16,22 * * *
     - cron: 20 5,11,17,23 * * *
     - cron: 45 3,9,15,21 * * *
+  repository_dispatch:
+    types: [upstream-cycle-ready]
   workflow_dispatch:
     inputs:
       environment:
@@ -49,16 +51,22 @@ jobs:
     outputs:
       matrix: ${{ steps.models.outputs.matrix }}
       model-parallelism: ${{ steps.models.outputs.model-parallelism }}
+      environment: ${{ steps.dispatch.outputs.environment || inputs.environment || 'production' }}
+      cycle: ${{ steps.dispatch.outputs.cycle || inputs.cycle || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - name: Admit external cycle
+        id: dispatch
+        if: github.event_name == 'repository_dispatch'
+        run: node --import tsx scripts/forecast-dispatch.ts
       - name: Select forecast models
         id: models
         env:
-          MODEL_SELECTION: ${{ inputs.model || 'all' }}
+          MODEL_SELECTION: ${{ steps.dispatch.outputs.model || inputs.model || 'all' }}
           MODEL_SCHEDULE: ${{ github.event.schedule || '' }}
         run: node --import tsx scripts/workflow-models.ts --forecast
   forecast:
@@ -69,14 +77,14 @@ jobs:
       max-parallel: ${{ fromJSON(needs.select.outputs.model-parallelism) }}
       matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     concurrency:
-      group: forecast-${{ inputs.environment || 'production' }}-${{ matrix.model }}
+      group: forecast-${{ needs.select.outputs.environment }}-${{ matrix.model }}
       cancel-in-progress: false
     uses: ./.github/workflows/forecast-model.yml
     with:
-      environment: ${{ inputs.environment || 'production' }}
+      environment: ${{ needs.select.outputs.environment }}
       model: ${{ matrix.model }}
       parallelism: ${{ matrix.parallelism }}
-      cycle: ${{ inputs.cycle || '' }}
+      cycle: ${{ needs.select.outputs.cycle }}
       allow-same-cycle: ${{ inputs['allow-same-cycle'] || false }}
       resume-run-id: ${{ inputs['resume-run-id'] || '' }}
       retain-full-artifacts: ${{ inputs['retain-full-artifacts'] || false }}

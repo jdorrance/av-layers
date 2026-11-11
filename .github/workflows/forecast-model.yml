@@ -79,7 +79,6 @@ jobs:
       ready: ${{ steps.plan.outputs.ready }}
       shards: ${{ steps.plan.outputs.shards }}
       artifact: ${{ steps.plan.outputs.artifact }}
-      credential-secret: ${{ steps.plan.outputs.credential-secret }}
     env: *plan-env
     steps:
       - uses: actions/checkout@v4
@@ -91,7 +90,7 @@ jobs:
         id: plan
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          GH_CREDENTIAL_ISSUER_TOKEN: ${{ secrets.GH_CREDENTIAL_ISSUER_TOKEN }}
+          FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets.FORECAST_SHARD_CREDENTIAL_KEY }}
         run: pnpm operations forecast-plan
       - name: Share immutable build plan
         uses: actions/upload-artifact@v4
@@ -146,22 +145,14 @@ jobs:
           path: output
       - name: Build forecast shard
         env:
-          FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets[needs.prepare.outputs.credential-secret] }}
+          FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets.FORECAST_SHARD_CREDENTIAL_KEY }}
         run: pnpm operations forecast-shard
-      - name: Upload completed shard
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ needs.prepare.outputs.artifact }}-shard-${{ matrix.shard.id }}
-          overwrite: true
-          path: |
-            output/shards/
-          if-no-files-found: error
-          retention-days: 1
       - name: Upload full shard payload on request
         uses: actions/upload-artifact@v4
         if: ${{ inputs['retain-full-artifacts'] }}
         with:
           name: ${{ needs.prepare.outputs.artifact }}-payload-${{ matrix.shard.id }}
+          overwrite: true
           path: output/builds/
           if-no-files-found: error
           retention-days: 1
@@ -203,13 +194,6 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: output
-      - name: Download forecast shards
-        uses: actions/download-artifact@v4
-        if: ${{ !inputs['resume-run-id'] }}
-        with:
-          pattern: ${{ needs.prepare.outputs.artifact }}-shard-*
-          merge-multiple: true
-          path: output/shards
       - name: Publish forecast
         env:
           FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT: ${{ steps.downloads.outputs.started }}
