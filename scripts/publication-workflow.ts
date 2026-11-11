@@ -6,7 +6,7 @@ import { getProduct } from '@av/contracts/models';
 import { manifestV5Schema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5 } from '@av/contracts';
 import { buildIdentity } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
-import { checkPerformance } from '../apps/batch/src/capacity.js';
+import { checkPerformance, forecastPlanDeadline } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext, type PublicationAuthority } from '../apps/batch/src/authority.js';
 import { failureReason } from '../apps/batch/src/failure.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
@@ -292,7 +292,7 @@ export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
     const plan = await readBuildPlan(join(root, 'plan.json'));
     identifyBuild(plan.buildId);
     await downloadForecastControlReceipts(store, root, plan, forecastPlanSignal(plan, signal));
-    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: plan.deadlineAt, receiptsOnly: true }) });
+    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: new Date(forecastPlanDeadline(plan)).toISOString(), receiptsOnly: true }) });
   }, store);
 }
 
@@ -389,14 +389,16 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
         || plan.createdAt !== manifest.createdAt || !sameJsonValue(plan.recipe, manifest.recipe)) {
       throw new Error('Resume plan differs from the retained whole-domain manifest');
     }
-    const committedOnly = Boolean(plan.deadlineAt && Date.now() >= Date.parse(plan.deadlineAt));
+    const planDeadline = forecastPlanDeadline(plan);
+    const committedOnly = Date.now() >= planDeadline;
     if (committedOnly) {
       const pointer = (await readPointer(store, model, signal)).pointer;
       const retained = pointer?.retained.find(item => item.buildId === manifest.buildId);
       if (pointer?.latestBuildId !== manifest.buildId || retained?.manifestKey !== `builds/${model}/${manifest.buildId}/manifest.json` || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Forecast publication deadline exceeded');
     }
-    const deadlineAt = committedOnly ? new Date(Date.now() + 5 * 60_000).toISOString() : plan.deadlineAt;
-    const deadlineSignal = deadlineAt ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Date.parse(deadlineAt) - Date.now()))]) : signal;
+    const deadline = committedOnly ? Date.now() + 5 * 60_000 : planDeadline;
+    const deadlineAt = new Date(deadline).toISOString();
+    const deadlineSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
     const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
     let receiptsOnly = false;
     if (grouped) for (const object of forecastObjects(manifest)) {

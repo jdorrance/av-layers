@@ -63,11 +63,11 @@ UTC cycle. Pass
 successful run.
 
 Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
-(15m timeout), parallel `forecast-shard` jobs (60m timeout), and
-`forecast` (`build-publish`, 60m timeout) to assemble, validate, publish to R2,
-clean up expired builds, and verify live API serving. Terrain preparation has its
-own operation budget per attempt from [build budgets](../apps/batch/src/capacity.ts);
-forecast elapsed time starts with planning.
+(15m timeout), parallel `forecast-shard` jobs (180m timeout), and
+`forecast` (`build-publish`, 180m timeout) to assemble, validate, publish to R2,
+clean up expired builds, and verify live API serving. A new plan has three hours
+from creation, including runner queues. Existing plans keep their original
+deadline. Terrain preparation has a separate 90-minute limit per attempt.
 
 Each model's `forecast.window` supplies its selected hours and `framesPerShard`.
 The registry derives the shard
@@ -87,8 +87,9 @@ worker ceilings and frame groups for their workers.
 
 Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
 changes reuse the same terrain cache and preserve retained builds.
-The [build budgets](../apps/batch/src/capacity.ts) gate the complete
-forecast's native and fine render work before weather acquisition.
+The [build budgets](../apps/batch/src/capacity.ts) admit a 2 GiB planned working
+set and accept up to 4 GiB of observed process RSS. Worker selection and
+compaction use the working-set limit.
 
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the run revision remains current main, the plan meets the

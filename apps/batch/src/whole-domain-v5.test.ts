@@ -515,7 +515,7 @@ describe('whole-domain v5 production', () => {
     expect(surface(serial, 'fine').layers).toEqual(['usable-lift-msl', 'usable-lift-agl']);
     expect(surface(serial, 'fine').terrain).toMatchObject({ coverageHash: surface(serial, 'fine').coverage.hash, layoutVersion: 1 });
     expect(serial.metrics.capacity).toMatchObject({ rasterWorkers: 0 });
-    expect((serial.metrics.capacity as { estimatedPeakBytes: number }).estimatedPeakBytes).toBeLessThan(2 * 1024 ** 3);
+    expect((serial.metrics.capacity as { estimatedPeakBytes: number }).estimatedPeakBytes).toBeLessThan(BUILD_BUDGETS.workingSetBytes);
     expect(checkPerformance(serial)).toMatchObject({ passed: true, observed: { tiles: 9 } });
 
     const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2 });
@@ -587,7 +587,7 @@ describe('whole-domain v5 production', () => {
     const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [2], layers: [...product.layers, 'sfc-temp-c'] };
     const plan = await createBuildPlan({ out, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 1, store });
     vi.mocked(createLocalFileReader).mockClear(); vi.mocked(validateSampleGroup).mockClear();
-    const usage = process.resourceUsage(), core = 128 * 1024 ** 2, peak = excess ? BUILD_BUDGETS.peakRssBytes + 1024 : 1024 ** 3;
+    const usage = process.resourceUsage(), core = 128 * 1024 ** 2, peak = excess ? BUILD_BUDGETS.peakRssBytes + 1024 : BUILD_BUDGETS.workingSetBytes + 512 * 1024 ** 2;
     const buffers: ArrayBufferLike[] = [], hashes = new Set<string>();
     let measured = core;
     const rss = vi.spyOn(process, 'resourceUsage').mockImplementation(() => ({ ...usage, maxRSS: measured / 1024 }));
@@ -799,11 +799,11 @@ describe('whole-domain v5 production', () => {
     const manifest = await builtManifest();
     const invalid = structuredClone(manifest);
     invalid.metrics.elapsedMs = -1;
-    invalid.metrics.peakRssBytes = 3 * 1024 ** 3;
+    invalid.metrics.peakRssBytes = BUILD_BUDGETS.peakRssBytes + 1;
     invalid.metrics.renderer = { native: { tiles: -1 }, fine: { tiles: 4 } };
     const result = checkPerformance(invalid);
     expect(result.passed).toBe(false);
-    expect(result.failures).toEqual(expect.arrayContaining(['missing or invalid elapsedMs', 'peakRssBytes: 3221225472 exceeds 2147483648', 'missing or invalid renderer tile counts']));
+    expect(result.failures).toEqual(expect.arrayContaining(['missing or invalid elapsedMs', `peakRssBytes: ${invalid.metrics.peakRssBytes} exceeds ${BUILD_BUDGETS.peakRssBytes}`, 'missing or invalid renderer tile counts']));
   });
 
   it('counts distinct native and fine raster work for direct and assembled v5 builds', async () => {
@@ -1129,7 +1129,7 @@ describe('whole-domain v5 production', () => {
     const copyBytes = activeBytes + nativeCells * 10;
     expect(threaded.workingSet.deriveSharedInputs).toBe(input.terrainBytes + fine.coverage.blockIds.byteLength
       + fine.coverage.offsets.byteLength + fine.coverage.output.byteLength + fine.coverage.halo.byteLength + activeBytes + copyBytes);
-    expect(threaded.deriveFrameCopyBytes).toBe(copyBytes + BUILD_BUDGETS.peakRssBytes - threaded.estimatedPeakBytes);
+    expect(threaded.deriveFrameCopyBytes).toBe(copyBytes + BUILD_BUDGETS.workingSetBytes - threaded.estimatedPeakBytes);
     expect(admitted.tiles).toBe(product.frameHours.length * 3);
     expect(admitted.estimatedPeakBytes).toBe(Object.values(admitted.workingSet).reduce((sum, value) => sum + value, 0));
     expect(fine.coverage.offsets[fine.coverage.blockIds.length]).toBe(180);
@@ -1140,10 +1140,10 @@ describe('whole-domain v5 production', () => {
     expect(admitted.workingSet.diagnostics).toBe(cells * 9);
     expect(admitted.prefetchFrameCount).toBe(1);
     const singleFrame = admitWholeDomain({ ...input, columns: { ...columns,
-      byteLength: columns.byteLength + BUILD_BUDGETS.peakRssBytes - admitted.estimatedPeakBytes + 1 } });
+      byteLength: columns.byteLength + BUILD_BUDGETS.workingSetBytes - admitted.estimatedPeakBytes + 1 } });
     expect(singleFrame.prefetchFrameCount).toBe(0);
     expect(singleFrame.workingSet.prefetchFrame).toBe(0);
-    expect(singleFrame.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+    expect(singleFrame.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);
     expect(singleFrame.violations).toEqual([]);
     const sparseAdmission = admitWholeDomain({ ...input, nativeActive: 1 });
     expect(sparseAdmission.workingSet.nativeFields).toBe(admitted.workingSet.nativeFields);

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getProduct, MODEL_IDS } from '@av/contracts/models';
 import { canonicalGridJson, createSparseCoverage, encodeSparseCoverage, expectedTiles, manifestV5Schema, type Manifest, type ManifestV5, type ModelPointer } from '@av/contracts';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
-import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
+import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from '../apps/batch/src/capacity.js';
 import { localPath } from '../apps/batch/src/validate.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn(), stageControl: vi.fn() }));
 vi.mock('./forecast-control.js', async importOriginal => ({
@@ -463,9 +463,14 @@ it.each(['zoom', 'tile bytes'])('rejects nonnumeric resume coverage %s despite a
   expect(fake.identity).toHaveBeenCalledOnce();
 });
 
+function mockResumePlan(plan: BuildPlan, now = Date.parse(plan.createdAt) + 1000) {
+  vi.spyOn(Date, 'now').mockReturnValue(now);
+  fake.readPlan.mockResolvedValue(plan);
+}
+
 it('resumes matching v5 artifacts with measured metrics within budget', async () => {
   const { manifest, plan, files } = v5ResumeFixture();
-  fake.readPlan.mockResolvedValue(plan);
+  mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await resumePublication(revision);
@@ -473,10 +478,12 @@ it('resumes matching v5 artifacts with measured metrics within budget', async ()
   expect(fake.write).toHaveBeenCalledWith(`output/builds/gfs/${manifest.buildId}/publication.json`, expect.stringContaining('"resumedFromRun": "100"'));
 });
 
-it.each([true, false])('allows expired-deadline recovery only for an authoritative committed build (%s)', async committed => {
+it.each([true, false].flatMap(committed => [true, false].map(explicit => ({ committed, explicit }))))(
+  'allows expired legacy recovery only for a committed build (committed=$committed, explicit deadline=$explicit)', async ({ committed, explicit }) => {
   const { manifest, plan, files } = v5ResumeFixture();
-  plan.deadlineAt = '2000-01-01T00:00:00.000Z';
-  fake.readPlan.mockResolvedValue(plan);
+  const deadline = Date.parse(plan.createdAt) + LEGACY_FORECAST_ELAPSED_MS;
+  if (explicit) plan.deadlineAt = new Date(deadline).toISOString();
+  mockResumePlan(plan, deadline + 1000);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   if (committed) fake.pointer.mockResolvedValueOnce({ etag: 'committed', pointer: { version: 1, model: manifest.model, latestBuildId: manifest.buildId,
@@ -498,7 +505,7 @@ it('delegates frame-group receipt validation to publication without an earlier d
     surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards: [{ ...shard, key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g0-b0.bin`, group: 0, firstFrame: 0, frameCount: manifest.frames.length, blockShard: 0 }] };
   }
   files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
-  fake.readPlan.mockResolvedValue(plan);
+  mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await resumePublication(revision);
@@ -522,7 +529,7 @@ it('rejects a prebranch grouped artifact at the recipe guard before receipt or n
   }
   files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
   fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
-  fake.readPlan.mockResolvedValue(plan);
+  mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await expect(resumePublication(revision)).rejects.toThrow('Resume recipe differs from current code/configuration');
@@ -557,7 +564,7 @@ it('resumes frame-group local payloads without remote shard receipts', async () 
     files.set(localPath('output', artifact.tilesKey), bytes);
   }
   files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
-  fake.readPlan.mockResolvedValue(plan);
+  mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   fake.verifyReceipts.mockRejectedValueOnce(new Error('missing shard receipts'));
@@ -568,11 +575,11 @@ it('resumes frame-group local payloads without remote shard receipts', async () 
 
 it.each([
   { defect: 'elapsed', metrics: { elapsedMs: BUILD_BUDGETS.elapsedMs + 1, peakRssBytes: 100_000_000, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'elapsedMs' },
-  { defect: 'rss', metrics: { elapsedMs: 1000, peakRssBytes: 3 * 1024 ** 3, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'peakRssBytes' },
+  { defect: 'rss', metrics: { elapsedMs: 1000, peakRssBytes: BUILD_BUDGETS.peakRssBytes + 1, tiles: [1, 1, 1, 1, 1, 1, 1, 1] }, message: 'peakRssBytes' },
   { defect: 'invalid', metrics: { elapsedMs: -1, peakRssBytes: 0 }, message: 'missing or invalid' }
 ] as const)('rejects v5 publication with $defect budget metrics', async ({ metrics, message }) => {
   const { manifest, plan, files } = v5ResumeFixture(metrics);
-  fake.readPlan.mockResolvedValue(plan);
+  mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await expect(resumePublication(revision)).rejects.toThrow(message);

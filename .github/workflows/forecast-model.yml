@@ -121,7 +121,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.ready == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     environment: ${{ inputs.environment }}
     permissions:
       contents: read
@@ -172,7 +172,7 @@ jobs:
     needs: [prepare, shard]
     if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (inputs['resume-run-id'] || (needs.prepare.outputs.ready == 'true' && needs.shard.result == 'success')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     environment: ${{ inputs.environment }}
     env:
       API_BASE_URL: ${{ vars.API_BASE_URL }}

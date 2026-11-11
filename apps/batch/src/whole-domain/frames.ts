@@ -50,6 +50,7 @@ export interface WholeDomainFrameResult {
 export interface WholeDomainFrameOptions extends FrameBuildOptions, ForecastInputs, BuildStamp {
   prepared: WholeDomainPrepared;
   hours?: readonly number[];
+  deadlineAt?: number;
   journalPrefix: string;
   surfaceTarget?: (surface: 'native' | 'fine') => string;
   sampleGroup?: number;
@@ -60,6 +61,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   const localController = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, localController.signal]) : localController.signal;
   const { product, mask, provider, prepared, buildId } = options;
+  const deadlineAt = options.deadlineAt ?? Date.parse(options.createdAt) + BUILD_BUDGETS.elapsedMs;
   const root = resolve(options.out), started = Date.now(), cacheDir = options.cacheDir ?? join(root, '.cache', provider.id);
   const deriveOptions = { daylightOnly: options.deriveOptions?.daylightOnly };
   const prefix = `builds/${product.modelId}/${buildId}`;
@@ -146,7 +148,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     for (let ordinal = 0; ordinal < hours.length; ordinal++) {
       const hour = hours[ordinal]!;
       frameHour = hour; phase = 'acquire'; signal.throwIfAborted();
-      if (Date.now() - Date.parse(options.createdAt) > BUILD_BUDGETS.elapsedMs) throw new Error('Build exceeded elapsedMs budget');
+      if (Date.now() >= deadlineAt) throw new Error('Build exceeded elapsedMs budget');
       const tAcquire = Date.now();
       const { frame, workMs: acquireTotalWorkMs } = await (prefetch ?? acquire(hour, ordinal));
       prefetch = undefined;
@@ -171,7 +173,6 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       if (inMap && !nativeFields['usable-lift-msl']) throw new Error('Whole-domain terrain derivation requires native MSL flags');
       const deriveNativeWallMs = Date.now() - tDerive, tFine = Date.now();
       const nativeClearance = inMap ? { validTime: descriptor.validTime, grid: mask.grid, diagnostics: diagnostics!, flags: nativeFields['usable-lift-msl']!.flags } : undefined;
-      const deadlineAt = Date.parse(options.createdAt) + BUILD_BUDGETS.elapsedMs;
       const fineFields = inMap ? (derivePool
         ? await derivePool.derive({ generation: completedFrames, frame, time: descriptor, daylightOnly: deriveOptions.daylightOnly, nativeClearance, deadlineAt })
         : await prepared.columns.deriveAsync(frame, terrainData!, descriptor, { daylightOnly: deriveOptions.daylightOnly,

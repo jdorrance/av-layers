@@ -6,11 +6,22 @@ export const BUILD_BUDGETS = {
   tiles: 5_000_000,
   samplePackBytes: 256 * 1024 * 1024,
   numericBytes: 64 * 1024 ** 3,
-  elapsedMs: 90 * 60_000,
-  peakRssBytes: 2 * 1024 ** 3
+  elapsedMs: 180 * 60_000,
+  workingSetBytes: 2 * 1024 ** 3,
+  peakRssBytes: 4 * 1024 ** 3
 } as const;
 
+export const LEGACY_FORECAST_ELAPSED_MS = 90 * 60_000;
 export const MAX_BUILD_LIFETIME_MS = 6 * 3_600_000;
+
+export function forecastPlanDeadline(plan: { createdAt: string; deadlineAt?: string }): number {
+  return plan.deadlineAt === undefined ? Date.parse(plan.createdAt) + LEGACY_FORECAST_ELAPSED_MS : Date.parse(plan.deadlineAt);
+}
+
+export function isForecastPlanDeadline(createdAt: string, deadline: number): boolean {
+  const elapsed = deadline - Date.parse(createdAt);
+  return elapsed === BUILD_BUDGETS.elapsedMs || elapsed === LEGACY_FORECAST_ELAPSED_MS;
+}
 export const MAX_V5_SHARD_BYTES = 64 * 1024 * 1024;
 
 interface FrameResources { maxLevels: number; auxiliarySurfaceFields?: number; auxiliaryLevelFields?: number }
@@ -68,7 +79,7 @@ function rendererTileCount(renderer: unknown): number {
   return Number.isSafeInteger(total) ? total : NaN;
 }
 
-/** Gate recorded build metrics against the same budgets used by build admission. */
+/** Check observed build resources before publication. */
 export function checkPerformance(manifest: ManifestV5) {
   const failures: string[] = [];
   const metric = (key: string): number => {

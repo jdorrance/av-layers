@@ -53,7 +53,7 @@ export async function createRasterPool(mask: SamplingMask, targets: readonly { f
 }) {
   const { workers: count, maxPending, geometryCacheBytes, signal, maxSharedInputBytes = MAX_RASTER_SHARED_INPUT_BYTES } = options;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_RASTER_WORKERS || !Number.isSafeInteger(maxPending) || maxPending < 1 || maxPending > 32
-      || !Number.isSafeInteger(geometryCacheBytes) || geometryCacheBytes < 0 || !Number.isSafeInteger(maxSharedInputBytes) || maxSharedInputBytes < 0 || maxSharedInputBytes > BUILD_BUDGETS.peakRssBytes || targets.length < 1 || targets.length > 3) throw new RangeError('Invalid raster pool limits');
+      || !Number.isSafeInteger(geometryCacheBytes) || geometryCacheBytes < 0 || !Number.isSafeInteger(maxSharedInputBytes) || maxSharedInputBytes < 0 || maxSharedInputBytes > BUILD_BUDGETS.workingSetBytes || targets.length < 1 || targets.length > 3) throw new RangeError('Invalid raster pool limits');
   signal?.throwIfAborted();
   for (const { field } of targets) validateSamplingField(mask.grid, field, mask);
   if ('coverage' in mask) createSparseCoverage(mask.coverage);
@@ -65,7 +65,7 @@ export async function createRasterPool(mask: SamplingMask, targets: readonly { f
   if (!Number.isSafeInteger(sharedInputBytes) || sharedInputBytes > maxSharedInputBytes) throw new RasterCapacityError('Raster shared input byte budget exceeded');
   const copiedInputBytes = inputViews.reduce((sum, view) => sum + (view.buffer instanceof SharedArrayBuffer ? 0 : view.byteLength), 0);
   const admittedPeakBytes = process.memoryUsage.rss() + copiedInputBytes + count * RASTER_WORKER_RESERVE_BYTES + geometryCacheBytes + maxPending * (RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 + MAX_TILE_BYTES);
-  if (!Number.isSafeInteger(admittedPeakBytes) || admittedPeakBytes > BUILD_BUDGETS.peakRssBytes) throw new RasterCapacityError('Raster process working-set budget exceeded');
+  if (!Number.isSafeInteger(admittedPeakBytes) || admittedPeakBytes > BUILD_BUDGETS.workingSetBytes) throw new RasterCapacityError('Raster process working-set budget exceeded');
   const tiles = sharedBytes(mask.tiles);
   const sharedMask: SamplingMask = 'coverage' in mask ? { ...mask, tiles, coverage: {
     ...mask.coverage, blockIds: sharedWords(mask.coverage.blockIds), offsets: sharedWords(mask.coverage.offsets),

@@ -78,7 +78,7 @@ describe('bounded per-frame raster workers', () => {
 
   it('rejects a process working set exceeding the build budget before allocating worker inputs', async () => {
     const { mask, targets } = fixture();
-    await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: 2 * 1024 ** 3, maxPending: 1 })).rejects.toThrow('process working-set budget');
+    await expect(createRasterPool(mask, targets, { workers: 1, geometryCacheBytes: BUILD_BUDGETS.workingSetBytes, maxPending: 1 })).rejects.toThrow('process working-set budget');
   });
 
   it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('admits each configured packed snapshot within a bounded whole-domain budget', async product => {
@@ -96,7 +96,7 @@ describe('bounded per-frame raster workers', () => {
     expect(capacity.rasterSharedInputBytes).toBeGreaterThan(MAX_RASTER_SHARED_INPUT_BYTES);
     expect(capacity.rasterWorkers).toBe(rasterWorkerCount(undefined, product.execution.workers));
     expect(capacity.violations).toEqual([]);
-    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);
     expect(capacity.workingSet.rasterSharedInputs).toBe(capacity.rasterWorkers ? capacity.rasterSharedInputBytes : 0);
     expect(capacity.workingSet.rasterWorkerRuntimes).toBe(capacity.rasterWorkers * RASTER_WORKER_RESERVE_BYTES);
     if (capacity.rasterWorkers) expect(capacity.workingSet.rasterInline).toBe(0);
@@ -105,7 +105,7 @@ describe('bounded per-frame raster workers', () => {
 
   it('falls back inline when whole-domain worker headroom is exhausted', async () => {
     const { mask, targets } = fixture(), directory = await mkdtemp(join(tmpdir(), 'av-raster-headroom-')); temporary.push(directory);
-    const rss = vi.spyOn(process.memoryUsage, 'rss').mockReturnValue(BUILD_BUDGETS.peakRssBytes);
+    const rss = vi.spyOn(process.memoryUsage, 'rss').mockReturnValue(BUILD_BUDGETS.workingSetBytes);
     try {
       const renderer = createRenderer(mask, { rasterWorkers: 3, rasterSharedInputBytes: 1000 });
       const path = join(directory, 'inline.pmtiles');
@@ -136,7 +136,7 @@ describe('bounded per-frame raster workers', () => {
     const capacity = admit(low), inline = admit(low + 1);
     expect(capacity).toMatchObject({ rasterWorkers: 0, deriveWorkers: 1, violations: [] });
     expect(capacity.workingSet.rasterInline).toBeGreaterThan(0);
-    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+    expect(capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);
     expect(inline).toMatchObject({ rasterWorkers: 0, deriveWorkers: 0, violations: [] });
     expect(inline.workingSet.rasterInline).toBeGreaterThan(0);
   });

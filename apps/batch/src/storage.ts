@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { addAbortSignal, Readable } from 'node:stream';
 import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { BUILD_BUDGETS } from './capacity.js';
+import { BUILD_BUDGETS, forecastPlanDeadline } from './capacity.js';
 import type { BuildPlan } from './parallel.js';
 import { pause } from './pause.js';
 import { pinnedSourcePrefix } from './source.js';
@@ -128,7 +128,7 @@ export async function assertBuildBucketLock(env: NodeJS.ProcessEnv, plan: ShardP
 
 function shardDeadline(plan: ShardPlan): number {
   if (!/^[a-z0-9-]+$/.test(plan.model) || !/^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(plan.buildId)) throw new Error('Invalid shard build identity');
-  const deadline = plan.deadlineAt === undefined ? Date.parse(plan.createdAt) + BUILD_BUDGETS.elapsedMs : Date.parse(plan.deadlineAt);
+  const deadline = forecastPlanDeadline(plan);
   if (!Number.isFinite(deadline) || Math.floor(deadline / 1000) <= Math.floor(Date.now() / 1000)) throw new Error('Forecast plan deadline expired or invalid');
   return deadline;
 }

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_PROVENANCE_BYTES, RETENTION_DAYS, createWholeDomainDescriptors, createRecipeIdentity, type ManifestV5, type ModelPointer } from '@av/contracts';
 import { workflowAuthority } from './authority.js';
 import { putImmutable, uploadBounded } from './immutable-upload.js';
-import { BUILD_BUDGETS } from './capacity.js';
+import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from './capacity.js';
 import { writeNativeCoverage } from './whole-domain/coverage.js';
 import type { ObjectStorage } from './storage.js';
 
@@ -525,6 +525,17 @@ describe('immutable publication', () => {
       return result;
     };
     await expect(publish(store, root, manifest, { authority, now: () => now, committedOnly: true })).rejects.toThrow('changed during validation');
+  });
+  it('allows a new plan to publish after the original 90-minute window while preserving the old deadline', async () => {
+    const { root, manifest } = await fixture(), store = new MemoryStore();
+    const created = Date.parse(manifest.createdAt);
+    const deadline = (elapsed: number) => new Date(created + elapsed).toISOString();
+    const clock = () => created + LEGACY_FORECAST_ELAPSED_MS + 60_000;
+    await expect(publish(store, root, manifest, { authority, now: clock, deadlineAt: deadline(LEGACY_FORECAST_ELAPSED_MS) }))
+      .rejects.toThrow('pre-publication deadline');
+    expect(await store.get('catalog/gfs/latest.json')).toBeNull();
+    await publish(store, root, manifest, { authority, now: clock, deadlineAt: deadline(BUILD_BUDGETS.elapsedMs) });
+    expect(JSON.parse(Buffer.from((await store.get('catalog/gfs/latest.json'))!.bytes).toString()).latestBuildId).toBe(manifest.buildId);
   });
   it('recovers an expired-deadline committed build without permitting a new CAS', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();

@@ -5,7 +5,7 @@ import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverage
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
-import { BUILD_BUDGETS, MAX_BUILD_LIFETIME_MS } from './capacity.js';
+import { BUILD_BUDGETS, isForecastPlanDeadline, MAX_BUILD_LIFETIME_MS } from './capacity.js';
 import { loadCoverage, readSparseCoverage } from './coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
@@ -122,8 +122,8 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     return;
   }
   check();
-  const deadline = Date.parse(manifest.createdAt) + BUILD_BUDGETS.elapsedMs;
-  if (options.deadlineAt !== undefined && Date.parse(options.deadlineAt) !== deadline) throw new Error('Invalid publication deadline');
+  const deadline = options.deadlineAt === undefined ? Date.parse(manifest.createdAt) + BUILD_BUDGETS.elapsedMs : Date.parse(options.deadlineAt);
+  if (!isForecastPlanDeadline(manifest.createdAt, deadline)) throw new Error('Invalid publication deadline');
   if (now() > deadline - SMOKE_VERIFY_RESERVE_MS) throw new Error('Build exceeds pre-publication deadline');
   retained.unshift({ buildId: manifest.buildId, manifestKey: key, cycle: manifest.cycle, expiresAt: manifest.expiresAt });
   const casStarted = Date.now();

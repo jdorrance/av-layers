@@ -108,7 +108,7 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
     retentionBasis: 'schedule', retainedNumericBytes: 28 * report.capacity.numericBytes });
   expect(report.capacity.tiles).toBeGreaterThan(0);
   expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
-  expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.peakRssBytes);
+  expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);
   for (const count of [report.capacity.rasterWorkers, report.capacity.deriveWorkers]) {
     expect(count).toBeGreaterThanOrEqual(0);
     expect(count).toBeLessThanOrEqual(product.execution.workers);
