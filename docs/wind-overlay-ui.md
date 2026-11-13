@@ -69,6 +69,9 @@ Use the captured compact strip: maximum **540 px wide**, **40 px tall on desktop
   last frame. Replay begins at the first frame.
 - Preserve the current requested/displayed-time distinction while data loads.
   Replace a field atomically and clear old wind trails when its time changes.
+  When lift advances before wind is ready, display matching-time coarse wind or
+  hide stale wind with compact loading in the wind control. Keep cloud and
+  precipitation identities consistent with the selected forecast too.
 
 The capture uses `America/New_York` and UTC frame identities. Production uses the
 application's explicit display timezone, including daylight-saving transitions.

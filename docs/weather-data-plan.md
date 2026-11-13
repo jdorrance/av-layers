@@ -3,9 +3,11 @@
 Publish bounded numeric weather chunks through the existing batch → R2 → API
 pipeline, and render them in the current MapLibre viewer.
 
-Proposal dated 2026-11-13, audited against `68c3b80`. The
+Proposal dated 2026-11-13, adversarially reviewed against `b49a3bd`. The
 [approved wind UI](wind-overlay-ui.md) is the build target. This PR records the
 design; production contracts and forecast calculations remain unchanged.
+The [review and executable evidence](weather-data-review.md) track corrected
+failure cases and the performance gates required before release.
 
 ## Recommendation
 
@@ -55,15 +57,16 @@ describe storage; each still needs explicit units, masks and sampling rules.
 
 [NormalizedFrame](../packages/forecast/src/inputs.ts) already supplies 10 m wind,
 upper-air U/V, level heights, model ground and missing masks. Winds are Earth-relative
-in m/s. [Configured sources](../packages/contracts/config/models.json) currently
-request 21 GFS, 25 RRFS, 30 ICON-EU and up to 40 av-wrf levels. Their existing
+in m/s. [Configured sources](../packages/contracts/config/models.json) include
+GFS, RRFS, ICON-EU, av-wrf and the two registered Armenia WRF products. The first
+four request 21, 25, 30 and up to 40 levels respectively. Their existing
 acquisition/rotation remains the source of truth. No additional upstream download
 is required for the proposed wind product.
 
 Use the existing [layer definitions](../packages/contracts/src/layers.ts) for
 scalar meaning and availability:
 
-- **Cloud cover:** all four models ingest total and low-cloud percentages as sample-only
+- **Cloud cover:** the configured models ingest total and low-cloud percentages as sample-only
   fields. Expose their numeric grids and validity. Keep source-specific low-cloud
   definitions and missingness. An 8-bit 0–100% encoding can be benchmarked against
   a declared error tolerance; clear sky is valid zero.
@@ -93,6 +96,22 @@ combine the same horizontally supported donors. Apply identical weights and
 validity to both components. Derive speed and direction afterward. The existing
 BL-top diagnostic uses another surface; share a narrow height-bracket helper
 between the reference sampler and point inspection.
+
+Version the wind sampling method. The first method uses bilinear interpolation
+when every positive-weight donor supports the target; otherwise it chooses the
+geometric-nearest donor for both components, using weight then row/column tie
+ordering from [sampleCells](../packages/forecast/src/sampler.ts). That donor can
+remain unavailable. Preserve source-level positions and gaps: accept an exact
+valid level, or interpolate between two consecutive source levels that are both
+valid and bracket the target; never skip masked rows. Surface is a separate mode;
+this version adds no synthetic 10 m lower interpolation anchor.
+
+Bind Top-of-lift target sampling to the build's `useStoredMslNoLift` method and
+the scalar sampler's complete status/support rules. Finite no-lift terrain values
+remain no-lift. With stored MSL interpolation, equal-weight values
+`[valid 2000, no-lift 500, no-lift 500, no-lift 500]` yield no target; two valid
+2000 m donors and two no-lift 500 m donors yield a valid 1250 m target. Preserve
+the majority threshold, ties and missing-donor behavior on CPU and GPU.
 
 Keep unsupported valleys, above-profile heights and missing brackets unavailable.
 The current lift clearance fallback supplies no valley wind extrapolation.
@@ -138,8 +157,28 @@ scalar descriptors. Keep per-product metadata nested and bounded; publish indexe
 separately where required. Reject unsupported codec versions explicitly.
 
 For option A, arrange one time/product's spatial blocks in immutable binary
-shards with bounded offset/length indexes. Reuse the existing sparse block
-geometry where measurements support it. Encode only wind/height/status;
+shards. Separate storage blocks from browser chunks: group neighboring blocks
+under fixed spatial chunk IDs, preserving static terrain cache reuse. Independently
+compress each chunk; retain a range-addressable shard. Record encoded and exact
+decoded lengths, codec, offset and content digest. Serve the compressed bytes as
+octet-stream with no HTTP content encoding, so the encoded cache counts actual
+retained bytes; a worker performs bounded decompression. Pilot chunks cap decoded
+data at 256 KiB and encoded data at 256 KiB plus a 4 KiB header. Use raw encoding
+when compression expands a chunk. Enforce both limits before allocating.
+
+Keep the root descriptor small. Use fixed spatial pages of at most 1024 binary
+index entries, at most 64 KiB per page, partitioned by product/frame/grid/LOD.
+The root names page layout and verified page roots; fetch only intersecting pages.
+Count page requests, bytes and dependency depth in cold-load admission. RRFS has
+5624 native storage blocks; its complete 40-frame index at 24 bytes per record
+would already occupy 5.15 MiB. A flat JSON block list exceeds existing limits.
+
+Publication verifies complete immutable shards. Serving validates bounded index
+pages, object identity/length and the requested range. Verify a requested chunk's
+digest where required; a cold read must never fetch/hash an entire shard.
+Reuse [packed range validation](../apps/api/src/packed-ranges.ts) and
+[immutable upload verification](../apps/batch/src/immutable-upload.ts).
+Encode only wind/height/status;
 existing full-profile files also contain thermodynamics and grouped times.
 For option B, PMTiles supports custom tile data via its
 [Unknown/Other type](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md#tile-type-tt).
@@ -162,9 +201,12 @@ compare-and-swap. The pointer binds all products atomically. Upgrade every point
 reader/writer, retry path, rollback and cleanup before emitting new references;
 an old parser can strip extra fields during a rewrite. Keep forecast artifacts
 inside the build prefix; retain shared terrain/coverage under their immutable
-identities. Admit retained builds before the inner Cache API lookup. Outer CDN
-hits bypass the Worker, so numeric routes must either use the inner cache after
-admission or explicitly define bounded expiry and purge behavior for early removal.
+identities. Admit retained builds on descriptor reads and numeric cache misses.
+Successful validated numeric responses explicitly opt into the existing Workers
+Cache front cache. Use canonical build/product/codec/grid/frame/LOD/chunk identity,
+deployment isolation, TTL capped at build expiry and mandatory revalidation.
+Errors opt out. Early removal purges affected cached URLs before acknowledging
+revocation; browser copies follow the existing immutable-until-expiry contract.
 
 Cloud/precipitation additions reuse this publication lifecycle and scalar codec.
 Each product has its own availability, time interval, resolution and precision.
@@ -172,39 +214,75 @@ Avoid multiplying cloud/rain payloads by wind height or fetching inactive produc
 
 ## Serving and browser performance
 
-The current production `workers.dev` origin demonstrated caching in a two-request
-probe: discovery changed from `X-Av-Response-Cache: miss` to `hit`, with R2 reads
-falling from one to zero; a tile changed from `CF-Cache-Status: MISS` to `HIT`.
-The [evidence](assets/wind-overlay/capacity.json) preserves selected response headers.
-This conflicts with the older [R2 example warning](https://developers.cloudflare.com/r2/examples/cache-api/).
-The [current runtime documentation](https://developers.cloudflare.com/workers/runtime-apis/cache/)
-distinguishes Cache API from outer CDN caching. Deployed behavior differs from
-this checkout; inspect its revision before changing cache architecture.
+Current [API routing](../apps/api/src/index.ts) enables the front cache for tiles
+and explicitly opts other routes out. Add the numeric success route to that policy;
+the filename suffix supplies no cache eligibility. Keep mutable discovery and
+errors under their current policy. The [recorded probe](assets/wind-overlay/capacity.json)
+observed discovery and tile hits on `workers.dev`, consistent with current main.
+Verify new-route cache hits, cross-region behavior and expiry on the chosen origin.
+Outer CDN hits skip Worker admission; cached R2/Server-Timing headers describe the
+original fill. Two local hits establish no throughput claim.
 
-A custom API hostname makes deployment ownership explicit. Verify new-route
-cache hits, cross-region behavior and expiry on the chosen origin. On an outer
-CDN hit, cached R2/Server-Timing headers describe the original fill. Keep those
-separate from fresh Worker counters; two local hits establish no throughput claim.
+Keep chunk URLs immutable and expiry-bounded. The existing
+[scheduler and serving budgets](serving-budgets.md) own concurrency, queue size,
+encoded-cache capacity and speculation limits. Extend that scheduler for numeric
+responses; separate raster and numeric schedulers would multiply demand. Share
+the overview speculation cutoff across enabled products and stop background
+admission while foreground work waits.
 
-Keep chunk URLs immutable and expiry-bounded. Reuse current
-[serving budgets](serving-budgets.md), including four active browser requests,
-two prefetch slots and the shared compressed cache. Prioritize current viewport
-and time; cancel superseded work. Load a coarse valid overview before native
-detail at wide extents. Coarse products need model-aware reduction and mask/shear
-validation; averaging level indices across varying heights changes meaning.
+Admit a complete view before dispatch. Count HTTP chunks and index/companion
+requests as well as bytes; issue work incrementally instead of queueing the
+entire native viewport. The [footprint audit](assets/wind-overlay/review-evidence.json)
+finds 96 ungrouped requests for a 1200 × 600 Woodstock z9 envelope. Illustrative
+fixed grouping reduces that to six, while increasing raw payload from 0.71 to
+0.97 MiB. At z8 even grouped data needs 24 requests / 3.44 MiB, before metadata.
 
-Track compressed cache, decoded CPU arrays, GPU textures and temporary uploads
-separately. A seven-byte column sample can occupy substantially more GPU memory.
+Pilot admission targets: at most 16 numeric data chunks and 2 MiB encoded bytes
+for a native view, with index pages charged separately; first-valid overview
+payload at most 256 KiB across four data chunks. These are experiment limits,
+to be validated before becoming constants. Select a coarser supported LOD when
+the view exceeds either limit. Coarse products need model-aware reduction and
+mask/shear validation; averaging level indices across varying heights changes
+meaning. Use a fixed physical-height overview lattice with explicit coverage,
+brackets and error bounds if native-level reduction cannot preserve the method.
+
+One admission owner accounts for existing raster preparation, decoded arrays,
+numeric terrain/lift, GPU textures, particle state, trail buffers and staging.
+Keep the current encoded-cache ceiling and existing 96 MiB forecast resource
+estimate; count new wind allocations inside it. Reserve active and replacement
+fields before loading. Start with at most 16 MiB of wind resources and 8 MiB
+temporary decode/upload storage inside that shared estimate. Evict speculative
+times and prepared rasters first, then lower overview/field/trail resolution.
+Charge old and new fields together during a swap. The existing raster-only
+replacement exception grants no extra wind allowance. Cap trail pixel dimensions
+independently of DPR and include both ping-pong buffers. Driver and basemap costs
+require separate whole-page measurements.
+
 Retain current time first; prefetch another time only within admitted capacity.
 Use generation IDs and atomic field swaps so slow old responses cannot replace
 the selected forecast. Reset/fade trails on a field change and release resources
 on eviction, hidden wind and context loss according to the chosen cache policy.
 
+Coordinate presentation by model/build/frame/height/dependency hashes/LOD. The
+existing timeline may display a new lift overview before wind is ready. Show
+matching-time coarse wind if resident; otherwise hide stale wind and expose a
+compact loading state in its control. Never relabel the previous wind field.
+Apply the same rule to cloud/precipitation. Commit all chunks of a selected field
+together and clear its old trails. Test distant time jumps and the full enabled
+layer stack, including sparse frame times and unavailable products.
+
 For A, run vertical selection only when the view's data, target height or time
 changes. Cap its geographic field resolution independently of particle density.
 Warm height changes update uniforms and the selected field, with no full-volume
-upload. CPU hover/barb sampling uses the same reference rules without synchronous
-GPU readback. Barbs and particles must agree at the same location.
+upload. Declare the selected 2D lattice, projection, node origin, masks and
+interpolation as the display authority. GPU barbs and particles sample that
+field. CPU probes reproduce its four node evaluations and interpolation off the
+main thread, without GPU readback. Direct native-column diagnostics stay labelled
+as such. Validate field approximation against direct sampling separately: the
+[counterexample](assets/wind-overlay/review-evidence.json) produces a 10.8 km/h
+difference solely from resampling across terrain and shear. Treat missing cells
+and no-lift boundaries explicitly; ordinary filtering of packed integers or
+invalid texels cannot define the method.
 
 The zero-request condition requires the current model/build/time, visible columns
 and halos, vertical brackets, masks and terrain/lift companions to be resident.
@@ -235,13 +313,18 @@ Layer's current tapered point trails conflict with the approved appearance.
 
 Build the standalone viewer first. Share numeric loading/sampling with the Windy
 plugin, then implement its separate host adapter. Preserve the plugin's existing
-bundle gate; measure dependency cost before adding a rendering framework.
+bundle gate. The preview's startup and combined lazy gates already cover the
+Windgram and current code; lazy loading creates no spare allowance. Measure
+incremental gzip bytes and interaction-ready latency for the decoder and renderer.
+Any allowance change requires those measurements and an explicit budget update.
 
 ## Capacity evidence and decision gates
 
-[Capacity evidence](assets/wind-overlay/capacity.json) records input hashes,
-coverage counts, formulas and the pinned RRFS build metrics. These are raw logical
-payload calculations; compressed sizes and incremental runtime need measurement.
+[Original capacity evidence](assets/wind-overlay/capacity.json) records the four-model
+baseline and pinned RRFS build. The [current audit](assets/wind-overlay/review-evidence.json)
+recomputes all six configured models, cadence, retention and viewport costs.
+These are raw logical payload calculations; compressed sizes and incremental
+runtime need measurement.
 
 Copying the current RRFS raster pyramid for all 12 choices adds **9.28 million
 tiles**, exceeding the whole-build five-million cap. Even 64-sample tiles through
@@ -255,6 +338,14 @@ selection with separate terrain/lift data. All-frame wind-column candidates are
 about **1.66 GiB GFS, 4.23 GiB ICON-EU, 10.72 GiB RRFS, 0.49 GiB av-wrf**, before
 indexes, overviews and numeric target-surface delivery. Compression lowers
 transfer/storage bytes; logical admission still counts decoded data.
+
+The two registered Armenia WRF products add about 0.069 and 0.127 GiB per run.
+All six configured cadences produce **67.13 GiB/day**, or **469.92 GiB over seven
+days**, of raw additional columns before indexes, overviews and companion delivery.
+Admit peak local disk, simultaneous encoders, upload/verification operations,
+publication time and retained compressed bytes. Reuse immutable terrain and
+existing numeric lift owners. Compressed capacity and schedule headroom remain
+release gates requiring a full representative build.
 
 The pinned RRFS build reports **61.38 minutes** and **1.977 GiB peak process RSS**.
 Its admitted working set is only about 102 MiB below the 2 GiB limit. Stream
@@ -277,9 +368,7 @@ Implement in four reviewable stages within this feature branch:
    availability and palettes. Demonstrate a palette edit that downloads no new
    data. Add further scalar products only with their current UI caller.
 
-Proposed acceptance targets: resident height selection in one or two display
-frames, zero HTTP requests and full-volume uploads during warm scrubbing, smooth
-60 fps desktop / stable 30 fps mobile, and bounded memory after repeated panning.
-Record cold bytes, first-valid-field latency, decode/upload time, warm selection
-p95, animation frame-time p95 and peak CPU/GPU memory separately. These targets
-require measurement; visual smoothness alone cannot establish field accuracy.
+Benchmark gates are owned by the [adversarial review](weather-data-review.md#release-gates).
+The existing [timeline benchmark](preview-performance.md) supplies the baseline
+and requested-versus-displayed correctness harness. Extend it with real numeric
+fields and full-stack readiness; keep its current zero-superseded-frame guarantee.
