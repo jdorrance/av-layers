@@ -47,7 +47,7 @@ export interface RequestMetrics {
   buildId?: string;
   problemCode?: string;
 }
-export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metrics?: RequestMetrics; responseCacheEnabled?: boolean }
+export interface WaitContext { waitUntil(promise: Promise<unknown>): void; metrics?: RequestMetrics; responseCacheEnabled?: boolean; cacheOrigin?: string }
 export function countCacheHit(ctx?: WaitContext): void { if (ctx?.metrics) ctx.metrics.cacheHits++; }
 
 const activeR2Waits = new WeakMap<RequestMetrics, { started: number; count: number }>();

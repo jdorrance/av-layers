@@ -125,6 +125,7 @@ function startPreview(): void {
     container: 'map',
     center: startup.camera?.center ?? [0, 20],
     zoom: startup.camera?.zoom ?? 2,
+    maxTileCacheSize: 16,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : basemapStyle()
@@ -141,6 +142,7 @@ function startPreview(): void {
   let opacity = initialOpacity;
   let expired = false;
   let mapFailed = false;
+  let mapReady = false;
   let overlayState: OverlayState = { displayed: null, requested: null, incomplete: false, replacementFailed: false };
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
@@ -191,7 +193,7 @@ function startPreview(): void {
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
-    if (applyingHistory || !urlReady || pendingModel) return;
+    if (applyingHistory || !mapReady || !urlReady || pendingModel) return;
     const camera = map.getCenter();
     const validTime = currentModel === AUTO_MODEL_ID ? requestedTime ?? undefined : build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
     const next = previewUrl(window.location.pathname, {
@@ -386,7 +388,7 @@ function startPreview(): void {
 
   function updateOverlay(): void {
     const layer = activeLayer();
-    if (!build || !selectedFrame || !layer || !ensureLive()) return;
+    if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
     clearError();
     try {
       overlay.select(build, layer, selectedFrame);
@@ -638,6 +640,10 @@ function startPreview(): void {
       focusRegion(model);
     });
   }
+  for (const [control, layer] of [[refAgl, 'usable-lift-agl'], [refMsl, 'usable-lift-msl']] as const) {
+    const prepare = () => { if (!control.disabled && selectedFrame) overlay.prepare(layer, selectedFrame); };
+    for (const event of ['pointerenter', 'focus', 'pointerdown']) control.addEventListener(event, prepare);
+  }
   refAgl.addEventListener('click', () => {
     reference = 'agl';
     syncReference();
@@ -777,9 +783,12 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    if (!startup.camera) focusRegion(initialModel);
-    void loadModel(initialModel);
+    if (!startup.camera) focusRegion(currentModel);
+    mapReady = true;
+    updateOverlay();
+    writeUrl('replace');
   });
+  void loadModel(initialModel);
 }
 
 function showMapFailure(error: unknown): void {

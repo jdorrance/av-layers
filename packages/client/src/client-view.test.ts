@@ -68,12 +68,12 @@ it('reports each surface and its grid once', () => {
   ]);
 });
 
-it('orders viewport prefetch by forecast step, sibling layer, then perimeter', () => {
+it('warms the sibling viewport before forecast steps and perimeter', () => {
   const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
   const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] });
   const tile = (layer: string, frame: string, x = 3, y = 3) => `https://api.test/tiles/${build.manifest.model}/${build.manifest.buildId}/${layer}/${frame}/3/${x}/${y}.webp`;
   expect(urls.slice(0, 5)).toEqual([
-    tile(activeLayer, 'f009'), tile(activeLayer, 'f003'), tile('usable-lift-msl', 'f006'), tile(activeLayer, 'f012'), tile(activeLayer, 'f006', 2, 2)
+    tile('usable-lift-msl', 'f006'), tile(activeLayer, 'f009'), tile(activeLayer, 'f003'), tile(activeLayer, 'f012'), tile(activeLayer, 'f006', 2, 2)
   ]);
   expect(urls).toHaveLength(12);
   expect(new Set(urls).size).toBe(urls.length);
@@ -86,7 +86,7 @@ it('uses owning surface zooms for overzoomed viewport prefetches', () => {
   expect(rain.every(url => !url.includes('usable-lift'))).toBe(true);
   expect(rain).not.toContain(`https://api.test/tiles/${build.manifest.model}/${build.manifest.buildId}/precip-rate/f006/7/64/64.webp`);
   const lift = planViewportPrefetch({ build, activeLayer: 'usable-lift-agl', activeFrame: 'f006', viewportTiles });
-  expect(lift[0]).toContain('/usable-lift-agl/f009/9/256/256.webp');
+  expect(lift[0]).toContain('/usable-lift-msl/f006/9/256/256.webp');
 });
 it('filters bounds and invalid tile coordinates and wraps only longitude-wrapping surfaces', () => {
   const build = fixtureBuild();
@@ -105,7 +105,8 @@ it('bounds prefetch URL count and omits frames beyond the timeline', () => {
   const viewportTiles = Array.from({ length: 40 }, (_, x) => ({ z: 7, x, y: 60 }));
   const urls = planViewportPrefetch({ build, activeLayer: 'usable-lift-msl', activeFrame: 'f006', viewportTiles });
   expect(urls).toHaveLength(64);
-  expect(urls.slice(0, 40).every(url => url.includes('/f009/'))).toBe(true);
+  expect(urls.slice(0, 40).every(url => url.includes('/usable-lift-agl/f006/'))).toBe(true);
+  expect(urls.slice(40).every(url => url.includes('/usable-lift-msl/f009/'))).toBe(true);
   const last = planViewportPrefetch({ build, activeLayer: 'precip-rate', activeFrame: 'f024', viewportTiles: [{ z: 3, x: 3, y: 3 }] });
   expect(last[0]).toContain('/f021/');
   expect(last.every(url => url.includes('/f021/') || url.includes('/f024/'))).toBe(true);
@@ -202,4 +203,35 @@ it('keeps raster prefetch inside the map prefix while the native point axis cont
   expect(planViewportPrefetch({ ...options, activeFrame: 'f009' })).toEqual([]);
   expect(pointSeriesSelection(build).frames).not.toContain('f009');
   expect(build.manifest.frames.some(frame => frame.id === 'f009')).toBe(true);
+});
+
+
+it('warms a complete requested viewport before the sibling and other times', () => {
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
+  const viewportTiles = Array.from({ length: 40 }, (_, x) => ({ z: 7, x, y: 60 }));
+  const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006', viewportTiles,
+    preferred: { layer: activeLayer, frame: 'f003' }, direction: -1 });
+  expect(urls).toHaveLength(64);
+  expect(urls.slice(0, 40).every(url => url.includes('/usable-lift-agl/f003/'))).toBe(true);
+  expect(urls.slice(40).every(url => url.includes('/usable-lift-agl/f009/'))).toBe(true);
+  expect(new Set(urls).size).toBe(urls.length);
+});
+
+it('follows backward scrub direction after the preferred target', () => {
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
+  const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f009', viewportTiles: [{ z: 3, x: 3, y: 3 }], direction: -1 });
+  expect(urls.slice(0, 4).map(url => url.split('/').slice(-5, -3).join('/'))).toEqual([
+    'usable-lift-msl/f009', 'usable-lift-agl/f006', 'usable-lift-agl/f012', 'usable-lift-agl/f003'
+  ]);
+});
+
+it('ignores unavailable preferred frames and the already visible selection', () => {
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
+  build.manifest.mapFrameCount = 2;
+  const options = { build, activeLayer, activeFrame: 'f006', viewportTiles: [{ z: 3, x: 3, y: 3 }] };
+  const missing = planViewportPrefetch({ ...options, preferred: { layer: activeLayer, frame: 'f009' } });
+  expect(missing.some(url => url.includes('/f009/'))).toBe(false);
+  const visible = planViewportPrefetch({ ...options, preferred: { layer: activeLayer, frame: 'f006' } });
+  expect(visible.some(url => url.endsWith('/usable-lift-agl/f006/3/3/3.webp'))).toBe(false);
+  expect(visible[0]).toContain('/usable-lift-agl/f003/');
 });

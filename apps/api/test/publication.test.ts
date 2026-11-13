@@ -18,13 +18,19 @@ describe('validated publication reuse', () => {
     const get = fixture.get.getMockImplementation()!;
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    fixture.get.mockImplementation(async (key, options) => { await gate; return get(key, options); });
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    fixture.get.mockImplementation(async (key, options) => {
+      if (fixture.get.mock.calls.length === 4) started();
+      await gate; return get(key, options);
+    });
     const load = (publication: typeof fixture, signal?: AbortSignal) => manifest(fixture.bucket, publication.manifest.model,
       publication.buildId, retained(publication.manifest), undefined, fixture.product, signal);
     const active = publications.slice(0, 4).map(publication => load(publication));
     const abort = new AbortController();
     const queued = expect(load(publications[4], abort.signal)).rejects.toThrow('Request disconnected');
     try {
+      await ready;
       expect(fixture.get).toHaveBeenCalledTimes(4);
       abort.abort(new Error('Request disconnected'));
       await queued;
@@ -88,7 +94,8 @@ describe('validated publication reuse', () => {
 
   it('admits warm cache hits and rejects a newly incompatible product before cache delivery', async () => {
     const fixture = createV5Fixture();
-    const cache = { match: vi.fn(async () => new Response(Uint8Array.of(1, 2, 3), { headers: { 'content-type': 'image/webp', 'content-length': '3' } })) };
+    const cache = { match: vi.fn(async (_request: Request) => new Response(Uint8Array.of(1, 2, 3), { headers: { 'content-type': 'image/webp', 'content-length': '3' } })) };
+    const responseMatches = () => cache.match.mock.calls.filter(([request]) => new URL(request.url).pathname.startsWith('/tiles/')).length;
     vi.stubGlobal('caches', { default: cache });
     const path = `/tiles/${fixture.manifest.model}/${fixture.buildId}/usable-lift-agl/h001/1/0/0.webp`;
     const first = await fixture.request(path);
@@ -101,18 +108,18 @@ describe('validated publication reuse', () => {
     expect(warm.headers.get('cache-control')).toBe('public, max-age=86400, immutable');
     await warm.arrayBuffer();
     expect(digest).not.toHaveBeenCalled();
-    const matches = cache.match.mock.calls.length;
+    const matches = responseMatches();
     const changed = createApp({ products: { [fixture.manifest.model]: { ...fixture.product, attribution: 'Changed deployment attribution' } } });
     const rejected = await changed.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
     expect(rejected.status).toBe(503);
     expect(rejected.headers.get('cache-control')).toBe('no-store');
-    expect(cache.match).toHaveBeenCalledTimes(matches);
+    expect(responseMatches()).toBe(matches);
     await rejected.arrayBuffer();
     vi.setSystemTime(Date.parse(fixture.manifest.expiresAt));
     const expired = await fixture.request(path);
     expect(expired.status).toBe(404);
     expect(expired.headers.get('cache-control')).toBe('no-store');
-    expect(cache.match).toHaveBeenCalledTimes(matches);
+    expect(responseMatches()).toBe(matches);
     await expired.arrayBuffer();
   });
 
