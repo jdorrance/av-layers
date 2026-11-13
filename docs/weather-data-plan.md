@@ -160,8 +160,11 @@ without the reference return an explicit product-unavailable result.
 Publish chunks/indexes → verified sidecar → scalar manifest → one final pointer
 compare-and-swap. The pointer binds all products atomically. Upgrade every pointer
 reader/writer, retry path, rollback and cleanup before emitting new references;
-an old parser can strip extra fields during a rewrite. Keep artifacts inside the
-build prefix and preserve retained-build expiry/admission before cache lookup.
+an old parser can strip extra fields during a rewrite. Keep forecast artifacts
+inside the build prefix; retain shared terrain/coverage under their immutable
+identities. Admit retained builds before the inner Cache API lookup. Outer CDN
+hits bypass the Worker, so numeric routes must either use the inner cache after
+admission or explicitly define bounded expiry and purge behavior for early removal.
 
 Cloud/precipitation additions reuse this publication lifecycle and scalar codec.
 Each product has its own availability, time interval, resolution and precision.
@@ -221,7 +224,8 @@ history. Its [data interface](https://docs.weatherlayers.com/weatherlayers-gl/la
 accepts CPU Uint8/Float32 arrays; a GPU-produced altitude texture needs an adapter
 or extension. Its documented field projection is regular longitude/latitude, so
 WebMercator/native tiles need correct reprojection. Mapbox `raster-particle` is a
-separate Mapbox feature and is absent from the current MapLibre layer registry.
+separate Mapbox feature and is absent from the
+[current MapLibre registry](https://github.com/maplibre/maplibre-gl-js/blob/v6.16.0/src/style/create_style_layer.ts).
 
 [Sakitam maplibre-wind](https://github.com/sakitam-fdd/wind-layer/tree/9e1446890306a7e423de71ec4c6b70bba1db33df/packages/maplibre-gl)
 is another 2D candidate with tiled particles, scalar rendering and timeline sources.
