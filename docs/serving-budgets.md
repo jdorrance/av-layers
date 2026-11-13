@@ -11,6 +11,9 @@ combined work across all grids selected by a request.
   its tiers and skips Worker execution on hits. TTL follows the build expiry
   with mandatory revalidation; misses validate and read the tile directly.
   Cache entries are isolated by deployment version. Other routes opt out.
+  Cloudflare still consults its cache tiers for those uncached routes because
+  the cache is configured per Worker entrypoint. Compare point and discovery
+  latency during rollout; the tile path uses the public entrypoint directly.
 - **Pointer cache:** 32 entries, 1 MiB max; 15 s positive TTL, 5 s unavailable
   TTL. Validated pointer bytes also use the Cache API with the original absolute
   deadline. A build-ID miss bypasses that shared entry and coalesces a pointer
