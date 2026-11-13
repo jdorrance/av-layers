@@ -5,8 +5,9 @@ import { coverageDescriptorSchema, sparseCoverageDescriptorSchema } from '@av/co
 import { RETENTION_DAYS, SAMPLE_BLOCK_SIZE } from '@av/contracts/format';
 import { prepareGridGeometry, type Grid } from '@av/contracts/geometry';
 import { PRODUCTS } from '@av/contracts/models';
-import { prepareSamplePackLayout } from '@av/forecast/sample-pack';
-import { sampleCells, type SamplePlan } from '@av/forecast/sampler';
+import { decodeSparseCoverage } from '@av/contracts/sparse-coverage';
+import { prepareSamplePackLayout, prepareShardedSamplePackLayout } from '@av/forecast/sample-pack';
+import { sampleCells, sampleGrid, type SamplePlan } from '@av/forecast/sampler';
 
 // Run from the repository root: pnpm exec node --import tsx scripts/weather-data-audit.ts
 const sources: Record<string, string> = {};
@@ -16,17 +17,26 @@ async function source(path: string) {
   return bytes;
 }
 await source('packages/contracts/config/models.json');
+await source('packages/forecast/src/sampler.ts');
 const models = [];
 for (const product of PRODUCTS) {
   const directory = `packages/contracts/${product.coverageDir}`;
   const descriptor = coverageDescriptorSchema.parse(JSON.parse((await source(`${directory}/manifest.json`)).toString()));
   const layout = prepareSamplePackLayout(descriptor.grid, await source(`${directory}/output.bin`), await source(`${directory}/halo.bin`));
+  const fineDescriptor = sparseCoverageDescriptorSchema.parse(JSON.parse((await source(`${directory}/fine/manifest.json`)).toString()));
+  const fineCoverage = decodeSparseCoverage(await source(`${directory}/fine/sparse.bin`), fineDescriptor.gridHash);
+  const fineLayout = prepareShardedSamplePackLayout(fineDescriptor.grid, fineCoverage.blockIds, 1);
   const frames = product.frameHours.length, levels = product.capabilities.maxVerticalLevels;
   const bytes = layout.storedCells * frames * (7 * levels + 5);
   const dailyBytes = bytes * product.expectedRunsPerDay;
+  const selectedFineSliceFrameBytes = fineLayout.storedCells * 5;
+  const fineSlicesBytes = selectedFineSliceFrameBytes * frames * 12;
   models.push({ model: product.modelId, frames, levels, storedCells: layout.storedCells, blocks: layout.blockCount,
     bytes, dailyBytes, retainedBytes: dailyBytes * RETENTION_DAYS, runsPerDay: product.expectedRunsPerDay,
-    flatIndexBytesAt24BytesPerBlockFrame: layout.blockCount * frames * 24 });
+    flatIndexBytesAt24BytesPerBlockFrame: layout.blockCount * frames * 24,
+    fineStoredCells: fineLayout.storedCells, fineSlicesBytes, selectedFineSliceFrameBytes,
+    nativeColumnFrameBytes: bytes / frames, columnToSelectedFineSliceRatio: bytes / frames / selectedFineSliceFrameBytes,
+    fineSlicesDailyBytes: fineSlicesBytes * product.expectedRunsPerDay });
 }
 
 const directory = 'packages/contracts/coverage/rrfs-conus-land-v1';
@@ -79,12 +89,42 @@ const nodeInterpolatedMps = (uAt(100 + 600) + uAt(700 + 600)) / 2;
 const directlySampledMps = uAt((100 + 700) / 2 + 600);
 assert.equal(nodeInterpolatedMps, 3); assert.equal(directlySampledMps, 0);
 
+const fixtureGrid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2,
+  lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
+const discontinuousWind = { values: Float32Array.of(0, 10, 0, 0), flags: Uint8Array.of(0, 0, 2, 2) };
+const directWind = (x: number) => sampleGrid(fixtureGrid, discontinuousWind, .9, x, 'wind-10m-u', undefined, false);
+const donorDiscontinuities = [.2, .02, .002].map(width => {
+  const left = directWind(.5 - width / 2), right = directWind(.5 + width / 2);
+  assert.equal(left.value, 0); assert.equal(right.value, 10);
+  assert.equal(left.status, 0); assert.equal(right.status, 0);
+  const x = .5 + width * .001, alpha = (x - (.5 - width / 2)) / width;
+  const displayU = left.value! * (1 - alpha) + right.value! * alpha, reference = directWind(x);
+  assert.equal(reference.value, 10); assert.equal(reference.status, 0);
+  const differenceKmh = Math.abs(displayU - reference.value!) * 3.6;
+  assert(Math.abs(differenceKmh - 17.964) < 1e-8);
+  return { width, x, displayU, referenceU: reference.value, differenceKmh };
+});
+const islandFineGrid: Grid = { ...fixtureGrid, width: 5, height: 5, lat0: 4 };
+const islandFine = { values: new Float32Array(25).fill(2000), flags: new Uint8Array(25) };
+islandFine.values[12] = 500; islandFine.flags[12] = 1;
+const islandCoarseGrid: Grid = { ...fixtureGrid, lat0: 4, dx: 4, dy: -4 };
+const islandCoarse = { values: new Float32Array(4).fill(2000), flags: new Uint8Array(4) };
+const islandReference = sampleGrid(islandFineGrid, islandFine, 2.1, 2.1, 'usable-lift-msl', undefined, true);
+const interpolatedCorners = sampleGrid(islandCoarseGrid, islandCoarse, 2.1, 2.1, 'usable-lift-msl', undefined, true);
+assert.equal(islandReference.status, 1); assert.equal(islandReference.value, null);
+assert.equal(interpolatedCorners.status, 0); assert.equal(interpolatedCorners.value, 2000);
+
 console.log(JSON.stringify({
   basis: 'b49a3bd configuration; raw arithmetic and existing sampler checks; no network/GPU/compression timing',
   sources, columnBytes: 'storedCells * frames * (7 * levels + 5)', retentionDays: RETENTION_DAYS, models,
+  fineSlicesMethod: 'Twelve choices on the configured fine grid; stored cells include the same 16-core block halos. Five-byte paired int16 U/V plus status. All configured frames; headers, indexes, overviews, compression and A target companions excluded. Equal accuracy is not assumed.',
+  fineSlicesBytes: 'fineStoredCells * frames * 12 * 5',
   totalDailyBytes: models.reduce((sum, model) => sum + model.dailyBytes, 0),
   totalRetainedBytes: models.reduce((sum, model) => sum + model.retainedBytes, 0),
+  totalFineSlicesDailyBytes: models.reduce((sum, model) => sum + model.fineSlicesDailyBytes, 0),
   viewportMethod: 'Unrotated WebMercator at512px/world zoom, projected perimeter sampled64times per edge; rectangular native-grid envelopes, no coverage-mask pruning or pan margin. Grouping includes whole aligned groups; headers/indexes/overviews excluded.',
   center, viewports,
-  counterexamples: { majorityNoLift, halfNoLift, displayField: { nodeInterpolatedMps, directlySampledMps, differenceKmh: (nodeInterpolatedMps - directlySampledMps) * 3.6 } }
+  counterexamples: { majorityNoLift, halfNoLift,
+    displayField: { nodeInterpolatedMps, directlySampledMps, differenceKmh: (nodeInterpolatedMps - directlySampledMps) * 3.6 },
+    donorDiscontinuities, noLiftIsland: { reference: islandReference, interpolatedCorners } }
 }, null, 2));

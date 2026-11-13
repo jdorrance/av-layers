@@ -11,7 +11,7 @@ failure cases and the performance gates required before release.
 
 ## Recommendation
 
-Start with **native wind columns for the visible area and one forecast time**,
+Trial **native wind columns for the visible area and one forecast time**,
 plus separate numeric terrain and usable-lift surfaces. Once resident, the full
 wind-height rail works without network requests. A bounded GPU pass creates the
 selected 2D wind field; trails and barbs consume that field.
@@ -20,13 +20,14 @@ Use one small numeric delivery family for wind, cloud cover and precipitation.
 Separate product payloads let the browser request only active layers. Keep the
 decoder and field sampler independent of archive format and drawing style.
 
-Prove this on real RRFS data around Woodstock before choosing the final chunk
-size, overview resolution and renderer. Precomputed height slices are the
-fallback if the volume sampler or mobile memory cost misses acceptance targets.
+Keep this choice provisional. Compare it with grouped precomputed fields on real
+RRFS data around Woodstock before choosing the representation, chunk size,
+overview resolution and renderer. Include cold entry, time changes, height
+sweeps and uncached pans under the same accuracy, coverage and resource limits.
 
 ## Two implementation options
 
-**A. Native columns + local height selection — preferred.** Publish per-time
+**A. Native columns + local height selection — working hypothesis.** Publish per-time
 spatial blocks containing height/U/V/status at available model levels, with
 surface wind. Keep fine terrain and usable-lift MSL/status separately cacheable.
 Retain the useful vertical range for resident blocks. Height changes update a
@@ -36,12 +37,13 @@ separate derived global field for every slider stop. It requires a reference
 sampler, projection handling, explicit CPU/GPU budgets and more client work.
 
 **B. Precomputed 2D fields — simpler renderer integration.** Batch derives Surface,
-ten AGL stops and Top of lift. Publish paired U/V/status numeric tiles in PMTiles;
-load the selected height and prefetch neighbors. WeatherLayers can consume decoded
-fields after projection-aware assembly. Cached selections are immediate; an
-uncached height needs data. Fine terrain-following slices increase publication
-work and storage substantially. Select this option if measured integration and
-device costs outweigh A's warm-height benefit.
+ten AGL stops and Top of lift. Publish paired U/V/status in grouped spatial binary
+chunks on the existing fine grid, with the same bounds/index policy as A. PMTiles
+is an optional packaging choice. Load the selected height and prefetch neighbors.
+WeatherLayers can consume decoded fields after projection-aware assembly. Cached
+selections are immediate; an uncached height needs data. This trades publication
+work for smaller selected-time/height payloads. Measure the complete interaction
+trace before choosing A or B; the best storage tradeoff varies by model.
 
 Zarr is a later packaging candidate if callers need broader multidimensional
 access. [Zarrita](https://github.com/manzt/zarrita.js) reads Zarr v2/v3, including
@@ -205,8 +207,11 @@ identities. Admit retained builds on descriptor reads and numeric cache misses.
 Successful validated numeric responses explicitly opt into the existing Workers
 Cache front cache. Use canonical build/product/codec/grid/frame/LOD/chunk identity,
 deployment isolation, TTL capped at build expiry and mandatory revalidation.
-Errors opt out. Early removal purges affected cached URLs before acknowledging
-revocation; browser copies follow the existing immutable-until-expiry contract.
+Errors opt out. Retain published builds and numeric references through their
+declared expiry. Rollback changes the latest selection while preserving unexpired
+builds; cleanup and pointer migration preserve their artifacts and references.
+This release provides expiry-based removal. Early pointer deletion cannot revoke
+immutable browser copies, stale-pointer admissions or in-flight cache fills.
 
 Cloud/precipitation additions reuse this publication lifecycle and scalar codec.
 Each product has its own availability, time interval, resolution and precision.
@@ -245,6 +250,13 @@ the view exceeds either limit. Coarse products need model-aware reduction and
 mask/shear validation; averaging level indices across varying heights changes
 meaning. Use a fixed physical-height overview lattice with explicit coverage,
 brackets and error bounds if native-level reduction cannot preserve the method.
+Each reduced vertical interval must retain support for every original bracket
+it spans; valid endpoints alone cannot bridge a missing source level.
+
+If no LOD meets accuracy, useful-coverage and resource gates, hide wind and show
+`Zoom in for wind` through the wind control. Use `Wind unavailable` for unsupported
+products/heights. Retain the selection and retry only when view, data or height
+changes. An unavailable overlay never counts as a fast successful display.
 
 One admission owner accounts for existing raster preparation, decoded arrays,
 numeric terrain/lift, GPU textures, particle state, trail buffers and staging.
@@ -262,6 +274,9 @@ Retain current time first; prefetch another time only within admitted capacity.
 Use generation IDs and atomic field swaps so slow old responses cannot replace
 the selected forecast. Reset/fade trails on a field change and release resources
 on eviction, hidden wind and context loss according to the chosen cache policy.
+New visible work cancels obsolete queued requests and aborts dispensable reads
+and decode/selection tasks. Late completions cannot upload or present. Foreground
+field work takes priority over neighboring heights/times and speculative overviews.
 
 Coordinate presentation by model/build/frame/height/dependency hashes/LOD. The
 existing timeline may display a new lift overview before wind is ready. Show
@@ -276,13 +291,19 @@ changes. Cap its geographic field resolution independently of particle density.
 Warm height changes update uniforms and the selected field, with no full-volume
 upload. Declare the selected 2D lattice, projection, node origin, masks and
 interpolation as the display authority. GPU barbs and particles sample that
-field. CPU probes reproduce its four node evaluations and interpolation off the
+field and its support/reconstruction policy. CPU probes reproduce that policy off the
 main thread, without GPU readback. Direct native-column diagnostics stay labelled
 as such. Validate field approximation against direct sampling separately: the
 [counterexample](assets/wind-overlay/review-evidence.json) produces a 10.8 km/h
 difference solely from resampling across terrain and shear. Treat missing cells
 and no-lift boundaries explicitly; ordinary filtering of packed integers or
-invalid texels cannot define the method.
+invalid texels cannot define the method. Preserve reference availability between
+field nodes, including small no-lift islands and coverage gaps. Carry support
+and reconstruction information or use a bounded validated sampling path for
+ambiguous cells. Keep nearest-donor discontinuities explicit: continuous blending
+across a donor change retains about 18 km/h error in the audit even after 100×
+refinement. Test every LOD against the original reference at off-node locations;
+CPU/GPU agreement alone cannot certify the approximation.
 
 The zero-request condition requires the current model/build/time, visible columns
 and halos, vertical brackets, masks and terrain/lift companions to be resident.
@@ -295,6 +316,12 @@ provides `prerender` and `render`. Reuse a maintained particle implementation af
 license and lifecycle review. Keep the field interface independent of the engine.
 Exact XC geometry still needs controlled assets/sampling; standard barbs alone
 do not establish the accepted visual match.
+
+If GPU selection is unsupported while MapLibre works, a bounded worker CPU
+sampler builds the same selected field/support representation for static Canvas2D
+barbs. Disable particle animation in that fallback and apply the same admission
+and accuracy gates. Whole-map WebGL context loss hides wind, preserves controls
+and resumes after restoration; a drawing-style change cannot restore that context.
 
 [WeatherLayers](https://docs.weatherlayers.com/weatherlayers-gl/layers/particle-layer)
 is the leading off-the-shelf trial for B: connected white lines and configurable
@@ -318,15 +345,43 @@ Windgram and current code; lazy loading creates no spare allowance. Measure
 incremental gzip bytes and interaction-ready latency for the decoder and renderer.
 Any allowance change requires those measurements and an explicit budget update.
 
+The approved standalone basemap is Google Terrain. Keep MapLibre and use the
+official [terrain tile API](https://developers.google.com/maps/documentation/tile/terrain)
+with `mapType: terrain` and `layerRoadmap`, a restricted Maps Platform key, and
+session reuse through its returned expiry. Honor returned tile dimensions and
+viewport attribution. Provider imagery follows its
+[cache and attribution policy](https://developers.google.com/maps/documentation/tile/policies);
+the immutable forecast cache continues to own our weather artifacts. Measure
+session setup, first basemap display and combined tile traffic in startup tests.
+Provider configuration is required before replacing the reference basemap.
+
+The compact km/mi control owns the shared display-unit preference. Update the
+map and Windgram formatters together; current wind m/s/kt conventions become the
+approved km/h/mph pair. SI fields, field identity, physical height stops and
+particle motion remain unchanged. Unit, opacity and display-style changes reuse
+resident fields. The [UI target](wind-overlay-ui.md#map-controls-and-defaults)
+owns the quantity mappings and default/URL precedence.
+
 ## Capacity evidence and decision gates
 
 [Original capacity evidence](assets/wind-overlay/capacity.json) records the four-model
 baseline and pinned RRFS build. The [current audit](assets/wind-overlay/review-evidence.json)
 recomputes all six configured models, cadence, retention and viewport costs.
 These are raw logical payload calculations; compressed sizes and incremental
-runtime need measurement.
+runtime need measurement. Fair grouped-chunk A/B all-frame wind costs are
+**1.66/39.71 GiB GFS**, **4.23/26.11 GiB ICON-EU**, **10.72/14.02 GiB RRFS**,
+and **0.489/0.103 GiB av-wrf**. The two Armenia WRF products are **0.069/0.015 GiB**
+and **0.127/0.027 GiB**. A includes columns; B includes all twelve fine-grid choices.
+Both exclude indexes, overviews and compression; A also needs its target surfaces.
 
-Copying the current RRFS raster pyramid for all 12 choices adds **9.28 million
+RRFS B plus existing numeric data totals **43.04 GiB** before those extras,
+within the 64 GiB logical ceiling. One selected RRFS fine-grid slice carries
+about **one ninth** of the corresponding column wind bytes. Across all six
+cadences B totals **319.50 GiB/day raw**, versus A's **67.13 GiB/day**. Compare
+measured traffic, publication work and retained storage at equal quality.
+
+Raster-pyramid packaging changes the work and resolution tradeoff. Copying the
+current RRFS raster pyramid for all 12 choices adds **9.28 million
 tiles**, exceeding the whole-build five-million cap. Even 64-sample tiles through
 z8 add **13.28 GiB** raw across 40 frames and 12 choices. At Woodstock that is
 about 1.90 km sample spacing; fine terrain is 1.5 km. z9 improves spacing but
@@ -348,7 +403,8 @@ existing numeric lift owners. Compressed capacity and schedule headroom remain
 release gates requiring a full representative build.
 
 The pinned RRFS build reports **61.38 minutes** and **1.977 GiB peak process RSS**.
-Its admitted working set is only about 102 MiB below the 2 GiB limit. Stream
+Its **2,040,638,557-byte planned working set** is about 102 MiB below its separate
+2 GiB admission limit; the observed RSS limit is 4 GiB. Stream
 bounded chunks while each normalized frame is resident; account for every new
 buffer and artifact. Native columns avoid deriving twelve complete fine fields.
 
@@ -357,15 +413,22 @@ Implement in four reviewable stages within this feature branch:
 1. **Real-data spike:** RRFS Woodstock, mountain/valley boundaries and strong
    shear; then one model-level source. Compare original CPU reference, decoded
    CPU and GPU samples. Exercise all approved AGL stops, Surface and Top of lift.
-   Benchmark columns against selected-height tiles on desktop and an actual phone.
+   Benchmark columns against equivalently grouped fine-grid fields on desktop
+   and an actual phone. Run the identical cold/time/height/pan trace, record
+   peak JS/native/GPU allocations and quality/coverage, and apply the
+   [pre-publication decision gate](weather-data-review.md#before-stage-2).
 2. **Numeric publication:** bounded codecs, sidecar, pointer migration,
    capacity accounting, verification, rollback and retained-build tests. Add the
-   deployed-origin cache check. Publish wind and required numeric target surfaces.
+   deployed-origin cache check. Test old/new pointer readers, fence old writers,
+   and exercise forced rollback, CAS retries and cleanup without losing retained
+   numeric references. Missing/corrupt referenced sidecars block publication or rollback.
+   Old builds hide unavailable wind while existing painted layers remain usable.
+   Publish wind and required numeric target surfaces.
 3. **Viewer:** shared transport/worker, bounded GPU field, all three approved
    styles and compact controls. Run cancellation, seam/mask, context-loss,
    expiry and long pan/time tests. Gate native detail/overview on accuracy.
 4. **Scalar rollout:** total/low cloud and numeric precipitation, with independent
-   availability and palettes. Demonstrate a palette edit that downloads no new
+   availability and palettes, after the wind gates pass. Demonstrate a palette edit that downloads no new
    data. Add further scalar products only with their current UI caller.
 
 Benchmark gates are owned by the [adversarial review](weather-data-review.md#release-gates).

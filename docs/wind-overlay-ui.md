@@ -5,11 +5,37 @@ The [data plan](weather-data-plan.md) owns delivery and implementation sequencin
 
 Approved 2026-11-13. These captures use published RRFS lift for Woodstock,
 Virginia, with illustrative winds that strengthen with height. Production winds
-follow the forecast, including shear and decreases with height.
+follow the forecast, including shear and decreases with height. Updated controls
+use the reference OpenStreetMap basemap; Google Terrain is the production target.
 
 ![Desktop wind controls](assets/wind-overlay/desktop.jpg)
 
 <img src="assets/wind-overlay/phone-menu.jpg" alt="Phone controls with the wind menu open" width="390" />
+
+## Map controls and defaults
+
+Default to **Auto** forecast selection: the finest available model covering the
+map center and selected time. Show a compact Auto control with other model choices
+inside its collapsed details menu. Honor an explicit model in an existing URL and
+show its actual name. Model selection remains independent of wind height.
+
+Use **Google Terrain** as the production basemap through the official
+[Map Tiles API](https://developers.google.com/maps/documentation/tile/terrain).
+Keep its attribution visible. Provider setup belongs to the data plan.
+
+Place a **36 × 36 px** current-location bullseye in the upper-right map controls.
+On tap, request one location fix and center the map. Show locating, unavailable and
+denied states; a failed request leaves the view intact. The mockup simulates this
+control without requesting location.
+
+Keep a small **km / mi** switch beside the map controls. It owns one app-wide
+metric/imperial preference, including the map scale, rail, keys, probes and
+Windgram. Use km/mi for distance, km/h/mph for horizontal wind, m/ft for height,
+m/s/ft/min for vertical speed, °C/°F for temperature, mm/in for precipitation
+(including hourly rates), hPa/inHg for pressure, and °C/km or °F/1,000 ft for lapse
+rate. Persist the preference.
+Keep canonical SI values, cached data, physical AGL stops and palette thresholds
+unchanged; switching units updates labels and glyphs without downloading fields.
 
 ## Wind display
 
@@ -20,13 +46,17 @@ density while retaining the same glyphs and speed values.
 
 Place the wind menu directly above the height rail. Its closed button is
 48 × 32 CSS px, with the selected style glyph and a chevron. The open menu is
-about 100 × 62 px and expands up and left. Its first row selects the three styles;
-its second row contains wind visibility and animation pause/play.
+about 100 × 62 px, bottom-aligned **6 px left** of the fixed trigger.
+Opening or selecting a style leaves the trigger and rail in place. Its first row
+selects the three styles; its second row contains wind visibility and animation
+pause/play. Keep the popup clear of the trigger's hit area so its activation
+cannot reach Pause or another newly revealed action.
 
 Selecting a style enables wind and closes the menu. Hiding wind retains its style
 and height. Pause is disabled for barbs and hidden wind. Show the paused/off state
 on the closed control. Escape and outside click close the menu; restore keyboard
-focus to its trigger. Keep these controls together beside the rail.
+focus to its trigger. Use focus without scrolling when opening or closing the
+menu. Keep these controls together beside the rail.
 
 ## Wind height
 
@@ -41,15 +71,23 @@ including its top selector. Reserve map space below it for the timeline.
 - Selecting Top of lift hides the fixed-height thumb and retains the last fixed
   selection. Moving the rail returns to fixed-height mode.
 
-Keep `m AGL` inside the rail. The phone has no duplicate upper-left wind label.
+Keep `m AGL` or `ft AGL` inside the rail, following the global units. Convert the
+same physical stops when units change. The phone has no duplicate upper-left wind label.
 Unsupported height samples remain unavailable; Surface and valid calm remain
 distinct. Top of lift may lie anywhere within the supported profile.
+Point inspection shows values for valid samples, `Wind unavailable` for missing
+support, `Outside forecast area` outside the domain, and `No usable lift` when
+Top of lift has no target. All three absent states omit glyphs and trails. If no
+LOD qualifies for the viewport, the wind control exposes `Zoom in for wind` and
+retains the requested selection without an endless loading state.
 
 ## Lift shading
 
-Retain a separate **156 × 46 px** upper-left lift key. Put the AGL/MSL radio toggle
-inside its existing `Lift m` line. Put the short opacity slider on that same line;
-keep it visible and adjustable in 5% steps. Preserve the lift palette and labels.
+Place the separate **156 × 46 px** lift key in the **lower-left corner, 8 px above
+the timeline**. Put the AGL/MSL radio toggle inside its existing `Lift m`/`Lift ft`
+line. Put the short opacity slider on that same line; keep it visible and
+adjustable in 5% steps. Default lift opacity to **50%** and honor explicit saved
+opacity. Preserve the lift palette, converting key labels with the global units.
 
 Changing the lift reference changes shading and its key. Wind heights remain AGL.
 Opacity affects only lift shading. The key and its controls share one compact box.
@@ -102,14 +140,20 @@ separately from antialiasing.
 
 Verify the controls at 320 px and 390 px phone widths and a 1200 px desktop view.
 Keep the rail clear of the timeline, labels unclipped, and the page free of
-horizontal overflow. The captured Pages model strip is contextual reference;
-production retains its real model navigation.
+horizontal overflow. Keep the lower-left key clear of attribution and the
+timeline, including phone safe areas.
 
 Use one Tab stop per radio group, arrow/Home/End navigation, accessible names,
 visible selection, and a labelled native range. Test day boundaries, unavailable
 hours, Top of lift without lift, style changes while paused, wind off/on, and
 rapid height/time changes. Compare barbs at calm and feather thresholds; verify
 white trails and the hybrid against the same decoded vectors.
+
+Verify fresh-load Auto/50% defaults and explicit saved overrides. Switch km/mi
+with a point card open: every quantity and the rail update consistently, while
+the selected physical height, time and cached fields stay fixed. Test location
+success, timeout and denial. Repeated pointer, touch and keyboard style selections
+must cause no layout shift, page scroll or accidental pause/visibility action.
 
 Capture provenance: RRFS cycle `2026-11-12T18:00:00Z`, build
 `20261112T215710Z-fefa6305-83de-488b-a745-700ec7eda922`, displayed forecast
