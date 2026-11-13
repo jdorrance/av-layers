@@ -50,11 +50,12 @@ it('binds whole-domain terrain, coverage and the lift method to their respective
 
 async function sourceFixture(interpolation: 'step' | 'linear-rgb'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'av-render-identity-')), git = promisify(execFile);
-  for (const directory of ['apps/batch/src', 'packages/contracts/src', 'packages/contracts/config', 'packages/forecast/src', 'packages/soaring/src', 'packages/solar/src', 'packages/thermodynamics/src']) {
+  for (const directory of ['apps/batch/src', 'packages/contracts/src', 'packages/contracts/config', 'packages/contracts/schemas', 'packages/forecast/src', 'packages/soaring/src', 'packages/solar/src', 'packages/thermodynamics/src']) {
     await mkdir(join(root, directory), { recursive: true });
   }
   await writeFile(join(root, 'packages/contracts/src/layers.ts'), `export const liftInterpolation = '${interpolation}';\n`);
   await writeFile(join(root, MODEL_CONFIG_PATH), '{}\n');
+  await writeFile(join(root, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'), '{}\n');
   await writeFile(join(root, 'apps/batch/pmtiles.json'), '{}\n');
   await writeFile(join(root, 'pnpm-lock.yaml'), 'lock\n');
   await writeFile(join(root, 'package.json'), '{}\n');
@@ -100,11 +101,11 @@ it('keeps client source out of the recipe and pins the full workspace lockfile',
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-it('binds global forecast settings into the recipe independently of science', async () => {
+it.each([MODEL_CONFIG_PATH, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'])('binds %s into the recipe independently of science', async path => {
   const root = await sourceFixture('linear-rgb');
   try {
     const before = await buildIdentity(INDEXED_PRODUCT, 'a'.repeat(64), { root });
-    await writeFile(join(root, MODEL_CONFIG_PATH), '{"parallelism":{"jobs":1,"workers":0}}\n');
+    await writeFile(join(root, path), '{"changed":true}\n');
     const after = await buildIdentity(INDEXED_PRODUCT, 'a'.repeat(64), { root });
     expect(after.components.contracts).not.toBe(before.components.contracts);
     expect(after.components.configuration).toBe(before.components.configuration);

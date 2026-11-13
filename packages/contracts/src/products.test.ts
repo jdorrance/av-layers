@@ -15,11 +15,7 @@ describe('model configuration', () => {
   it('resolves each model window once for consumers and source adapters', () => {
     for (const settings of configuration.models) {
       const product = getProduct(settings.modelId)!, window = settings.forecast.window;
-      expect(product.frameHours).toEqual([
-        ...Array.from({ length: 24 }, (_, index) => index + 1),
-        ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)
-      ]);
-      expect(product.expectedRunsPerDay).toBe(4);
+      if ('expectedRunsPerDay' in settings.forecast) expect(product.expectedRunsPerDay).toBe(settings.forecast.expectedRunsPerDay);
       const { source, tier } = settings;
       expect(product.tier).toBe(tier);
       expect(product.source).toEqual(source);

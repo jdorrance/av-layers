@@ -101,7 +101,7 @@ it('offers the published models and follows the selected build', () => {
   const nodes = visit(panel.root as unknown as FakeElement);
   const model = nodes.find(element => element.id === 'av-model')!;
   expect(model.value).toBe('gfs');
-  expect(model.children.map(option => option.value)).toEqual(['gfs', 'icon-eu', 'rrfs', 'auto']);
+  expect(model.children.map(option => option.value)).toEqual(['gfs', 'icon-eu', 'rrfs', 'av-wrf', 'auto']);
   expect(nodes.some(element => element.id === 'av-layer' || element.id === 'av-frame')).toBe(false);
   panel.renderBuild(fixtureBuild({ model: 'icon-eu', buildId: FIXTURE_BUILD_ID }));
   expect(model.value).toBe('icon-eu');

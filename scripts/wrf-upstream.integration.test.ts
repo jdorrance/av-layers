@@ -12,7 +12,7 @@ import { buildShard, createBuildPlan, finalizeBuild } from '../apps/batch/src/pa
 import { publish } from '../apps/batch/src/publication.js';
 import type { ObjectStorage } from '../apps/batch/src/storage.js';
 import { completeForecastControlShard, downloadForecastControlReceipts, forecastPlanSignal, uploadForecastControlPlan } from './forecast-control.js';
-import { UPP_ARMENIA, UPP_NEW_ZEALAND } from './fixtures/upp-products.js';
+import { UPP_NORTH, UPP_SOUTH } from './fixtures/upp-products.js';
 import { denseFixtureMask, syntheticWholeDomain } from './fixtures/whole-domain.js';
 import { publishUppFixture } from './fixtures/upp-lambert-grib.js';
 
@@ -22,8 +22,8 @@ vi.mock('@av/contracts/models', async importOriginal => {
   return { ...actual, getProduct: (id: string) => fixtureRegistry.get(id) ?? actual.getProduct(id) };
 });
 const fixtureRuns = [
-  { product: UPP_ARMENIA, cycleHourUtc: 8 },
-  { product: UPP_NEW_ZEALAND, cycleHourUtc: 0 }
+  { product: UPP_NORTH, cycleHourUtc: 8 },
+  { product: UPP_SOUTH, cycleHourUtc: 0 }
 ];
 
 const config = fileURLToPath(new URL('../apps/api/wrangler.json', import.meta.url));

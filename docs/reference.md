@@ -14,9 +14,9 @@ Invoke `pnpm exec node --import tsx apps/batch/src/cli.ts COMMAND` with the opti
 
 Source: [command definitions](../apps/batch/src/commands.ts), consumed by [CLI](../apps/batch/src/cli.ts).
 
-- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
+- `build`: `--model <string>`, `--out <string>`, `--cycle <string>`, `--cache-dir <string>`, `--source-store-dir <string>`, `--terrain-catalog-ref <string>`, `--terrain-store-dir <string>`.
 - `capacity`: `--model <string>`, `--cadence-hours <string>`, `--retention-days <string>`.
-- `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`.
+- `input-proof`: `--model <string>`, `--cycle <string>`, `--cache-dir <string>`, `--source-store-dir <string>`.
 - `validate`: `--manifest <string>`, `--receipts-only`.
 
 ## Terrain CLI
@@ -54,6 +54,26 @@ Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refine
 Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
 Forecast trigger budget: 40 shard jobs; default workers 3.
+
+### av-wrf (av-wrf-soaring)
+
+- Public model ID: `av-wrf`; model family: `wrf`; source configuration: `av-wrf-pilot-v1`; domain: `pilot`.
+- Attribution: av-wrf · WRF-ARW / NOAA GFS · Aviation Forecast Layers.
+- Resolution tier: `high`.
+- Grid: `lambert-conformal`; 204 columns × 174 rows; spherical Earth radius 6370000 m; periodic longitude: false.
+- Terrain subdivision factor: `1`; fine grid: 204 columns × 174 rows.
+- Bounds [west, south, east, north]: `[40.78698,37.812119,48.21302,42.534384]`.
+- Coverage: `av-wrf-pilot-land-v1`. Land and 50 km coastal buffer within the configured av-wrf Lambert domain; Russia excluded.
+- Native tile zoom: 0–10.
+- Execution: 24 target shards; at most 24 simultaneous shard jobs; worker ceiling 3; event-driven, 1 expected runs per day.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
+- Source interval changes at hour 39 to 3 hours.
+- Vertical coordinate: `model-levels`; maximum levels: 40.
+- Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- Publication timing: cycle age at most 6 hours; remaining horizon at least 36 hours.
 
 ### GFS (gfs-soaring)
 

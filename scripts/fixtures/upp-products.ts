@@ -30,9 +30,9 @@ function uppProduct(region: string, grid: Extract<Grid, { kind: 'lambert-conform
 }
 
 const grid = { kind: 'lambert-conformal', width: 18, height: 18, wrapLongitude: false } as const;
-export const UPP_ARMENIA = uppProduct('armenia', { ...grid, earthRadiusM: 6371229, centralMeridianDeg: 44.5,
+export const UPP_NORTH = uppProduct('north', { ...grid, earthRadiusM: 6371229, centralMeridianDeg: 44.5,
   latitudeOfOriginDeg: 39, standardParallel1Deg: 39, standardParallel2Deg: 41.4,
   x0M: -24_000, y0M: 110_000, dxM: 3000, dyM: 3000 }, 3);
-export const UPP_NEW_ZEALAND = uppProduct('nz', { ...grid, earthRadiusM: 6370000, centralMeridianDeg: 172.5,
+export const UPP_SOUTH = uppProduct('nz', { ...grid, earthRadiusM: 6370000, centralMeridianDeg: 172.5,
   latitudeOfOriginDeg: -44, standardParallel1Deg: -44, standardParallel2Deg: -38,
   x0M: -8_000, y0M: 300_000, dxM: 1000, dyM: 1000 }, 1);

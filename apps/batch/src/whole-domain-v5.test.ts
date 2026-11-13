@@ -1,5 +1,5 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
-import { ARMENIA_LAMBERT } from '../../../tests/lambert-fixtures.js';
+import { NORTHERN_LAMBERT } from '../../../tests/lambert-fixtures.js';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -188,7 +188,7 @@ async function builtManifest() {
 }
 
 it('serves separate 1 km Lambert lift and native surfaces with serial and shard parity', async () => {
-  const grid = { ...ARMENIA_LAMBERT, width: 18, height: 18, x0M: 0, y0M: 0, dxM: 1000, dyM: 1000 };
+  const grid = { ...NORTHERN_LAMBERT, width: 18, height: 18, x0M: 0, y0M: 0, dxM: 1000, dyM: 1000 };
   const configured: ProductDefinition = { ...product, grid, bounds: [44, 40, 45, 41],
     terrainSubdivisionFactor: 1, frameHours: [1, 2], intervalHours: 1 };
   const geometry = planWholeDomainGrid(grid, 1);
@@ -851,14 +851,15 @@ describe('whole-domain v5 production', () => {
     expect([...sparseActiveIndices(fine.coverage)]).toHaveLength(fine.coverage.width * fine.coverage.height);
   });
 
-  it('builds with private donor support and keeps donor-only cells outside native samples', async () => {
+  it.each(['Uint8Array', 'Buffer'] as const)('builds with private donor support and preserves %s coverage and native samples', async storage => {
     const setup = await fixture(), out = await root('wd-donor-build'), source = fixtureProvider();
-    const mask: CoverageMask = { ...nativeMask, output: new Uint8Array(nativeMask.output.length), halo: new Uint8Array(nativeMask.halo.length) };
+    const bytes = (length: number) => storage === 'Buffer' ? Buffer.alloc(length) : new Uint8Array(length);
+    const mask: CoverageMask = { ...nativeMask, output: bytes(nativeMask.output.length), halo: bytes(nativeMask.halo.length) };
     setBit(mask.output, 0);
     for (const i of [1, 17, 18, 19, 35]) setBit(mask.halo, i);
-    const before = { output: mask.output.slice(), halo: mask.halo.slice() };
+    const before = { output: Uint8Array.from(mask.output), halo: Uint8Array.from(mask.halo) };
     const manifest = await readV5(await buildForecast({ out, cycle: CYCLE, product, mask, provider: source.provider, wholeDomain: setup }));
-    expect(mask.output).toEqual(before.output); expect(mask.halo).toEqual(before.halo);
+    expect(Uint8Array.from(mask.output)).toEqual(before.output); expect(Uint8Array.from(mask.halo)).toEqual(before.halo);
     const native = surface(manifest, 'native'), data = await surfaceBytes(out, manifest, 'native');
     const plan = (await import('@av/forecast')).prepareShardedSamplePackLayout(mask.grid, nativeSparseMask(mask).coverage.blockIds, native.samples.channelCount);
     for (let ordinal = 0; ordinal < plan.blockCount; ordinal++) {

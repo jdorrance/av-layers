@@ -9,7 +9,8 @@ import { selectWorkflowModels } from './workflow-models.js';
 
 it('selects registered models with their fixed configured caps', () => {
   const all = PRODUCTS.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
-  expect(selectWorkflowModels()).toEqual(all);
+  expect(selectWorkflowModels()).toEqual(all.filter(model => PRODUCTS.find(product => product.modelId === model.model)!.execution.schedule.length));
+  expect(selectWorkflowModels({ kind: 'health' })).toEqual(all);
   for (const model of all) expect(selectWorkflowModels({ selection: model.model })).toEqual([model]);
   for (const value of ['', 'unknown', 'constructor', 'toString', all.map(model => model.model).join(',')]) {
     expect(() => selectWorkflowModels({ selection: value })).toThrow('Unknown forecast model');

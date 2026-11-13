@@ -9,7 +9,7 @@ export const MAX_JSON_CONTAINER_ENTRIES = 256;
 export class ResourceLimitError extends Error {}
 
 /** Bound nesting and structural tokens before TextDecoder or JSON.parse allocates strings or an object graph. */
-export function parseBoundedJson(bytes: Uint8Array, maxTokens = MAX_METADATA_JSON_TOKENS): unknown {
+export function parseBoundedJson(bytes: Uint8Array, maxTokens = MAX_METADATA_JSON_TOKENS, maxContainerEntries = MAX_JSON_CONTAINER_ENTRIES): unknown {
   let string = false, escaped = false, depth = 0, tokens = 0;
   const containers: { kind: number; entries: number }[] = [];
   for (let i = 0; i < bytes.length; i++) {
@@ -26,7 +26,7 @@ export function parseBoundedJson(bytes: Uint8Array, maxTokens = MAX_METADATA_JSO
       if (byte === 0x7d || byte === 0x5d) { depth--; containers.pop(); }
       const container = containers.at(-1);
       if (container && ((byte === 0x3a && container.kind === 0x7b) || (byte === 0x2c && container.kind === 0x5b))) {
-        if (++container.entries > MAX_JSON_CONTAINER_ENTRIES - (container.kind === 0x5b ? 1 : 0)) throw new ResourceLimitError('JSON container exceeds property budget');
+        if (++container.entries > maxContainerEntries - (container.kind === 0x5b ? 1 : 0)) throw new ResourceLimitError('JSON container exceeds property budget');
       }
       if (depth > 32) throw new ResourceLimitError('JSON nesting exceeds object budget');
     }

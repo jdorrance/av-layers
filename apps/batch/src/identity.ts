@@ -62,7 +62,7 @@ export async function buildIdentity(product: ProductDefinition, coverageHash: st
       ],
       settings: []
     },
-    contracts: { directories: ['packages/contracts/src'], settings: [MODEL_CONFIG_PATH] }
+    contracts: { directories: ['packages/contracts/src'], settings: [MODEL_CONFIG_PATH, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'] }
   };
   const components = {} as Record<'adapter' | 'science' | 'contracts', string>;
   const fixtureProduct = join(root, 'packages/contracts/src/fixture-product.ts');

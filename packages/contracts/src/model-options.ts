@@ -33,5 +33,16 @@ export const MODEL_OPTIONS = [
       -60.891244,
       52.628704
     ]
+  },
+  {
+    "modelId": "av-wrf",
+    "label": "av-wrf",
+    "nominalDxMeters": 3001,
+    "bounds": [
+      40.78698,
+      37.812119,
+      48.21302,
+      42.534384
+    ]
   }
 ] as const;

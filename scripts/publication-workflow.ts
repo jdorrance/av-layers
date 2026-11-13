@@ -252,7 +252,9 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
     const plan = await readBuildPlan('output/plan.json');
     buildId = plan.buildId;
     const prefix = `builds/${authority.model}/${plan.buildId}/`;
-    const sourcePrefix = plan.sourcePin ? pinnedSourcePrefix(authority.model, plan.cycle, plan.sourcePin.key) : undefined;
+    const product = getProduct(authority.model);
+    if (!product) throw new Error('Forecast shard requires a configured model');
+    const sourcePrefix = plan.sourcePin ? pinnedSourcePrefix(product, plan.cycle, plan.sourcePin.key) : undefined;
     const assertReadable = (key: string): void => {
       if (!key.startsWith(prefix) && !/^coverage\/[a-f0-9]{64}\/(manifest\.json|sparse\.bin|tiles\.bin)$/.test(key)
           && !/^terrain\/prepared\/[a-f0-9]{64}\/[a-z0-9.-]+$/.test(key)
