@@ -1,6 +1,7 @@
 import { DEFAULT_PROBE_TIMEOUT_MS, MAX_PROVENANCE_BYTES, maxProfileFrames, parseFrameProvenance, parseProvenance,
   renderedFrames, renderedLayers, type LayerId, type ManifestV5 } from '@av/contracts';
 import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
+import { PRODUCTS } from '@av/contracts/models';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -146,7 +147,7 @@ function requestReading(path: string, response: Response, startedAt: number): [M
 /** One live serving check for deployment and monitoring, pinned to a single immutable build. */
 export async function probeApi(options: {
   baseUrl: string; model: string; expectedDeploymentId?: string; requireLive?: boolean;
-  expectedModels?: readonly string[]; expectedBuild?: Pick<ManifestV5, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
+  expectedBuild?: Pick<ManifestV5, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
   fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: ManifestV5) => void;
   observeProbe?: (route: MeasuredRoute, reading: ProbeReading) => void;
   observeClient?: (metric: ApiClientMetric) => void;
@@ -167,7 +168,6 @@ export async function probeApi(options: {
   const json = async (path: string, limit?: number) => JSON.parse(new TextDecoder().decode((await get(path, 'application/json', limit)).bytes));
   const catalog = await json('/v1/catalog') as { models?: Array<{ model?: string; available?: boolean; error?: string }> };
   invariant(Array.isArray(catalog.models) && catalog.models.some(item => item.model === options.model && item.available === true), `Catalog reports no publication for ${options.model}`);
-  invariant(options.expectedModels?.every(model => catalog.models?.some(item => item.model === model)) ?? true, 'Catalog omitted a registered forecast model');
   const client = new ApiClient({ baseUrl, fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS, now: options.now, onMetric: options.observeClient });
   const build = await client.latest(options.model, { requireLive: options.requireLive ?? true, signal: options.signal });
   const { manifest } = build, frame = manifest.frames[0].id;
@@ -194,6 +194,27 @@ export async function probeApi(options: {
   const decoder = new TextDecoder();
   invariant(bytes.length >= 25 && decoder.decode(bytes.subarray(0, 4)) === 'RIFF' && decoder.decode(bytes.subarray(8, 12)) === 'WEBP', 'tile body is not WebP');
   return manifest;
+}
+
+/** Deployment checks every registered model, accepting absent event-driven publications. */
+export async function verifyApiDeployment(options: {
+  baseUrl: string; expectedDeploymentId: string; signal?: AbortSignal; fetchImpl?: typeof fetch;
+}): Promise<void> {
+  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  await verifyWorkerReadiness({ ...options, url: `${baseUrl}/healthz` });
+  const client = new ApiClient({ baseUrl, fetchImpl: options.fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
+  const catalog = await client.catalog({ signal: options.signal });
+  invariant(new Set(catalog.map(entry => entry.model)).size === catalog.length, 'Catalog repeats a forecast model');
+  const published = PRODUCTS.filter(product => {
+    const entry = catalog.find(entry => entry.model === product.modelId);
+    invariant(entry, `Catalog omitted registered forecast model ${product.modelId}`);
+    if (entry.available) return true;
+    invariant(product.execution.schedule.length === 0 && entry.error === 'publication-unavailable',
+      `Catalog reports no publication for ${product.modelId}: ${entry.error ?? 'unknown error'}`);
+    console.log(`Deployment: ${product.modelId} has no publication; awaiting an external forecast cycle`);
+    return false;
+  });
+  for (const product of published) await probeApi({ ...options, baseUrl, model: product.modelId });
 }
 
 export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: Pick<ManifestV5, 'model' | 'buildId' | 'frames' | 'layers'>; fetchImpl?: typeof fetch }): Promise<void> {
