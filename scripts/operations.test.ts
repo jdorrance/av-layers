@@ -11,7 +11,7 @@ import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { MAX_FORECAST_SHARDS, readBuildPlan } from '../apps/batch/src/parallel.js';
 import { assertBuildBucketLock, r2ShardStorage, sealShardCredentials } from '../apps/batch/src/storage.js';
 import { uploadForecastControlPlan } from './forecast-control.js';
-import { planForecast, runForecastShard } from './publication-workflow.js';
+import { assertCurrentMain, planForecast, runForecastShard } from './publication-workflow.js';
 import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, validateShardEnvironment, verifyPagesProduction, runOperation, type WranglerConfig } from './operations';
 
 vi.mock('../apps/batch/src/parallel.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/parallel.js')>(), readBuildPlan: vi.fn() }));
@@ -40,9 +40,10 @@ const otherModel = MODEL_IDS.find(model => model !== DEFAULT_MODEL)!;
 const credentialName = (model: string) => `FORECAST_${model.toUpperCase().replaceAll('-', '_')}_SHARD_CREDENTIAL_KEY`;
 const namedKeys = MODEL_IDS.map(credentialName);
 const base = { TARGET_ENV: 'staging', MODEL: DEFAULT_MODEL, CLOUDFLARE_ACCOUNT_ID: account, CLOUDFLARE_API_TOKEN: 'token', PAGES_PROJECT_NAME: pages, API_BASE_URL: 'https://api-staging.example.com' };
+const workflow = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123' };
 
 it('requires an explicit registered model for forecast writes and maintenance', () => {
-  const context = { GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging' };
+  const context = { ...workflow, TARGET_ENV: 'staging' };
   for (const MODEL of MODEL_IDS) {
     for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard', 'forecast', 'maintenance']) {
       expect(() => validateOperationInputs(command, { ...base, MODEL, SHARD_ID: '0', ACTION: 'cleanup' })).not.toThrow();
@@ -77,6 +78,26 @@ it('admits explicit forecast commands and bounded worker identities', () => {
   for (const command of ['forecast-terrain', 'forecast-plan', 'forecast-shard']) expect(() => validateOperationInputs(command, { ...base, SHARD_ID: '0', RESUME_RUN_ID: '123' })).toThrow('Only forecast accepts');
 });
 
+it.each(['forecast-terrain', 'forecast-plan', 'forecast', 'deploy', 'maintenance'])(
+  'requires current main before new work, resume, deployment or maintenance: %s', async command => {
+    for (const [key, value] of Object.entries({ ...base, ACTION: 'cleanup', RESUME_RUN_ID: command === 'forecast' ? '100' : undefined })) vi.stubEnv(key, value);
+    vi.mocked(assertCurrentMain).mockReset().mockRejectedValueOnce(new Error('superseded'));
+    try {
+      await expect(runOperation(command)).rejects.toThrow('superseded');
+      expect(assertCurrentMain).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllEnvs(); vi.mocked(assertCurrentMain).mockReset(); }
+  }
+);
+
+it.each(['forecast-shard', 'forecast'])('requires workflow authority before frozen %s work', async command => {
+  for (const [key, value] of Object.entries({ ...base, ...workflow, SHARD_ID: '0', RESUME_RUN_ID: undefined, GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/deploy.yml@refs/heads/main' })) vi.stubEnv(key, value);
+  vi.mocked(assertCurrentMain).mockClear();
+  try {
+    await expect(runOperation(command)).rejects.toThrow('serialized');
+    expect(assertCurrentMain).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); }
+});
+
 it('derives publication bucket from the selected Wrangler environment and needs one account ID', () => {
   const env = { ...base, R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret', R2_BUCKET: 'ignored-stale-variable' };
   expect(validatePublicationEnvironment(env, config)).toMatchObject({ accountId: account, r2Bucket: config.staging.bucket });
@@ -93,7 +114,7 @@ it('requires an encryption key and excludes parent credentials from shards', () 
   for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...namedKeys, 'FORECAST_EXAMPLE_SHARD_CREDENTIAL_KEY']) expect(() => validateShardEnvironment({ ...env, [key]: 'publisher' }, config)).toThrow(key);
 });
 
-it('opens scoped shard storage from the validated plan and encrypted artifact', async () => {
+it('opens frozen shard storage after main advances using the validated plan and encrypted artifact', async () => {
   const deadlineAt = new Date(Date.now() + 30 * 60_000).toISOString();
   const plan = { model: DEFAULT_MODEL, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', createdAt: new Date().toISOString(), deadlineAt };
   vi.mocked(readBuildPlan).mockResolvedValue(plan as Awaited<ReturnType<typeof readBuildPlan>>);
@@ -104,10 +125,12 @@ it('opens scoped shard storage from the validated plan and encrypted artifact', 
     envelope.copy(buffer, offset, position, position + bytesRead);
     return { bytesRead, buffer };
   }, close: async () => {} } as never);
-  for (const [key, value] of Object.entries({ ...base, SHARD_ID: '1', FORECAST_SHARD_CREDENTIAL_KEY: shardEnv.FORECAST_SHARD_CREDENTIAL_KEY })) vi.stubEnv(key, value);
+  for (const [key, value] of Object.entries({ ...base, ...workflow, SHARD_ID: '1', RESUME_RUN_ID: undefined, FORECAST_SHARD_CREDENTIAL_KEY: shardEnv.FORECAST_SHARD_CREDENTIAL_KEY })) vi.stubEnv(key, value);
   for (const key of ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_SESSION_TOKEN', 'R2_SHARD_ACCESS_KEY_ID', 'R2_SHARD_SECRET_ACCESS_KEY', 'CLOUDFLARE_API_TOKEN', 'GH_CREDENTIAL_ISSUER_TOKEN', ...namedKeys]) vi.stubEnv(key, undefined);
+  vi.mocked(assertCurrentMain).mockReset().mockRejectedValue(new Error('superseded'));
   try {
     await runOperation('forecast-shard');
+    expect(assertCurrentMain).not.toHaveBeenCalled();
     expect(readBuildPlan).toHaveBeenCalledWith('output/plan.json');
     expect(runForecastShard).toHaveBeenCalledOnce();
     const [shard, store] = vi.mocked(runForecastShard).mock.calls[0]!;
@@ -120,7 +143,7 @@ it('opens scoped shard storage from the validated plan and encrypted artifact', 
     vi.mocked(readBuildPlan).mockResolvedValueOnce({ ...plan, model: otherModel } as Awaited<ReturnType<typeof readBuildPlan>>);
     await expect(runOperation('forecast-shard')).rejects.toThrow('differs from the workflow model');
     expect(runForecastShard).toHaveBeenCalledOnce();
-  } finally { vi.unstubAllEnvs(); vi.mocked(open).mockReset(); vi.mocked(runForecastShard).mockReset(); vi.mocked(readBuildPlan).mockReset(); vi.mocked(r2ShardStorage).mockClear(); }
+  } finally { vi.unstubAllEnvs(); vi.mocked(open).mockReset(); vi.mocked(runForecastShard).mockReset(); vi.mocked(readBuildPlan).mockReset(); vi.mocked(r2ShardStorage).mockClear(); vi.mocked(assertCurrentMain).mockReset(); }
 });
 
 it('seals the plan with the environment key only after the bucket lock and control upload', async () => {

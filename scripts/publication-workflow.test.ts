@@ -35,6 +35,7 @@ vi.mock('node:child_process', async () => {
 vi.mock('node:fs/promises', () => ({ writeFile: fake.write, mkdir: fake.mkdir, readdir: fake.directories,
   stat: async (path: string) => { await fake.readLocal(path); return { isFile: () => true }; } }));
 import { resumePublication, assertV5ResumeIdentity, forecastArtifactRevision, downloadForecastArtifact, planForecast, prepareForecastTerrain, runForecastShard, finalizeAndPublish, publicationWorkflow } from './publication-workflow.js';
+import { runOperation } from './operations.js';
 const revision = 'a'.repeat(40);
 const catalogRef = { key: `terrain/catalogs/${'c'.repeat(64)}.json`, sha256: 'c'.repeat(64), bytes: 100 };
 let manifest: ManifestV5;
@@ -309,10 +310,26 @@ it('refuses local or non-main invocation before building or publishing', async (
   expect(fake.finalize).not.toHaveBeenCalled();
   expect(fake.publish).not.toHaveBeenCalled();
 });
-it('refuses a superseded revision before publishing', async () => {
+it('assembles a frozen forecast after main advances and refuses publication with original provenance intact', async () => {
+  for (const [key, value] of Object.entries({ RESUME_RUN_ID: undefined, GITHUB_RUN_ATTEMPT: '1', CLOUDFLARE_ACCOUNT_ID: '0'.repeat(32), R2_ACCESS_KEY_ID: 'publisher', R2_SECRET_ACCESS_KEY: 'publisher-secret' })) vi.stubEnv(key, value);
+  const original = structuredClone(manifest), path = 'output/builds/gfs/build/manifest.json';
+  fake.finalize.mockImplementationOnce(async (_plan, { onValidated }) => {
+    await fake.write(path, JSON.stringify(manifest));
+    await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, path);
+    return path;
+  });
   fake.gh.mockResolvedValue({ stdout: 'b'.repeat(40) });
-  await expect(finalizeAndPublish()).rejects.toThrow('superseded');
-  expect(fake.publish).not.toHaveBeenCalled();
+  await expect(runOperation('forecast')).rejects.toThrow('superseded');
+  expect(fake.stageControl).toHaveBeenCalledOnce();
+  expect(fake.finalize).toHaveBeenCalledOnce();
+  expect(fake.gh).toHaveBeenCalledOnce();
+  expect(fake.finalize.mock.invocationCallOrder[0]).toBeLessThan(fake.gh.mock.invocationCallOrder[0]);
+  const sealed = fake.write.mock.calls.findIndex(([file]) => file === path);
+  expect(JSON.parse(fake.write.mock.calls[sealed][1])).toEqual(original);
+  expect(fake.write.mock.invocationCallOrder[sealed]).toBeLessThan(fake.gh.mock.invocationCallOrder[0]);
+  expect(JSON.parse(fake.write.mock.calls.find(([file]) => file === 'output/workflow.json')![1])).toMatchObject({ runId: '123', attempt: 1, revision });
+  expect(manifest).toEqual(original);
+  for (const call of [fake.publish, fake.pointer, fake.cleanup, fake.verifyServing]) expect(call).not.toHaveBeenCalled();
 });
 it('refuses a build that exceeds resource budgets before publication', async () => {
   manifest.metrics.peakRssBytes = 10 * 1024 ** 3;

@@ -22,7 +22,7 @@ import { terrainCatalogInput } from './terrain-inputs.js';
 
 const TERRAIN_ATTEMPTS = 3;
 
-/** Check at entry and immediately before publishing a completed forecast. */
+/** Check before starting new work and immediately before publishing a completed forecast. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
   const { repository, revision } = workflowContext();
   const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/git/ref/heads/main`, '--jq', '.object.sha'], { timeout: 15_000, signal });

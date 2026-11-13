@@ -169,7 +169,9 @@ async function pnpm(args: string[], env: NodeJS.ProcessEnv = process.env): Promi
 
 export async function runOperation(command: string): Promise<void> {
   validateOperationInputs(command);
-  await assertCurrentMain();
+  // Frozen work keeps its plan revision; publication still checks current main.
+  if (command === 'forecast-shard' || command === 'forecast' && !process.env.RESUME_RUN_ID) workflowAuthority();
+  else await assertCurrentMain();
   if (command === 'forecast-shard') {
     const config = validateShardEnvironment(process.env);
     const plan = await readBuildPlan('output/plan.json');
