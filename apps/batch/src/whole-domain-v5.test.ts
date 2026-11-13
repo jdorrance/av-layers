@@ -1152,6 +1152,12 @@ describe('whole-domain v5 production', () => {
     expect(sparseAdmission.workingSet.nativeFrame).toBeLessThan(admitted.workingSet.nativeFrame);
     const rejected = admitWholeDomain({ ...input, terrainBytes: 3 * 1024 ** 3 });
     expect(rejected.violations).toContain('whole-domain working set exceeds the 2 GiB process budget');
+    const nativeDecoder = admitWholeDomain({ ...input, acquisitionWorkspaceBytes: 128 * 1024 ** 2 });
+    expect(nativeDecoder.workingSet.acquisitionWorkspace).toBe(128 * 1024 ** 2);
+    expect(nativeDecoder.estimatedPeakBytes).toBe(admitted.estimatedPeakBytes + 128 * 1024 ** 2);
+    expect(admitWholeDomain({ ...input, acquisitionWorkspaceBytes: BUILD_BUDGETS.workingSetBytes }).violations)
+      .toContain('whole-domain working set exceeds the 2 GiB process budget');
+    expect(() => admitWholeDomain({ ...input, acquisitionWorkspaceBytes: NaN })).toThrow('Invalid acquisition workspace');
   });
 
   it('admits exact per-surface tile counts at the cap and rejects the next covered tile', () => {

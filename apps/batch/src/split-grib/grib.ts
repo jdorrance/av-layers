@@ -1,373 +1,153 @@
-import {
-  decodeFieldValues,
-  parseFields,
-  parseGrid,
-  parseProduct,
-  type Identification
-} from '@azohra/meteo.grib';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { MAX_SPLIT_OBJECT_BYTES, type SplitSource } from './source.js';
-import { decompressBzip2, isBzip2Compressed } from './codec/bzip2.js';
-import { decodeCcsdsSamples } from './codec/ccsds.js';
 
 export interface DecodedSplitGribField {
   readonly discipline: number;
-  readonly identification: Identification;
-  readonly grid: Extract<ReturnType<typeof parseGrid>, { kind: 'latlon' }> & {
-    readonly scanningMode: number;
-    readonly earthShapeCode: number;
+  readonly identification: { centre: number; year: number; month: number; day: number; hour: number; minute: number; second: number };
+  readonly grid: {
+    kind: 'latlon'; ni: number; nj: number; numberOfDataPoints: number; scanningMode: number; uvRelativeToGrid: boolean;
+    latitudeOfFirstGridPoint: number; latitudeOfLastGridPoint: number; longitudeOfFirstGridPoint: number; longitudeOfLastGridPoint: number;
+    iDirectionIncrement: number; jDirectionIncrement: number;
   };
   readonly product: {
-    readonly templateNumber: number;
-    readonly parameterCategory: number;
-    readonly parameterNumber: number;
-    readonly firstFixedSurfaceType: number;
-    readonly firstFixedSurfaceValue: number | null;
-    readonly secondFixedSurfaceType: number;
-    readonly secondFixedSurfaceValue: number | null;
-    readonly coordinateValueCount: number;
-    readonly validTimeIso: string;
-    readonly startHour: number;
-    readonly endHour: number;
-    readonly statisticalProcessCode: number | null;
+    templateNumber: number; parameterCategory: number; parameterNumber: number;
+    firstFixedSurfaceType: number; firstFixedSurfaceValue: number | null;
+    secondFixedSurfaceType: number; secondFixedSurfaceValue: number | null;
+    coordinateValueCount: number; validTimeIso: string; startHour: number; endHour: number; statisticalProcessCode: number | null;
   };
   readonly representation: {
-    readonly dataRepresentationTemplateNumber: number;
-    readonly codedValueCount: number;
-    readonly bitsPerValue: number;
-    readonly referenceValue: number;
-    readonly binaryScaleFactor: number;
-    readonly decimalScaleFactor: number;
-    readonly packingError: number;
+    dataRepresentationTemplateNumber: number; codedValueCount: number; bitsPerValue: number; referenceValue: number;
+    binaryScaleFactor: number; decimalScaleFactor: number; packingError: number;
   };
   readonly expandedBytes: number;
-  /** Unnormalized statistical windows retain Float64 values through interval recovery. */
   readonly values: Float32Array | Float64Array;
   readonly missing: Uint8Array;
 }
 
-const TIME_UNIT_HOURS: Readonly<Record<number, number>> = {
-  0: 1 / 60, // minutes
-  1: 1, // hours
-  2: 24, // days
-  10: 3, // 3 hours
-  11: 6, // 6 hours
-  12: 12, // 12 hours
-  13: 1 / 3600 // seconds
-};
+type Target = { values: Float32Array; missing: Uint8Array };
+type Metadata = Omit<DecodedSplitGribField, 'values' | 'missing'> & { precision: 4 | 8; peakNativeRssBytes: number; error?: string };
+const MAX_METADATA_BYTES = 32 * 1024;
+const DECODE_TIMEOUT_MS = 60_000;
+const MAX_PENDING_FIELDS = 8;
+const NATIVE_RUNTIME_BYTES = 320 * 1024 ** 2;
 
-function readSigned16(view: DataView, byteOffset: number): number {
-  const raw = view.getUint16(byteOffset, false);
-  return (raw & 0x8000) !== 0 ? -(raw & 0x7fff) : raw;
+function nativeWorkspaceBytes(cells: number, activeCells: number): number {
+  return NATIVE_RUNTIME_BYTES + 32 * cells + 18 * activeCells + 3 * MAX_SPLIT_OBJECT_BYTES;
 }
 
-function parseSection4Metadata(
-  section4: Uint8Array,
-  referenceTimeIso: string
-): DecodedSplitGribField['product'] {
-  if (section4.byteLength < 34) {
-    throw new Error(`Truncated GRIB2 Section 4 (${section4.byteLength} bytes)`);
+/** Native scratch, IPC buffers and the acquisition queue share this admission allowance. */
+export function splitGribWorkspaceBytes(cells: number, activeCells: number): number {
+  if (!Number.isSafeInteger(cells) || cells < 1 || !Number.isSafeInteger(activeCells) || activeCells < 0 || activeCells > cells) throw new RangeError('Invalid Split GRIB workspace dimensions');
+  const bytes = nativeWorkspaceBytes(cells, activeCells) + 9 * activeCells + MAX_PENDING_FIELDS * MAX_SPLIT_OBJECT_BYTES + MAX_METADATA_BYTES;
+  if (!Number.isSafeInteger(bytes)) throw new RangeError('Unsafe Split GRIB workspace size');
+  return bytes;
+}
+
+/** One lazy ecCodes process per acquisition session; queued fields share one native scratch allocation. */
+export function createSplitGribDecoder(source: SplitSource, activeIndices: Uint32Array, signal?: AbortSignal) {
+  const count = activeIndices.length, cells = source.grid.width * source.grid.height;
+  if (count > cells || activeIndices.some(index => index >= cells)) throw new RangeError('Active cell index exceeds Split GRIB grid size');
+  const stats = { decodeCalls: 0, decodeMs: 0, peakNativeRssBytes: 0, ipcBytes: 0 };
+  let child: ChildProcessWithoutNullStreams | undefined, stopped: Error | undefined;
+  let output: AsyncIterator<Buffer>, remaining: Buffer = Buffer.alloc(0), stderr = '';
+  let exited: Promise<void> | undefined, pending = Promise.resolve(), queued = 0;
+
+  function stop(reason: unknown): void {
+    stopped ??= reason instanceof Error ? reason : new Error(String(reason));
+    child?.kill('SIGKILL');
   }
-  const view = new DataView(section4.buffer, section4.byteOffset, section4.byteLength);
-  const parsed = parseProduct(section4);
-  const coordinateValueCount = parsed.numberOfCoordinateValues;
-  const templateNumber = parsed.productDefinitionTemplateNumber;
-  if (templateNumber !== 0 && templateNumber !== 8) {
-    throw new Error(`Unsupported Split GRIB GRIB2 product definition template 4.${templateNumber}`);
-  }
-  if (parsed.typeOfGeneratingProcess !== 2) {
-    throw new Error('Unsupported Split GRIB generating process');
-  }
-  const { parameterCategory, parameterNumber } = parsed;
-  const timeUnitCode = parsed.indicatorOfUnitOfTimeRange!;
-  const unitHours = TIME_UNIT_HOURS[timeUnitCode];
-  if (unitHours === undefined) {
-    throw new Error(`Unsupported GRIB2 time range unit code ${timeUnitCode}`);
-  }
-  const startOrValidHours = parsed.forecastTime! * unitHours;
-  if (!Number.isFinite(startOrValidHours) || startOrValidHours < 0) {
-    throw new Error('Invalid Split GRIB forecast time');
+  function protocolError(message: string): never { const error = new Error(message); stop(error); throw error; }
+  const abort = () => stop(signal?.reason ?? new Error('Split GRIB decoder aborted'));
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+
+  function start(): void {
+    if (stopped) throw stopped;
+    if (child) return;
+    const python = process.env.AV_ECCODES_PYTHON ?? fileURLToPath(new URL('../../../../.tools/eccodes/bin/python', import.meta.url));
+    child = spawn(python, ['-u', fileURLToPath(new URL('./decode.py', import.meta.url))], { stdio: 'pipe' });
+    output = child.stdout[Symbol.asyncIterator]();
+    exited = new Promise(resolve => {
+      child!.once('error', error => { stop(new Error(`Cannot start ecCodes decoder; run pnpm tools:eccodes: ${error.message}`)); resolve(); });
+      child!.once('exit', (code, signal) => { stopped ??= new Error(`ecCodes decoder exited (${signal ?? code}): ${stderr}`); resolve(); });
+    });
+    child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4096); });
+    child.stdin.on('error', stop);
+    const config = Buffer.from(JSON.stringify({ width: source.grid.width, height: source.grid.height, count, maxBytes: MAX_SPLIT_OBJECT_BYTES }));
+    const header = Buffer.alloc(4); header.writeUInt32LE(config.byteLength);
+    child.stdin.write(header); child.stdin.write(config);
+    child.stdin.write(Buffer.from(activeIndices.buffer, activeIndices.byteOffset, activeIndices.byteLength));
+    stats.ipcBytes += header.length + config.length + activeIndices.byteLength;
   }
 
-  const surfaceValue = (scale: number | undefined, value: number | undefined) =>
-    scale === undefined || value === undefined ? null : value * 10 ** -scale;
-  const firstFixedSurfaceType = parsed.typeOfFirstFixedSurface ?? 255;
-  const firstFixedSurfaceValue = surfaceValue(parsed.scaleFactorOfFirstFixedSurface, parsed.scaledValueOfFirstFixedSurface);
-  const secondFixedSurfaceType = parsed.typeOfSecondFixedSurface ?? 255;
-  const secondFixedSurfaceValue = surfaceValue(parsed.scaleFactorOfSecondFixedSurface, parsed.scaledValueOfSecondFixedSurface);
-
-  const refMs = Date.parse(referenceTimeIso);
-  if (templateNumber === 0) {
-    if (section4.byteLength !== 34 + 4 * coordinateValueCount) throw new Error('Unsupported Split GRIB instantaneous product layout');
-    const validTimeIso = new Date(refMs + startOrValidHours * 3_600_000).toISOString();
-    return {
-      templateNumber,
-      parameterCategory,
-      parameterNumber,
-      firstFixedSurfaceType,
-      firstFixedSurfaceValue,
-      secondFixedSurfaceType,
-      secondFixedSurfaceValue,
-      coordinateValueCount,
-      validTimeIso,
-      startHour: startOrValidHours,
-      endHour: startOrValidHours,
-      statisticalProcessCode: null
-    };
+  async function read(size: number): Promise<Buffer> {
+    const result = Buffer.allocUnsafe(size);
+    for (let offset = 0; offset < size;) {
+      if (!remaining.length) {
+        const next = await output.next();
+        if (next.done) { await exited; throw stopped ?? new Error('Truncated ecCodes decoder output'); }
+        remaining = next.value;
+      }
+      const copied = Math.min(size - offset, remaining.length);
+      result.set(remaining.subarray(0, copied), offset);
+      remaining = remaining.subarray(copied); offset += copied;
+    }
+    stats.ipcBytes += size;
+    return result;
   }
 
-  // Template 4.8: Average, accumulation, extreme values
-  if (section4.byteLength !== 58 + 4 * coordinateValueCount || view.getUint8(41) !== 1) {
-    throw new Error('Split GRIB statistical product requires exactly one time range');
-  }
-  if (view.getUint32(42, false) !== 0) throw new Error('Split GRIB statistical interval contains missing samples');
-  const endYear = view.getUint16(34, false);
-  const endMonth = view.getUint8(36);
-  const endDay = view.getUint8(37);
-  const endHourUtc = view.getUint8(38);
-  const endMinute = view.getUint8(39);
-  const endSecond = view.getUint8(40);
-  const endMs = Date.UTC(endYear, endMonth - 1, endDay, endHourUtc, endMinute, endSecond);
-  const end = new Date(endMs);
-  if (end.getUTCFullYear() !== endYear || end.getUTCMonth() + 1 !== endMonth ||
-      end.getUTCDate() !== endDay || end.getUTCHours() !== endHourUtc ||
-      end.getUTCMinutes() !== endMinute || end.getUTCSeconds() !== endSecond) {
-    throw new Error('Invalid Split GRIB statistical interval date');
-  }
-  const validTimeIso = end.toISOString();
-  if (view.getUint8(47) !== 2 || view.getUint32(54, false) !== 0 ||
-      (view.getUint8(53) !== 255 && TIME_UNIT_HOURS[view.getUint8(53)] === undefined)) {
-    throw new Error('Unsupported Split GRIB statistical increment');
-  }
-  const statisticalProcessCode = view.getUint8(46);
-  const statUnitCode = view.getUint8(48);
-  const statUnitHours = TIME_UNIT_HOURS[statUnitCode];
-  if (statUnitHours === undefined) {
-    throw new Error(`Unsupported GRIB2 statistical time unit code ${statUnitCode}`);
-  }
-  const rangeLengthRaw = view.getUint32(49, false);
-  const durationHours = rangeLengthRaw * statUnitHours;
-  const endHour = (endMs - refMs) / 3_600_000;
-  const startHour = endHour - durationHours;
-  if (durationHours <= 0 || Math.abs(startHour - startOrValidHours) > 1e-6) {
-    throw new Error('Split GRIB statistical endpoints and range length differ');
+  async function run(bytes: Uint8Array, target?: Target): Promise<DecodedSplitGribField> {
+    start();
+    const started = performance.now(), timeout = setTimeout(() => stop(new Error('Split GRIB decode deadline exceeded')), DECODE_TIMEOUT_MS);
+    try {
+      const header = Buffer.alloc(8); header.writeUInt32LE(bytes.byteLength); header.writeUInt32LE(Number(target !== undefined), 4);
+      child!.stdin.write(header); child!.stdin.write(bytes);
+      stats.ipcBytes += header.length + bytes.byteLength;
+      const response = await read(8), metadataBytes = response.readUInt32LE(), payloadBytes = response.readUInt32LE(4);
+      if (!metadataBytes || metadataBytes > MAX_METADATA_BYTES || payloadBytes > count * 9) protocolError('ecCodes response exceeds byte limit');
+      let metadata: Metadata;
+      try { metadata = JSON.parse((await read(metadataBytes)).toString()) as Metadata; }
+      catch { protocolError('Invalid ecCodes response metadata'); }
+      if (!metadata || !Number.isSafeInteger(metadata.peakNativeRssBytes) || metadata.peakNativeRssBytes < 0) protocolError('Invalid ecCodes response memory measurement');
+      stats.peakNativeRssBytes = Math.max(stats.peakNativeRssBytes, metadata.peakNativeRssBytes);
+      if (metadata.peakNativeRssBytes > nativeWorkspaceBytes(cells, count)) protocolError('ecCodes native memory exceeds admitted workspace');
+      if (metadata.error) {
+        if (payloadBytes || typeof metadata.error !== 'string') protocolError('Invalid ecCodes error response');
+        throw new Error(metadata.error);
+      }
+      if (![4, 8].includes(metadata.precision) || (target && metadata.precision !== 4) || payloadBytes !== count * (metadata.precision + 1)) protocolError('Invalid ecCodes response array layout');
+      const payload = await read(payloadBytes), valueBytes = metadata.precision * count;
+      const values = target?.values ?? (metadata.precision === 8 ? new Float64Array(count) : new Float32Array(count));
+      const missing = target?.missing ?? new Uint8Array(count);
+      // Buffer byte offsets need not align to the wire element width.
+      const view = new DataView(payload.buffer, payload.byteOffset, valueBytes);
+      for (let i = 0; i < count; i++) values[i] = metadata.precision === 8 ? view.getFloat64(i * 8, true) : view.getFloat32(i * 4, true);
+      missing.set(payload.subarray(valueBytes));
+      const { precision: _, peakNativeRssBytes: __, ...field } = metadata;
+      if (stopped) throw stopped;
+      stats.decodeCalls++;
+      return { ...field, values, missing };
+    } finally { clearTimeout(timeout); stats.decodeMs += performance.now() - started; }
   }
 
   return {
-    templateNumber,
-    parameterCategory,
-    parameterNumber,
-    firstFixedSurfaceType,
-    firstFixedSurfaceValue,
-    secondFixedSurfaceType,
-    secondFixedSurfaceValue,
-    coordinateValueCount,
-    validTimeIso,
-    startHour,
-    endHour,
-    statisticalProcessCode
-  };
-}
-
-/**
- * Decode a DWD Split GRIB-EU GRIB2 (or `.grib2.bz2`) buffer in pure TypeScript and
- * extract `activeIndices` in normalized north-to-south (`-j`) grid order.
- */
-export function decodeSplitGribField(source: SplitSource,
-  inputBytes: Uint8Array,
-  activeIndices: Uint32Array,
-  target?: { values: Float32Array; missing: Uint8Array }
-): DecodedSplitGribField {
-  const gribBytes = isBzip2Compressed(inputBytes) ? decompressBzip2(inputBytes, MAX_SPLIT_OBJECT_BYTES) : inputBytes;
-  if (gribBytes.byteLength > MAX_SPLIT_OBJECT_BYTES) throw new Error('Split GRIB expanded object byte length out of bounds');
-  const fields = parseFields(gribBytes);
-  if (fields.length !== 1) {
-    throw new Error(`Expected exactly 1 GRIB2 field in Split GRIB object, found ${fields.length}`);
-  }
-  const field = fields[0]!;
-  const grid = parseGrid(field.section3);
-  const s3View = new DataView(
-    field.section3.buffer,
-    field.section3.byteOffset,
-    field.section3.byteLength
-  );
-  const gridTemplateNumber = s3View.getUint16(12, false);
-  if (grid.kind !== 'latlon' || gridTemplateNumber !== 0) {
-    throw new Error(`Expected GRIB2 grid template 3.0 (regular lat/lon), got 3.${gridTemplateNumber}`);
-  }
-  const earthShapeCode = s3View.getUint8(14);
-  const scanningMode = s3View.getUint8(71);
-
-  const width = grid.ni;
-  const height = grid.nj;
-  const pointCount = width * height;
-  if (
-    width !== source.grid.width ||
-    height !== source.grid.height ||
-    grid.numberOfDataPoints !== pointCount
-  ) {
-    throw new Error(
-      `Split GRIB grid dimension mismatch: expected ${source.grid.width}x${source.grid.height}, got ${width}x${height} (${grid.numberOfDataPoints})`
-    );
-  }
-  if (scanningMode !== 64 && scanningMode !== 0) {
-    throw new Error(`Unsupported Split GRIB scanning mode ${scanningMode}`);
-  }
-  const southToNorth = scanningMode === 64;
-  if (southToNorth ? grid.latitudeOfFirstGridPoint >= grid.latitudeOfLastGridPoint
-    : grid.latitudeOfFirstGridPoint <= grid.latitudeOfLastGridPoint) {
-    throw new Error('Split GRIB scanning mode disagrees with latitude endpoints');
-  }
-
-  const id = field.identification;
-  const referenceTimeIso = new Date(
-    Date.UTC(id.year, id.month - 1, id.day, id.hour, id.minute, id.second)
-  ).toISOString();
-
-  const product = parseSection4Metadata(field.section4, referenceTimeIso);
-
-  const s5 = field.section5;
-  if (s5.byteLength < 21) {
-    throw new Error(`Truncated GRIB2 Section 5 (${s5.byteLength} bytes)`);
-  }
-  const s5View = new DataView(s5.buffer, s5.byteOffset, s5.byteLength);
-  const codedValueCount = s5View.getUint32(5, false);
-  if (codedValueCount > pointCount) throw new Error('GRIB2 coded value count exceeds grid point count');
-  const drt = s5View.getUint16(9, false);
-  const referenceValue = s5View.getFloat32(11, false);
-  const binaryScaleFactor = readSigned16(s5View, 15);
-  const decimalScaleFactor = readSigned16(s5View, 17);
-  const bitsPerValue = s5View.getUint8(19);
-  const binaryScale = 2 ** binaryScaleFactor;
-  const decimalScale = 10 ** -decimalScaleFactor;
-  const packingError = bitsPerValue === 0 ? 0 : 0.5 * binaryScale * decimalScale;
-
-  const s6 = field.section6 as Uint8Array | null | undefined;
-  let hasBitmap = false;
-  let bitmapBytes: Uint8Array | null = null;
-  if (s6 instanceof Uint8Array && s6.byteLength > 0) {
-    if (s6.byteLength >= 6 && s6[4] === 6) {
-      const bitmapIndicator = s6[5]!;
-      if (bitmapIndicator !== 255 && bitmapIndicator !== 0) {
-        throw new Error(`Unsupported GRIB2 Section 6 bitmap indicator ${bitmapIndicator}`);
-      }
-      hasBitmap = bitmapIndicator === 0;
-      bitmapBytes = hasBitmap ? s6.subarray(6) : null;
-    } else {
-      hasBitmap = true;
-      bitmapBytes = s6;
-    }
-  }
-  if (hasBitmap && bitmapBytes!.byteLength < Math.ceil(pointCount / 8)) {
-    throw new Error('Truncated GRIB2 Section 6 bitmap');
-  }
-  let presentCount = pointCount;
-  if (hasBitmap) {
-    presentCount = 0;
-    for (let i = 0; i < pointCount; i += 1) presentCount += (bitmapBytes![i >> 3]! >> (7 - (i & 7))) & 1;
-  }
-  if (codedValueCount !== presentCount) throw new Error('GRIB2 coded value count differs from grid/bitmap coverage');
-
-  if (drt === 42 && s5.byteLength < 25) throw new Error(`Truncated GRIB2 Section 5.42 (${s5.byteLength} bytes)`);
-  const retainPrecise = !target && product.templateNumber === 8;
-  const allocValues = (length: number): Float64Array | Float32Array => retainPrecise ? new Float64Array(length) : new Float32Array(length);
-  let fullValues: Float64Array | Float32Array;
-  if ((drt === 0 || drt === 42) && bitsPerValue === 0) {
-    // ecCodes treats zero-bit 5.0/5.42 fields as the unscaled reference value.
-    fullValues = allocValues(pointCount).fill(referenceValue);
-    if (hasBitmap) for (let i = 0; i < pointCount; i++) {
-      if (!(bitmapBytes![i >> 3]! & (0x80 >> (i & 7)))) fullValues[i] = NaN;
-    }
-  } else if (drt === 42) {
-    const flags = s5View.getUint8(21);
-    const blockSize = s5View.getUint8(22);
-    const rsi = s5View.getUint16(23, false);
-    const payload = field.section7.subarray(5);
-
-    const decodedCoded = allocValues(codedValueCount);
-    if (codedValueCount > 0) {
-      const rawSamples = decodeCcsdsSamples(payload, {
-        bitsPerSample: bitsPerValue,
-        blockSize,
-        rsi,
-        flags,
-        sampleCount: codedValueCount
-      });
-      for (let i = 0; i < codedValueCount; i += 1) {
-        decodedCoded[i] = (referenceValue + rawSamples[i]! * binaryScale) * decimalScale;
-      }
-    }
-
-    if (!hasBitmap) {
-      fullValues = decodedCoded;
-    } else {
-      const expanded = allocValues(pointCount);
-      let codedIdx = 0;
-      for (let i = 0; i < pointCount; i += 1) {
-        const present = (bitmapBytes![i >> 3]! & (0x80 >> (i & 7))) !== 0;
-        if (present) {
-          expanded[i] = decodedCoded[codedIdx]!;
-          codedIdx += 1;
-        } else {
-          expanded[i] = NaN;
-        }
-      }
-      fullValues = expanded;
-    }
-  } else if (drt === 0 && !hasBitmap && bitsPerValue === 8) {
-    const payload = field.section7.subarray(5);
-    if (payload.byteLength < codedValueCount) throw new Error('Truncated GRIB2 simple-packing payload');
-    const decoded = allocValues(pointCount);
-    for (let i = 0; i < pointCount; i += 1) {
-      decoded[i] = (referenceValue + payload[i]! * binaryScale) * decimalScale;
-    }
-    fullValues = decoded;
-  } else {
-    fullValues = decodeFieldValues(field, { missingValue: NaN }).values;
-  }
-
-  const outValues = target?.values ?? allocValues(activeIndices.length);
-  const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
-  if (outValues.length !== activeIndices.length || outMissing.length !== activeIndices.length) throw new RangeError('Split GRIB target length mismatch');
-
-  for (let i = 0; i < activeIndices.length; i += 1) {
-    const targetIdx = activeIndices[i]!;
-    if (targetIdx >= pointCount) {
-      throw new RangeError(`Active cell index ${targetIdx} exceeds Split GRIB grid size ${pointCount}`);
-    }
-    const row = Math.floor(targetIdx / width);
-    const col = targetIdx - row * width;
-    const sourceRow = southToNorth ? height - 1 - row : row;
-    const sourceIdx = sourceRow * width + col;
-    const value = fullValues[sourceIdx]!;
-    if (Number.isFinite(value)) {
-      outValues[i] = value;
-      outMissing[i] = 0;
-    } else {
-      outValues[i] = NaN;
-      outMissing[i] = 1;
-    }
-  }
-
-  return {
-    discipline: field.discipline,
-    identification: field.identification,
-    grid: {
-      ...grid,
-      scanningMode,
-      earthShapeCode
+    stats,
+    get failure(): Error | undefined { return stopped; },
+    decode(bytes: Uint8Array, target?: Target): Promise<DecodedSplitGribField> {
+      if (stopped) return Promise.reject(stopped);
+      if (!bytes.byteLength || bytes.byteLength > MAX_SPLIT_OBJECT_BYTES) return Promise.reject(new RangeError('Split GRIB object byte length out of bounds'));
+      if (target && (target.values.length !== count || target.missing.length !== count)) return Promise.reject(new RangeError('Split GRIB target length mismatch'));
+      if (queued >= MAX_PENDING_FIELDS) return Promise.reject(new Error('Split GRIB decoder queue exceeds concurrency limit'));
+      queued++;
+      const result = pending.then(() => run(bytes, target));
+      pending = result.then(() => {}, () => {}).finally(() => { queued--; });
+      return result;
     },
-    product,
-    representation: {
-      dataRepresentationTemplateNumber: drt,
-      codedValueCount,
-      bitsPerValue,
-      referenceValue,
-      binaryScaleFactor,
-      decimalScaleFactor,
-      packingError
-    },
-    expandedBytes: gribBytes.byteLength,
-    values: outValues,
-    missing: outMissing
+    async close(): Promise<void> {
+      signal?.removeEventListener('abort', abort);
+      stop(new Error('Split GRIB decoder is closed'));
+      await Promise.allSettled([pending, exited]);
+    }
   };
 }

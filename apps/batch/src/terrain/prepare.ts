@@ -7,7 +7,7 @@ import { createTerrainReader, type TerrainReadStats } from './reader.js';
 export const PREPARED_TERRAIN_METHOD = 'bilinear-native-v1';
 export const PREPARED_DESCRIPTOR_MAX_BYTES = 16 * 1024;
 export const PREPARED_TERRAIN_CELL_BYTES = Float32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;
-export const MAX_PREPARED_TERRAIN_BYTES = MAX_GRID_CELLS * PREPARED_TERRAIN_CELL_BYTES;
+const MAX_PREPARED_TERRAIN_BYTES = MAX_GRID_CELLS * PREPARED_TERRAIN_CELL_BYTES;
 const preparedKey = z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/);
 export const preparedTerrainRefSchema = terrainAssetSchema.extend({
   key: preparedKey,
@@ -70,7 +70,7 @@ export async function readPreparedTerrain(refInput: PreparedTerrainRef, read: Re
   return { descriptor, elevationM, valid };
 }
 
-export interface TerrainPreparationReport { cacheHit: boolean; cells: number; arrayBytes: number; elapsedMs: number; reader?: TerrainReadStats }
+interface TerrainPreparationReport { cacheHit: boolean; cells: number; arrayBytes: number; elapsedMs: number; reader?: TerrainReadStats }
 export interface PrepareTerrainOptions {
   catalog: TerrainCatalog;
   storage: TerrainStorage;

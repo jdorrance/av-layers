@@ -6,6 +6,7 @@
   "dependencies": {
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
+    "@av/solar": "workspace:*",
     "@aws-sdk/checksums": "3.1002.0",
     "@aws-sdk/client-s3": "3.1160.0",
     "@azohra/meteo.grib": "0.1.4",

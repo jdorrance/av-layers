@@ -1,7 +1,7 @@
 /** Pair normalized point forecasts and summarize differences; adapters own units and parameter definitions. */
-export type ComparisonStatus = 'valid' | 'no-lift' | 'unavailable' | 'outside-domain';
-export type Comparability = 'equivalent' | 'related' | 'unmapped';
-export type PairingMode = 'same-product-cycle' | 'products-at-valid-time';
+type ComparisonStatus = 'valid' | 'no-lift' | 'unavailable' | 'outside-domain';
+type Comparability = 'equivalent' | 'related' | 'unmapped';
+type PairingMode = 'same-product-cycle' | 'products-at-valid-time';
 export interface ComparisonOptions {
   pairing?: { mode: 'products-at-valid-time'; note: string };
 }
@@ -47,7 +47,7 @@ export interface ParameterMapping {
   referencePolicy?: 'exact' | 'provider-ground';
 }
 
-export type UnmatchedReason = 'missing-model' | 'valid-time-mismatch' | 'product-mismatch' | 'unknown-product'
+type UnmatchedReason = 'missing-model' | 'valid-time-mismatch' | 'product-mismatch' | 'unknown-product'
   | 'cycle-mismatch' | 'unknown-cycle' | 'coordinate-mismatch' | 'unknown-coordinate' | 'missing-parameter' | 'unmapped-parameter'
   | 'unit-mismatch' | 'unknown-unit' | 'reference-mismatch' | 'unknown-reference' | 'unknown-definition'
   | 'interval-mismatch' | 'time-support-mismatch';
@@ -60,7 +60,7 @@ interface PairIdentity {
   validTime: string;
 }
 
-export interface ForecastIdentity {
+interface ForecastIdentity {
   provider: string;
   model: string;
   product: string;
@@ -86,7 +86,7 @@ export interface ComparisonPair extends PairIdentity {
   difference: number | null;
 }
 
-export interface UnmatchedSample extends PairIdentity {
+interface UnmatchedSample extends PairIdentity {
   side: 'left' | 'right' | 'both';
   reason: UnmatchedReason;
   parameter?: string;

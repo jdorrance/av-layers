@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   CELL_BYTES,
   gridSchema,
@@ -36,7 +36,10 @@ import { decodeSamplePack } from './evaluation-input.js';
 import { runEvaluation, runEvaluationCli, sampleNativeTargetFields } from './evaluate.js';
 
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
 
 const buildId = '20261030T000000Z-e4de530b-0527-4e42-aaf2-e5b124cb77e7';
 const cycle = '2026-10-30T00:00:00.000Z';
@@ -121,13 +124,14 @@ function normalizedFrame(hour = 9): NormalizedFrame {
   };
 }
 
-function provider(options: { failHour?: number; onOpen?: (value: { readOnlyCache?: boolean; offline?: boolean }) => void } = {}): ForecastProvider {
+function provider(options: { failHour?: number; nativePeakRssBytes?: number; onOpen?: (value: { readOnlyCache?: boolean; offline?: boolean }) => void } = {}): ForecastProvider {
   return {
     id: 'fake', provider: 'NOAA', maxLevels: 2,
     async open(openOptions): Promise<ForecastSession> {
       options.onOpen?.(openOptions);
       return {
         cycle, stats: { acquired: 1 },
+        nativePeakRssBytes: options.nativePeakRssBytes,
         async acquire(hour) {
           if (hour === options.failHour) throw new Error('Injected acquisition failure');
           return normalizedFrame(hour);
@@ -242,6 +246,20 @@ describe('paired evaluation CLI orchestration', () => {
     })).rejects.toThrow('clearance');
     expect(opened).toBe(false);
     await expect(readFile(join(values.packageOut, buildId, 'report.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each([undefined, 384 * 1024 * 1024])('includes native peak RSS %s in the runtime report', async nativePeakRssBytes => {
+    const values = await fixture();
+    const usage = process.resourceUsage();
+    vi.spyOn(process, 'resourceUsage').mockReturnValue({ ...usage, maxRSS: 256 * 1024 });
+    const result = await runEvaluation({
+      controlManifest: values.manifestPath, cacheDir: join(values.out, 'cache'), out: values.packageOut,
+      frames: [frameId], provider: provider({ nativePeakRssBytes })
+    });
+    const expectedPeak = 256 * 1024 * 1024 + (nativePeakRssBytes ?? 0);
+    expect(result.runtime.peakRssBytes).toBe(expectedPeak);
+    const report = JSON.parse(await readFile(result.report.path, 'utf8'));
+    expect(report.runtime.peakRssBytes).toBe(expectedPeak);
   });
 
   it('runs every variant, writes compact deterministic evidence, field packs and matched images once', async () => {

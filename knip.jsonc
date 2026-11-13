@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // System tools provisioned by development setup and CI.
+  "ignoreBinaries": ["openssl", "uv"],
+  "workspaces": {
+    ".": {
+      // packages/soaring/src/bundle.test.ts imports this through a Vite virtual entry.
+      "ignoreDependencies": ["@av/solar"],
+      "entry": [
+        "scripts/{forecast-dispatch,monitor-health,operations,workflow-models}.ts!",
+        "scripts/masks/check_fine_masks.ts"
+      ],
+      "project": ["scripts/**/*.{ts,mjs}", "tests/**/*.ts", "*.{ts,mjs}", "scripts/{forecast-control,forecast-dispatch,monitor-health,operations,publication-workflow,smoke-api,terrain-inputs,workflow-models}.ts!"]
+    },
+    "apps/api": {
+      "project": ["src/**/*.ts!", "test/**/*.ts"]
+    },
+    "apps/batch": {
+      // Production scans need CLI roots; workers load their paths through workerData.
+      "entry": ["src/cli.ts!", "src/terrain/cli.ts!", "src/comparison/cli.ts!", "src/refinement/{cli,evaluate,station-replay}.ts!", "src/raster-worker.ts!", "src/whole-domain/derive-worker.ts!"],
+      "project": ["src/**/*.ts!", "parallel-fixtures.ts", "!src/terrain/test-fixtures.ts!"]
+    },
+    "apps/windy-plugin": {
+      "project": ["src/**/*.ts!", "*.{ts,mjs}"]
+    },
+    "packages/thermodynamics": {
+      // Public aliases preserve the temperature unit in each caller's name.
+      "ignoreIssues": { "src/index.ts": ["duplicates"] }
+    }
+  }
+}

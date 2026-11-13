@@ -86,8 +86,8 @@ async function verifyLocalFile(path: string, expectedBytes: number, maxBytes: nu
 }
 
 export const MAX_EVALUATION_FILE_BYTES = 512 * 1024 ** 2;
-export const MAX_EVALUATION_DECODED_BYTES = 512 * 1024 ** 2;
-export const MAX_EVALUATION_TOTAL_BYTES = 8 * 1024 ** 3;
+const MAX_EVALUATION_DECODED_BYTES = 512 * 1024 ** 2;
+const MAX_EVALUATION_TOTAL_BYTES = 8 * 1024 ** 3;
 
 async function verifyHash(path: string, expectedBytes: number, expectedSha256: string): Promise<void> {
   await verifyLocalFile(path, expectedBytes, MAX_EVALUATION_FILE_BYTES);

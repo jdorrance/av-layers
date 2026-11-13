@@ -9,7 +9,7 @@ interface Entry {
 }
 type Proof = NonNullable<Awaited<ReturnType<TerrainStorage['head']>>>;
 interface Download { entry: Entry; asset: TerrainAsset; signal: AbortSignal; resolve(proof: Proof): void; reject(error: unknown): void }
-export interface TerrainSourceCacheStats {
+interface TerrainSourceCacheStats {
   hits: number; downloads: number; downloadBytes: number; remoteRequests: number;
   cachedBytes: number; reservedBytes: number; peakBytes: number; activeDownloads: number; peakDownloads: number;
 }

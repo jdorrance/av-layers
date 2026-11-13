@@ -69,6 +69,13 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
   await mkdir(localPath(root, options.journalPrefix), { recursive: true });
   await journal('progress', { state: 'acquiring', buildId, startedAt: new Date(started).toISOString() });
   let acquisition: Awaited<ReturnType<ForecastProvider['open']>> | undefined;
+  const peakRssBytes = () => {
+    const native = acquisition?.nativePeakRssBytes ?? 0;
+    if (!Number.isSafeInteger(native) || native < 0) throw new Error('Invalid native decoder RSS');
+    const bytes = process.resourceUsage().maxRSS * 1024 + native;
+    if (bytes > BUILD_BUDGETS.peakRssBytes) throw new Error('Forecast process RSS exceeds the build budget');
+    return bytes;
+  };
   let nativeWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let fineWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
   let profileWriter: ReturnType<typeof createShardedSamplePackWriter> | undefined;
@@ -227,7 +234,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       completedFrames++;
       phase = 'write-progress';
       await journal('progress', { state: 'rendered-frame', buildId, hour, completedFrames, elapsedMs: Date.now() - started,
-        phasesMs: { acquireMs, deriveMs, packMs, renderMs }, peakRssBytes: process.resourceUsage().maxRSS * 1024 });
+        phasesMs: { acquireMs, deriveMs, packMs, renderMs }, peakRssBytes: peakRssBytes() });
     }
     frameHour = null; phase = 'finalize-pack';
     const tPack = Date.now();
@@ -253,7 +260,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     return { cycle, frames, artifacts, receipts, surfaces, capacity, metrics: {
       frames: summaries, phasesMs: { acquireMs, deriveMs, packMs, renderMs },
       renderer: { native: nativeRenderer.metrics(), fine: fineRenderer.metrics(), packFinishWallMs }, acquisition: acquisition.stats,
-      elapsedMs: Date.now() - started, peakRssBytes: process.resourceUsage().maxRSS * 1024
+      elapsedMs: Date.now() - started, peakRssBytes: peakRssBytes()
     } };
   } catch (caught) {
     const error = localController.signal.aborted ? localController.signal.reason : caught;

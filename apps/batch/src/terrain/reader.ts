@@ -10,7 +10,7 @@ export const TERRAIN_READ_LIMITS = Object.freeze({
   maxCachedPixels: 8_000_000, maxOpenTiles: 8
 });
 export type TerrainReadLimits = { [K in keyof typeof TERRAIN_READ_LIMITS]: number };
-export interface TerrainWindow {
+interface TerrainWindow {
   geometry: TerrainGeometry;
   values: Float32Array;
   missing: Uint8Array;

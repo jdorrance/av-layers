@@ -25,10 +25,14 @@ import { loadCoverage } from '../coverage.js';
 import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
-import { decodeSplitGribField } from './grib.js';
+import { createSplitGribDecoder } from './grib.js';
+
+async function decodeSplitGribField(source: typeof profile, bytes: Uint8Array, indices: Uint32Array) {
+  const decoder = createSplitGribDecoder(source, indices);
+  try { return await decoder.decode(bytes); } finally { await decoder.close(); }
+}
 import { splitGribRegularFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
-import { isBzip2Compressed } from './codec/bzip2.js';
 
 const PROBE_DIR = process.env['ICON_DWD_PROBE_DIR'];
 
@@ -73,7 +77,7 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
       ...(meridional && !missing ? { overridePoint: { sourceRow: scanningMode === 64 ? configured.grid.height - 1 : 0, col: 0, value: 4 } } : {})
     });
     if (field === 'V_10M' && Number(hour) === 4) {
-      const decoded = decodeSplitGribField(configured, bytes, Uint32Array.of(0, 1));
+      const decoded = await decodeSplitGribField(configured, bytes, Uint32Array.of(0, 1));
       expect(decoded.grid.uvRelativeToGrid).toBe(uvRelativeToGrid);
       expect(decoded.grid.scanningMode).toBe(scanningMode);
       expect([...decoded.values]).toEqual([4, -2]);
@@ -182,12 +186,13 @@ function buildSyntheticSplitGrib2(options: {
   v3.setUint8(71, scan);
 
   // Section 4 (Template 4.0 = 34 bytes, Template 4.8 = 58 bytes)
-  const s4Len = (options.templateNumber === 0 ? 34 : 58) + 4 * (options.coordinateValueCount ?? 0);
+  const coordinateValueCount = options.coordinateValueCount ?? (options.firstFixedSurfaceType === 150 ? 6 : 0);
+  const s4Len = (options.templateNumber === 0 ? 34 : 58) + 4 * coordinateValueCount;
   const s4 = new Uint8Array(s4Len);
   const v4 = new DataView(s4.buffer);
   v4.setUint32(0, s4Len, false);
   v4.setUint8(4, 4);
-  v4.setUint16(5, options.coordinateValueCount ?? 0, false);
+  v4.setUint16(5, coordinateValueCount, false);
   v4.setUint16(7, options.templateNumber, false);
   v4.setUint8(9, options.parameterCategory);
   v4.setUint8(10, options.parameterNumber);
@@ -437,7 +442,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     expect(sentinels).toHaveLength(12);
   });
 
-  it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', () => {
+  it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', async () => {
     const cycle = '2026-10-08T00:00:00Z';
     // Yerevan: j = 171 from south (29.5 + 171 * 0.0625 = 40.1875N), i = 1088 (-23.5 + 1088 * 0.0625 = 44.5E)
     // In normalized north-to-south order (row 0 = 70.5N): row = 656 - 171 = 485
@@ -456,7 +461,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       constantValue: 500,
       overridePoint: { sourceRow: 171, col: 1088, value: 542 }
     });
-    const decoded = decodeSplitGribField(profile, grib, Uint32Array.of(normIndex, 0));
+    const decoded = await decodeSplitGribField(profile, grib, Uint32Array.of(normIndex, 0));
     verifySplitGribFieldMetadata(profile, decoded, 'HSURF', cycle);
     expect(decoded.values[0]).toBe(542);
     expect(decoded.values[1]).toBe(500);
@@ -473,21 +478,21 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     ['invalid end date', 36, 13],
     ['truncated coordinate values', 6, 1],
     ['wrong generating process', 11, 1]
-  ] as const)('refuses statistical metadata with %s', (_label, byteOffset, value) => {
+  ] as const)('refuses statistical metadata with %s', async (_label, byteOffset, value) => {
     const bytes = buildSyntheticSplitGrib2({ referenceTimeIso: '2026-10-08T00:00:00Z',
       templateNumber: 8, parameterCategory: 0, parameterNumber: 11,
       firstFixedSurfaceType: 1, firstFixedSurfaceValue: null, hour: 6, constantValue: -100 });
     bytes[16 + 21 + 72 + byteOffset] = value;
-    expect(() => decodeSplitGribField(profile, bytes, Uint32Array.of(0))).toThrow();
+    await expect(decodeSplitGribField(profile, bytes, Uint32Array.of(0))).rejects.toThrow();
   });
 
-  it('accepts the six coordinate values carried by DWD model-level fields', () => {
+  it('accepts the six coordinate values carried by DWD model-level fields', async () => {
     const cycle = '2026-10-08T00:00:00Z';
     const bytes = buildSyntheticSplitGrib2({ referenceTimeIso: cycle, coordinateValueCount: 6,
       templateNumber: 0, parameterCategory: 0, parameterNumber: 0,
       firstFixedSurfaceType: 150, firstFixedSurfaceValue: 74,
       secondFixedSurfaceType: 150, secondFixedSurfaceValue: 75, hour: 6, constantValue: 290 });
-    const decoded = decodeSplitGribField(profile, bytes, Uint32Array.of(0));
+    const decoded = await decodeSplitGribField(profile, bytes, Uint32Array.of(0));
     verifySplitGribFieldMetadata(profile, decoded, 'T', cycle, { hour: 6, level: 74 });
     expect(decoded.product.coordinateValueCount).toBe(6);
     expect(decoded.values[0]).toBe(290);
@@ -655,6 +660,25 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     expect(attempts).toBe(2);
     expect(second.stats.cacheHits).toBeGreaterThan(0);
     await second.close();
+  });
+
+  it('surfaces a missing decoder runtime without downloading a valid cached field', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-runtime-')), cycle = '2026-10-08T00:00:00Z';
+    tempDirs.push(cacheDir);
+    const fetchImpl = vi.fn(syntheticFetch(cycle, []));
+    const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
+    const first = await createSplitGribAcquisitionSession(profile, options);
+    try { await first.acquire(4); } finally { await first.close(); }
+    const name = (await readdir(join(cacheDir, 'objects'))).find(name => name.endsWith('_HSURF.grib2.bz2'))!;
+    const path = join(cacheDir, 'objects', name), cached = readFileSync(path);
+    fetchImpl.mockClear();
+    vi.stubEnv('AV_ECCODES_PYTHON', join(cacheDir, 'missing-python'));
+    const second = await createSplitGribAcquisitionSession(profile, options);
+    try {
+      await expect(second.acquire(5)).rejects.toThrow('Cannot start ecCodes decoder');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(readFileSync(path)).toEqual(cached);
+    } finally { await second.close(); vi.unstubAllEnvs(); }
   });
 
   it('does not retry or cache a response that fails GRIB validation', async () => {
@@ -884,7 +908,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
 
   it.skipIf(!PROBE_DIR)(
     'decodes six retained DWD ICON-EU .grib2.bz2 fields (bzip2 + DRT 5.42 CCSDS) and matches ecCodes/libaec reference values',
-    () => {
+    async () => {
       // Yerevan grid point: sourceRow = 171 (from 29.5N), col = 1088 (from -23.5E)
       // Normalized north-to-south row = 656 - 171 = 485 -> flat index = 485 * 1377 + 1088 = 668933
       const yerevanNormalizedIdx = (profile.grid.height - 1 - 171) * profile.grid.width + 1088;
@@ -899,27 +923,27 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
         const receipt = manifest.samples.find(sample => sample.filename === filename)?.receipt;
         expect(receipt?.bytes).toBe(compressed.byteLength);
         expect(receipt?.sha256).toBe(createHash('sha256').update(compressed).digest('hex'));
-        expect(isBzip2Compressed(compressed)).toBe(true);
+        expect(Buffer.from(compressed.subarray(0, 3)).toString()).toBe('BZh');
         return decodeSplitGribField(profile, compressed, active);
       };
 
-      const hsurf = loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_HSURF.grib2.bz2');
+      const hsurf = await loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_HSURF.grib2.bz2');
       verifySplitGribFieldMetadata(profile, hsurf, 'HSURF', cycle);
       expect(hsurf.values[0]).toBeCloseTo(1059.875, 4);
 
-      const hhl75 = loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_75_HHL.grib2.bz2');
+      const hhl75 = await loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_75_HHL.grib2.bz2');
       verifySplitGribFieldMetadata(profile, hhl75, 'HHL', cycle, { level: 75 });
       expect(hhl75.values[0]).toBeCloseTo(1059.875, 4);
 
-      const p74 = loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_P.grib2.bz2');
+      const p74 = await loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_P.grib2.bz2');
       verifySplitGribFieldMetadata(profile, p74, 'P', cycle, { hour: 6, level: 74 });
       expect(p74.values[0]).toBeCloseTo(90410.921875, 2);
 
-      const t74 = loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2');
+      const t74 = await loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2');
       verifySplitGribFieldMetadata(profile, t74, 'T', cycle, { hour: 6, level: 74 });
       expect(t74.values[0]).toBeCloseTo(288.935883, 4);
 
-      const ashfl = loadReal('icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2');
+      const ashfl = await loadReal('icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2');
       verifySplitGribFieldMetadata(profile, ashfl, 'ASHFL_S', cycle, { hour: 6 });
       expect(ashfl.values[0]).toBeCloseTo(11.42572, 4);
     }

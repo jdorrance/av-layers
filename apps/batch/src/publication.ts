@@ -20,8 +20,8 @@ const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
 const manifestKey = (model: ModelId, id: string): string => `builds/${model}/${id}/manifest.json`;
 const safeId = (id: string): boolean => /^\d{8}T\d{6}Z-[a-f0-9-]{36}$/.test(id);
 export const MAX_UPLOAD_ARTIFACT_BYTES = BUILD_BUDGETS.samplePackBytes;
-export const MAX_UPLOAD_RESERVED_BYTES = 2 * MAX_UPLOAD_ARTIFACT_BYTES;
-export const SMOKE_VERIFY_RESERVE_MS = 60_000;
+const MAX_UPLOAD_RESERVED_BYTES = 2 * MAX_UPLOAD_ARTIFACT_BYTES;
+const SMOKE_VERIFY_RESERVE_MS = 60_000;
 
 export function buildIdTime(id: string): number {
   if (!safeId(id)) throw new Error('Invalid build ID');
@@ -271,7 +271,7 @@ async function verifyRemoteHash(store: ObjectStorage, key: string, expectedHash:
   if (hash.digest('hex') !== expectedHash) throw new Error(`Rollback object corrupt: ${key}`);
 }
 
-export interface CleanupObjects { objects: number; knownBytes: number; unknownSizeObjects: number }
+interface CleanupObjects { objects: number; knownBytes: number; unknownSizeObjects: number }
 export interface CleanupSummary {
   version: 1; prefix: string; observedAt: string; status: 'complete' | 'failed';
   listed: CleanupObjects | null; protected: CleanupObjects | null; unreferenced: CleanupObjects | null;

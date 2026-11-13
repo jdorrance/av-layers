@@ -11,7 +11,7 @@ export interface SkySightCaptureOptions {
   requestedTimes?: readonly string[];
 }
 
-export interface SkySightNativeProfile {
+interface SkySightNativeProfile {
   validTime: string;
   base: number | null;
   scalars: Record<string, number | null>;

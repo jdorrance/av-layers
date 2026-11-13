@@ -10,6 +10,7 @@ Use the pnpm version in [package.json](../package.json):
 ```sh
 pnpm install
 pnpm tools:pmtiles
+pnpm tools:eccodes
 ```
 
 pnpm installs the pinned Node runtime locally. `pnpm tools:pmtiles` installs
@@ -17,6 +18,13 @@ the PMTiles CLI in the current worktree's `.tools/` for archive tests. For
 offline setup, run `pnpm install --offline` with a populated store and copy
 `.tools/pmtiles` from a prepared worktree on the same machine. Use the version
 pinned in [pmtiles.json](../apps/batch/pmtiles.json).
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) before
+`pnpm tools:eccodes`. It creates `.tools/eccodes` from the pinned
+[decoder environment](../apps/batch/eccodes.json) and
+[requirements](../apps/batch/eccodes-requirements.txt). ICON acquisition and
+decoder tests use that Python environment. `AV_ECCODES_PYTHON` selects an
+existing environment with the same versions.
 
 ## Start the sample-data map
 

@@ -18,12 +18,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
+        with:
+          eccodes: 'true'
       - run: pnpm tools:pmtiles
       - name: Verify foundation
         run: pnpm verify
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: '0.8.17'
       - name: Verify coverage geometry
         run: uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/test_fine_masks.py
       - name: Verify lossless terrain packing

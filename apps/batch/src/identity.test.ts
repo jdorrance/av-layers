@@ -50,13 +50,16 @@ it('binds whole-domain terrain, coverage and the lift method to their respective
 
 async function sourceFixture(interpolation: 'step' | 'linear-rgb'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'av-render-identity-')), git = promisify(execFile);
-  for (const directory of ['apps/batch/src', 'packages/contracts/src', 'packages/contracts/config', 'packages/contracts/schemas', 'packages/forecast/src', 'packages/soaring/src', 'packages/solar/src', 'packages/thermodynamics/src']) {
+  for (const directory of ['apps/batch/src/split-grib', 'packages/contracts/src', 'packages/contracts/config', 'packages/contracts/schemas', 'packages/forecast/src', 'packages/soaring/src', 'packages/solar/src', 'packages/thermodynamics/src']) {
     await mkdir(join(root, directory), { recursive: true });
   }
   await writeFile(join(root, 'packages/contracts/src/layers.ts'), `export const liftInterpolation = '${interpolation}';\n`);
   await writeFile(join(root, MODEL_CONFIG_PATH), '{}\n');
   await writeFile(join(root, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'), '{}\n');
   await writeFile(join(root, 'apps/batch/pmtiles.json'), '{}\n');
+  await writeFile(join(root, 'apps/batch/eccodes.json'), '{}\n');
+  await writeFile(join(root, 'apps/batch/eccodes-requirements.txt'), 'eccodes==2.50.1\n');
+  await writeFile(join(root, 'apps/batch/src/split-grib/decode.py'), 'decoder = "fixture"\n');
   await writeFile(join(root, 'pnpm-lock.yaml'), 'lock\n');
   await writeFile(join(root, 'package.json'), '{}\n');
   await writeFile(join(root, 'tsconfig.json'), '{}\n');
@@ -81,6 +84,24 @@ it('changes the render recipe for a lift interpolation source change while scien
     expect(liftRenderStyle('step')).not.toBe(liftRenderStyle('linear-rgb'));
   } finally { await Promise.all([rm(step, { recursive: true, force: true }), rm(linear, { recursive: true, force: true })]); }
 });
+
+it.each(['apps/batch/src/split-grib/decode.py', 'apps/batch/eccodes.json', 'apps/batch/eccodes-requirements.txt'])(
+  'binds %s to the adapter recipe while preserving science identity', async file => {
+    const root = await sourceFixture('linear-rgb'), coverageHash = 'a'.repeat(64);
+    try {
+      const before = await buildIdentity(INDEXED_PRODUCT, coverageHash, { root });
+      await writeFile(join(root, file), 'changed decoder input\n');
+      const after = await buildIdentity(INDEXED_PRODUCT, coverageHash, { root });
+      expect(after.components.adapter).not.toBe(before.components.adapter);
+      expect(after.recipe.hash).not.toBe(before.recipe.hash);
+      expect(after.recipe.lockHash).toBe(before.recipe.lockHash);
+      expect(after.components.science).toBe(before.components.science);
+      expect(after.components.contracts).toBe(before.components.contracts);
+      expect(after.components.configuration).toBe(before.components.configuration);
+      expect(after.scienceHash).toBe(before.scienceHash);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+);
 
 it('keeps client source out of the recipe and pins the full workspace lockfile', async () => {
   const root = await sourceFixture('linear-rgb'), coverageHash = 'a'.repeat(64);

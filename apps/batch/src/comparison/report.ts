@@ -160,5 +160,3 @@ export function buildReport(left: readonly ComparisonSample[], right: readonly C
     topDiscrepancies: largestDifferences(daylightPairs)
   };
 }
-
-export type ComparisonReport = ReturnType<typeof buildReport>;

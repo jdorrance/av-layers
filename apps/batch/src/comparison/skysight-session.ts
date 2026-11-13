@@ -16,7 +16,7 @@ import { selectSkySightRegions, regionForecastTimes } from './skysight-regions.j
 const MAX_REQUESTS = 4096, MAX_PLAN_BYTES = 16 * 1024 ** 2, MAX_BASELINE_BYTES = 128 * 1024 ** 2;
 const digest = (value: Uint8Array | string) => createHash('sha256').update(value).digest('hex');
 
-export interface SkySightRequest {
+interface SkySightRequest {
   id: string; url: string; method: 'GET' | 'POST'; kind: 'point' | 'windgram' | 'update-marker';
   phase: 'before' | 'forecast' | 'after'; region: string; siteId?: string; requestBody?: string;
   times?: string[]; localDate?: string; probeTime?: string;

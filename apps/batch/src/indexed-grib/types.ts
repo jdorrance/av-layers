@@ -68,7 +68,7 @@ export interface IndexedGribAcquisitionSession {
   close(): Promise<void>;
 }
 
-export type IndexedGribFieldKind =
+type IndexedGribFieldKind =
   | 'terrain'
   | 'surface-pressure'
   | 'temp-2m'
@@ -119,7 +119,7 @@ export interface IndexedGribDuplicateVerification {
   candidates: { offset: number; length: number; idxLine: string; idxLineNumber: number; asset: SourceAssetReceipt }[];
 }
 
-export interface DecodedProductReceipt {
+interface DecodedProductReceipt {
   productDefinitionTemplateNumber: number;
   parameterCategory: number;
   parameterNumber: number;

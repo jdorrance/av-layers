@@ -144,7 +144,7 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
   }
 }
 
-export function configuredWholeDomain(model: string, env: NodeJS.ProcessEnv, store: ObjectStorage) {
+function configuredWholeDomain(model: string, env: NodeJS.ProcessEnv, store: ObjectStorage) {
   const product = getProduct(model);
   if (!product) throw new Error(`No forecast product for ${model}`);
   const factor = product.terrainSubdivisionFactor;

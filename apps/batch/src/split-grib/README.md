@@ -19,10 +19,16 @@ per-cell missingness. Layer descriptors bind both fixed surfaces.
 Configured precipitation accumulations use same-run companions to recover
 trailing rates with the shared interval kernel and GRIB packing tolerances.
 
-[grib.ts](grib.ts) decodes GRIB packing and scan direction;
-[codec/bzip2.ts](codec/bzip2.ts) and [codec/ccsds.ts](codec/ccsds.ts) retain bounded
-pure-TypeScript decoding. Reference tests cover libaec, ecCodes and bzip2 data.
+[grib.ts](grib.ts) owns one bounded ecCodes process per acquisition session.
+[decode.py](decode.py) reads metadata with ecCodes, decompresses bzip2 with Python,
+and checks libaec's decoded sample count. Install the pinned runtime with `pnpm tools:eccodes`; see
+[setup](../../../../docs/development.md#setup). Reference tests cover
+libaec, ecCodes and bzip2 data, malformed inputs, cancellation and process shutdown.
 The optional retained DWD fixture check uses `ICON_DWD_PROBE_DIR`.
+
+Session metrics include decoder time, IPC bytes and native peak RSS. Build
+admission reserves native scratch and queued input buffers; published peak RSS
+includes the decoder process. [grib.ts](grib.ts) owns the workspace allowance.
 
 Admitted template 3.0 has matching grid-relative and Earth-relative wind axes
 ([NOAA](https://www.cpc.ncep.noaa.gov/products/tools/wgrib2/new_grid_winds.html)).

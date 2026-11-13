@@ -1,6 +1,7 @@
 import type { ModelDefinition } from '@av/contracts';
 import type { ResolvableForecastProvider } from '../provider.js';
 import { splitSource } from './source.js';
+import { splitGribWorkspaceBytes } from './grib.js';
 
 export function createSplitGribProvider(model: ModelDefinition): ResolvableForecastProvider {
   const source = splitSource(model);
@@ -8,6 +9,7 @@ export function createSplitGribProvider(model: ModelDefinition): ResolvableForec
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true, retainedGeometryFields: source.modelLevels.length + 1,
     auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
     auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
+    acquisitionWorkspaceBytes: activeCells => splitGribWorkspaceBytes(source.grid.width * source.grid.height, activeCells),
     async resolveCycle(options) {
       options.signal?.throwIfAborted();
       const { validateSplitGribCycle } = await import('./fields.js');

@@ -6,9 +6,9 @@ import { planSample } from '@av/forecast/sampler';
 import z from 'zod';
 
 export const MAX_STATION_OBSERVATION_BYTES = 16 * 1024 * 1024;
-export const MAX_STATION_OBSERVATIONS = 100_000;
-export const MAX_STATION_ELEVATION_MISMATCH_M = 150;
-export const DRY_ADIABATIC_LAPSE_K_PER_M = 0.0098;
+const MAX_STATION_OBSERVATIONS = 100_000;
+const MAX_STATION_ELEVATION_MISMATCH_M = 150;
+const DRY_ADIABATIC_LAPSE_K_PER_M = 0.0098;
 
 const STATION_ID = /^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$/;
 const UTC_TIMESTAMP = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?Z$/;
@@ -73,7 +73,7 @@ export type ElevationOffsetBand = '<=-250' | '-250..-100' | '-100..0' | '0..200'
 
 export const ELEVATION_OFFSET_BANDS: readonly ElevationOffsetBand[] = ['<=-250', '-250..-100', '-100..0', '0..200', '>=200'];
 
-export function elevationOffsetBand(offsetM: number): ElevationOffsetBand {
+function elevationOffsetBand(offsetM: number): ElevationOffsetBand {
   if (!Number.isFinite(offsetM)) throw new RangeError('Elevation offset must be finite');
   if (offsetM <= -250) return '<=-250';
   if (offsetM <= -100) return '-250..-100';
@@ -144,12 +144,6 @@ export interface SparseFrameDiagnostics {
   readonly flags: Uint8Array;
   readonly bufferBytes: number;
   readonly sourceIndices: Uint32Array;
-}
-
-export interface SparseFrameDiagnosticsSummary {
-  readonly validAt: string;
-  readonly donorIndices: number;
-  readonly bufferBytes: number;
 }
 
 export function prepareSparseFrameDiagnostics(
@@ -248,7 +242,7 @@ export interface StationVariantExclusionCounts {
   readonly temperatureMissing: number;
 }
 
-export interface StationVariantResult {
+interface StationVariantResult {
   readonly id: string;
   readonly diagnostic: TemperatureMetrics;
   readonly gate: TemperatureMetrics;

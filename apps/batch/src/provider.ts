@@ -31,6 +31,8 @@ export function createNormalizedFrameTarget(cells: number, levels: number, model
 export interface ForecastSession {
   cycle: string;
   readonly stats: Record<string, unknown>;
+  /** Peak resident bytes in native child processes owned by this session. */
+  readonly nativePeakRssBytes?: number;
   /** Acquire sequentially; the caller owns each returned frame and closes the session in finally. */
   acquire(hour: number, target?: NormalizedFrameTarget): Promise<NormalizedFrame>;
   close(): Promise<void>;
@@ -46,6 +48,8 @@ export interface ForecastProvider {
   provider: string;
   maxLevels: number;
   directTargets?: boolean;
+  /** Acquisition scratch and child-process memory, excluding normalized frame targets. */
+  acquisitionWorkspaceBytes?(activeCells: number): number;
   /** Cached Float32 value/Uint8 mask pairs retained alongside each normalized frame. */
   retainedGeometryFields?: number;
   auxiliarySurfaceFields?: number;
