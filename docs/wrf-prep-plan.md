@@ -76,7 +76,6 @@ Bind encoded radius, grid spacing, dimensions, LaD, standard parallels, and
 producer identity to the configured grid. Verify northern and southern cones
 and accept first-cell rounding within the physical GRIB2 precision bound.
 Use PROJ control points and wind rotation on each side of the central meridian.
-Bind the southern pole encoding to the producer configuration.
 
 NOAA UPP can emit Earth shape 6 with a radius of 6,371,229 m and LaD equal to
 the first true latitude. An explicit 6,370,000 m sphere is also testable when
@@ -90,7 +89,7 @@ Check that terrain-based lift uses the fine DEM.
 
 ## 5. Catalog and automatic selection
 
-Add domain bounds and nominal grid spacing to the catalog and the
+Add domain bounds, tier, and nominal grid spacing to the catalog and the
 browser-safe model options. Add opt-in Auto in Preview and Windy. Keep explicit
 model selection, existing defaults, and pinned URLs.
 
@@ -106,8 +105,7 @@ Generate deterministic UPP-style GRIB2, indexes, and ready receipts for tiny
 Lambert fixtures in both hemispheres. Use a test-only product registry.
 Exercise private source admission, scoped shard reads, assembly, publication,
 and a local Worker. Verify catalog, tile, point, and profile responses,
-including daylight lift values, Earth-relative winds and vertical-velocity
-conversion.
+including Earth-relative winds and vertical-velocity conversion.
 
 Document the producer's exact field, grid, interval, object, and dispatch
 contract in the [extension guide](extensions.md). Keep raw NetCDF, nested

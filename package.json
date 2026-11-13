@@ -18,6 +18,7 @@
   "scripts": {
     "refinement": "node --import tsx apps/batch/src/refinement/cli.ts",
     "refinement:evaluate": "node --import tsx apps/batch/src/refinement/evaluate.ts",
+    "comparison": "node --import tsx apps/batch/src/comparison/cli.ts",
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",

@@ -1,0 +1,502 @@
+[
+  {
+    "id": "armenia-reference",
+    "name": "User reference — Armenia region",
+    "lat": 39.69873414348142,
+    "lon": 44.9560546875,
+    "region": "europe-caucasus",
+    "terrain": "slope",
+    "timezone": "Asia/Yerevan",
+    "source": "User-provided XC Skies coordinate, 2026-11-13"
+  },
+  {
+    "id": "aragats",
+    "name": "Aragats south summit",
+    "lat": 40.5037,
+    "lon": 44.1841,
+    "region": "europe-caucasus",
+    "terrain": "slope",
+    "timezone": "Asia/Yerevan",
+    "source": "http://www.paraglidingearth.com/?site=9306"
+  },
+  {
+    "id": "lake-sevan",
+    "name": "Tsovagyugh — Lake Sevan",
+    "lat": 40.5933,
+    "lon": 44.9465,
+    "region": "europe-caucasus",
+    "terrain": "water",
+    "timezone": "Asia/Yerevan",
+    "source": "http://www.paraglidingearth.com/?site=9311"
+  },
+  {
+    "id": "hatis",
+    "name": "Mount Hatis",
+    "lat": 40.2727,
+    "lon": 44.7074,
+    "region": "europe-caucasus",
+    "terrain": "ridge",
+    "timezone": "Asia/Yerevan",
+    "source": "http://www.paraglidingearth.com/?site=9304"
+  },
+  {
+    "id": "gudauri-valley",
+    "name": "Gudauri valley floor",
+    "lat": 42.4709,
+    "lon": 44.4863,
+    "region": "europe-caucasus",
+    "terrain": "valley",
+    "timezone": "Asia/Tbilisi",
+    "source": "http://www.paraglidingearth.com/?site=19641"
+  },
+  {
+    "id": "oludeniz",
+    "name": "Oludeniz coast",
+    "lat": 36.5462,
+    "lon": 29.1228,
+    "region": "europe-caucasus",
+    "terrain": "water",
+    "timezone": "Europe/Istanbul",
+    "source": "http://www.paraglidingearth.com/?site=7216"
+  },
+  {
+    "id": "tolmin-valley",
+    "name": "Tolmin valley floor",
+    "lat": 46.1851,
+    "lon": 13.7222,
+    "region": "europe-caucasus",
+    "terrain": "valley",
+    "timezone": "Europe/Ljubljana",
+    "source": "http://www.paraglidingearth.com/?site=7183"
+  },
+  {
+    "id": "fiesch-valley",
+    "name": "Fiesch valley floor",
+    "lat": 46.4093,
+    "lon": 8.13667,
+    "region": "europe-caucasus",
+    "terrain": "valley",
+    "timezone": "Europe/Zurich",
+    "source": "http://www.paraglidingearth.com/?site=6604"
+  },
+  {
+    "id": "annecy-doussard",
+    "name": "Doussard — Lake Annecy",
+    "lat": 45.7819,
+    "lon": 6.2221,
+    "region": "europe-caucasus",
+    "terrain": "water",
+    "timezone": "Europe/Paris",
+    "source": "http://www.paraglidingearth.com/?site=3046"
+  },
+  {
+    "id": "saint-hilaire",
+    "name": "Saint-Hilaire-du-Touvet",
+    "lat": 45.3069,
+    "lon": 5.88806,
+    "region": "europe-caucasus",
+    "terrain": "slope",
+    "timezone": "Europe/Paris",
+    "source": "http://www.paraglidingearth.com/?site=6176"
+  },
+  {
+    "id": "laragne",
+    "name": "Laragne — Le Chabre",
+    "lat": 44.2978,
+    "lon": 5.7651,
+    "region": "europe-caucasus",
+    "terrain": "ridge",
+    "timezone": "Europe/Paris",
+    "source": "http://www.paraglidingearth.com/?site=2546"
+  },
+  {
+    "id": "piedrahita",
+    "name": "Piedrahita — Pena Negra",
+    "lat": 40.4217,
+    "lon": -5.30073,
+    "region": "europe-caucasus",
+    "terrain": "plateau",
+    "timezone": "Europe/Madrid",
+    "source": "http://www.paraglidingearth.com/?site=6672"
+  },
+  {
+    "id": "ager",
+    "name": "Ager — Montsec ridge",
+    "lat": 42.0464,
+    "lon": 0.7461,
+    "region": "europe-caucasus",
+    "terrain": "ridge",
+    "timezone": "Europe/Madrid",
+    "source": "http://www.paraglidingearth.com/?site=7366"
+  },
+  {
+    "id": "bassano",
+    "name": "Bassano southern foothills",
+    "lat": 45.8238,
+    "lon": 11.7694,
+    "region": "europe-caucasus",
+    "terrain": "slope",
+    "timezone": "Europe/Rome",
+    "source": "http://www.paraglidingearth.com/?site=9200"
+  },
+  {
+    "id": "innsbruck",
+    "name": "Innsbruck — Seegrube",
+    "lat": 47.3052,
+    "lon": 11.3774,
+    "region": "europe-caucasus",
+    "terrain": "slope",
+    "timezone": "Europe/Vienna",
+    "source": "http://www.paraglidingearth.com/?site=9064"
+  },
+  {
+    "id": "wasserkuppe",
+    "name": "Wasserkuppe upland",
+    "lat": 50.4971,
+    "lon": 9.93203,
+    "region": "europe-caucasus",
+    "terrain": "plateau",
+    "timezone": "Europe/Berlin",
+    "source": "http://www.paraglidingearth.com/?site=6679"
+  },
+  {
+    "id": "schoenbrunn",
+    "name": "Schoenbrunn winch field",
+    "lat": 49.4036,
+    "lon": 8.92637,
+    "region": "europe-caucasus",
+    "terrain": "flat",
+    "timezone": "Europe/Berlin",
+    "source": "http://www.paraglidingearth.com/?site=14110"
+  },
+  {
+    "id": "devils-dyke",
+    "name": "Devils Dyke",
+    "lat": 50.8857,
+    "lon": -0.21296,
+    "region": "europe-caucasus",
+    "terrain": "ridge",
+    "timezone": "Europe/London",
+    "source": "http://www.paraglidingearth.com/?site=6279"
+  },
+  {
+    "id": "torrey-pines",
+    "name": "Torrey Pines",
+    "lat": 32.8902,
+    "lon": -117.252,
+    "region": "north-america",
+    "terrain": "water",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=101"
+  },
+  {
+    "id": "owens-valley",
+    "name": "Owens Valley floor — Paiute",
+    "lat": 37.5113,
+    "lon": -118.35,
+    "region": "north-america",
+    "terrain": "valley",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=7010"
+  },
+  {
+    "id": "chelan",
+    "name": "Chelan Butte",
+    "lat": 47.8042,
+    "lon": -120.039,
+    "region": "north-america",
+    "terrain": "water",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=6684"
+  },
+  {
+    "id": "tiger-mountain",
+    "name": "Tiger Mountain",
+    "lat": 47.4995,
+    "lon": -122.009,
+    "region": "north-america",
+    "terrain": "slope",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=6687"
+  },
+  {
+    "id": "woodrat-valley",
+    "name": "Woodrat valley floor",
+    "lat": 42.2471,
+    "lon": -123.026,
+    "region": "north-america",
+    "terrain": "valley",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=6655"
+  },
+  {
+    "id": "point-mountain",
+    "name": "Point of the Mountain",
+    "lat": 40.4735,
+    "lon": -111.893,
+    "region": "north-america",
+    "terrain": "ridge",
+    "timezone": "America/Denver",
+    "source": "http://www.paraglidingearth.com/?site=19513"
+  },
+  {
+    "id": "mingus",
+    "name": "Mingus Mountain",
+    "lat": 34.7028,
+    "lon": -112.116,
+    "region": "north-america",
+    "terrain": "plateau",
+    "timezone": "America/Phoenix",
+    "source": "http://www.paraglidingearth.com/?site=7376"
+  },
+  {
+    "id": "sandia",
+    "name": "Sandia Peak",
+    "lat": 35.2006,
+    "lon": -106.438,
+    "region": "north-america",
+    "terrain": "ridge",
+    "timezone": "America/Denver",
+    "source": "http://www.paraglidingearth.com/?site=11414"
+  },
+  {
+    "id": "lookout-georgia",
+    "name": "Lookout Mountain — Georgia",
+    "lat": 34.8982,
+    "lon": -85.4453,
+    "region": "north-america",
+    "terrain": "ridge",
+    "timezone": "America/New_York",
+    "source": "http://www.paraglidingearth.com/?site=18038"
+  },
+  {
+    "id": "wallaby",
+    "name": "Wallaby Ranch — Florida",
+    "lat": 28.2593,
+    "lon": -81.6908,
+    "region": "north-america",
+    "terrain": "flat",
+    "timezone": "America/New_York",
+    "source": "http://www.paraglidingearth.com/?site=11763"
+  },
+  {
+    "id": "hearne",
+    "name": "Hearne — Texas",
+    "lat": 30.8672,
+    "lon": -96.6225,
+    "region": "north-america",
+    "terrain": "flat",
+    "timezone": "America/Chicago",
+    "source": "http://www.paraglidingearth.com/?site=11659"
+  },
+  {
+    "id": "dunlap-valley",
+    "name": "Dunlap valley floor",
+    "lat": 36.7355,
+    "lon": -119.105,
+    "region": "north-america",
+    "terrain": "valley",
+    "timezone": "America/Los_Angeles",
+    "source": "http://www.paraglidingearth.com/?site=7007"
+  },
+  {
+    "id": "cosmos",
+    "name": "Cosmos — Minnesota",
+    "lat": 44.988,
+    "lon": -94.7984,
+    "region": "north-america",
+    "terrain": "flat",
+    "timezone": "America/Chicago",
+    "source": "http://www.paraglidingearth.com/?site=16557"
+  },
+  {
+    "id": "pemberton-valley",
+    "name": "Pemberton valley floor",
+    "lat": 50.3349,
+    "lon": -122.815,
+    "region": "north-america",
+    "terrain": "valley",
+    "timezone": "America/Vancouver",
+    "source": "http://www.paraglidingearth.com/?site=6709"
+  },
+  {
+    "id": "yamaska",
+    "name": "Mont Yamaska",
+    "lat": 45.4522,
+    "lon": -72.8781,
+    "region": "north-america",
+    "terrain": "ridge",
+    "timezone": "America/Toronto",
+    "source": "http://www.paraglidingearth.com/?site=7082"
+  },
+  {
+    "id": "valle-bravo",
+    "name": "Valle de Bravo lakeside",
+    "lat": 19.1834,
+    "lon": -100.128,
+    "region": "north-america",
+    "terrain": "water",
+    "timezone": "America/Mexico_City",
+    "source": "http://www.paraglidingearth.com/?site=6749"
+  },
+  {
+    "id": "quixada",
+    "name": "Quixada dry lowland",
+    "lat": -5.07806,
+    "lon": -39.0363,
+    "region": "south-america",
+    "terrain": "flat",
+    "timezone": "America/Fortaleza",
+    "source": "http://www.paraglidingearth.com/?site=6801"
+  },
+  {
+    "id": "valadares",
+    "name": "Governador Valadares — Ibituruna",
+    "lat": -18.8866,
+    "lon": -41.915,
+    "region": "south-america",
+    "terrain": "ridge",
+    "timezone": "America/Sao_Paulo",
+    "source": "http://www.paraglidingearth.com/?site=6617"
+  },
+  {
+    "id": "rio-pedra-bonita",
+    "name": "Rio de Janeiro — Pedra Bonita",
+    "lat": -22.9882,
+    "lon": -43.2788,
+    "region": "south-america",
+    "terrain": "water",
+    "timezone": "America/Sao_Paulo",
+    "source": "http://www.paraglidingearth.com/?site=7136"
+  },
+  {
+    "id": "roldanillo-valley",
+    "name": "Roldanillo valley floor",
+    "lat": 4.4062,
+    "lon": -76.1536,
+    "region": "south-america",
+    "terrain": "valley",
+    "timezone": "America/Bogota",
+    "source": "http://www.paraglidingearth.com/?site=12217"
+  },
+  {
+    "id": "cuchi-corral",
+    "name": "Cuchi Corral upland",
+    "lat": -30.9671,
+    "lon": -64.5847,
+    "region": "south-america",
+    "terrain": "plateau",
+    "timezone": "America/Argentina/Cordoba",
+    "source": "http://www.paraglidingearth.com/?site=6811"
+  },
+  {
+    "id": "iquique",
+    "name": "Iquique — coastal desert",
+    "lat": -20.2427,
+    "lon": -70.1184,
+    "region": "south-america",
+    "terrain": "water",
+    "timezone": "America/Santiago",
+    "source": "http://www.paraglidingearth.com/?site=6654"
+  },
+  {
+    "id": "sacred-valley",
+    "name": "Sacred Valley — Peru",
+    "lat": -13.3633,
+    "lon": -72.0678,
+    "region": "south-america",
+    "terrain": "valley",
+    "timezone": "America/Lima",
+    "source": "http://www.paraglidingearth.com/?site=10324"
+  },
+  {
+    "id": "pichincha",
+    "name": "Quito — Pichincha",
+    "lat": -0.166,
+    "lon": -78.5253,
+    "region": "south-america",
+    "terrain": "slope",
+    "timezone": "America/Guayaquil",
+    "source": "http://www.paraglidingearth.com/?site=7388"
+  },
+  {
+    "id": "pokhara",
+    "name": "Pokhara — Phewa lakeside",
+    "lat": 28.2213,
+    "lon": 83.9506,
+    "region": "asia-oceania",
+    "terrain": "water",
+    "timezone": "Asia/Kathmandu",
+    "source": "http://www.paraglidingearth.com/?site=6938"
+  },
+  {
+    "id": "bir-billing",
+    "name": "Bir Billing",
+    "lat": 32.0598,
+    "lon": 76.7445,
+    "region": "asia-oceania",
+    "terrain": "slope",
+    "timezone": "Asia/Kolkata",
+    "source": "http://www.paraglidingearth.com/?site=6789"
+  },
+  {
+    "id": "asagiri",
+    "name": "Asagiri plateau",
+    "lat": 35.4098,
+    "lon": 138.584,
+    "region": "asia-oceania",
+    "terrain": "plateau",
+    "timezone": "Asia/Tokyo",
+    "source": "http://www.paraglidingearth.com/?site=9751"
+  },
+  {
+    "id": "puli-valley",
+    "name": "Puli basin",
+    "lat": 23.9577,
+    "lon": 120.982,
+    "region": "asia-oceania",
+    "terrain": "valley",
+    "timezone": "Asia/Taipei",
+    "source": "http://www.paraglidingearth.com/?site=7406"
+  },
+  {
+    "id": "manilla",
+    "name": "Manilla — Mount Borah",
+    "lat": -30.6789,
+    "lon": 150.609,
+    "region": "asia-oceania",
+    "terrain": "ridge",
+    "timezone": "Australia/Sydney",
+    "source": "http://www.paraglidingearth.com/?site=4632"
+  },
+  {
+    "id": "forbes",
+    "name": "Forbes airfield",
+    "lat": -33.3612,
+    "lon": 147.933,
+    "region": "asia-oceania",
+    "terrain": "flat",
+    "timezone": "Australia/Sydney",
+    "source": "http://www.paraglidingearth.com/?site=11077"
+  },
+  {
+    "id": "treble-cone",
+    "name": "Treble Cone",
+    "lat": -44.6378,
+    "lon": 168.908,
+    "region": "asia-oceania",
+    "terrain": "slope",
+    "timezone": "Pacific/Auckland",
+    "source": "http://www.paraglidingearth.com/?site=6171"
+  },
+  {
+    "id": "karioitahi",
+    "name": "Karioitahi coast",
+    "lat": -37.276,
+    "lon": 174.653,
+    "region": "asia-oceania",
+    "terrain": "water",
+    "timezone": "Pacific/Auckland",
+    "source": "http://www.paraglidingearth.com/?site=10879"
+  }
+]

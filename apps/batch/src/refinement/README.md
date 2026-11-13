@@ -13,6 +13,9 @@ selects a local configuration file.
 
 ## Evaluation
 
+The [forecast comparison](../comparison/README.md) captures current point and
+profile products across fixed sites for matched-cycle provider comparisons.
+
 ```sh
 pnpm refinement:evaluate --control-manifest PATH --cache-dir PATH --out PATH --frames f021,f024
 ```
