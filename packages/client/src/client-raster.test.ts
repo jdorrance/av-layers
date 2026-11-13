@@ -5,7 +5,7 @@ const tile = (x = 0) => `${base}/tiles/gfs/build/usable-lift-msl/f003/7/${x}/50.
 const webp = () => new Response(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } });
 const disposals: Array<() => void> = [];
 function setup(options: Parameters<typeof createRasterTileProtocol>[1]) { const protocol = createRasterTileProtocol(base, options); disposals.push(protocol.dispose); return protocol; }
-function setupSources(options: Parameters<typeof createRasterTileProtocol>[1]) { const protocol = createSourceRasterTileProtocol(base, options); disposals.push(protocol.dispose); return protocol; }
+function setupSources(options: Parameters<typeof createSourceRasterTileProtocol>[1]) { const protocol = createSourceRasterTileProtocol(base, options); disposals.push(protocol.dispose); return protocol; }
 afterEach(() => { for (const dispose of disposals.splice(0)) dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 function heldFetch() {
   const finish: Array<(response: Response) => void> = [];
@@ -383,6 +383,26 @@ it('limits retained source handles and releases them for the next selection', as
   second.dispose(); protocol.dispose();
   await expect(protocol.load({ url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
   expect(() => protocol.createSource(false)).toThrow();
+});
+
+it('bounds the expanded source window while preserving background admission', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxSources: 4 });
+  const sources = Array.from({ length: 4 }, (_, index) => protocol.createSource(index === 0));
+  expect(() => protocol.createSource(false)).toThrow('source limit');
+  const pending = sources.map((source, index) => protocol.load({ url: source.url(tile(index)) }, new AbortController()));
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  finish[0](webp()); await pending[0];
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  finish[1](webp()); await pending[1];
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
+  finish[2](webp()); finish[3](webp()); await Promise.all(pending);
+  sources[1].dispose();
+  expect(() => protocol.createSource(false)).not.toThrow();
+  expect(() => protocol.createSource(false)).toThrow('source limit');
+});
+
+it.each([1, 5, 2.5, Infinity])('rejects an unsupported source window: %s', maxSources => {
+  expect(() => createSourceRasterTileProtocol(base, { maxSources })).toThrow('Invalid raster source limit');
 });
 
 it('demotes queued source work while allowing the current admitted read to settle', async () => {

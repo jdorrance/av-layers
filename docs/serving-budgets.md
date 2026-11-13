@@ -18,9 +18,16 @@ combined work across all grids selected by a request.
   [raster scheduler](../packages/client/src/client-raster.ts).
   It keeps 4 requests active and queues 64. Background work starts while fewer
   than 2 background reads are active; admitted reads finish after demotion. The
-  compressed tile cache is 48 MiB including entry overhead. Preview retains at
-  most two source handles (displayed and prepared), with 16 offscreen tiles per
-  source. Prepared-source loading shares the two-request prefetch limit. Build expiry drops
+  compressed tile cache is 48 MiB including entry overhead. Preview retains up to
+  four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
+  with 16 offscreen tiles per source. The 96 MiB admission estimate charges visible
+  and cached tiles at twice RGBA storage; large viewports shrink the prepared window.
+  The displayed/replacement pair can exceed that estimate when required for a switch.
+  MapLibre's texture pool and browser allocations are separate; the
+  [input benchmark](preview-performance.md) records retained texture storage.
+  Prepared-source loading shares the two-request prefetch limit. Cold selections
+  drop unfinished background sources to release MapLibre's upstream image queue.
+  Build expiry drops
   that build's cache. Palette responses stay revalidatable. Build-specific tile,
   manifest, provenance, and TileJSON responses stay immutable until `expiresAt`.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4

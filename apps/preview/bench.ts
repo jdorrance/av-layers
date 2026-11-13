@@ -1,71 +1,153 @@
-import { Map } from 'maplibre-gl';
-import type { PinnedBuild } from '@av/client';
-import type { LayerId } from '@av/contracts/layers';
-import { RasterOverlay, type OverlayState } from './src/raster-overlay';
+import { Map as PreviewMap, type MapOptions } from 'maplibre-gl';
+export * from 'maplibre-gl';
 
-interface Selection { layer: LayerId; frame: string }
-interface Sample extends Selection { ms: number; renders: number; pixels: number[][]; sources: number }
+interface TextureMemory { bytes: number; peakBytes: number; rasterBytes: number; peakRasterBytes: number; textures: number; peakTextures: number }
+interface InputSample { index: number; inputAt: number; inputEpochMs: number; ms: number; rendered: boolean; renders: number; pixels?: number[][]; sources: number }
 export interface PreviewBench {
   ready: Promise<void>;
-  select(layer: LayerId, frame: string): Promise<Sample>;
-  prepare(layer: LayerId, frame: string): void;
-  pan(longitude: number): void;
+  select(index: number): Promise<InputSample>;
+  drag(indices: number[], intervalMs: number): Promise<{ samples: InputSample[]; staleFramePaints: number; lastTargetMs: number }>;
   settled(): boolean;
-  snapshot(): { displayed: Selection | null; requested: Selection | null; sources: number; sourceIds: string[]; width: number; height: number; renderer: string; frames: string[] };
+  snapshot(): { sources: number; peakSources: number; renderer: string; frames: string[]; memory: TextureMemory; selectedIndex: number; displayedIndex: number; width: number; height: number };
+  pan(longitude: number): void;
+  resetPeaks(): void;
 }
 declare global { interface Window { bench: PreviewBench } }
 
-const build = await (await fetch('/bench/config.json')).json() as PinnedBuild;
-const initial: Selection = { layer: 'usable-lift-agl', frame: build.manifest.frames[2].id };
-const map = new Map({ container: 'map', style: { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#111111' } }] },
-  center: [-100,40], zoom: 7.15, attributionControl: false, maxTileCacheSize: 16, canvasContextAttributes: { preserveDrawingBuffer: true } });
-const canvas = map.getCanvas(), gl = canvas.getContext('webgl2')!;
-if (!gl) throw new Error('WebGL2 is required by the benchmark');
-const debug = gl.getExtension('WEBGL_debug_renderer_info');
-const renderer = debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
-let state: OverlayState, render = 0, commitRender = -1;
-let waiting: { selection: Selection; start: number; render: number; resolve: (sample: Sample) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
-const same = (a: Selection | null | undefined,b: Selection | null | undefined) => !!a && !!b && a.frame === b.frame && a.layer === b.layer;
-const overlay = new RasterOverlay(map, location.origin, 1, next => {
-  if (!same(state?.displayed,next.displayed)) commitRender = render;
-  state = next;
-  document.querySelector('#displayed')!.textContent = next.displayed ? `${next.displayed.layer} ${next.displayed.frame}` : 'Loading';
-});
+type GL = WebGLRenderingContext | WebGL2RenderingContext;
+interface Level { width: number; height: number; bytes: number; bytesPerPixel: number }
+interface Allocation { levels: globalThis.Map<number, Level> }
 
-function sources() { return Object.keys(map.getStyle().sources).filter(id => id.startsWith('av-overlay-')); }
-function pixels() {
-  return [[0.5,0.5],[0.25,0.25],[0.25,0.75],[0.75,0.25],[0.75,0.75]].map(([x,y]) => {
-    const value = new Uint8Array(4);
-    gl.readPixels(Math.floor(canvas.width*x),Math.floor(canvas.height*y),1,1,gl.RGBA,gl.UNSIGNED_BYTE,value);
-    return [...value];
+// Count requested texture storage, including textures retained by MapLibre's pool.
+function textureAccounting(): { snapshot(): TextureMemory; resetPeaks(): void } {
+  const allocations = new globalThis.Map<WebGLTexture, Allocation>();
+  const states = new WeakMap<GL, { unit: number; bound: globalThis.Map<string, WebGLTexture | null> }>();
+  let peakBytes = 0, peakRasterBytes = 0, peakTextures = 0;
+  const totals = () => {
+    let bytes = 0, rasterBytes = 0;
+    for (const allocation of allocations.values()) {
+      const size = [...allocation.levels.values()].reduce((sum, level) => sum + level.bytes, 0);
+      bytes += size;
+      const base = allocation.levels.get(0);
+      if (base?.width === 256 && base.height === 256 && base.bytesPerPixel === 4) rasterBytes += size;
+    }
+    return { bytes, rasterBytes, textures: allocations.size };
+  };
+  function changed() { const now = totals(); peakBytes = Math.max(peakBytes, now.bytes); peakRasterBytes = Math.max(peakRasterBytes, now.rasterBytes); peakTextures = Math.max(peakTextures, now.textures); }
+  function state(gl: GL) {
+    let value = states.get(gl);
+    if (!value) { value = { unit: gl.TEXTURE0, bound: new globalThis.Map() }; states.set(gl, value); }
+    return value;
+  }
+  function allocation(gl: GL, target: number): Allocation | undefined {
+    const current = state(gl), texture = current.bound.get(`${current.unit}/${target}`);
+    return texture ? allocations.get(texture) : undefined;
+  }
+  const pixelBytes = (format: number) => ({ 6406: 1, 6407: 3, 6408: 4, 6409: 1, 6410: 2, 33321: 1, 33323: 2, 32849: 3, 32856: 4, 35907: 4, 33325: 2, 33327: 4, 34842: 8, 34836: 16 }[format] ?? 4);
+  function level(value: Allocation | undefined, index: number, width: number, height: number, bytesPerPixel: number) {
+    if (!value) return;
+    value.levels.set(index, { width, height, bytesPerPixel, bytes: width * height * bytesPerPixel }); changed();
+  }
+  function wrap(prototype: object, name: string, after: (gl: GL, args: unknown[], result: unknown) => void) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    if (!descriptor || typeof descriptor.value !== 'function') return;
+    const original = descriptor.value as (...args: unknown[]) => unknown;
+    Object.defineProperty(prototype, name, { ...descriptor, value: function (this: GL, ...args: unknown[]) {
+      const result = Reflect.apply(original, this, args); after(this, args, result); return result;
+    } });
+  }
+  for (const prototype of [WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]) {
+    wrap(prototype, 'createTexture', (_gl, _args, texture) => { if (texture) { allocations.set(texture as WebGLTexture, { levels: new globalThis.Map() }); changed(); } });
+    wrap(prototype, 'deleteTexture', (_gl, [texture]) => { allocations.delete(texture as WebGLTexture); });
+    wrap(prototype, 'activeTexture', (gl, [unit]) => { state(gl).unit = Number(unit); });
+    wrap(prototype, 'bindTexture', (gl, [target, texture]) => { const current = state(gl); current.bound.set(`${current.unit}/${target}`, texture as WebGLTexture | null); });
+    wrap(prototype, 'texStorage2D', (gl, args) => {
+      const [target, levels, format, width, height] = args.map(Number), value = allocation(gl, target);
+      for (let index = 0; index < levels; index++) level(value, index, Math.max(1, width >> index), Math.max(1, height >> index), pixelBytes(format));
+    });
+    wrap(prototype, 'texImage2D', (gl, args) => {
+      const [target, index, format] = args.map(Number), source = args[5] as { width?: number; height?: number } | null;
+      const width = args.length >= 9 ? Number(args[3]) : source?.width ?? 0, height = args.length >= 9 ? Number(args[4]) : source?.height ?? 0;
+      level(allocation(gl, target), index, width, height, pixelBytes(format));
+    });
+    wrap(prototype, 'generateMipmap', (gl, [target]) => {
+      const value = allocation(gl, Number(target)), base = value?.levels.get(0);
+      if (base) for (let index = 1; Math.max(base.width, base.height) >> index; index++) level(value, index, Math.max(1, base.width >> index), Math.max(1, base.height >> index), base.bytesPerPixel);
+    });
+  }
+  return {
+    snapshot() { return { ...totals(), peakBytes, peakRasterBytes, peakTextures }; },
+    resetPeaks() { const now = totals(); peakBytes = now.bytes; peakRasterBytes = now.rasterBytes; peakTextures = now.textures; }
+  };
+}
+const memory = textureAccounting();
+
+/** Vite-only Map wrapper: the product still mounts its real main module and controls. */
+export class Map extends PreviewMap {
+  constructor(options: MapOptions) {
+    super({ ...options, canvasContextAttributes: { ...options.canvasContextAttributes, preserveDrawingBuffer: true } });
+    installBench(this);
+  }
+}
+
+function installBench(map: PreviewMap): void {
+  const time = document.querySelector<HTMLInputElement>('#time')!;
+  const canvas = map.getCanvas(), gl = canvas.getContext('webgl2')!;
+  if (!gl) throw new Error('WebGL2 is required by the benchmark');
+  const debug = gl.getExtension('WEBGL_debug_renderer_info');
+  const renderer = debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
+  const sources = () => Object.keys(map.getStyle().sources).filter(id => id.startsWith('av-overlay-')).length;
+  const samples: InputSample[] = [];
+  let frames: string[] = [], renders = 0, peakSources = 0, displayedIndex = -1, staleFramePaints = 0;
+  let waiting: { index: number; inputAt: number; render: number; resolve: (sample: InputSample) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
+  let requested: { resolve: (sample: InputSample) => void; reject: (error: Error) => void } | undefined;
+  let readyResolve!: () => void;
+  const ready = new Promise<void>(resolve => { readyResolve = resolve; });
+  void fetch('/bench/config.json').then(response => response.json()).then((config: { frames: string[] }) => { frames = config.frames; map.triggerRepaint(); });
+  function finish(rendered: boolean, pixels?: number[][]) {
+    if (!waiting) return;
+    const value: InputSample = { index: waiting.index, inputAt: waiting.inputAt, inputEpochMs: performance.timeOrigin + waiting.inputAt, ms: performance.now() - waiting.inputAt,
+      rendered, renders: renders - waiting.render, pixels, sources: sources() };
+    clearTimeout(waiting.timer); samples.push(value); waiting.resolve(value); waiting = undefined;
+  }
+  time.addEventListener('input', () => {
+    finish(false);
+    const observer = requested;
+    requested = undefined;
+    const index = Number(time.value), inputAt = performance.now();
+    waiting = { index, inputAt, render: renders, resolve: observer?.resolve ?? (() => {}), reject: observer?.reject ?? (() => {}),
+      timer: setTimeout(() => { const pending = waiting; waiting = undefined; pending?.reject(new Error(`Slider target ${index} did not render`)); }, 15000) };
+  }, { capture: true });
+  function select(index: number): Promise<InputSample> {
+    if (index < 0 || index >= frames.length || !Number.isInteger(index)) throw new Error('Unknown benchmark frame');
+    return new Promise((resolve, reject) => {
+      requested = { resolve, reject }; time.value = String(index); time.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+  map.on('render', () => {
+    renders++; peakSources = Math.max(peakSources, sources());
+    const pixels = [[0.5, 0.5], [0.25, 0.25], [0.25, 0.75], [0.75, 0.25], [0.75, 0.75]].map(([x, y]) => {
+      const pixel = new Uint8Array(4); gl.readPixels(Math.floor(canvas.width * x), Math.floor(canvas.height * y), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel); return [...pixel];
+    });
+    const index = Math.round((pixels[0][1] - 16) / 8);
+    if (index < 0 || index >= frames.length || pixels.some(pixel => Math.abs(pixel[0] - 40) > 3 || Math.abs(pixel[1] - (16 + index * 8)) > 3)) return;
+    if (displayedIndex !== index && waiting && waiting.index !== index) staleFramePaints++;
+    displayedIndex = index;
+    if (!time.disabled && !waiting && index === Number(time.value)) readyResolve();
+    if (waiting?.index === index) finish(true, pixels);
   });
+  window.bench = {
+    ready, select,
+    async drag(indices, intervalMs) {
+      const first = samples.length, stale = staleFramePaints;
+      let last: Promise<InputSample> | undefined;
+      for (const index of indices) { last = select(index); await new Promise(resolve => setTimeout(resolve, intervalMs)); }
+      const final = await last;
+      return { samples: samples.slice(first), staleFramePaints: staleFramePaints - stale, lastTargetMs: final?.ms ?? 0 };
+    },
+    settled() { return !waiting && map.loaded() && map.areTilesLoaded() && !map.isMoving(); },
+    snapshot() { return { sources: sources(), peakSources, renderer, frames, memory: memory.snapshot(), selectedIndex: Number(time.value), displayedIndex, width: canvas.width, height: canvas.height }; },
+    pan(longitude) { map.jumpTo({ center: [longitude, 40] }); },
+    resetPeaks() { peakSources = sources(); memory.resetPeaks(); }
+  };
 }
-function expected(selection: Selection) {
-  return [selection.layer === 'usable-lift-agl' ? 40 : 200, 25 + build.manifest.frames.findIndex(frame => frame.id === selection.frame)*24];
-}
-function select(layer: LayerId,frame: string): Promise<Sample> {
-  if (waiting) { clearTimeout(waiting.timer); waiting.reject(new Error('Superseded benchmark selection')); waiting = undefined; }
-  const selection = {layer,frame};
-  return new Promise((resolve,reject) => {
-    const timer = setTimeout(() => { waiting = undefined; reject(new Error(`Frame did not render: ${layer} ${frame}`)); },15000);
-    waiting = {selection,start:performance.now(),render,resolve,reject,timer};
-    overlay.select(build,layer,frame);
-    map.triggerRepaint();
-  });
-}
-map.on('render',() => {
-  render++;
-  if (!waiting || !same(state.displayed,waiting.selection) || render <= commitRender + 1) return;
-  const value = pixels(), color = expected(waiting.selection);
-  if (value.some(pixel => Math.abs(pixel[0]-color[0]) > 3 || Math.abs(pixel[1]-color[1]) > 3)) return;
-  const sample = { ...waiting.selection, ms: performance.now()-waiting.start, renders: render-waiting.render, pixels:value,sources:sources().length };
-  clearTimeout(waiting.timer); waiting.resolve(sample); waiting = undefined;
-});
-window.bench = {
-  ready: new Promise((resolve,reject) => map.once('load',() => { select(initial.layer,initial.frame).then(() => resolve(),reject); })),
-  select,
-  prepare(layer,frame) { (overlay as RasterOverlay & {prepare?: (layer: LayerId,frame: string) => void}).prepare?.(layer,frame); },
-  pan(longitude) { map.jumpTo({ center:[longitude,40] }); },
-  settled() { return !waiting && map.loaded() && map.areTilesLoaded() && !map.isMoving(); },
-  snapshot() { return { displayed:state?.displayed ? {layer:state.displayed.layer,frame:state.displayed.frame} : null,requested:state?.requested ? {layer:state.requested.layer,frame:state.requested.frame} : null,sources:sources().length,sourceIds:sources(),width:canvas.width,height:canvas.height,renderer,frames:build.manifest.frames.map(frame => frame.id) }; }
-};

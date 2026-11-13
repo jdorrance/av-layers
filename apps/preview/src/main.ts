@@ -28,6 +28,7 @@ import {
 } from '@av/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
+import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
 import { clockLabel, dayKey, dayLabel, frameIndexFor } from './timeline';
 
@@ -125,7 +126,7 @@ function startPreview(): void {
     container: 'map',
     center: startup.camera?.center ?? [0, 20],
     zoom: startup.camera?.zoom ?? 2,
-    maxTileCacheSize: 16,
+    maxTileCacheSize: RASTER_CACHE_TILES,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : basemapStyle()
@@ -143,12 +144,15 @@ function startPreview(): void {
   let expired = false;
   let mapFailed = false;
   let mapReady = false;
+  let selectingOverlay = false;
   let overlayState: OverlayState = { displayed: null, requested: null, incomplete: false, replacementFailed: false };
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
     updateOverlayStatus();
   });
   let timelineRaf: number | null = null;
+  let timelineDays: { build: PinnedBuild; offset: number; buttons: HTMLButtonElement[] } | null = null;
+  let ribbon: { build: PinnedBuild; layer: LayerId } | null = null;
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
   let loadAbort: AbortController | null = null;
@@ -158,6 +162,7 @@ function startPreview(): void {
   let pointHorizon: PointHorizon = 'day';
   let windgram: PointWindgram | null = null;
   let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
+  let pointSelection: { update: ReturnType<PointWindgram['renderPointWindgram']>; frame: string | null; units: UnitSystem; mapFrame: string | null } | null = null;
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
   let urlReady = false;
@@ -228,6 +233,7 @@ function startPreview(): void {
     windgram?.disposePointWindgram(pointBody);
     pointBody.replaceChildren();
     updatePointSeries = null;
+    pointSelection = null;
     pointBody.tabIndex = -1;
     meta.replaceChildren();
   }
@@ -257,6 +263,7 @@ function startPreview(): void {
   }
 
   function renderRibbon(layer: LayerId, displayedBuild = build): void {
+    if (!legend.hidden && ribbon?.build === displayedBuild && ribbon.layer === layer) return;
     const palette = displayedBuild ? activePalettes(displayedBuild.manifest.descriptors.palettes, layer, displayedBuild.manifest.descriptors.layers)[0] : undefined;
     if (!displayedBuild || !palette) {
       legend.hidden = true;
@@ -264,6 +271,7 @@ function startPreview(): void {
       return;
     }
     legend.hidden = false;
+    ribbon = { build: displayedBuild, layer };
     const title = document.createElement('p');
     title.className = 'ribbon-title';
     const descriptor = displayedBuild.manifest.descriptors.layers[layer];
@@ -307,6 +315,7 @@ function startPreview(): void {
 
   function updateTimeUi(): void {
     if (!build || !selectedFrame) {
+      timelineDays = null;
       dayBar.replaceChildren();
       timestamp.textContent = expired ? 'Build expired — overlay removed' : 'No frame selected';
       return;
@@ -316,23 +325,30 @@ function startPreview(): void {
     const today = dayKey(Date.now(), offset);
     const selected = frames.find(frame => frame.id === selectedFrame) ?? frames[0];
     const selectedKey = selected ? dayKey(Date.parse(selected.validTime), offset) : '';
-    dayBar.replaceChildren(...[...new Set(frames.map(frame => dayKey(Date.parse(frame.validTime), offset)))].map(key => {
-      const button = document.createElement('button');
-      button.type = 'button';
+    if (timelineDays?.build !== build || timelineDays.offset !== offset) {
+      const buttons: HTMLButtonElement[] = [];
+      frames.forEach((frame, index) => {
+        const key = dayKey(Date.parse(frame.validTime), offset);
+        if (buttons.at(-1)?.value === key) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.value = key;
+        button.addEventListener('click', () => selectIndex(index, 'push'));
+        buttons.push(button);
+      });
+      timelineDays = { build, offset, buttons };
+      dayBar.replaceChildren(...buttons);
+      timeInput.min = '0';
+      timeInput.max = String(Math.max(0, frames.length - 1));
+    }
+    for (const button of timelineDays.buttons) {
+      const key = button.value;
       button.className = key === selectedKey ? 'day is-selected' : 'day';
       button.ariaPressed = String(key === selectedKey);
-      button.value = key;
       button.textContent = dayLabel(key, today);
       button.disabled = expired || mapFailed;
-      button.addEventListener('click', () => {
-        const index = frames.findIndex(frame => dayKey(Date.parse(frame.validTime), offset) === key);
-        if (index >= 0) selectIndex(index, 'push');
-      });
-      return button;
-    }));
+    }
     const index = Math.max(0, frames.findIndex(frame => frame.id === selectedFrame));
-    timeInput.min = '0';
-    timeInput.max = String(Math.max(0, frames.length - 1));
     if (document.activeElement !== timeInput) timeInput.value = String(index);
     timestamp.textContent = selected ? clockLabel(Date.parse(selected.validTime), offset) : 'No frame selected';
   }
@@ -360,11 +376,19 @@ function startPreview(): void {
     tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
     if (displayed) renderRibbon(displayed.layer, displayed.build);
     else { legend.hidden = true; legendBody.replaceChildren(); }
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    if (!selectingOverlay) updatePointSelection();
   }
 
   function displayedPointFrame(): string | null {
     return overlayState.displayed?.build === build ? overlayState.displayed.frame : null;
+  }
+
+  function updatePointSelection(): void {
+    if (!updatePointSeries) return;
+    const frame = pointSeries.frameId, mapFrame = displayedPointFrame();
+    if (pointSelection?.update === updatePointSeries && pointSelection.frame === frame && pointSelection.units === pointUnitSystem && pointSelection.mapFrame === mapFrame) return;
+    pointSelection = { update: updatePointSeries, frame, units: pointUnitSystem, mapFrame };
+    updatePointSeries(frame, pointUnitSystem, mapFrame);
   }
 
   function expireView(): void {
@@ -404,11 +428,14 @@ function startPreview(): void {
     const layer = activeLayer();
     if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
     clearError();
+    selectingOverlay = true;
     try {
       overlay.select(build, layer, selectedFrame);
-      updateTimeUi();
     } catch (error) {
       showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      selectingOverlay = false;
+      updatePointSelection();
     }
   }
 
@@ -419,9 +446,13 @@ function startPreview(): void {
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
-    followMapFrame();
+    pointSeries.followMapFrame(selectedFrame);
     if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
-    timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
+    timelineRaf = null;
+    const layer = activeLayer();
+    if (mapReady && build && layer && overlay.isPrepared(build, layer, frame.id)) updateOverlay();
+    else timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
+    updatePointSelection();
     if (history !== 'none') {
       writeUrl(history);
       if (currentModel === AUTO_MODEL_ID) void loadAuto();
@@ -430,7 +461,7 @@ function startPreview(): void {
 
   function followMapFrame(): void {
     pointSeries.followMapFrame(selectedFrame);
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    updatePointSelection();
   }
 
   function chooseFrame(value: PinnedBuild): void {
@@ -458,6 +489,7 @@ function startPreview(): void {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
           selectedFrame = next.frame.id;
           followMapFrame();
+          updateTimeUi();
           updateOverlay();
           updateFreshness();
           if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
@@ -518,7 +550,7 @@ function startPreview(): void {
     horizonNotice.textContent = '';
     build = null;
     selectedFrame = null;
-    dayBar.replaceChildren();
+    updateTimeUi();
     legend.hidden = true;
     legendBody.replaceChildren();
     closePoint();
@@ -535,6 +567,7 @@ function startPreview(): void {
       pointHorizonSelect.children[0].textContent = next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
       if (resolved) selectedFrame = resolved.frame.id;
       else chooseFrame(next);
+      updateTimeUi();
       updateOverlay();
       updateFreshness();
       setControlsEnabled(true);
@@ -573,8 +606,9 @@ function startPreview(): void {
       point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
-        updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());
-        selectIndex(renderedFrames(context.build.manifest).findIndex(frame => frame.id === id), 'push');
+        const index = renderedFrames(context.build.manifest).findIndex(frame => frame.id === id);
+        if (index >= 0) selectIndex(index, 'push');
+        else updatePointSelection();
       }
     });
     pointBody.tabIndex = 0;
@@ -590,7 +624,7 @@ function startPreview(): void {
     pointLocation.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     meta.replaceChildren();
     windgram?.disposePointWindgram(pointBody);
-    pointBody.replaceChildren(); updatePointSeries = null; pointBody.tabIndex = -1;
+    pointBody.replaceChildren(); updatePointSeries = null; pointSelection = null; pointBody.tabIndex = -1;
     await loadPointRange();
   }
 
@@ -638,6 +672,7 @@ function startPreview(): void {
         const previousFrame = selectedFrame;
         chooseFrame(build);
         if (selectedFrame !== previousFrame) followMapFrame();
+        updateTimeUi();
         updateOverlay();
       }
     } finally {
@@ -689,7 +724,7 @@ function startPreview(): void {
   pointUnits.value = pointUnitSystem;
   pointUnits.addEventListener('change', () => {
     pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    updatePointSelection();
   });
   pointHorizonSelect.value = pointHorizon;
   pointHorizonSelect.addEventListener('change', () => {
@@ -763,6 +798,7 @@ function startPreview(): void {
       setPointStatus('Point request interrupted. Click the map again.');
       windgram?.disposePointWindgram(pointBody);
       updatePointSeries = null;
+      pointSelection = null;
     }
     if (!event.persisted || pointInterrupted) pointSeries.close();
     if (expiryTimer !== null) {
@@ -773,6 +809,8 @@ function startPreview(): void {
     if (event.persisted) return;
     lifecycle.abort();
     windgram?.disposePointWindgram(pointBody);
+    updatePointSeries = null;
+    pointSelection = null;
     disposeExpiry();
     overlay.destroy(); map.remove();
   }, globalListener);
@@ -785,6 +823,7 @@ function startPreview(): void {
       return;
     }
     if (build && ensureLive()) {
+      updateTimeUi();
       updateOverlay();
       setControlsEnabled(true);
       updateFreshness();
