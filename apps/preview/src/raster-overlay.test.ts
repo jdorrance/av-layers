@@ -6,7 +6,7 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 const build = () => fixtureBuild();
-function fixture() {
+function fixture(coveringCount?: number) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
@@ -25,6 +25,8 @@ function fixture() {
     isSourceLoaded: (id: string) => loaded.has(id),
     isMoving: () => moving,
     getZoom: () => 0,
+    getCenter: () => ({ lng: -117, lat: 32 }),
+    coveringTiles: coveringCount === undefined ? undefined : () => Array.from({ length: coveringCount! }),
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   };
   const states: OverlayState[] = [];
@@ -37,7 +39,7 @@ function fixture() {
   const stage = () => [...sources.keys()].find(id => opacity.get(id) === 0)!;
   const displayed = () => [...sources.keys()].find(id => opacity.get(id)! > 0)!;
   const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); await Promise.resolve(); };
-  return { overlay, map, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, displayed, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
+  return { overlay, map, loaded, setCoveringCount: (value: number) => { coveringCount = value; }, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, displayed, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
@@ -434,4 +436,174 @@ it.each(['commit', 'failure'] as const)('preserves target prefetch through selec
     expect(requests.some(request => request !== target && request.signal.aborted)).toBe(true);
     expect(requests.filter(request => request.url === target.url)).toHaveLength(1);
   } finally { f.overlay.destroy(); await interactive?.catch(() => {}); }
+});
+
+function sourceFor(f: ReturnType<typeof fixture>, layer: string, frame: string): string | undefined {
+  return [...f.sources].find(([, source]) => (source as { tiles: string[] }).tiles[0].includes(`/${layer}/${frame}/`))?.[0];
+}
+async function completeWindow(f: ReturnType<typeof fixture>): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    const next = [...f.sources.keys()].find(id => !f.loaded.has(id));
+    if (!next) return;
+    await f.complete(next);
+  }
+}
+
+it('prepares the most likely viewport before filling a four-source window', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    expect(f.sources.size).toBe(2);
+    const sibling = sourceFor(f, 'usable-lift-msl', frame)!;
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+    await f.complete(sibling);
+    expect(f.sources.size).toBe(3);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(true);
+    const next = sourceFor(f, 'usable-lift-agl', b.manifest.frames[3].id)!;
+    await f.complete(next);
+    expect(f.sources.size).toBe(4);
+    await completeWindow(f);
+    expect(f.sources.size).toBe(4);
+    expect(f.displayed()).not.toBe(sibling);
+  } finally { f.overlay.destroy(); }
+});
+
+it('takes two ready forward steps while retaining overlapping in-flight preparation', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
+    await completeWindow(f);
+    const first = sourceFor(f, 'usable-lift-agl', frames[3].id)!;
+    const second = sourceFor(f, 'usable-lift-agl', frames[4].id)!;
+    const previous = sourceFor(f, 'usable-lift-agl', frames[2].id)!;
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frames[3].id)).toBe(true);
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frames[4].id)).toBe(true);
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id); await Promise.resolve();
+    expect(f.displayed()).toBe(first);
+    const warming = sourceFor(f, 'usable-lift-agl', frames[5].id)!;
+    expect(warming).toBeDefined();
+    f.overlay.select(b, 'usable-lift-agl', frames[4].id); await Promise.resolve();
+    expect(f.displayed()).toBe(second);
+    expect(sourceFor(f, 'usable-lift-agl', frames[5].id)).toBe(warming);
+    expect(f.sources.has(previous)).toBe(false);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id);
+    expect(f.displayed()).toBe(first);
+  } finally { f.overlay.destroy(); }
+});
+
+it('makes explicit layer intent ready before later timeline frames without changing the display', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
+    await completeWindow(f);
+    const displayed = f.displayed();
+    f.overlay.prepare('usable-lift-msl', frames[2].id);
+    const preferred = sourceFor(f, 'usable-lift-msl', frames[2].id)!;
+    expect(preferred).toBeDefined();
+    expect(f.displayed()).toBe(displayed);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+    await f.complete(preferred);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frames[2].id)).toBe(true);
+    f.overlay.select(b, 'usable-lift-msl', frames[2].id);
+    expect(f.displayed()).toBe(preferred);
+  } finally { f.overlay.destroy(); }
+});
+
+it('releases unfinished background sources before a cold timeline selection', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    const displayed = f.displayed();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    const superseded = sourceFor(f, 'usable-lift-agl', frames[2].id)!;
+    f.emit('sourcedata', { sourceId: superseded, tile: {} });
+    f.emit('sourcedataloading', { sourceId: superseded, tile: {} });
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id);
+    expect(f.sources.has(superseded)).toBe(false);
+    expect(f.sources.size).toBe(2);
+    expect(f.displayed()).toBe(displayed);
+    await f.complete();
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[3].id);
+  } finally { f.overlay.destroy(); }
+});
+
+it('shrinks the prepared window on resize and admits no speculative sources over budget', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
+    expect(f.sources.size).toBe(4);
+    f.setCoveringCount(64); f.emit('resize'); await completeWindow(f);
+    expect(f.sources.size).toBe(2);
+    f.setCoveringCount(256); f.emit('resize');
+    expect(f.sources.size).toBe(1);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.sources.size).toBe(2);
+    await f.complete();
+    expect(f.sources.size).toBe(1);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+  } finally { f.overlay.destroy(); }
+});
+
+it('rejects readiness for moving, damaged, expired, and disposed prepared sources', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
+  f.setMoving(true);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+  f.setMoving(false);
+  f.emit('error', { sourceId: f.displayed(), tile: {}, error: new Error('visible failure') });
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+  b.expiresAtMs = Date.now();
+  expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+  f.overlay.destroy();
+  expect(f.sources.size).toBe(0);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+});
+
+it('recomputes memory admission after selection during camera movement', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.emit('movestart');
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    f.setCoveringCount(64);
+    f.emit('moveend'); await completeWindow(f);
+    expect(f.sources.size).toBe(2);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[2].id);
+  } finally { f.overlay.destroy(); }
+});
+
+
+it('warms remaining same-day bytes after the ready forward window', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await completeWindow(f);
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls[0]).toContain(`/usable-lift-agl/${frames[5].id}/`);
+    expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[3].id}/`))).toBe(false);
+    expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[4].id}/`))).toBe(false);
+    expect(f.sources.size).toBe(4);
+  } finally { f.overlay.destroy(); }
+});
+
+it('reuses the displayed source after an active viewport tile leaves without an abort', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const active = f.displayed();
+    f.emit('movestart');
+    f.emit('sourcedataloading', { sourceId: active, tile: {} });
+    f.emit('moveend');
+    await f.complete();
+    f.overlay.select(b, 'usable-lift-msl', frame); await Promise.resolve();
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
+    f.overlay.select(b, 'usable-lift-agl', frame);
+    expect(f.displayed()).toBe(active);
+  } finally { f.overlay.destroy(); }
 });

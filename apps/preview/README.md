@@ -56,18 +56,22 @@ See [the data guide](../../docs/data.md) for units and coverage.
 
 [Measured results](../../docs/preview-performance.md) record the desktop baseline.
 
-Compare the baseline and current raster overlay in an isolated Chromium session:
+Compare the baseline and current preview in isolated Chromium sessions:
 
 ```sh
 pnpm exec playwright install chromium
-pnpm bench:preview --baseline origin/main --out output/preview-layer-bench.json
+pnpm bench:preview --baseline 99cd00a --channel chrome --out output/preview-layer-bench.json
 ```
 
 Use `--channel chrome` for installed Chrome and inspect the recorded WebGL renderer.
-The [benchmark](../../scripts/preview-layer-bench.ts) serves patterned lossless WebP
-with controlled tile latency. It records automatic time stepping, layer toggles,
-explicit preparation, rapid selection and panning. Each sample waits for a render
-after commit and checks five framebuffer positions against the target layer/time.
-The JSON includes source fingerprints, per-sample latency, request counts and
-browser heap observations; adjacent PNGs show the final views. GPU allocations
-and production API latency require separate measurements.
+The [benchmark](../../scripts/preview-layer-bench.ts) loads each revision’s actual
+preview UI and serves patterned lossless WebP with controlled tile latency. It
+times `#time` input to the first render with five correct framebuffer pixels.
+Cold and warmed 24-hour drags dispatch every 60 or 120 ms; settled steps run with
+the point card closed and open. Superseded inputs remain in the report.
+
+Use `--scenario cold --delay-ms 250` or `500` to measure slower tile responses.
+The JSON records source fingerprints, per-input latency, request counts, retained
+JavaScript heap, and live WebGL texture storage including mipmaps and pooled
+textures. Repeated pans and time changes measure retention; adjacent PNGs show
+the final views. Texture bytes exclude driver overhead and renderbuffers.
