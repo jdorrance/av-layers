@@ -499,6 +499,278 @@
       "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf", "modelId": "wrf-armenia-3km"},
       "terrainSubdivisionFactor": 1,
       "execution": {"zoom": 10, "parallelism": 24, "schedule": []}
+    },
+    {
+      "modelId": "wrf-armenia-pilot-dwd-3km",
+      "id": "wrf-armenia-pilot-dwd-3km-soaring",
+      "coverageDir": "coverage/wrf-armenia-pilot-dwd-3km-land",
+      "source": {
+        "modelFamily": "wrf",
+        "configurationId": "wrf-armenia-pilot-dwd-3km",
+        "domainId": "armenia-3km-c1"
+      },
+      "tier": "high",
+      "label": "WRF North Armenia 3km ICON comparison",
+      "attribution": "DWD / WRF-ARW / Aviation Forecast Layers",
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {
+        "verticalCoordinate": "model-levels",
+        "maxVerticalLevels": 40,
+        "daylightFrames": "all-hours"
+      },
+      "grid": {
+        "kind": "lambert-conformal",
+        "width": 106,
+        "height": 92,
+        "earthRadiusM": 6370000.0,
+        "centralMeridianDeg": 44.5,
+        "latitudeOfOriginDeg": 40.6,
+        "standardParallel1Deg": 39.5,
+        "standardParallel2Deg": 41.2,
+        "x0M": -157500.0,
+        "y0M": -136500.0,
+        "dxM": 3000.0,
+        "dyM": 3000.0,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "intervalHours": 1,
+        "cycleHoursUtc": [
+          0
+        ],
+        "statisticsResetHours": null,
+        "expectedRunsPerDay": 1,
+        "window": {
+          "hourlyThrough": 24,
+          "endHour": 24,
+          "tailStepHours": 1,
+          "minHorizonHours": 18,
+          "framesPerShard": 2
+        }
+      },
+      "freshness": {
+        "maxCycleAgeHours": 6
+      },
+      "coverage": {
+        "id": "wrf-armenia-pilot-dwd-3km-land",
+        "description": "WRF North Armenia 3km ICON comparison",
+        "west": 42.581,
+        "south": 39.3437,
+        "east": 46.419,
+        "north": 41.8413,
+        "seaBufferMeters": 50000,
+        "excludedA3": [
+          "RUS"
+        ],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          [
+            "yerevan-north",
+            40.27,
+            44.52,
+            true
+          ],
+          [
+            "sevan",
+            40.55,
+            44.96,
+            true
+          ],
+          [
+            "aparan",
+            40.59,
+            44.36,
+            true
+          ],
+          [
+            "gyumri",
+            40.79,
+            43.85,
+            true
+          ],
+          [
+            "aragats-south",
+            40.4,
+            44.22,
+            true
+          ],
+          [
+            "aragats-north",
+            40.64,
+            44.2,
+            true
+          ]
+        ]
+      },
+      "upstream": {
+        "protocol": "wrf-zarr-v3",
+        "provider": "av-wrf",
+        "modelId": "wrf-armenia-pilot-dwd-3km"
+      },
+      "terrainSubdivisionFactor": 1,
+      "execution": {
+        "zoom": 10,
+        "parallelism": 24,
+        "schedule": []
+      }
+    },
+    {
+      "modelId": "wrf-armenia-pilot-dwd-1km",
+      "id": "wrf-armenia-pilot-dwd-1km-soaring",
+      "coverageDir": "coverage/wrf-armenia-pilot-dwd-1km-land",
+      "source": {
+        "modelFamily": "wrf",
+        "configurationId": "wrf-armenia-pilot-dwd-1km",
+        "domainId": "armenia-1km-c1"
+      },
+      "tier": "high",
+      "label": "WRF North Armenia 1km ICON comparison",
+      "attribution": "DWD / WRF-ARW / Aviation Forecast Layers",
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {
+        "verticalCoordinate": "model-levels",
+        "maxVerticalLevels": 40,
+        "daylightFrames": "all-hours"
+      },
+      "grid": {
+        "kind": "lambert-conformal",
+        "width": 156,
+        "height": 114,
+        "earthRadiusM": 6370000.0,
+        "centralMeridianDeg": 44.5,
+        "latitudeOfOriginDeg": 40.6,
+        "standardParallel1Deg": 39.5,
+        "standardParallel2Deg": 41.2,
+        "x0M": -77500.0,
+        "y0M": -56500.0,
+        "dxM": 1000.0,
+        "dyM": 1000.0,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "intervalHours": 1,
+        "cycleHoursUtc": [
+          0
+        ],
+        "statisticsResetHours": null,
+        "expectedRunsPerDay": 1,
+        "window": {
+          "hourlyThrough": 24,
+          "endHour": 24,
+          "tailStepHours": 1,
+          "minHorizonHours": 18,
+          "framesPerShard": 2
+        }
+      },
+      "freshness": {
+        "maxCycleAgeHours": 6
+      },
+      "coverage": {
+        "id": "wrf-armenia-pilot-dwd-1km-land",
+        "description": "WRF North Armenia 1km ICON comparison",
+        "west": 43.5688,
+        "south": 40.0836,
+        "east": 45.4312,
+        "north": 41.1128,
+        "seaBufferMeters": 50000,
+        "excludedA3": [
+          "RUS"
+        ],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          [
+            "yerevan-north",
+            40.27,
+            44.52,
+            true
+          ],
+          [
+            "sevan",
+            40.55,
+            44.96,
+            true
+          ],
+          [
+            "aparan",
+            40.59,
+            44.36,
+            true
+          ],
+          [
+            "gyumri",
+            40.79,
+            43.85,
+            true
+          ],
+          [
+            "aragats-south",
+            40.4,
+            44.22,
+            true
+          ],
+          [
+            "aragats-north",
+            40.64,
+            44.2,
+            true
+          ]
+        ]
+      },
+      "upstream": {
+        "protocol": "wrf-zarr-v3",
+        "provider": "av-wrf",
+        "modelId": "wrf-armenia-pilot-dwd-1km"
+      },
+      "terrainSubdivisionFactor": 1,
+      "execution": {
+        "zoom": 10,
+        "parallelism": 24,
+        "schedule": []
+      }
     }
   ]
 }
