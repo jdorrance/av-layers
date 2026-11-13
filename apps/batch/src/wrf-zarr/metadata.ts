@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { parseBoundedJson, sameGrid } from '@av/contracts';
 import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
+import { runConcurrent } from '../concurrent.js';
 import { COORDINATES, type WrfRun } from './ready.js';
 
 /** Validate the sole supported producer layout before decoding any weather arrays. */
@@ -17,7 +18,7 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
       || attrs.cape_parcel_definition !== contract.capeParcelDefinition || attrs.low_cloud_definition !== contract.lowCloudDefinition
       || !sameGrid(attrs.grid as typeof grid, grid) || !isDeepStrictEqual(attrs.lead_hours, receipt.lead_hours)) throw new Error('WRF group metadata differs from receipt or wire contract');
   const lengths: Record<string, number> = { time: receipt.lead_hours.length, level: receipt.exported_levels_k, y: grid.height, x: grid.width };
-  for (const field of contract.fields) {
+  await runConcurrent(contract.fields, 4, async field => {
     const meta = await metadata(`${field.name}/zarr.json`), dims = field.dims;
     const shape = dims.map(dim => lengths[dim]);
     const outer = dims.map(dim => dim === 'time' ? 1 : dim === 'y' ? ny : dim === 'x' ? nx : lengths[dim]);
@@ -28,8 +29,8 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
       codecs: [{ name: 'sharding_indexed', configuration: { chunk_shape: inner, codecs: contract.innerCodecs, index_codecs: contract.indexCodecs, index_location: 'end' } }],
       attributes: { units: field.units, consumer_target: field.target, time_support: field.timeSupport, mantissa_keepbits: field.keepbits } };
     if (!isDeepStrictEqual(meta, required)) throw new Error(`Unsupported WRF array metadata: ${field.name}`);
-  }
-  for (const name of COORDINATES) {
+  });
+  await runConcurrent(COORDINATES, 4, async name => {
     const dim = name.endsWith('_unix_s') ? 'time' : name, count = lengths[dim]!;
     const integer64 = name.endsWith('_unix_s'), spatial = name === 'x' || name === 'y';
     const dataType = integer64 ? 'int64' : spatial ? 'float64' : 'int32', size = integer64 || spatial ? 8 : 4;
@@ -49,5 +50,5 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
         : Date.parse((name === 'valid_time_unix_s' ? receipt.valid_times_utc : name === 'window_start_unix_s' ? receipt.window_starts_utc : receipt.window_ends_utc)[i]!) / 1000;
       if (actual !== expected) throw new Error(`WRF coordinate differs from receipt: ${name}`);
     }
-  }
+  });
 }

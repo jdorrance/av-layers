@@ -8,6 +8,7 @@ import { WRF_ZARR_CYCLE, WRF_ZARR_FIXTURE } from '../../../../scripts/fixtures/w
 import { createWrfFixtureStore } from '../../../../scripts/fixtures/wrf-zarr-store.js';
 import ready from '../../../../scripts/fixtures/wrf-zarr/_ready.json' with { type: 'json' };
 import oracle from '../../../../scripts/fixtures/wrf-zarr/oracle.json' with { type: 'json' };
+import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 
 const prefix = `upstream/${ready.model_id}/${ready.cycle_partition}/`, readyKey = `${prefix}_ready.json`;
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -76,6 +77,10 @@ it('matches zarr-python across all 22 fields, sparse cell order, levels and time
       expect(frame.intervals).toMatchObject({ usedCompanion: false, profileTime: ready.valid_times_utc[hour - 1],
         fluxWindow: { start: ready.window_starts_utc[hour - 1], end: ready.window_ends_utc[hour - 1] } });
       expect(frame.receipt.sourcePin).toEqual(resolved.sourcePin);
+      expect(frame.receipt).toMatchObject({ schemaVersion: contract.schemaVersion,
+        definitions: { verticalCoordinate: contract.verticalCoordinate, temperature: contract.temperatureDefinition,
+          moistureSourceOfTruth: contract.moistureSourceOfTruth, capeParcel: contract.capeParcelDefinition, lowCloud: contract.lowCloudDefinition,
+          windReference: 'earth-relative', gust: 'ifs-cy43r1-instantaneous-turbulent-gust', omega: 'moist-hydrostatic-proxy-minus-rho-g-w' } });
     }
     expect(frames[1]!.auxSurface!.u10mMps!.values).toBe(frames[0]!.auxSurface!.u10mMps!.values);
     expect(frames[1]!.auxLevels!.omegaPaS![2]!.missing).toBe(frames[0]!.auxLevels!.omegaPaS![2]!.missing);

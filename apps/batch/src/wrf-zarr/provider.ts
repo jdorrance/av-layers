@@ -96,7 +96,10 @@ export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecas
         return { ...target, pressurePa: target.pressurePa!, missing: { ...target.missing, pressure: target.missing.pressure! },
           cycle: run.cycle, hour, validAt, capturedAt: new Date().toISOString(), grid: model.grid, activeIndices: active,
           intervals: { profileTime: validAt, fluxWindow: window, fluxSourceWindow: window, precipitationWindow: window, precipitationSourceWindow: window, usedCompanion: windowIndices.length > 1 },
-          receipt: { schemaId: contract.schemaId, sourcePin: run.pin, attemptId: run.receipt.attempt_id } };
+          receipt: { schemaId: contract.schemaId, schemaVersion: contract.schemaVersion, sourcePin: run.pin, attemptId: run.receipt.attempt_id,
+            definitions: { verticalCoordinate: contract.verticalCoordinate, temperature: contract.temperatureDefinition,
+              moistureSourceOfTruth: contract.moistureSourceOfTruth, capeParcel: contract.capeParcelDefinition, lowCloud: contract.lowCloudDefinition,
+              windReference: 'earth-relative', gust: 'ifs-cy43r1-instantaneous-turbulent-gust', omega: 'moist-hydrostatic-proxy-minus-rho-g-w' } } };
       };
       return { cycle: run.cycle, stats,
         async acquire(hour, target) {

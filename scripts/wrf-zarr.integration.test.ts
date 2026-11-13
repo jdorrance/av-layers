@@ -10,6 +10,7 @@ import { WRF_ZARR_CYCLE, WRF_ZARR_FIXTURE } from './fixtures/wrf-zarr-product.js
 import { createWrfFixtureStore } from './fixtures/wrf-zarr-store.js';
 import { denseFixtureMask, syntheticWholeDomain } from './fixtures/whole-domain.js';
 import { seedLocalBuild } from './sample-preview.js';
+import contract from '../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 
 it('builds producer-encoded Zarr into v5 and serves its tiles, samples and model-level profiles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-wrf-zarr-preview-')), product = WRF_ZARR_FIXTURE;
@@ -37,6 +38,10 @@ it('builds producer-encoded Zarr into v5 and serves its tiles, samples and model
       };
       await read(`/v1/models/${product.modelId}/latest?expand=manifest`);
       expect(await (await read('/v1/catalog')).json()).toMatchObject({ models: [expect.objectContaining({ model: product.modelId, available: true })] });
+      expect(await (await read(`${pinned}/provenance?frame=f001`)).json()).toMatchObject({ receipt: {
+        schemaId: contract.schemaId, schemaVersion: contract.schemaVersion,
+        definitions: { capeParcel: contract.capeParcelDefinition, lowCloud: contract.lowCloudDefinition }
+      } });
       const point = gridToGeographic(product.grid, 2, 1)!, query = `lat=${point.lat}&lon=${point.lon}&frame=f001`;
       const sample = sampleResponseV5Schema.parse(await (await read(`${pinned}/sample?${query}&layers=precip-rate,sfc-temp-c,usable-lift-agl`)).json());
       expect(sample.frames[0]!.layers['precip-rate']).toMatchObject({ value: 1.75, status: 'valid' });
