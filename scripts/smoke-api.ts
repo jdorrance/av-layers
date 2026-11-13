@@ -123,25 +123,38 @@ const measuredRoutes = ['latest', 'sample', 'samples', 'profile', 'tile', 'prove
 type MeasuredRoute = typeof measuredRoutes[number];
 export interface ProbeReading {
   status: number; elapsedMs: number; responseCache?: string; r2Reads?: number; r2Bytes?: number;
+  edgeCache?: string; ageSeconds?: number;
   serverTimingMs?: Partial<Record<'worker' | 'admit' | 'r2', number>>;
+}
+
+function headerCount(response: Response, name: string): number | undefined {
+  const raw = response.headers.get(name);
+  const value = raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+function isWebp(bytes: Uint8Array): boolean {
+  const decoder = new TextDecoder();
+  return bytes.length >= 25 && decoder.decode(bytes.subarray(0, 4)) === 'RIFF'
+    && decoder.decode(bytes.subarray(8, 12)) === 'WEBP';
 }
 
 function requestReading(path: string, response: Response, startedAt: number): [MeasuredRoute, ProbeReading] | undefined {
   const name = path.startsWith('/tiles/') ? 'tile' : path.slice(path.lastIndexOf('/') + 1);
   const route = measuredRoutes.find(route => route === name);
   if (!route) return;
-  const counter = (name: string) => {
-    const raw = response.headers.get(name);
-    const value = raw !== null && /^\d+$/.test(raw) ? Number(raw) : NaN;
-    return Number.isSafeInteger(value) ? value : undefined;
-  };
   const cache = response.headers.get('x-av-response-cache');
+  const edgeCache = response.headers.get('cf-cache-status');
+  // Reused tile headers describe the original fill; other routes still run inside the Worker.
+  const reusedTile = route === 'tile' && cache === 'not-applicable'
+    && ['HIT', 'STALE', 'UPDATING', 'REVALIDATED'].includes(edgeCache ?? '');
   const timings = (response.headers.get('server-timing') ?? '').matchAll(/(?:^|,)\s*(worker|admit|r2);dur=(\d+(?:\.\d+)?)(?=\s*(?:,|$))/g);
   const serverTimingMs = Object.fromEntries(Array.from(timings, ([, name, value]) => [name, Number(value)]).filter(([, value]) => Number.isFinite(value)));
   return [route, { status: response.status, elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
     responseCache: cache && ['hit', 'miss', 'bypass', 'not-applicable'].includes(cache) ? cache : undefined,
-    r2Reads: counter('x-av-r2-reads'), r2Bytes: counter('x-av-r2-bytes'),
-    ...(Object.keys(serverTimingMs).length ? { serverTimingMs } : {}) }];
+    edgeCache: edgeCache ?? undefined, ageSeconds: headerCount(response, 'age'),
+    r2Reads: reusedTile ? undefined : headerCount(response, 'x-av-r2-reads'), r2Bytes: reusedTile ? undefined : headerCount(response, 'x-av-r2-bytes'),
+    ...(!reusedTile && Object.keys(serverTimingMs).length ? { serverTimingMs } : {}) }];
 }
 
 /** One live serving check for deployment and monitoring, pinned to a single immutable build. */
@@ -191,9 +204,24 @@ export async function probeApi(options: {
   invariant(response.headers.get('content-type') === 'image/webp', 'tile did not return image/webp');
   invariant(response.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
   invariant(response.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
-  const decoder = new TextDecoder();
-  invariant(bytes.length >= 25 && decoder.decode(bytes.subarray(0, 4)) === 'RIFF' && decoder.decode(bytes.subarray(8, 12)) === 'WEBP', 'tile body is not WebP');
+  invariant(isWebp(bytes), 'tile body is not WebP');
   return manifest;
+}
+
+async function verifyTileCache(baseUrl: string, manifest: ManifestV5, request: typeof fetch, signal?: AbortSignal): Promise<void> {
+  const layer = renderedLayers(manifest.layers, manifest.descriptors.layers)[0];
+  const url = `${baseUrl}/tiles/${manifest.model}/${manifest.buildId}/${layer}/${manifest.frames[0].id}/0/0/0.webp`;
+  await retryProbe('Tile edge cache', async () => {
+    // An ordinary GET allows the front cache to fill; cache:no-store sends bypass directives.
+    const response = await request(url, { headers: { accept: 'image/webp' }, signal: probeSignal(signal) });
+    const bytes = await readResponseBytes(response);
+    invariant(response.status === 200 && response.headers.get('content-type') === 'image/webp'
+      && isWebp(bytes), 'Tile edge cache returned an invalid tile');
+    invariant(response.headers.get('cf-cache-status') === 'HIT'
+      && headerCount(response, 'age') !== undefined
+      && response.headers.get('x-av-response-cache') === 'not-applicable',
+    'Tile was not served by the front cache');
+  }, { retries: 2, delayMs: 1000, signal });
 }
 
 /** Deployment checks every registered model, accepting absent event-driven publications. */
@@ -214,7 +242,10 @@ export async function verifyApiDeployment(options: {
     console.log(`Deployment: ${product.modelId} has no publication; awaiting an external forecast cycle`);
     return false;
   });
-  for (const product of published) await probeApi({ ...options, baseUrl, model: product.modelId });
+  for (const product of published) {
+    const manifest = await probeApi({ ...options, baseUrl, model: product.modelId });
+    await verifyTileCache(baseUrl, manifest, options.fetchImpl ?? fetch, options.signal);
+  }
 }
 
 export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: Pick<ManifestV5, 'model' | 'buildId' | 'frames' | 'layers'>; fetchImpl?: typeof fetch }): Promise<void> {

@@ -584,7 +584,7 @@ describe('read-only worker', () => {
       models: PRODUCTS.map(product => ({ model: product.modelId, available: false, error: 'publication-unavailable' }))
     });
   });
-  it('validates resource and expiry before cached blank and reduces TTL on hits', async () => {
+  it('validates blank tiles and bounds each origin response by build expiry', async () => {
     const url = `/tiles/gfs/${primary}/usable-lift-agl/f003/1/0/0.webp`;
     const first = await call(url);
     expect(first.status).toBe(200);
@@ -608,7 +608,7 @@ describe('read-only worker', () => {
     expect(expired.headers.get('cache-control')).toBe('no-store');
     expect(cache.matches).toBe(hits);
   });
-  it('preserves pinned tiles across rollback and rejects them after retention removal', async () => {
+  it('preserves pinned origin tiles across rollback and rejects them after retention removal', async () => {
     const target = publication(secondary), previous = publication(primary);
     bucket.install(target, previous);
     const path = `/tiles/gfs/${primary}/usable-lift-agl/f003/1/0/0.webp`;
@@ -621,7 +621,7 @@ describe('read-only worker', () => {
     expect(await (await call('/v1/models/gfs/latest')).json()).toMatchObject({ pointer: { latestBuildId: target.manifest.buildId } });
     const pinned = await call(path);
     expect(pinned.status).toBe(200);
-    expect(pinned.headers.get('x-av-response-cache')).toBe('hit');
+    expect(pinned.headers.get('x-av-response-cache')).toBe('not-applicable');
     await pinned.arrayBuffer();
     const matches = cache.matches;
     bucket.install(target);

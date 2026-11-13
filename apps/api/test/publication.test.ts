@@ -92,7 +92,7 @@ describe('validated publication reuse', () => {
     expect(fixture.get.mock.calls.filter(([key]) => key === entry.manifestKey)).toHaveLength(2);
   });
 
-  it('admits warm cache hits and rejects a newly incompatible product before cache delivery', async () => {
+  it('reuses warm tile admission and rejects a newly incompatible product', async () => {
     const fixture = createV5Fixture();
     const cache = { match: vi.fn(async (_request: Request) => new Response(Uint8Array.of(1, 2, 3), { headers: { 'content-type': 'image/webp', 'content-length': '3' } })) };
     const responseMatches = () => cache.match.mock.calls.filter(([request]) => new URL(request.url).pathname.startsWith('/tiles/')).length;
@@ -106,9 +106,11 @@ describe('validated publication reuse', () => {
     expect(warm.status).toBe(200);
     expect(warm.headers.get('x-av-r2-reads')).toBe('0');
     expect(warm.headers.get('cache-control')).toBe('public, max-age=86400, immutable');
+    expect(warm.headers.get('cloudflare-cdn-cache-control')).toBe('public, max-age=86400, must-revalidate');
     await warm.arrayBuffer();
     expect(digest).not.toHaveBeenCalled();
     const matches = responseMatches();
+    expect(matches).toBe(0);
     const changed = createApp({ products: { [fixture.manifest.model]: { ...fixture.product, attribution: 'Changed deployment attribution' } } });
     const rejected = await changed.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
     expect(rejected.status).toBe(503);
