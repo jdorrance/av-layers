@@ -106,7 +106,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   const prefix = `${base.pathname.replace(/\/+$/, '')}/tiles/`;
   const scheme = `av-raster-${crypto.randomUUID()}`, schemePrefix = `${scheme}://`;
   const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, retryDelayMs = options.retryDelayMs ?? 200;
-  const maxActive = options.maxActive ?? 4, maxQueued = options.maxQueued ?? 64;
+  const maxActive = options.maxActive ?? 16, maxQueued = options.maxQueued ?? 64;
   const maxCacheBytes = options.maxCacheBytes ?? 48 * 1024 * 1024, maxPrefetchActive = options.maxPrefetchActive ?? Math.min(2, Math.max(1, maxActive - 2));
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(retryDelayMs) || retryDelayMs < 0
       || !integerWithin(maxActive, 1, 16) || !integerWithin(maxQueued, 1, 512)

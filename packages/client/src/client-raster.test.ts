@@ -281,14 +281,14 @@ it('drops expired cache entries before a newer tile can evict a live one', async
   expect(fetchImpl).toHaveBeenCalledTimes(3);
 });
 
-it('defaults to four interactive fetches within the measured viewport budget', async () => {
+it('defaults to sixteen interactive fetches and queues further tiles', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
-  const requests = Array.from({ length: 5 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
-  expect(fetchImpl).toHaveBeenCalledTimes(4);
+  const requests = Array.from({ length: 17 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
+  expect(fetchImpl).toHaveBeenCalledTimes(16);
   for (const done of finish.slice()) done(webp());
-  await Promise.all(requests.slice(0, 4));
-  expect(fetchImpl).toHaveBeenCalledTimes(5);
-  finish[4](webp()); await requests[4];
+  await Promise.all(requests.slice(0, 16));
+  expect(fetchImpl).toHaveBeenCalledTimes(17);
+  finish[16](webp()); await requests[16];
 });
 
 it('charges long tile URLs and headers against cache admission for small blank tiles', async () => {
@@ -329,7 +329,7 @@ it('bounds queued prefetches even when the prefetch lane cannot dispatch', async
 
 
 it('keeps prepared map sources in the background lane and promotes them without refetching', async () => {
-  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl });
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxActive: 4 });
   const source = protocol.createSource(false);
   const prepared = Array.from({ length: 4 }, (_, i) => protocol.load({ url: source.url(tile(i)) }, new AbortController()));
   expect(fetchImpl).toHaveBeenCalledTimes(2);
