@@ -202,6 +202,71 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   expect(sourceId()).toBeDefined();
 });
 
+it('switches a ready frame during slider input and cancels an older queued selection', async () => {
+  await start();
+  Object.assign(map(), { coveringTiles: () => [{}] });
+  map().emit('resize');
+  await selectFrame(1);
+  const readySource = sourceId();
+  await selectFrame(2);
+  const { RasterOverlay } = await import('./raster-overlay');
+  const select = vi.spyOn(RasterOverlay.prototype, 'select');
+  const schedule = vi.spyOn(win, 'requestAnimationFrame');
+  ui('time').value = String(manifest.frames.length - 1);
+  ui('time').dispatchEvent(new Event('input'));
+  expect(select).not.toHaveBeenCalled();
+  expect(schedule).toHaveBeenCalledOnce();
+  ui('time').value = '1';
+  ui('time').dispatchEvent(new Event('input'));
+  expect(select).toHaveBeenCalledOnce();
+  expect(sourceId()).toBe(readySource);
+  expect(schedule).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(16);
+  expect(select).toHaveBeenCalledOnce();
+});
+
+it('coalesces unready slider input and writes history only when the slider commits', async () => {
+  await start();
+  const { RasterOverlay } = await import('./raster-overlay');
+  vi.spyOn(RasterOverlay.prototype, 'isPrepared').mockReturnValue(false);
+  const select = vi.spyOn(RasterOverlay.prototype, 'select');
+  const replace = vi.spyOn(win.history, 'replaceState');
+  for (const index of [0, 1, 2]) {
+    ui('time').value = String(index);
+    ui('time').dispatchEvent(new Event('input'));
+  }
+  expect(select).not.toHaveBeenCalled();
+  expect(replace).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(16);
+  expect(select).toHaveBeenCalledOnce();
+  expect(select.mock.calls[0][2]).toBe(manifest.frames[2].id);
+  ui('time').dispatchEvent(new Event('change'));
+  expect(replace).toHaveBeenCalledOnce();
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[2].validTime);
+});
+
+it('retains day buttons and the scale while scrubbing and rebuilds day clicks for a new longitude', async () => {
+  await start();
+  const days = [...ui('days').children], scale = ui('legend-body').children[0];
+  await selectFrame(0);
+  await selectFrame(1);
+  expect(ui('days').children).toEqual(days);
+  expect(ui('legend-body').children[0]).toBe(scale);
+  const push = vi.spyOn(win.history, 'pushState');
+  days.at(-1)!.dispatchEvent(new Event('click'));
+  expect(push).toHaveBeenCalledOnce();
+  expect(ui('days').children).toEqual(days);
+  map().jumpTo({ center: [179, 20], zoom: 2 });
+  expect(ui('days').children[0]).not.toBe(days[0]);
+  const lastDay = ui('days').children.at(-1)!;
+  const index = manifest.frames.findIndex(frame => new Date(Date.parse(frame.validTime) + 12 * 3600_000).toISOString().slice(0, 10) === lastDay.value);
+  lastDay.dispatchEvent(new Event('click'));
+  expect(ui('time').value).toBe(String(index));
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[index].validTime);
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  expect(ui('legend-body').children[0]).not.toBe(scale);
+});
+
 it.each([true, false])('publishes the initial regional camera without adding history (discovery first: %s)', async discoveryFirst => {
   manifest = fixtureManifestV5({ model: 'icon-eu' });
   vi.stubEnv('VITE_MODEL', manifest.model);
@@ -792,6 +857,44 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-body').children[0]).toBe(series);
   expect(fetchMock).toHaveBeenCalledTimes(3);
+});
+
+it('keeps point selection current while skipping redraws for unchanged overlay status', async () => {
+  const windgram = await import('@av/windgram');
+  const render = windgram.renderPointWindgram;
+  const update = vi.fn<ReturnType<typeof render>>();
+  vi.spyOn(windgram, 'renderPointWindgram').mockImplementation((...args) => {
+    update.mockImplementation(render(...args));
+    return update;
+  });
+  await start();
+  Object.assign(map(), { coveringTiles: () => [{}] });
+  map().emit('resize');
+  fetchMock.mockImplementation(async input => sample(input));
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  ui('ref-agl').dispatchEvent(new Event('click'));
+  update.mockClear();
+  const tile = {};
+  map().emit('error', { sourceId: sourceId(), tile });
+  map().emit('sourcedata', { sourceId: sourceId(), tile });
+  expect(update).not.toHaveBeenCalled();
+  ui('point-units').value = 'imperial';
+  ui('point-units').dispatchEvent(new Event('change'));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update.mock.calls[0][1]).toBe('imperial');
+  await selectFrame(1);
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  await selectFrame(2);
+  update.mockClear();
+  ui('time').value = '1';
+  ui('time').dispatchEvent(new Event('input'));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  ui('point-close').dispatchEvent(new Event('click'));
+  update.mockClear();
+  await selectFrame(2);
+  expect(update).not.toHaveBeenCalled();
 });
 
 it('shows the map lift pair while the selected native profile is pending', async () => {

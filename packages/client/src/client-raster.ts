@@ -62,8 +62,10 @@ export function createRasterTileProtocol(baseUrl: string, options: RasterTileOpt
   return createProtocol(baseUrl, options);
 }
 
-/** Add two independently prioritized source handles for the preview overlay. */
-export function createSourceRasterTileProtocol(baseUrl: string, options: RasterTileOptions = {}): RasterTileSourceProtocol {
+/** Add a bounded set of independently prioritized source handles for the preview. */
+export function createSourceRasterTileProtocol(baseUrl: string, options: RasterTileOptions & { maxSources?: number } = {}): RasterTileSourceProtocol {
+  const maxSources = options.maxSources ?? 2;
+  if (!integerWithin(maxSources, 2, 4)) throw new Error('Invalid raster source limit');
   const sources = new Map<string, SourceGroup>();
   let sourceOrder = 0, disposed = false, controls: SourceControls;
   const protocol = createProtocol(baseUrl, options, {
@@ -78,7 +80,7 @@ export function createSourceRasterTileProtocol(baseUrl: string, options: RasterT
     ...protocol,
     createSource(interactive) {
       if (disposed) throw abortError();
-      if (sources.size >= 2) throw new Error('Raster source limit reached');
+      if (sources.size >= maxSources) throw new Error('Raster source limit reached');
       const id = `source-${++sourceOrder}`, source: SourceGroup = { interactive };
       sources.set(id, source);
       return {

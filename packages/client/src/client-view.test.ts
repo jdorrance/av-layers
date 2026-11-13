@@ -235,3 +235,28 @@ it('ignores unavailable preferred frames and the already visible selection', () 
   expect(visible.some(url => url.endsWith('/usable-lift-agl/f006/3/3/3.webp'))).toBe(false);
   expect(visible[0]).toContain('/usable-lift-agl/f003/');
 });
+
+it('uses the bounded byte window for unprepared timeline frames', () => {
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
+  const viewportTiles = Array.from({ length: 40 }, (_, x) => ({ z: 7, x, y: 60 }));
+  const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006', viewportTiles,
+    preferred: { layer: activeLayer, frame: 'f009' },
+    prepared: [{ layer: activeLayer, frame: 'f009' }, { layer: activeLayer, frame: 'f003' }],
+    timelineFrames: ['f006', 'f009', 'missing', 'f012', 'f015', 'f003'] });
+  expect(urls).toHaveLength(64);
+  expect(urls.slice(0, 40).every(url => url.includes('/usable-lift-agl/f012/'))).toBe(true);
+  expect(urls.slice(40).every(url => url.includes('/usable-lift-agl/f015/'))).toBe(true);
+  expect(new Set(urls).size).toBe(64);
+});
+
+it('keeps explicit layer intent ahead of timeline bytes and still warms pan tiles', () => {
+  const build = fixtureBuild(), activeLayer = 'usable-lift-agl' as const;
+  const urls = planViewportPrefetch({ build, activeLayer, activeFrame: 'f006',
+    viewportTiles: [{ z: 3, x: 3, y: 3 }],
+    preferred: { layer: 'usable-lift-msl', frame: 'f006' },
+    prepared: [{ layer: activeLayer, frame: 'f006' }], timelineFrames: ['f012'] });
+  expect(urls[0]).toContain('/usable-lift-msl/f006/');
+  expect(urls[1]).toContain('/usable-lift-agl/f012/');
+  expect(urls.some(url => url.includes('/usable-lift-agl/f006/'))).toBe(true);
+  expect(urls.some(url => url.endsWith('/usable-lift-agl/f006/3/3/3.webp'))).toBe(false);
+});
