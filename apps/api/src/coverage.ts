@@ -23,6 +23,8 @@ const scalarBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfa
 const profileBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
 const tileFlights = new WeakMap<R2Bucket, MaterializedReads<SparseTiles>>();
 const COVERAGE_CACHE_BYTES = 24 * 1024 * 1024;
+// Each configured native/fine surface retains a mask and tile entry; the byte cap stays fixed.
+const COVERAGE_CACHE_ENTRIES = 32;
 const MAX_API_SPARSE_BYTES = MAX_SPARSE_COVERAGE_BYTES;
 interface SparseLease { refs: number; loading: boolean; bytes: number; release?: () => void; value?: ResolvedSparseCoverage }
 const sparseLeases = new WeakMap<R2Bucket, Map<string, SparseLease>>();
@@ -106,7 +108,7 @@ export async function resolveSparseTiles(bucket: R2Bucket, surface: ForecastSurf
   const { hash, maskKey } = surface.coverage, prefix = coveragePrefix(hash), cacheKey = `${hash}/tiles`;
   if (maskKey !== `${prefix}/manifest.json`) throw new CoverageError('Invalid coverage descriptor key');
   let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
+  if (!cache) { cache = new ByteCache(COVERAGE_CACHE_ENTRIES, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
   let result = cache.get(cacheKey) as SparseTiles | undefined;
   if (result) countCacheHit(ctx);
   if (!result) {
@@ -182,7 +184,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
   };
   try {
   let cache = caches.get(bucket);
-  if (!cache) { cache = new ByteCache(16, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
+  if (!cache) { cache = new ByteCache(COVERAGE_CACHE_ENTRIES, COVERAGE_CACHE_BYTES); caches.set(bucket, cache); }
   let resolved = state.value ?? cache.get(cacheKey) as ResolvedSparseCoverage | undefined;
   if (resolved) {
     countCacheHit(ctx);

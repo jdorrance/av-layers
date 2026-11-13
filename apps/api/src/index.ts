@@ -425,13 +425,15 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
   if (!Number.isSafeInteger(z) || z > surface.coverage.maxZoom || !Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x >= 2 ** z || y >= 2 ** z) {
     fail(400, 'invalid-tile', 'Tile address out of range');
   }
-  return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
-    const signal = c.req.raw.signal;
-    const { tiles } = await resolveSparseTiles(c.env.BUCKET, surface, m.descriptors.bounds, c.executionCtx, signal);
-    const tileMask = { tiles, maxZoom: surface.coverage.maxZoom };
-    const data = isTileCovered(tileMask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx, signal) : blank;
-    return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
-  });
+  const signal = c.req.raw.signal;
+  const { tiles } = await resolveSparseTiles(c.env.BUCKET, surface, m.descriptors.bounds, c.executionCtx, signal);
+  const tileMask = { tiles, maxZoom: surface.coverage.maxZoom };
+  const data = isTileCovered(tileMask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx, signal, { sha256: a.tilesSha256, expiresAt: m.expiresAt }) : blank;
+  const result = finish(c.req.raw, response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`), m.expiresAt);
+  // Workers Cache skips this handler on hits; revalidation prevents stale-on-error past expiry.
+  // https://developers.cloudflare.com/workers/cache/configuration/
+  result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
+  return result;
 });
 
 app.openAPIRegistry.registerPath({ method: 'get', path: '/openapi.json', responses: { 200: { description: 'OpenAPI 3.1 document' } } });
@@ -456,6 +458,8 @@ return {
     const complete = (result: Response) => {
       const finished = performance.now(), elapsed = finished - start;
       const r2WaitMs = r2WaitDuration(metrics, finished);
+      // Only validated tiles opt into front caching; point rate limits and discovery run per request.
+      if (!result.headers.has('cloudflare-cdn-cache-control')) result.headers.set('cloudflare-cdn-cache-control', 'no-store');
       result.headers.set('x-av-response-cache', metrics.responseCache ?? 'not-applicable');
       const timing = [`worker;dur=${elapsed.toFixed(2)}`];
       if (metrics.admitMs !== undefined) timing.push(`admit;dur=${metrics.admitMs.toFixed(2)}`);
@@ -503,7 +507,7 @@ return {
       return complete(reject(400, 'invalid-query', 'Unknown query parameter'));
     }
     const req = request.method === 'HEAD' ? new Request(request, { method: 'GET' }) : request;
-    const observed = { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise), metrics, responseCacheEnabled: env.AV_RESPONSE_CACHE !== 'off' };
+    const observed = { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise), metrics, cacheOrigin: url.origin, responseCacheEnabled: env.AV_RESPONSE_CACHE !== 'off' };
     let result: Response;
     try { result = boundResponse(finish(request, await app.fetch(req, env, observed as unknown as Parameters<typeof app.fetch>[2]))); }
     catch (error) {

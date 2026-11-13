@@ -82,7 +82,7 @@ it('changes the render recipe for a lift interpolation source change while scien
   } finally { await Promise.all([rm(step, { recursive: true, force: true }), rm(linear, { recursive: true, force: true })]); }
 });
 
-it('keeps client source out of the recipe and pins the full workspace lockfile', async () => {
+it('keeps client commits out of the content recipe and pins the full workspace lockfile', async () => {
   const root = await sourceFixture('linear-rgb'), coverageHash = 'a'.repeat(64);
   try {
     const before = await buildIdentity(INDEXED_PRODUCT, coverageHash, { root });
@@ -90,6 +90,12 @@ it('keeps client source out of the recipe and pins the full workspace lockfile',
     await mkdir(client, { recursive: true });
     await writeFile(join(client, 'client-api.ts'), 'export const browserChange = true;\n');
     expect(await buildIdentity(INDEXED_PRODUCT, coverageHash, { root })).toEqual(before);
+    const git = promisify(execFile);
+    await git('git', ['add', 'packages/client'], { cwd: root });
+    await git('git', ['-c', 'user.name=Source test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'client-only'], { cwd: root });
+    const committed = await buildIdentity(INDEXED_PRODUCT, coverageHash, { root });
+    expect(committed.recipe.sourceRevision).not.toBe(before.recipe.sourceRevision);
+    expect(committed).toEqual({ ...before, recipe: { ...before.recipe, sourceRevision: committed.recipe.sourceRevision } });
 
     const lock = 'updated workspace lockfile\n';
     await writeFile(join(root, 'pnpm-lock.yaml'), lock);

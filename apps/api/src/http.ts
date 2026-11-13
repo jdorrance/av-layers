@@ -86,7 +86,7 @@ export function finish(request: Request, res: Response, expiresAt?: string, edge
   if (expiresAt || edgeUntil !== undefined) headers.set('cache-control', cacheControl(expiresAt, edgeUntil));
   if (edgeUntil !== undefined) headers.set('date', new Date().toUTCString());
   headers.set('access-control-allow-origin', '*');
-  headers.set('access-control-expose-headers', 'ETag, Cache-Control, Server-Timing, X-Av-R2-Reads, X-Av-R2-Bytes, X-Av-Cache-Hits, X-Av-Coalesced, X-Av-Response-Cache');
+  headers.set('access-control-expose-headers', 'ETag, Cache-Control, Cf-Cache-Status, Age, Server-Timing, X-Av-R2-Reads, X-Av-R2-Bytes, X-Av-Cache-Hits, X-Av-Coalesced, X-Av-Response-Cache');
   if (
     res.status === 200 &&
     headers.has('etag') &&

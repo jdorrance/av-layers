@@ -6,18 +6,21 @@ import { NOW, createV5Fixture } from './v5-fixture';
 type Fixture = ReturnType<typeof createV5Fixture>;
 class EdgeCache {
   entries = new Map<string, { response: Response; until: number }>();
+  internal = new Map<string, { response: Response; until: number }>();
   matches = 0;
   puts = 0;
   async match(request: Request): Promise<Response | undefined> {
-    this.matches++;
-    const entry = this.entries.get(request.url);
+    const internal = new URL(request.url).pathname.startsWith('/__av-storage/');
+    if (!internal) this.matches++;
+    const entry = (internal ? this.internal : this.entries).get(request.url);
     return entry && entry.until > Date.now() ? entry.response.clone() : undefined;
   }
   async put(request: Request, response: Response): Promise<void> {
-    this.puts++;
+    const internal = new URL(request.url).pathname.startsWith('/__av-storage/');
+    if (!internal) this.puts++;
     const seconds = Number(/s-maxage=(\d+)/.exec(response.headers.get('cache-control') ?? '')?.[1] ?? 0);
-    const until = Date.parse(response.headers.get('date')!) + seconds * 1000;
-    this.entries.set(request.url, { response: new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers }), until });
+    const until = internal ? Number(response.headers.get('x-av-until')) : Date.parse(response.headers.get('date')!) + seconds * 1000;
+    (internal ? this.internal : this.entries).set(request.url, { response: new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers }), until });
   }
 }
 let cache: EdgeCache;
@@ -217,6 +220,7 @@ it('bypasses response cache when disabled and keeps health and errors uncached',
   expect(bypass.status).toBe(200);
   expect(bypass.headers.get('x-av-response-cache')).toBe('bypass');
   expect(cache.matches).toBe(0); expect(cache.puts).toBe(0);
+  expect(cache.internal.size).toBe(0);
   for (const path of ['/healthz', '/v1/models/unknown/latest', '/v1/models/gfs/latest?invalid=true']) {
     const response = await call(fixture, path);
     expect(response.headers.get('cache-control')).toBe('no-store');

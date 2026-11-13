@@ -113,7 +113,9 @@ it.each([
   const pixelHashes = async (root: string, manifest: ManifestV5) => Object.fromEntries(await Promise.all(manifest.artifacts.map(async artifact => [
     `${artifact.layer}/${artifact.frame}`, sha256(await tilePixels(root, artifact))
   ])));
-  expect(await pixelHashes(serial, left), `Recorded at ${golden.baseline}`).toEqual(expected.pixels);
+  // Terrain-MSL rendering colours no-lift cells; the original numeric baseline stays pinned.
+  expect(left.tool.liftRenderStyle).toBe(golden.pixelRenderStyle);
+  expect(await pixelHashes(serial, left), `Recorded for ${golden.pixelRenderStyle}`).toEqual(expected.pixels);
   expect(await pixelHashes(parallel, right)).toEqual(expected.pixels);
 
   const indices = nativeSparseMask(mask).coverage.blockIds, point = planSample(grid, lat, lon)!;

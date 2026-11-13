@@ -24,12 +24,23 @@
       </header>
       <aside id="legend" class="ribbon" hidden>
         <div id="legend-body"></div>
+        <details id="legend-key" class="ribbon-key">
+          <summary id="legend-key-toggle">Map key</summary>
+          <div class="ribbon-key-body">
+            <p id="legend-reference"></p>
+            <p id="legend-no-lift"></p>
+            <p id="legend-cutoff"></p>
+            <p>Missing data and areas outside coverage are clear. Select a point to check its status.</p>
+          </div>
+        </details>
         <button id="legend-toggle" type="button" aria-expanded="true" aria-label="Collapse lift scale">⌃</button>
       </aside>
       <footer id="timebar">
         <div id="days" role="toolbar" aria-label="Forecast day"></div>
         <input id="time" type="range" min="0" max="0" step="1" value="0" aria-label="Forecast time" />
         <p id="timestamp">No frame selected</p>
+        <p id="frame-status" role="status" aria-live="polite">Loading forecast…</p>
+        <p id="timeline-status" hidden></p>
       </footer>
       <p id="horizon-notice" class="toast" role="status" hidden></p>
       <p id="tile-error" class="toast error" role="alert" hidden></p>

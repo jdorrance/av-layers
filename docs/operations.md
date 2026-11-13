@@ -92,12 +92,14 @@ set and accept up to 4 GiB of observed process RSS. Worker selection and
 compaction use the working-set limit.
 
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
-the run revision remains current main, the plan meets the
-[build elapsed budget](../apps/batch/src/capacity.ts),
+the plan meets the [build elapsed budget](../apps/batch/src/capacity.ts),
 its scoped credentials and the environment sealing key remain valid. Start a
-new build after a main change, expiry, or rotation. Also start a new build
+new build after expiry or rotation. Also start a new build
 when a failed shard uploaded frame provenance without completing its receipt.
 Reacquisition can change the immutable provenance timestamp.
+Workers and assembly finish under their frozen revision when main advances.
+Publication requires current main; [resume the completed artifact](#resume-a-build)
+from a current-main run with matching producer content.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
@@ -175,6 +177,14 @@ model is verified through its latest build, retained list, point, provenance and
 tile routes; invalid, incomplete and expired publications fail deployment.
 After Cloudflare Pages deploys, the job checks the revision marker and Windy
 plugin CORS headers.
+
+Deployment checks each available model's tile front cache with bounded repeated
+GETs. Workers Cache serves tile hits before API admission; TTL ends by the
+forecast expiry. Normal publication preserves unexpired builds. Manual early
+withdrawal also requires purging that build's tile path from
+[Workers Cache](https://developers.cloudflare.com/workers/cache/purge/).
+Deployment versions use separate caches. Point and discovery routes retain
+their request-time checks.
 
 The Worker and browsers serve v5. Publish a fresh v5 forecast for each model
 when cutting over an environment with older builds, then rerun deployment if

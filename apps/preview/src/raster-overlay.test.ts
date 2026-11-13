@@ -6,12 +6,13 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 const build = () => fixtureBuild();
-function fixture() {
+function fixture(coveringCount?: number) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
   const loaded = new Set<string>();
   let moving = false;
+  let painted: string | undefined;
   const map = {
     on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
     off: (name: string, listener: (event: never) => void) => handlers.get(name)?.delete(listener),
@@ -25,18 +26,22 @@ function fixture() {
     isSourceLoaded: (id: string) => loaded.has(id),
     isMoving: () => moving,
     getZoom: () => 0,
+    getCenter: () => ({ lng: -117, lat: 32 }),
+    coveringTiles: coveringCount === undefined ? undefined : () => Array.from({ length: coveringCount! }),
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   };
   const states: OverlayState[] = [];
   const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
   const emit = (name: string, event: object = {}) => {
+    if (name === 'render') painted = [...sources.keys()].find(id => opacity.get(id)! > 0);
     if (name === 'movestart') moving = true;
     if (name === 'moveend') moving = false;
     for (const handler of handlers.get(name) ?? []) handler(event as never);
   };
-  const stage = () => [...sources.keys()].at(-1)!;
-  const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); await Promise.resolve(); };
-  return { overlay, map, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
+  const stage = () => [...sources.keys()].find(id => opacity.get(id) === 0)!;
+  const displayed = () => [...sources.keys()].find(id => opacity.get(id)! > 0)!;
+  const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); emit('render'); await Promise.resolve(); };
+  return { overlay, map, loaded, painted: () => painted, setCoveringCount: (value: number) => { coveringCount = value; }, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, displayed, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
@@ -46,10 +51,14 @@ beforeEach(() => {
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-it('warms the next frame after commit without waiting for map idle', async () => {
+it('prepares the sibling source before warming additional frames', async () => {
   const f = fixture(), b = build();
   try {
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(fetch).not.toHaveBeenCalled();
+    await f.complete();
+    expect(f.sources.size).toBe(2);
+    expect((f.sources.get(f.stage()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-msl/');
     expect(fetch).not.toHaveBeenCalled();
     await f.complete();
     expect(fetch).toHaveBeenCalled();
@@ -60,12 +69,130 @@ it('warms the next frame after commit without waiting for map idle', async () =>
   } finally { f.overlay.destroy(); }
 });
 
+it('keeps a prepared layer invisible and reuses both sources on repeated toggles', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const agl = f.displayed(), msl = f.stage(), stateCount = f.states.length;
+    await f.complete(msl);
+    expect(f.states).toHaveLength(stateCount);
+    expect(f.opacity.get(msl)).toBe(0);
+    for (let i = 0; i < 10; i++) {
+      const layer = i % 2 ? 'usable-lift-agl' : 'usable-lift-msl';
+      f.overlay.select(b, layer, frame); f.emit('render'); await Promise.resolve();
+      expect(f.states.at(-1)?.displayed).toMatchObject({ layer, frame });
+      expect(f.sources.size).toBe(2);
+      expect([...f.sources.keys()]).toEqual([agl, msl]);
+      expect(f.opacity.get(i % 2 ? agl : msl)).toBe(0.7);
+      expect(f.opacity.get(i % 2 ? msl : agl)).toBe(0);
+    }
+  } finally { f.overlay.destroy(); }
+});
+
+it.each([1, -1])('retains the previous prepared frame at the timeline boundary when stepping %i', async direction => {
+  const f = fixture(), b = build(), frames = b.manifest.frames;
+  const edge = direction === 1 ? frames.length - 1 : 0, previous = edge - direction;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[previous].id); await f.complete();
+    const retained = f.displayed();
+    f.overlay.select(b, 'usable-lift-agl', frames[edge].id); await f.complete();
+    expect(f.stage()).toBe(retained);
+    f.overlay.select(b, 'usable-lift-agl', frames[previous].id);
+    expect(f.displayed()).toBe(retained);
+    expect(f.sources.size).toBe(2);
+  } finally { f.overlay.destroy(); }
+});
+
+it('retries partially failed speculative tiles before replacing the displayed view', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const displayed = f.displayed(), damaged = f.stage();
+    await f.complete(damaged);
+    f.emit('error', { sourceId: damaged, tile: {}, error: new Error('temporary tile failure') });
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.sources.has(damaged)).toBe(false);
+    expect(f.displayed()).toBe(displayed);
+    expect(f.states.at(-1)?.incomplete).toBe(false);
+    await f.complete();
+    expect(f.states.at(-1)).toMatchObject({ displayed: { layer: 'usable-lift-msl' }, incomplete: false });
+  } finally { f.overlay.destroy(); }
+});
+
+it('rebuilds a damaged previous source before switching back after a pan', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const damaged = f.displayed();
+    f.emit('movestart');
+    f.emit('error', { sourceId: damaged, tile: {}, error: new Error('new viewport failed') });
+    f.emit('moveend'); await f.complete();
+    f.overlay.select(b, 'usable-lift-msl', frame); f.emit('render'); await Promise.resolve();
+    const healthy = f.displayed();
+    expect(f.sources.has(damaged)).toBe(false);
+    f.overlay.select(b, 'usable-lift-agl', frame);
+    expect(f.displayed()).toBe(healthy);
+    expect(f.states.at(-1)?.incomplete).toBe(false);
+    await f.complete();
+    expect(f.states.at(-1)).toMatchObject({ displayed: { layer: 'usable-lift-agl' }, incomplete: false });
+  } finally { f.overlay.destroy(); }
+});
+
+it('prepares an intended time without selecting it and follows the scrub direction', async () => {
+  const f = fixture(), b = build(), [first, next, following] = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', first.id); await f.complete();
+    const displayed = f.displayed(), discarded = f.stage();
+    f.overlay.prepare('usable-lift-agl', next.id);
+    const prepared = f.stage();
+    expect(f.sources.has(discarded)).toBe(false);
+    await f.complete(prepared);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(first.id);
+    f.overlay.select(b, 'usable-lift-agl', next.id); f.emit('render'); await Promise.resolve();
+    expect(f.displayed()).toBe(prepared);
+    expect(f.sources.has(displayed)).toBe(false);
+    expect((f.sources.get(f.stage()) as { tiles: string[] }).tiles[0]).toContain(`/${following.id}/`);
+    expect(f.sources.size).toBe(2);
+  } finally { f.overlay.destroy(); }
+});
+
+it('keeps background failures out of displayed state and retries on explicit selection', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const failed = f.stage(), stateCount = f.states.length;
+    f.emit('error', { sourceId: failed, error: new Error('standby unavailable') });
+    for (let i = 0; i < 3; i++) f.emit('idle');
+    expect(f.sources.size).toBe(1);
+    expect(f.states).toHaveLength(stateCount);
+    expect(f.states.at(-1)).toMatchObject({ incomplete: false, replacementFailed: false });
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    const retry = f.stage(); expect(retry).not.toBe(failed);
+    await f.complete(retry);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+  } finally { f.overlay.destroy(); }
+});
+
+it('keeps both sources transparent when opacity is zero through a prepared swap', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const prepared = f.stage(); await f.complete(prepared);
+    f.overlay.setOpacity(0);
+    f.overlay.select(b, 'usable-lift-msl', frame); f.emit('render'); await Promise.resolve();
+    expect([...f.opacity.values()]).toEqual([0, 0]);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+    f.overlay.setOpacity(0.5);
+    expect(f.opacity.get(prepared)).toBe(0.5);
+  } finally { f.overlay.destroy(); }
+});
+
 it.each(['supersede', 'move', 'clear', 'destroy', 'expire'] as const)('skips queued commit prefetch after %s', async action => {
   const f = fixture(), b = build();
   try {
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
     const sourceId = f.stage(); f.markLoaded(sourceId);
-    f.emit('sourcedata', { sourceId, tile: {} }); f.emit('render');
+    f.emit('sourcedata', { sourceId, tile: {} }); f.emit('render'); f.emit('render');
     if (action === 'supersede') f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
     else if (action === 'move') f.emit('movestart');
     else if (action === 'clear') f.overlay.clear();
@@ -79,7 +206,7 @@ it.each(['supersede', 'move', 'clear', 'destroy', 'expire'] as const)('skips que
 it('waits beyond 150 ms and retains the committed frame until successful replacement rendering', async () => {
   const f = fixture(), b = build();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
-  const old = f.stage();
+  const old = f.displayed();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
   expect(f.opacity.get(old)).toBe(0.7); expect(f.opacity.get(f.stage())).toBe(0);
   vi.advanceTimersByTime(1000); f.emit('render');
@@ -90,10 +217,83 @@ it('waits beyond 150 ms and retains the committed frame until successful replace
   f.overlay.destroy();
 });
 
+it.each(['render', 'idle'] as const)('restores the painted frame when an unpainted %s swap is superseded', async event => {
+  const f = fixture(32), b = build(), [first, second, third] = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', first.id); await f.complete();
+    const original = f.painted();
+    f.overlay.select(b, 'usable-lift-agl', second.id);
+    const replacement = sourceFor(f, 'usable-lift-agl', second.id)!;
+    f.markLoaded(replacement); f.emit('sourcedata', { sourceId: replacement, tile: {} });
+    f.emit(event);
+    expect(f.opacity.get(replacement)).toBe(0.7);
+    expect(f.painted()).toBe(original);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(first.id);
+    f.emit('idle');
+    expect(f.states.at(-1)?.displayed?.frame).toBe(first.id);
+    f.overlay.select(b, 'usable-lift-agl', third.id);
+    f.emit('render');
+    expect(f.painted()).toBe(original);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(first.id);
+    await f.complete(sourceFor(f, 'usable-lift-agl', third.id)!);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(third.id);
+    expect(f.painted()).not.toBe(replacement);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+  } finally { f.overlay.destroy(); }
+});
+
+it.each(['movestart', 'resize'] as const)('invalidates an unpainted replacement on %s until its viewport settles', async event => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const original = f.painted(), replacement = sourceFor(f, 'usable-lift-msl', frame)!;
+    await f.complete(replacement);
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.opacity.get(replacement)).toBe(0.7);
+    expect(f.painted()).toBe(original);
+    f.emit(event);
+    const tile = {};
+    f.emit('sourcedataloading', { sourceId: replacement, tile }); f.emit('render');
+    expect(f.painted()).toBe(original);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-agl');
+    f.emit('sourcedata', { sourceId: replacement, tile }); f.emit('render');
+    expect(f.painted()).toBe(original);
+    if (event === 'movestart') {
+      f.emit('moveend');
+      expect(f.sources.has(replacement)).toBe(false);
+      await f.complete(sourceFor(f, 'usable-lift-msl', frame)!);
+    } else f.emit('render');
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+    expect(f.painted()).not.toBe(original);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+  } finally { f.overlay.destroy(); }
+});
+
+it.each(['failure', 'clear', 'expire', 'build'] as const)('discards an unpainted replacement on %s', async action => {
+  const f = fixture(32), b = build(), [first, second, third] = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', first.id); await f.complete();
+    const original = f.painted();
+    f.overlay.select(b, 'usable-lift-agl', second.id);
+    const pending = sourceFor(f, 'usable-lift-agl', second.id)!;
+    f.markLoaded(pending); f.emit('sourcedata', { sourceId: pending, tile: {} }); f.emit('render');
+    if (action === 'failure') f.emit('error', { sourceId: pending, error: new Error('source failed') });
+    else if (action === 'clear') f.overlay.clear();
+    else if (action === 'expire') vi.setSystemTime(b.expiresAtMs);
+    else f.overlay.select(build(), 'usable-lift-agl', third.id);
+    f.emit('render');
+    expect(f.sources.has(pending)).toBe(false);
+    expect(f.states.some(state => state.displayed?.frame === second.id)).toBe(false);
+    if (action === 'expire') f.emit('render');
+    expect(f.painted()).toBe(action === 'clear' || action === 'expire' ? undefined : original);
+    expect(f.states.at(-1)?.displayed?.frame ?? null).toBe(action === 'clear' || action === 'expire' ? null : first.id);
+  } finally { f.overlay.destroy(); }
+});
+
 it('keeps old imagery on a source failure and ignores success events from superseded sources', async () => {
   const f = fixture(), b = build();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
-  const committed = f.stage();
+  const committed = f.displayed();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id); const superseded = f.stage();
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[1].id);
   await f.complete(superseded);
@@ -107,7 +307,7 @@ it('keeps old imagery on a source failure and ignores success events from supers
 it('keeps partial staging imagery when one tile fails and commits it with the remaining tiles', async () => {
   const f = fixture(), b = build();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
-  const committed = f.stage();
+  const committed = f.displayed();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
   const staging = f.stage(), tile = {};
   f.emit('error', { sourceId: staging, tile, error: new Error('offline') });
@@ -130,7 +330,7 @@ it('keeps partial staging imagery when one tile fails and commits it with the re
 it.each([false, true])('settles a stationary viewport with no tiles and retries on movement (old raster: %s)', async committed => {
   const f = fixture(), b = build();
   if (committed) { f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete(); }
-  const previous = committed ? f.stage() : null;
+  const previous = committed ? f.displayed() : null;
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
   const empty = f.stage(), tile = {};
   f.markLoaded(empty);
@@ -198,7 +398,7 @@ it('keeps the displayed raster if the replacement only succeeded before a pan', 
   try {
     const [previous, next] = b.manifest.frames;
     f.overlay.select(b, 'usable-lift-agl', previous.id); await f.complete();
-    const displayed = f.stage();
+    const displayed = f.displayed();
     f.overlay.select(b, 'usable-lift-agl', next.id);
     const oldViewport = f.stage(), pending = {};
     f.emit('sourcedataloading', { sourceId: oldViewport, tile: pending });
@@ -223,7 +423,7 @@ it('rechecks camera readiness and expires old imagery while a new model is loadi
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[0].id);
   f.emit('movestart'); await f.complete();
   expect(f.sources.size).toBe(2);
-  f.emit('moveend'); await f.complete(); expect(f.sources.size).toBe(1);
+  f.emit('moveend'); await f.complete(); expect(f.sources.size).toBe(2);
   vi.advanceTimersByTime(1001); expect(f.sources.size).toBe(0);
   f.overlay.destroy();
 });
@@ -271,7 +471,7 @@ it('restages on idle when a clamped zoom emits no movement events', async () => 
 it('allows a healthy replacement to finish after the displayed source reports an error', async () => {
   const f = fixture(), b = build();
   f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete();
-  const old = f.stage();
+  const old = f.displayed();
   f.overlay.select(b, 'usable-lift-msl', b.manifest.frames[0].id); const next = f.stage();
   f.emit('error', { sourceId: old, tile: {}, error: new Error('old viewport failed') });
   expect(f.sources.has(next)).toBe(true);
@@ -292,9 +492,10 @@ it.each(['commit', 'failure'] as const)('preserves target prefetch through selec
   const f = fixture(), b = build();
   let interactive: Promise<unknown> | null = null;
   try {
-    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete(); f.emit('idle');
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id); await f.complete(); await f.complete(); f.emit('idle');
     expect(requests.length).toBeGreaterThan(0);
-    const target = requests[0];
+    const target = requests.find(request => request.url.includes(`/${b.manifest.frames[1].id}/`))!;
+    expect(target).toBeDefined();
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[1].id);
     expect(target.signal.aborted).toBe(false);
     const [scheme, handler] = vi.mocked(addProtocol).mock.calls.at(-1)!;
@@ -310,4 +511,174 @@ it.each(['commit', 'failure'] as const)('preserves target prefetch through selec
     expect(requests.some(request => request !== target && request.signal.aborted)).toBe(true);
     expect(requests.filter(request => request.url === target.url)).toHaveLength(1);
   } finally { f.overlay.destroy(); await interactive?.catch(() => {}); }
+});
+
+function sourceFor(f: ReturnType<typeof fixture>, layer: string, frame: string): string | undefined {
+  return [...f.sources].find(([, source]) => (source as { tiles: string[] }).tiles[0].includes(`/${layer}/${frame}/`))?.[0];
+}
+async function completeWindow(f: ReturnType<typeof fixture>): Promise<void> {
+  for (let i = 0; i < 4; i++) {
+    const next = [...f.sources.keys()].find(id => !f.loaded.has(id));
+    if (!next) return;
+    await f.complete(next);
+  }
+}
+
+it('prepares the most likely viewport before filling a four-source window', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    expect(f.sources.size).toBe(2);
+    const sibling = sourceFor(f, 'usable-lift-msl', frame)!;
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+    await f.complete(sibling);
+    expect(f.sources.size).toBe(3);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(true);
+    const next = sourceFor(f, 'usable-lift-agl', b.manifest.frames[3].id)!;
+    await f.complete(next);
+    expect(f.sources.size).toBe(4);
+    await completeWindow(f);
+    expect(f.sources.size).toBe(4);
+    expect(f.displayed()).not.toBe(sibling);
+  } finally { f.overlay.destroy(); }
+});
+
+it('takes two ready forward steps while retaining overlapping in-flight preparation', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
+    await completeWindow(f);
+    const first = sourceFor(f, 'usable-lift-agl', frames[3].id)!;
+    const second = sourceFor(f, 'usable-lift-agl', frames[4].id)!;
+    const previous = sourceFor(f, 'usable-lift-agl', frames[2].id)!;
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frames[3].id)).toBe(true);
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frames[4].id)).toBe(true);
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id); f.emit('render'); await Promise.resolve();
+    expect(f.displayed()).toBe(first);
+    const warming = sourceFor(f, 'usable-lift-agl', frames[5].id)!;
+    expect(warming).toBeDefined();
+    f.overlay.select(b, 'usable-lift-agl', frames[4].id); f.emit('render'); await Promise.resolve();
+    expect(f.displayed()).toBe(second);
+    expect(sourceFor(f, 'usable-lift-agl', frames[5].id)).toBe(warming);
+    expect(f.sources.has(previous)).toBe(false);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id);
+    expect(f.displayed()).toBe(first);
+  } finally { f.overlay.destroy(); }
+});
+
+it('makes explicit layer intent ready before later timeline frames without changing the display', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
+    await completeWindow(f);
+    const displayed = f.displayed();
+    f.overlay.prepare('usable-lift-msl', frames[2].id);
+    const preferred = sourceFor(f, 'usable-lift-msl', frames[2].id)!;
+    expect(preferred).toBeDefined();
+    expect(f.displayed()).toBe(displayed);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+    await f.complete(preferred);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frames[2].id)).toBe(true);
+    f.overlay.select(b, 'usable-lift-msl', frames[2].id);
+    expect(f.displayed()).toBe(preferred);
+  } finally { f.overlay.destroy(); }
+});
+
+it('releases unfinished background sources before a cold timeline selection', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    const displayed = f.displayed();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    const superseded = sourceFor(f, 'usable-lift-agl', frames[2].id)!;
+    f.emit('sourcedata', { sourceId: superseded, tile: {} });
+    f.emit('sourcedataloading', { sourceId: superseded, tile: {} });
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id);
+    expect(f.sources.has(superseded)).toBe(false);
+    expect(f.sources.size).toBe(2);
+    expect(f.displayed()).toBe(displayed);
+    await f.complete();
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[3].id);
+  } finally { f.overlay.destroy(); }
+});
+
+it('shrinks the prepared window on resize and admits no speculative sources over budget', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
+    expect(f.sources.size).toBe(4);
+    f.setCoveringCount(64); f.emit('resize'); await completeWindow(f);
+    expect(f.sources.size).toBe(2);
+    f.setCoveringCount(256); f.emit('resize');
+    expect(f.sources.size).toBe(1);
+    expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.sources.size).toBe(2);
+    await f.complete();
+    expect(f.sources.size).toBe(1);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+  } finally { f.overlay.destroy(); }
+});
+
+it('rejects readiness for moving, damaged, expired, and disposed prepared sources', async () => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
+  f.setMoving(true);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+  f.setMoving(false);
+  f.emit('error', { sourceId: f.displayed(), tile: {}, error: new Error('visible failure') });
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+  b.expiresAtMs = Date.now();
+  expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
+  f.overlay.destroy();
+  expect(f.sources.size).toBe(0);
+  expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+});
+
+it('recomputes memory admission after selection during camera movement', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.emit('movestart');
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    f.setCoveringCount(64);
+    f.emit('moveend'); await completeWindow(f);
+    expect(f.sources.size).toBe(2);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[2].id);
+  } finally { f.overlay.destroy(); }
+});
+
+
+it('warms remaining same-day bytes after the ready forward window', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id); await completeWindow(f);
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls[0]).toContain(`/usable-lift-agl/${frames[5].id}/`);
+    expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[3].id}/`))).toBe(false);
+    expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[4].id}/`))).toBe(false);
+    expect(f.sources.size).toBe(4);
+  } finally { f.overlay.destroy(); }
+});
+
+it('reuses the displayed source after an active viewport tile leaves without an abort', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const active = f.displayed();
+    f.emit('movestart');
+    f.emit('sourcedataloading', { sourceId: active, tile: {} });
+    f.emit('moveend');
+    await f.complete();
+    f.overlay.select(b, 'usable-lift-msl', frame); f.emit('render'); await Promise.resolve();
+    expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
+    f.overlay.select(b, 'usable-lift-agl', frame);
+    expect(f.displayed()).toBe(active);
+  } finally { f.overlay.destroy(); }
 });

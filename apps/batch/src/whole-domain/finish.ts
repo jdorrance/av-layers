@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { createWholeDomainDescriptors, encodeBoundedJson, manifestV5Schema, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS,
+import { createWholeDomainDescriptors, encodeBoundedJson, liftRenderStyle, PALETTES, manifestV5Schema, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS,
   MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PROFILE_PACK_FORMAT, RETENTION_DAYS, SAMPLE_BLOCK_SIZE, TERRAIN_CLEARANCE_METHOD, terrainColumnMethodForProduct,
   type ManifestV5 } from '@av/contracts';
 import type { BuildStamp, ForecastInputs } from '../frame-build.js';
@@ -84,7 +84,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
       source: { provider: provider.provider, model: product.modelId, temporalApproximation: 'interval flux with endpoint profile',
         frameCount: result.frames.length, provenanceKey, provenanceSha256: sha256(provenanceBytes),
         terrain: { dataId: surfaces.find(surface => surface.terrain)?.terrain?.dataId ?? '', key: prepared.terrain.key, sha256: prepared.terrain.sha256, arrayBytes: prepared.terrain.arrayBytes } },
-      tool: { components: options.identity.components, node: process.version, tileFormat: 'webp', liftRenderStyle: 'transparent-no-lift-v2',
+      tool: { components: options.identity.components, node: process.version, tileFormat: 'webp', liftRenderStyle: liftRenderStyle(PALETTES.lift.interpolation),
         terrainMethod: refinementMethod.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id, ...RASTER_SAMPLING },
       palettes: descriptors.palettes.map(palette => palette.id), metrics: {}
     };

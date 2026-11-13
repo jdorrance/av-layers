@@ -1,5 +1,6 @@
 {
   "baseline": "ab80afb0e0d9a08e5845d15c1e807e7615de97a1",
+  "pixelRenderStyle": "terrain-msl-step-v1",
   "models": {
     "gfs": {
       "frames": [
@@ -147,7 +148,7 @@
       ],
       "pixels": {
         "precip-rate/f001": "eeb17051d754f3dc4284689eec2dcef188586eecaea9ff03826b29763ccc65ed",
-        "usable-lift-msl/f001": "c36145c0ec384e8e0d16628e151dfebd1f0e6cebec0772be0a686974ef613b3b",
+        "usable-lift-msl/f001": "75c6741e48d18968a0eac715b0a23751a7a3133f87780a67896de5a576829c65",
         "usable-lift-agl/f001": "9aa870e2d2f9b4796740938f79a146a59337e648808afe441d4bcec2c9aca412",
         "precip-rate/f002": "fd5622baad64cf7911e29b6aa21b882adc5769a2e9d48b593f114ecabd72c2cc",
         "usable-lift-msl/f002": "da9afeb03321b51f90027331c563f0cfe0f37878cac3ed52ed9637d0d74708a3",

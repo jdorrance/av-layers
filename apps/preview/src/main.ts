@@ -2,7 +2,7 @@ import { renderBuildDiagnostics } from '@av/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { LayerId } from '@av/contracts/layers';
+import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@av/client';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
+import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
 import { clockLabel, dayKey, dayLabel, frameIndexFor } from './timeline';
 
@@ -47,6 +48,8 @@ const opacityReadout = element<HTMLSpanElement>('opacity-readout');
 const timeInput = element<HTMLInputElement>('time');
 const dayBar = element<HTMLDivElement>('days');
 const timestamp = element<HTMLParagraphElement>('timestamp');
+const frameStatus = element<HTMLParagraphElement>('frame-status');
+const timelineStatus = element<HTMLParagraphElement>('timeline-status');
 const legend = element<HTMLElement>('legend');
 const legendBody = element<HTMLDivElement>('legend-body');
 const legendToggle = element<HTMLButtonElement>('legend-toggle');
@@ -67,6 +70,7 @@ const pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label');
 const meta = element<HTMLDListElement>('meta');
 
 const LIFT: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
+const displayedClock = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
@@ -125,6 +129,7 @@ function startPreview(): void {
     container: 'map',
     center: startup.camera?.center ?? [0, 20],
     zoom: startup.camera?.zoom ?? 2,
+    maxTileCacheSize: RASTER_CACHE_TILES,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : basemapStyle()
@@ -141,12 +146,15 @@ function startPreview(): void {
   let opacity = initialOpacity;
   let expired = false;
   let mapFailed = false;
-  let overlayState: OverlayState = { displayed: null, requested: null, incomplete: false, replacementFailed: false };
+  let mapReady = false;
+  let selectingOverlay = false;
+  let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
     updateOverlayStatus();
   });
-  let timelineRaf: number | null = null;
+  let timelineDays: { build: PinnedBuild; offset: number; buttons: HTMLButtonElement[] } | null = null;
+  let ribbon: { build: PinnedBuild; layer: LayerId } | null = null;
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
   let loadAbort: AbortController | null = null;
@@ -156,6 +164,7 @@ function startPreview(): void {
   let pointHorizon: PointHorizon = 'day';
   let windgram: PointWindgram | null = null;
   let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
+  let pointSelection: { update: ReturnType<PointWindgram['renderPointWindgram']>; frame: string | null; units: UnitSystem; mapFrame: string | null } | null = null;
   let expiryTimer: number | null = null;
   let disposeExpiry = () => {};
   let urlReady = false;
@@ -191,7 +200,7 @@ function startPreview(): void {
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
-    if (applyingHistory || !urlReady || pendingModel) return;
+    if (applyingHistory || !mapReady || !urlReady || pendingModel) return;
     const camera = map.getCenter();
     const validTime = currentModel === AUTO_MODEL_ID ? requestedTime ?? undefined : build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
     const next = previewUrl(window.location.pathname, {
@@ -226,6 +235,7 @@ function startPreview(): void {
     windgram?.disposePointWindgram(pointBody);
     pointBody.replaceChildren();
     updatePointSeries = null;
+    pointSelection = null;
     pointBody.tabIndex = -1;
     meta.replaceChildren();
   }
@@ -255,6 +265,7 @@ function startPreview(): void {
   }
 
   function renderRibbon(layer: LayerId, displayedBuild = build): void {
+    if (!legend.hidden && ribbon?.build === displayedBuild && ribbon.layer === layer) return;
     const palette = displayedBuild ? activePalettes(displayedBuild.manifest.descriptors.palettes, layer, displayedBuild.manifest.descriptors.layers)[0] : undefined;
     if (!displayedBuild || !palette) {
       legend.hidden = true;
@@ -262,9 +273,11 @@ function startPreview(): void {
       return;
     }
     legend.hidden = false;
+    ribbon = { build: displayedBuild, layer };
     const title = document.createElement('p');
     title.className = 'ribbon-title';
-    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m)' : 'Top of usable lift (m)';
+    const descriptor = displayedBuild.manifest.descriptors.layers[layer];
+    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m AGL)' : 'Top of usable lift (m MSL)';
     const scale = document.createElement('div');
     scale.className = 'ribbon-scale';
     const colorCount = palette.colors.length;
@@ -286,11 +299,25 @@ function startPreview(): void {
     const body = document.createElement('div');
     body.className = 'ribbon-main';
     body.append(title, scale);
+    element<HTMLParagraphElement>('legend-reference').textContent = layer === 'usable-lift-agl'
+      ? 'AGL shows usable lift height above ground.'
+      : 'MSL includes ground elevation. Choose AGL to see usable lift height above ground.';
+    const renderStyle = displayedBuild.manifest.tool.liftRenderStyle;
+    const terrainNoLift = layer === 'usable-lift-msl'
+      && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE);
+    element<HTMLParagraphElement>('legend-no-lift').textContent = terrainNoLift
+      ? 'No usable lift: the map shows ground elevation, including at night.'
+      : 'No usable lift: clear areas on the map.';
+    const sink = displayedBuild.manifest.descriptors.methods[descriptor.methodId]?.parameters.sinkRateMps;
+    element<HTMLParagraphElement>('legend-cutoff').textContent = Number.isFinite(sink) && sink > 0
+      ? `Usable lift requires predicted updrafts above ${sink} m/s. Nearby terrain can cross this cutoff.`
+      : 'Usable lift depends on the predicted updraft and terrain.';
     legendBody.replaceChildren(body);
   }
 
   function updateTimeUi(): void {
     if (!build || !selectedFrame) {
+      timelineDays = null;
       dayBar.replaceChildren();
       timestamp.textContent = expired ? 'Build expired — overlay removed' : 'No frame selected';
       return;
@@ -300,30 +327,35 @@ function startPreview(): void {
     const today = dayKey(Date.now(), offset);
     const selected = frames.find(frame => frame.id === selectedFrame) ?? frames[0];
     const selectedKey = selected ? dayKey(Date.parse(selected.validTime), offset) : '';
-    dayBar.replaceChildren(...[...new Set(frames.map(frame => dayKey(Date.parse(frame.validTime), offset)))].map(key => {
-      const button = document.createElement('button');
-      button.type = 'button';
+    if (timelineDays?.build !== build || timelineDays.offset !== offset) {
+      const buttons: HTMLButtonElement[] = [];
+      frames.forEach((frame, index) => {
+        const key = dayKey(Date.parse(frame.validTime), offset);
+        if (buttons.at(-1)?.value === key) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.value = key;
+        button.addEventListener('click', () => selectIndex(index, 'push'));
+        buttons.push(button);
+      });
+      timelineDays = { build, offset, buttons };
+      dayBar.replaceChildren(...buttons);
+      timeInput.min = '0';
+      timeInput.max = String(Math.max(0, frames.length - 1));
+    }
+    for (const button of timelineDays.buttons) {
+      const key = button.value;
       button.className = key === selectedKey ? 'day is-selected' : 'day';
       button.ariaPressed = String(key === selectedKey);
-      button.value = key;
       button.textContent = dayLabel(key, today);
       button.disabled = expired || mapFailed;
-      button.addEventListener('click', () => {
-        const index = frames.findIndex(frame => dayKey(Date.parse(frame.validTime), offset) === key);
-        if (index >= 0) selectIndex(index, 'push');
-      });
-      return button;
-    }));
+    }
     const index = Math.max(0, frames.findIndex(frame => frame.id === selectedFrame));
-    timeInput.min = '0';
-    timeInput.max = String(Math.max(0, frames.length - 1));
     if (document.activeElement !== timeInput) timeInput.value = String(index);
-    timestamp.textContent = selected ? clockLabel(Date.parse(selected.validTime), offset) : 'No frame selected';
+    timestamp.textContent = selected ? `Selected · ${clockLabel(Date.parse(selected.validTime), offset)}` : 'No frame selected';
   }
 
   function removeOverlay(dispose = false): void {
-    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
-    timelineRaf = null;
     overlay.clear(dispose);
   }
 
@@ -333,22 +365,43 @@ function startPreview(): void {
   }
 
   function updateOverlayStatus(): void {
-    const { displayed, requested, incomplete, replacementFailed } = overlayState;
+    const { displayed, requested, quality, viewLoading, overviewReady, overviewTotal, overviewFailed, incomplete, replacementFailed } = overlayState;
     const showing = displayed ? `Showing ${displayed.build.manifest.model} ${displayed.frame} ${displayed.layer}.` : 'No forecast displayed.';
     const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
     const olderBuild = displayed && displayed.build !== build;
+    const displayedTime = displayed?.build.manifest.frames.find(frame => frame.id === displayed.frame)?.validTime;
+    const displayedLabel = displayedTime ? `${displayedClock.format(Date.parse(displayedTime))} UTC` : '';
+    frameStatus.dataset.quality = quality ?? 'none';
+    const status = !displayed ? requested ? 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
+      : pending ? `Showing ${displayedLabel} · Loading selected time…`
+      : quality === 'overview' ? `${displayedLabel} · Overview · ${replacementFailed ? 'Detail unavailable' : 'Loading detail…'}`
+      : viewLoading ? `${displayedLabel} · Loading this view…`
+      : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
+    if (frameStatus.textContent !== status) frameStatus.textContent = status;
+    timelineStatus.dataset.ready = String(overviewReady); timelineStatus.dataset.total = String(overviewTotal);
+    timelineStatus.hidden = overviewTotal === 0;
+    timelineStatus.textContent = overviewReady === overviewTotal ? 'Timeline ready'
+      : `${overviewReady + overviewFailed === overviewTotal ? 'Timeline partly ready' : 'Preparing timeline'} · ${overviewReady} / ${overviewTotal} times ready`;
     const alert = replacementFailed || incomplete;
     tileErrorBox.className = alert ? 'toast error' : 'toast status';
     tileErrorBox.role = alert ? 'alert' : 'status';
-    tileErrorBox.hidden = !alert && !pending && !pendingModel && !olderBuild;
-    tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
+    tileErrorBox.hidden = !alert && !pendingModel && !olderBuild;
+    tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : olderBuild ? showing : '';
     if (displayed) renderRibbon(displayed.layer, displayed.build);
     else { legend.hidden = true; legendBody.replaceChildren(); }
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    if (!selectingOverlay) updatePointSelection();
   }
 
   function displayedPointFrame(): string | null {
     return overlayState.displayed?.build === build ? overlayState.displayed.frame : null;
+  }
+
+  function updatePointSelection(): void {
+    if (!updatePointSeries) return;
+    const frame = pointSeries.frameId, mapFrame = displayedPointFrame();
+    if (pointSelection?.update === updatePointSeries && pointSelection.frame === frame && pointSelection.units === pointUnitSystem && pointSelection.mapFrame === mapFrame) return;
+    pointSelection = { update: updatePointSeries, frame, units: pointUnitSystem, mapFrame };
+    updatePointSeries(frame, pointUnitSystem, mapFrame);
   }
 
   function expireView(): void {
@@ -386,13 +439,16 @@ function startPreview(): void {
 
   function updateOverlay(): void {
     const layer = activeLayer();
-    if (!build || !selectedFrame || !layer || !ensureLive()) return;
+    if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
     clearError();
+    selectingOverlay = true;
     try {
       overlay.select(build, layer, selectedFrame);
-      updateTimeUi();
     } catch (error) {
       showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      selectingOverlay = false;
+      updatePointSelection();
     }
   }
 
@@ -403,9 +459,9 @@ function startPreview(): void {
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
     updateTimeUi();
-    followMapFrame();
-    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
-    timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
+    pointSeries.followMapFrame(selectedFrame);
+    updateOverlay();
+    updatePointSelection();
     if (history !== 'none') {
       writeUrl(history);
       if (currentModel === AUTO_MODEL_ID) void loadAuto();
@@ -414,7 +470,7 @@ function startPreview(): void {
 
   function followMapFrame(): void {
     pointSeries.followMapFrame(selectedFrame);
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    updatePointSelection();
   }
 
   function chooseFrame(value: PinnedBuild): void {
@@ -442,6 +498,7 @@ function startPreview(): void {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
           selectedFrame = next.frame.id;
           followMapFrame();
+          updateTimeUi();
           updateOverlay();
           updateFreshness();
           if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
@@ -502,7 +559,7 @@ function startPreview(): void {
     horizonNotice.textContent = '';
     build = null;
     selectedFrame = null;
-    dayBar.replaceChildren();
+    updateTimeUi();
     legend.hidden = true;
     legendBody.replaceChildren();
     closePoint();
@@ -519,6 +576,7 @@ function startPreview(): void {
       pointHorizonSelect.children[0].textContent = next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
       if (resolved) selectedFrame = resolved.frame.id;
       else chooseFrame(next);
+      updateTimeUi();
       updateOverlay();
       updateFreshness();
       setControlsEnabled(true);
@@ -557,8 +615,9 @@ function startPreview(): void {
       point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
-        updatePointSeries?.(id, pointUnitSystem, displayedPointFrame());
-        selectIndex(renderedFrames(context.build.manifest).findIndex(frame => frame.id === id), 'push');
+        const index = renderedFrames(context.build.manifest).findIndex(frame => frame.id === id);
+        if (index >= 0) selectIndex(index, 'push');
+        else updatePointSelection();
       }
     });
     pointBody.tabIndex = 0;
@@ -574,7 +633,7 @@ function startPreview(): void {
     pointLocation.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
     meta.replaceChildren();
     windgram?.disposePointWindgram(pointBody);
-    pointBody.replaceChildren(); updatePointSeries = null; pointBody.tabIndex = -1;
+    pointBody.replaceChildren(); updatePointSeries = null; pointSelection = null; pointBody.tabIndex = -1;
     await loadPointRange();
   }
 
@@ -622,6 +681,7 @@ function startPreview(): void {
         const previousFrame = selectedFrame;
         chooseFrame(build);
         if (selectedFrame !== previousFrame) followMapFrame();
+        updateTimeUi();
         updateOverlay();
       }
     } finally {
@@ -637,6 +697,10 @@ function startPreview(): void {
       void loadModel(model);
       focusRegion(model);
     });
+  }
+  for (const [control, layer] of [[refAgl, 'usable-lift-agl'], [refMsl, 'usable-lift-msl']] as const) {
+    const prepare = () => { if (!control.disabled && selectedFrame) overlay.prepare(layer, selectedFrame); };
+    for (const event of ['pointerenter', 'focus', 'pointerdown']) control.addEventListener(event, prepare);
   }
   refAgl.addEventListener('click', () => {
     reference = 'agl';
@@ -669,7 +733,7 @@ function startPreview(): void {
   pointUnits.value = pointUnitSystem;
   pointUnits.addEventListener('change', () => {
     pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
-    updatePointSeries?.(pointSeries.frameId, pointUnitSystem, displayedPointFrame());
+    updatePointSelection();
   });
   pointHorizonSelect.value = pointHorizon;
   pointHorizonSelect.addEventListener('change', () => {
@@ -743,6 +807,7 @@ function startPreview(): void {
       setPointStatus('Point request interrupted. Click the map again.');
       windgram?.disposePointWindgram(pointBody);
       updatePointSeries = null;
+      pointSelection = null;
     }
     if (!event.persisted || pointInterrupted) pointSeries.close();
     if (expiryTimer !== null) {
@@ -753,6 +818,8 @@ function startPreview(): void {
     if (event.persisted) return;
     lifecycle.abort();
     windgram?.disposePointWindgram(pointBody);
+    updatePointSeries = null;
+    pointSelection = null;
     disposeExpiry();
     overlay.destroy(); map.remove();
   }, globalListener);
@@ -765,6 +832,7 @@ function startPreview(): void {
       return;
     }
     if (build && ensureLive()) {
+      updateTimeUi();
       updateOverlay();
       setControlsEnabled(true);
       updateFreshness();
@@ -777,9 +845,12 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    if (!startup.camera) focusRegion(initialModel);
-    void loadModel(initialModel);
+    if (!startup.camera) focusRegion(currentModel);
+    mapReady = true;
+    updateOverlay();
+    writeUrl('replace');
   });
+  void loadModel(initialModel);
 }
 
 function showMapFailure(error: unknown): void {

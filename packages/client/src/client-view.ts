@@ -249,12 +249,16 @@ export function viewportTiles(bounds: { west: number; south: number; east: numbe
   return tiles;
 }
 
-/** Plan bounded tile warming in forecast-step, layer-toggle, then pan order. */
+/** Warm one preferred viewport before neighboring frames and pan tiles. */
 export function planViewportPrefetch(options: {
   build: PinnedBuild;
   activeLayer: LayerId;
   activeFrame: string;
   viewportTiles: readonly ViewportTile[];
+  preferred?: { layer: LayerId; frame: string };
+  direction?: 1 | -1;
+  prepared?: readonly { layer: LayerId; frame: string }[];
+  timelineFrames?: readonly string[];
 }): string[] {
   const { build, activeLayer, activeFrame } = options, manifest = build.manifest;
   const frames = renderedFrames(manifest);
@@ -275,7 +279,7 @@ export function planViewportPrefetch(options: {
   }
   const viewport = options.viewportTiles.slice(0, 64).flatMap(tile => { const valid = normalize(tile, activeLayer); return valid ? [valid] : []; });
   function add(layer: LayerId, frame: string | undefined, tile: ViewportTile): void {
-    if (!frame || urls.size >= 64 || !build.templates[layer] || !rendered.includes(layer)) return;
+    if (!frame || !frames.some(item => item.id === frame) || urls.size >= 64 || !build.templates[layer] || !rendered.includes(layer)) return;
     const valid = normalize(tile, layer);
     if (!valid) return;
     const { z, x, y } = valid, width = 2 ** z;
@@ -287,10 +291,21 @@ export function planViewportPrefetch(options: {
     urls.add(template.replaceAll('{z}', String(z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(y)));
   }
   const frame = (offset: number) => frames[frameIndex + offset]?.id;
-  for (const offset of [1, -1]) for (const tile of viewport) add(activeLayer, frame(offset), tile);
+  function warm(layer: LayerId, id: string | undefined): void {
+    if ((layer === activeLayer && id === activeFrame) || options.prepared?.some(item => item.layer === layer && item.frame === id)) return;
+    for (const tile of viewport) add(layer, id, tile);
+  }
   const sibling = activeLayer === 'usable-lift-agl' ? 'usable-lift-msl' : activeLayer === 'usable-lift-msl' ? 'usable-lift-agl' : undefined;
-  if (sibling) for (const tile of viewport) add(sibling, activeFrame, tile);
-  for (const tile of viewport) add(activeLayer, frame(2), tile);
+  const preferred = options.preferred ?? (sibling ? { layer: sibling, frame: activeFrame } : undefined);
+  if (preferred) warm(preferred.layer, preferred.frame);
+  for (const id of options.timelineFrames ?? []) {
+    if (urls.size >= 64) break;
+    warm(activeLayer, id);
+  }
+  const direction = options.direction ?? 1;
+  for (const offset of [direction, -direction]) warm(activeLayer, frame(offset));
+  if (sibling) warm(sibling, activeFrame);
+  warm(activeLayer, frame(2 * direction));
   const visible = new Set(viewport.map(tile => `${tile.z}/${tile.x}/${tile.y}`));
   for (const tile of viewport) {
     for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]) {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PMTiles } from 'pmtiles';
-import { expectedTiles, paletteColor, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
+import { expectedTiles, paletteColor, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { prepareSamplePackLayout, QUAD_OFFSETS, sampleGrid, type GridField } from '@av/forecast';
 import { createRenderer, mercatorPoint, renderArchive, renderTile, renderTileRgba } from './render.js';
 import { createSamplePackBuilder } from './sample-pack.js';
@@ -33,6 +33,9 @@ async function reader(path: string): Promise<{ archive: PMTiles; close: () => Pr
 }
 
 function referenceTileRgba(field: GridField, mask: CoverageMask, layer: LayerId, z: number, x: number, y: number): Uint8Array {
+  // An independent scalar-field oracle treats stored MSL terrain as visible elevation.
+  if (layer === 'usable-lift-msl') field = { ...field, flags: field.flags.map(flag =>
+    (flag & STATUS_MASK) === STATUS_NO_LIFT ? flag & ~STATUS_MASK : flag) };
   const data = new Uint8Array(256 * 256 * 4);
   for (let i = 0; i < 256 * 256; i++) {
     const px = i & 255, py = i >> 8;
@@ -120,15 +123,22 @@ describe('rendered WebP and PMTiles fixtures', () => {
     } finally { vi.doUnmock('@av/contracts'); vi.resetModules(); }
   });
 
-  it('renders no-lift transparent independently of the stored MSL terrain value', async () => {
+  it.each(['step', 'linear-rgb'] as const)('renders stored no-lift MSL terrain with unchanged sample status and transparent AGL (%s)', async interpolation => {
     const a = mercatorPoint(5, 16, 16, 30.25, 30.25), b = mercatorPoint(5, 16, 16, 30.75, 30.75);
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (let i = 0; i < 4; i++) setBit(mask.output, i);
     const field: GridField = { values: new Float32Array(4).fill(5500), flags: new Uint8Array(4).fill(STATUS_NO_LIFT) };
     expect(sampleGrid(grid, field, a.lat, a.lon, 'usable-lift-msl', mask, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
-    expect(pixel(await decodeWebp(await renderTile(field, mask, 'usable-lift-msl', 5, 16, 16)), 30, 30)).toEqual([0, 0, 0, 0]);
-    field.values.fill(0);
-    expect(pixel(await decodeWebp(await renderTile(field, mask, 'usable-lift-agl', 5, 16, 16)), 30, 30)).toEqual([0, 0, 0, 0]);
+    const renderer = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: interpolation });
+    expect(pixel({ data: renderer.renderTileRgba(field, 'usable-lift-msl', 5, 16, 16) }, 30, 30)).toEqual([166, 167, 169, 255]);
+    expect(renderer.metrics().blankTiles).toBe(0);
+    expect([...field.flags]).toEqual([STATUS_NO_LIFT, STATUS_NO_LIFT, STATUS_NO_LIFT, STATUS_NO_LIFT]);
+    for (const status of [STATUS_UNAVAILABLE, STATUS_OUTSIDE]) {
+      field.flags.fill(status);
+      expect(pixel({ data: renderer.renderTileRgba(field, 'usable-lift-msl', 5, 16, 16) }, 30, 30)).toEqual([0, 0, 0, 0]);
+    }
+    field.flags.fill(STATUS_NO_LIFT); field.values.fill(0);
+    expect(pixel({ data: renderer.renderTileRgba(field, 'usable-lift-agl', 5, 16, 16) }, 30, 30)).toEqual([0, 0, 0, 0]);
   });
 
   it('premultiplies valid and no-lift quarter-pixels without a dark fringe', async () => {
@@ -307,7 +317,7 @@ describe('build-owned prepared renderer', () => {
     const dir = await mkdtemp(join(tmpdir(), 'av-render-')); temporary.push(dir);
     try {
       const a = await renderer.renderTile(field, 'usable-lift-agl', 0, 0, 0);
-      const b = await renderer.renderTile(field, 'usable-lift-msl', 1, 0, 0);
+      const b = await renderer.renderTile(field, 'usable-lift-agl', 1, 0, 0);
       expect(a).toBe(b);
       await renderer.renderArchive(join(dir, 'blank.pmtiles'), field, 'usable-lift-agl');
       expect(spy).toHaveBeenCalledTimes(1);

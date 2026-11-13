@@ -2,6 +2,7 @@ import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
+import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
@@ -11,6 +12,7 @@ import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } fro
 class Element extends EventTarget {
   children: Element[] = [];
   style: Record<string, string> = {};
+  dataset: Record<string, string> = {};
   textContent = '';
   innerHTML = '';
   className = '';
@@ -80,7 +82,8 @@ class MapMock {
   sources = new Map<string, unknown>();
   layers = new Map<string, { id: string; source?: string; paint?: Record<string, number> }>();
   removed = false;
-  options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number } = {};
+  private paintQueued = false;
+  options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number; maxTileCacheSize?: number } = {};
   center = { lng: 0, lat: 0 };
   zoom = 0;
   constructor(options?: MapMock['options']) {
@@ -104,7 +107,9 @@ class MapMock {
   getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
   fitBounds(bounds: [[number, number], [number, number]]): void {
     const [[west, south], [east, north]] = bounds;
+    this.emit('movestart');
     this.center = { lng: (west + east) / 2, lat: (south + north) / 2 };
+    this.emit('moveend');
   }
   jumpTo(camera: { center: [number, number]; zoom: number }, event: Record<string, unknown> = {}): void {
     this.emit('movestart', event);
@@ -112,7 +117,15 @@ class MapMock {
     this.zoom = camera.zoom;
     this.emit('moveend', event);
   }
-  setPaintProperty(id: string, property: string, value: number): void { const layer = this.layers.get(id); if (layer) { layer.paint ??= {}; layer.paint[property] = value; } }
+  setPaintProperty(id: string, property: string, value: number): void {
+    const layer = this.layers.get(id);
+    if (!layer || layer.paint?.[property] === value) return;
+    layer.paint ??= {}; layer.paint[property] = value;
+    if (autoLoadRaster && !this.paintQueued) {
+      this.paintQueued = true;
+      queueMicrotask(() => { this.paintQueued = false; this.emit('render'); });
+    }
+  }
   addSource(id: string, source: unknown): void { this.sources.set(id, source); }
   getSource(id: string): unknown { return this.sources.get(id); }
   removeSource(id: string): void { this.sources.delete(id); }
@@ -134,7 +147,10 @@ let manifest: ManifestV5;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
-const sourceId = () => [...map().layers.values()].find(layer => layer.source?.startsWith('av-overlay-'))!.source!;
+const sourceId = () => {
+  const overlays = [...map().layers.values()].filter(layer => layer.source?.startsWith('av-overlay-'));
+  return (overlays.find(layer => (layer.paint?.['raster-opacity'] ?? 0) > 0) ?? overlays[0])!.source!;
+};
 function modelButton(id: string): Element {
   const button = ui('models').children.find(child => child.value === id);
   if (!button) throw new Error(`Missing model button ${id}`);
@@ -185,6 +201,143 @@ beforeEach(() => {
 afterEach(() => {
   page('pagehide', false);
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
+});
+
+it('starts discovery before the map loads and bounds retained tile caches', async () => {
+  await import('./main');
+  expect(fetchMock).toHaveBeenCalled();
+  expect(map().sources.size).toBe(0);
+  expect(map().options.maxTileCacheSize).toBe(16);
+  map().emit('load');
+  await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
+  expect(sourceId()).toBeDefined();
+});
+
+it.each([LIFT_STEP_RENDER_STYLE, LIFT_RENDER_STYLE, 'transparent-no-lift-v2', undefined])('explains the displayed MSL render style %s and cutoff', async style => {
+  const method = manifest.descriptors.layers['usable-lift-msl'].methodId;
+  manifest.descriptors.methods[method].parameters.sinkRateMps = 1.8;
+  manifest.tool.liftRenderStyle = style;
+  await start();
+  expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (m AGL)')).toBe(true);
+  expect(ui('legend-no-lift').textContent).toBe('No usable lift: clear areas on the map.');
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(visit(ui('legend-body')).some(node => node.textContent === 'Top of usable lift (m MSL)')).toBe(true));
+  expect(ui('legend-reference').textContent).toContain('MSL includes ground elevation. Choose AGL');
+  expect(ui('legend-cutoff').textContent).toContain('predicted updrafts above 1.8 m/s');
+  expect(ui('legend-no-lift').textContent).toBe(style === LIFT_STEP_RENDER_STYLE || style === LIFT_RENDER_STYLE
+    ? 'No usable lift: the map shows ground elevation, including at night.'
+    : 'No usable lift: clear areas on the map.');
+  ui('legend-key').open = true;
+  ui('legend-key-toggle').focus();
+  const tile = {};
+  map().emit('error', { sourceId: sourceId(), tile });
+  map().emit('sourcedata', { sourceId: sourceId(), tile });
+  expect(ui('legend-key').open).toBe(true);
+  expect(doc.activeElement).toBe(ui('legend-key-toggle'));
+});
+
+it('selects cold and ready frames during slider input before the next map draw', async () => {
+  await start();
+  Object.assign(map(), { coveringTiles: () => [{}] });
+  map().emit('resize');
+  await selectFrame(1);
+  const readySource = sourceId();
+  await selectFrame(2);
+  const { RasterOverlay } = await import('./raster-overlay');
+  const select = vi.spyOn(RasterOverlay.prototype, 'select');
+  const schedule = vi.spyOn(win, 'requestAnimationFrame');
+  ui('time').value = String(manifest.frames.length - 1);
+  ui('time').dispatchEvent(new Event('input'));
+  expect(select).toHaveBeenCalledOnce();
+  expect(select.mock.calls[0][2]).toBe(manifest.frames.at(-1)!.id);
+  expect(schedule).not.toHaveBeenCalled();
+  ui('time').value = '1';
+  ui('time').dispatchEvent(new Event('input'));
+  expect(select).toHaveBeenCalledTimes(2);
+  expect(sourceId()).toBe(readySource);
+  expect(schedule).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(16);
+  expect(select).toHaveBeenCalledTimes(2);
+});
+
+it('updates each cold slider selection synchronously and writes history on commit', async () => {
+  await start();
+  const { RasterOverlay } = await import('./raster-overlay');
+  autoLoadRaster = false;
+  const select = vi.spyOn(RasterOverlay.prototype, 'select');
+  const replace = vi.spyOn(win.history, 'replaceState');
+  for (const index of [0, 1, 2]) {
+    ui('time').value = String(index);
+    ui('time').dispatchEvent(new Event('input'));
+  }
+  expect(select.mock.calls.map(call => call[2])).toEqual(manifest.frames.slice(0, 3).map(frame => frame.id));
+  expect(replace).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(16);
+  expect(select).toHaveBeenCalledTimes(3);
+  ui('time').dispatchEvent(new Event('change'));
+  expect(replace).toHaveBeenCalledOnce();
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[2].validTime);
+});
+
+it('retains day buttons and the scale while scrubbing and rebuilds day clicks for a new longitude', async () => {
+  await start();
+  const days = [...ui('days').children], scale = ui('legend-body').children[0];
+  await selectFrame(0);
+  await selectFrame(1);
+  expect(ui('days').children).toEqual(days);
+  expect(ui('legend-body').children[0]).toBe(scale);
+  const push = vi.spyOn(win.history, 'pushState');
+  days.at(-1)!.dispatchEvent(new Event('click'));
+  expect(push).toHaveBeenCalledOnce();
+  expect(ui('days').children).toEqual(days);
+  map().jumpTo({ center: [179, 20], zoom: 2 });
+  expect(ui('days').children[0]).not.toBe(days[0]);
+  const lastDay = ui('days').children.at(-1)!;
+  const index = manifest.frames.findIndex(frame => new Date(Date.parse(frame.validTime) + 12 * 3600_000).toISOString().slice(0, 10) === lastDay.value);
+  lastDay.dispatchEvent(new Event('click'));
+  expect(ui('time').value).toBe(String(index));
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[index].validTime);
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  await Promise.resolve();
+  expect(ui('legend-body').children[0]).not.toBe(scale);
+});
+
+it.each([true, false])('publishes the initial regional camera without adding history (discovery first: %s)', async discoveryFirst => {
+  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  vi.stubEnv('VITE_MODEL', manifest.model);
+  let release!: () => void;
+  const discovery = new Promise<void>(resolve => { release = resolve; });
+  fetchMock.mockImplementationOnce(async () => { await discovery; return latest(); });
+  const push = vi.spyOn(win.history, 'pushState'), replace = vi.spyOn(win.history, 'replaceState');
+  await import('./main');
+  expect(fetchMock).toHaveBeenCalled();
+  if (discoveryFirst) {
+    release();
+    await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
+    expect(replace).not.toHaveBeenCalled();
+  }
+  map().emit('load');
+  if (!discoveryFirst) release();
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
+  expect(sourceId()).toBeDefined();
+  const query = new URL(win.href).searchParams;
+  expect(Number(query.get('lat'))).toBe(map().getCenter().lat);
+  expect(Number(query.get('lon'))).toBe(map().getCenter().lng);
+  expect(replace).toHaveBeenCalledOnce();
+  expect(push).not.toHaveBeenCalled();
+});
+
+it.each(['pointerenter', 'focus', 'pointerdown'])('prepares a layer on %s while preserving the displayed selection', async event => {
+  await start();
+  await selectFrame(1);
+  const active = sourceId();
+  ui('ref-msl').dispatchEvent(new Event(event));
+  const standby = [...map().layers.values()].find(layer => layer.source?.startsWith('av-overlay-') && layer.paint?.['raster-opacity'] === 0)!;
+  expect((map().getSource(standby.source!) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-msl/');
+  expect(sourceId()).toBe(active);
+  expect(ui('ref-agl').className).toContain('is-selected');
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  expect(sourceId()).toBe(standby.source);
 });
 
 it('keeps the incomplete-map warning until every failed tile recovers or leaves the viewport', async () => {
@@ -435,7 +588,7 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
 it('labels the map clock as longitude time alongside UTC', async () => {
   win.href = 'http://localhost:5173/?lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
   await start();
-  expect(ui('timestamp').textContent).toBe('05:00 longitude time (UTC−01:00) · 06:00 UTC');
+  expect(ui('timestamp').textContent).toBe('Selected · 05:00 longitude time (UTC−01:00) · 06:00 UTC');
 });
 
 it('uses the default camera when a shared URL has an invalid latitude', async () => {
@@ -741,6 +894,46 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });
 
+it('keeps point selection current while skipping redraws for unchanged overlay status', async () => {
+  const windgram = await import('@av/windgram');
+  const render = windgram.renderPointWindgram;
+  const update = vi.fn<ReturnType<typeof render>>();
+  vi.spyOn(windgram, 'renderPointWindgram').mockImplementation((...args) => {
+    update.mockImplementation(render(...args));
+    return update;
+  });
+  await start();
+  Object.assign(map(), { coveringTiles: () => [{}] });
+  map().emit('resize');
+  fetchMock.mockImplementation(async input => sample(input));
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  ui('ref-agl').dispatchEvent(new Event('click'));
+  update.mockClear();
+  const tile = {};
+  map().emit('error', { sourceId: sourceId(), tile });
+  map().emit('sourcedata', { sourceId: sourceId(), tile });
+  expect(update).not.toHaveBeenCalled();
+  ui('point-units').value = 'imperial';
+  ui('point-units').dispatchEvent(new Event('change'));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update.mock.calls[0][1]).toBe('imperial');
+  await selectFrame(1);
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  await selectFrame(2);
+  update.mockClear();
+  ui('time').value = '1';
+  ui('time').dispatchEvent(new Event('input'));
+  expect(update).toHaveBeenCalledOnce();
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[2].id);
+  await Promise.resolve();
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  ui('point-close').dispatchEvent(new Event('click'));
+  update.mockClear();
+  await selectFrame(2);
+  expect(update).not.toHaveBeenCalled();
+});
+
 it('shows the map lift pair while the selected native profile is pending', async () => {
   const build = fixtureProfileBuild(), published = build.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
@@ -862,7 +1055,7 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
   expect(ui('point-horizon-label').hidden).toBe(true);
   await selectFrame(0);
   const first = sourceId();
-  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render');
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
   await selectFrame(39);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   try {
@@ -924,7 +1117,7 @@ it('labels the displayed raster through pending, failed and successful point-tim
   const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
   expect(time.textContent).toContain(`Point: ${stamp(0)} UTC · Map: unavailable`);
   const first = sourceId();
-  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render');
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
   await selectFrame(1);
   const pending = [...map().layers.keys()].find(id => id !== first)!;
@@ -936,7 +1129,7 @@ it('labels the displayed raster through pending, failed and successful point-tim
   await selectFrame(2);
   const replacement = [...map().layers.keys()].find(id => id !== first)!;
   expect(time.textContent).toBe(`Point: ${stamp(2)} UTC · Map: ${stamp(0)} UTC`);
-  map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render');
+  map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(2)} UTC`);
   const previous = new URL(win.href);
   previous.searchParams.set('t', published.frames[0].validTime);
@@ -945,6 +1138,6 @@ it('labels the displayed raster through pending, failed and successful point-tim
   expect(time.textContent).toBe(`Point: ${stamp(0)} UTC · Map: ${stamp(2)} UTC`);
   await Promise.resolve();
   const restored = [...map().layers.keys()].find(id => id !== replacement)!;
-  map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render');
+  map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render'); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
 });
