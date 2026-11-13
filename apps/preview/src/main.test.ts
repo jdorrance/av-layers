@@ -12,6 +12,7 @@ import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } fro
 class Element extends EventTarget {
   children: Element[] = [];
   style: Record<string, string> = {};
+  dataset: Record<string, string> = {};
   textContent = '';
   innerHTML = '';
   className = '';
@@ -587,7 +588,7 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
 it('labels the map clock as longitude time alongside UTC', async () => {
   win.href = 'http://localhost:5173/?lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
   await start();
-  expect(ui('timestamp').textContent).toBe('05:00 longitude time (UTC−01:00) · 06:00 UTC');
+  expect(ui('timestamp').textContent).toBe('Selected · 05:00 longitude time (UTC−01:00) · 06:00 UTC');
 });
 
 it('uses the default camera when a shared URL has an invalid latitude', async () => {
