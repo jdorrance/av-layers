@@ -262,7 +262,9 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
       })) throw new Error('Forecast plan coverage changed');
   const identity = await buildIdentity(product, plan.coverageHash, { wholeDomain:
     { k: prepared.plan.k, nativeCoverageHash: prepared.native.hash, fineCoverageHash: prepared.fine.hash, fineGridHash: prepared.fine.descriptor.gridHash, terrain: prepared.terrain } });
-  if (!same(plan.recipe, identity.recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
+  // Receipt-only resume can cross unrelated commits; producer content and dirty state stay pinned.
+  const recipe = resume ? { ...identity.recipe, sourceRevision: plan.recipe.sourceRevision } : identity.recipe;
+  if (!same(plan.recipe, recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
   return { plan, prepared, identity, product };
 }
 
