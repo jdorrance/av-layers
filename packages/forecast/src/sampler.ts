@@ -77,7 +77,7 @@ function quadOffsets(field: GridField, width: number) {
  * Keep both the weight products and the accumulation order identical to reduceCells.
  * Missing contributors, invalid flags and non-finite values use that reference path.
  */
-function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample): boolean {
+function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): boolean {
   const { flags, values } = field;
   const fa = flags[a], fb = flags[b], fc = flags[c], fd = flags[d], combined = fa | fb | fc | fd;
   if ((combined & STATUS_MASK) >= STATUS_UNAVAILABLE || (!spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0)
@@ -85,16 +85,16 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
   let va = values[a], vb = values[b], vc = values[c], vd = values[d];
   if (!Number.isFinite(va) || !Number.isFinite(vb) || !Number.isFinite(vc) || !Number.isFinite(vd)) return false;
   out.support = combined & SUPPORT_MASK; out.interpolated = true;
-  if ((fa & fb & fc & fd & STATUS_MASK) === STATUS_NO_LIFT) {
+  if (!retainNoLiftValue && (fa & fb & fc & fd & STATUS_MASK) === STATUS_NO_LIFT) {
     out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
   }
   const left = 1 - fx, top = 1 - fy;
-  let w00 = top * left, w10 = top * fx, w01 = fy * left, w11 = fy * fx;
+  let w00 = top * left, w10 = top * fx, w01 = fy * left, w11 = fy * fx, noLiftWeight = 0;
   if (spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0) {
     const na = (fa & STATUS_MASK) === STATUS_NO_LIFT, nb = (fb & STATUS_MASK) === STATUS_NO_LIFT;
     const nc = (fc & STATUS_MASK) === STATUS_NO_LIFT, nd = (fd & STATUS_MASK) === STATUS_NO_LIFT;
-    const noLiftWeight = (na ? w00 : 0) + (nb ? w10 : 0) + (nc ? w01 : 0) + (nd ? w11 : 0);
-    if (noLiftWeight > 0.5) {
+    noLiftWeight = (na ? w00 : 0) + (nb ? w10 : 0) + (nc ? w01 : 0) + (nd ? w11 : 0);
+    if (!retainNoLiftValue && noLiftWeight > 0.5) {
       out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
     }
     if (!useStoredMslNoLift && !spec.zeroOnNoLiftInterpolation) {
@@ -116,11 +116,11 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
   value += vb * w10;
   value += vc * w01;
   value += vd * w11;
-  out.value = value; out.status = STATUS_VALID;
+  out.value = value; out.status = noLiftWeight > 0.5 ? STATUS_NO_LIFT : STATUS_VALID;
   return true;
 }
 
-function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample): void {
+function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): void {
   const { values, flags, weights, rows, columns } = cells;
   let missing = false, finite = true, allNoLift = true, support = 0, noLiftWeight = 0;
   for (let i = 0; i < count; i++) {
@@ -141,20 +141,22 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
       if (better) nearest = i;
     }
     const flag = flags[nearest], status = flag & STATUS_MASK;
-    if (status === STATUS_VALID && !Number.isFinite(values[nearest])) throw new RangeError('valid cell has non-finite value');
-    out.value = status === STATUS_VALID ? values[nearest] : status === STATUS_NO_LIFT ? spec.noLiftSampleValue : null;
+    const retain = status === STATUS_VALID || retainNoLiftValue && status === STATUS_NO_LIFT;
+    if (retain && !Number.isFinite(values[nearest])) throw new RangeError('known cell has non-finite value');
+    out.value = retain ? values[nearest] : status === STATUS_NO_LIFT ? spec.noLiftSampleValue : null;
     out.status = status; out.support = flag & SUPPORT_MASK; out.interpolated = false;
     return;
   }
   if (!finite) throw new RangeError('known cell has non-finite value');
   if (count === 1) {
     const status = flags[0] & STATUS_MASK;
-    out.value = status === STATUS_VALID ? values[0] : spec.noLiftSampleValue;
+    out.value = status === STATUS_VALID || retainNoLiftValue ? values[0] : spec.noLiftSampleValue;
     out.status = status; out.support = support; out.interpolated = false;
     return;
   }
   out.support = support; out.interpolated = true;
-  if (spec.supportsNoLift && (allNoLift || noLiftWeight > 0.5)) { out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return; }
+  const noLift = spec.supportsNoLift && (allNoLift || noLiftWeight > 0.5);
+  if (noLift && !retainNoLiftValue) { out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return; }
   const renormalizeMsl = !useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation && count === 4 && noLiftWeight > 0;
   const validWeight = 1 - noLiftWeight;
   let value = 0;
@@ -166,7 +168,7 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
       value += (spec.zeroOnNoLiftInterpolation && isNoLift ? 0 : values[i]) * weights[i];
     }
   }
-  out.value = value; out.status = STATUS_VALID;
+  out.value = value; out.status = noLift ? STATUS_NO_LIFT : STATUS_VALID;
 }
 
 interface LocatedCell { column: number; row: number; fractionX: number; fractionY: number }
@@ -284,7 +286,8 @@ export interface PreparedGridSampling {
   readonly width: number;
   readonly height: number;
   readonly contributors: Uint32Array;
-  bind(field: GridField, layer: LayerId | LayerSpec, useStoredMslNoLift: boolean): (x: number, y: number, out: Sample) => void;
+  /** Retain stored no-lift MSL heights for rendering; public samples keep their descriptor value. */
+  bind(field: GridField, layer: LayerId | LayerSpec, useStoredMslNoLift: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
 }
 
 export interface PreparedGridAxis {
@@ -381,9 +384,10 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   const contributors = Uint32Array.from(contributorSet);
   return {
     width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift) {
+    bind(field, layer, useStoredMslNoLift, retainNoLiftMsl = false) {
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
+      const retainNoLiftValue = retainNoLiftMsl && useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
       const packed = 'coverage' in field;
       const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
@@ -394,11 +398,11 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
         if (fx !== 0 && fy !== 0) {
           const r0 = rows.lower[y] * grid.width, r1 = rows.upper[y] * grid.width, c0 = columns.lower[x], c1 = columns.upper[x];
           if (!packed) {
-            if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, useStoredMslNoLift, out)) return;
+            if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
           } else {
             const start = quads!.locate(r0, c0, r1, c1), offsets = quads!.offsets;
             cachedQuad = start;
-            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out)) return;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
           }
         }
         let count = 0;
@@ -410,7 +414,7 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
           scratch.weights[count] = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
           scratch.rows[count] = row; scratch.columns[count] = column; count++;
         }
-        reduceCells(scratch, count, spec, useStoredMslNoLift, out);
+        reduceCells(scratch, count, spec, useStoredMslNoLift, out, retainNoLiftValue);
       };
     }
   };
@@ -538,9 +542,10 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
   return {
     width, height: total / width, contributors,
     byteLength: total * (2 * Uint32Array.BYTES_PER_ELEMENT + 2 * Float64Array.BYTES_PER_ELEMENT) + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift) {
+    bind(field, layer, useStoredMslNoLift, retainNoLiftMsl = false) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
+      const retainNoLiftValue = retainNoLiftMsl && useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
       const packed = 'coverage' in field;
       const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
@@ -553,11 +558,11 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
         if (fx !== 0 && fy !== 0) {
           const r0 = row * grid.width, r1 = nextRow * grid.width;
           if (!packed) {
-            if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, useStoredMslNoLift, out)) return;
+            if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
           } else {
             const start = quads!.locate(r0, column, r1, nextColumn), offsets = quads!.offsets;
             cachedQuad = start;
-            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out)) return;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
           }
         }
         let count = 0;
@@ -569,7 +574,7 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
           scratch.weights[count] = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
           scratch.rows[count] = sourceRow; scratch.columns[count] = sourceColumn; count++;
         }
-        reduceCells(scratch, count, spec, useStoredMslNoLift, out);
+        reduceCells(scratch, count, spec, useStoredMslNoLift, out, retainNoLiftValue);
       };
     }
   };

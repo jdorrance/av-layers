@@ -180,8 +180,11 @@ builds renormalize the MSL weights over valid cells in a four-cell mix. If a
 contributor is unavailable or outside the domain, the nearest contributing cell
 supplies the value and status.
 
-Tile rendering evaluates four quarter-pixel subsamples in Web Mercator. Linear
-lift palettes colour the mean valid value and scale alpha by valid coverage.
+Tile rendering evaluates four quarter-pixel subsamples in Web Mercator. MSL
+rendering retains stored ground elevation for no-lift cells and interpolates it
+with usable tops. Public samples retain their no-lift values and status. AGL
+no-lift cells and missing inputs remain transparent. Linear lift palettes colour
+the mean drawable value and scale alpha by drawable coverage.
 Other paths, including rain, average premultiplied RGBA. The renderer encodes
 lossless WebP. Render style changes the recipe identity while preserving numeric
 packs. [Layer descriptors](../packages/contracts/src/layers.ts) select palettes.

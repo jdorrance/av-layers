@@ -45,7 +45,7 @@ it('writes an admitted v5 build with a map prefix, native tail and indexed sourc
   expect(timeout).toHaveBeenCalledWith(BUILD_BUDGETS.elapsedMs);
   expect(open).toHaveBeenCalledWith(expect.objectContaining({ cacheDir, cycle: requestedCycle, signal: expect.any(AbortSignal) }));
   expect(close).toHaveBeenCalledOnce();
-  expect(manifest).toMatchObject({ cycle, mapFrameCount: 1, tool: { liftRenderStyle: 'transparent-no-lift-v2' },
+  expect(manifest).toMatchObject({ cycle, mapFrameCount: 1, tool: { liftRenderStyle: 'terrain-msl-step-v1' },
     source: { frameCount: 2, provider: 'Synthetic build test' } });
   expect(manifest.frames.map(frame => [frame.id, frame.intervalStart, frame.intervalEnd])).toEqual([
     ['f001', cycle, '2026-10-30T01:00:00.000Z'], ['f002', '2026-10-30T01:00:00.000Z', '2026-10-30T02:00:00.000Z']

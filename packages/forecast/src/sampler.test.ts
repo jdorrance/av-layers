@@ -12,6 +12,38 @@ describe('scalar sampling', () => {
     expect(sampleGrid(grid, msl, 1, 0.5, 'usable-lift-msl', undefined, true).value).toBe(255);
     expect(sampleGrid(grid, msl, 0, 0.5, 'usable-lift-msl', undefined, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
   });
+  it.each(['dense-grid', 'packed-grid', 'dense-points', 'packed-points'])('retains terrain MSL for rendering while preserving statuses and public samples (%s)', mode => {
+    const mask = { grid, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
+    const coverage = sparseCoverageFromDense({ ...grid, gridHash: 'a'.repeat(64), output: mask.output, halo: mask.halo });
+    const field = { values: Float32Array.of(100, 300, 200, 400), flags: Uint8Array.of(5, 0, 1, 0),
+      ...(mode.startsWith('packed') ? { coverage } : {}) };
+    const samplingMask = mode.startsWith('packed') ? { grid, coverage, tiles: mask.tiles, maxZoom: 0 } : mask;
+    const sample = (lat: number, lon: number, layer: 'usable-lift-msl' | 'usable-lift-agl' = 'usable-lift-msl', retain = true) => {
+      const prepared = mode.endsWith('points')
+        ? preparePointSampling(samplingMask, Float64Array.of(lat), Float64Array.of(lon))
+        : prepareGridSampling(samplingMask, Float64Array.of(lat), Float64Array.of(lon));
+      const result = { value: null as number | null, status: 3, support: 0, interpolated: false };
+      prepared.bind(field, layer, true, retain)(0, 0, result);
+      return result;
+    };
+    expect(sample(1, 0)).toEqual({ value: 100, status: STATUS_NO_LIFT, support: 4, interpolated: false });
+    expect(sample(0.5, 0)).toMatchObject({ value: 150, status: STATUS_NO_LIFT });
+    expect(sample(0.5, 0.25)).toMatchObject({ value: 200, status: STATUS_NO_LIFT, support: 4 });
+    expect(sample(0.5, 0.5)).toMatchObject({ value: 250, status: 0 });
+    expect(sample(0.5, 0.75)).toMatchObject({ value: 300, status: 0 });
+    expect(sample(0.5, 0.25, 'usable-lift-msl', false)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    expect(sampleGrid(grid, field, 0.5, 0.25, 'usable-lift-msl', undefined, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    expect(sample(0.5, 0.25, 'usable-lift-agl')).toMatchObject({ value: 0, status: STATUS_NO_LIFT });
+    field.flags.fill(STATUS_NO_LIFT);
+    expect(sample(0.5, 0.5)).toMatchObject({ value: 250, status: STATUS_NO_LIFT });
+    field.flags[1] = STATUS_UNAVAILABLE;
+    expect(sample(0.75, 0.25)).toMatchObject({ value: 100, status: STATUS_NO_LIFT, interpolated: false });
+    expect(sample(0.75, 0.75)).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
+    field.flags[1] = STATUS_OUTSIDE;
+    expect(sample(0.75, 0.75)).toMatchObject({ value: null, status: STATUS_OUTSIDE });
+    field.values[0] = NaN;
+    expect(() => sample(0.75, 0.25)).toThrow('known cell has non-finite value');
+  });
   it('ignores zero-weight neighbors and snaps close to nodes', () => {
     const field = { values: Float32Array.of(4, NaN, NaN, NaN), flags: Uint8Array.of(0, 2, 2, 2) };
     expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'precip-rate', undefined, false)).toMatchObject({ value: 4, interpolated: false });

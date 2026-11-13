@@ -2,6 +2,7 @@ import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
+import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
@@ -202,17 +203,20 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   expect(sourceId()).toBeDefined();
 });
 
-it('explains clear areas and MSL terrain using the displayed build cutoff', async () => {
+it.each([LIFT_STEP_RENDER_STYLE, LIFT_RENDER_STYLE, 'transparent-no-lift-v2', undefined])('explains the displayed MSL render style %s and cutoff', async style => {
   const method = manifest.descriptors.layers['usable-lift-msl'].methodId;
   manifest.descriptors.methods[method].parameters.sinkRateMps = 1.8;
+  manifest.tool.liftRenderStyle = style;
   await start();
   expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (m AGL)')).toBe(true);
+  expect(ui('legend-no-lift').textContent).toBe('No usable lift: clear areas on the map.');
   ui('ref-msl').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(visit(ui('legend-body')).some(node => node.textContent === 'Top of usable lift (m MSL)')).toBe(true));
   expect(ui('legend-reference').textContent).toContain('MSL includes ground elevation. Choose AGL');
   expect(ui('legend-cutoff').textContent).toContain('predicted updrafts above 1.8 m/s');
-  expect(ui('legend-no-lift').style.background)
-    .toBe(manifest.descriptors.palettes.find(palette => palette.id === 'lift')?.noLiftColor);
+  expect(ui('legend-no-lift').textContent).toBe(style === LIFT_STEP_RENDER_STYLE || style === LIFT_RENDER_STYLE
+    ? 'No usable lift: the map shows ground elevation, including at night.'
+    : 'No usable lift: clear areas on the map.');
   ui('legend-key').open = true;
   ui('legend-key-toggle').focus();
   const tile = {};

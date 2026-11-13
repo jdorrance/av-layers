@@ -97,7 +97,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .ribbon-key-body { position: absolute; right: calc(100% + 6px); bottom: 0; width: min(220px, calc(100vw - 110px)); max-height: 50dvh; overflow: auto; padding: 10px; background: #fffffff2; border: 1px solid #d9e2e7; border-radius: 4px; }
 .ribbon-key p { margin: 0 0 8px; }
 .ribbon-key p:last-child { margin-bottom: 0; }
-.ribbon-no-lift { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 1px solid #687582; vertical-align: -2px; }
 
 .ribbon-title {
   margin: 0;
