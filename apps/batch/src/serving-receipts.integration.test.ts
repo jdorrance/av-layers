@@ -6,6 +6,7 @@ import { manifestV5Schema, type ProductDefinition } from '@av/contracts';
 import { syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
 import { CYCLE, cleanupTemporaryRoots, fixtureProvider, mask, product, PublicationStore, readManifest, temporaryRoot } from '../parallel-fixtures.js';
 import { buildShard, createBuildPlan, finalizeBuild, verifyBuildReceipts, type WholeDomainReceipt } from './parallel.js';
+import * as identity from './identity.js';
 
 // Force multiple serving shards on the small grid to exercise the HEAD limit.
 vi.mock('@av/forecast', async importOriginal => {
@@ -79,6 +80,46 @@ it.each(['complete', 'failure', 'abort'] as const)('bounds serving receipt HEADs
     await running?.catch(() => {});
   }
 }, 60_000);
+
+it('resumes identical producer receipts across commits while workers and finalizers keep their revision pin', async () => {
+  const { inputs, plan, manifest } = receiptFixture;
+  const originalPlan = await readFile(join(inputs.out, 'plan.json'));
+  const originalManifest = structuredClone(manifest), originalIdentity = identity.buildIdentity;
+  const currentRevision = 'b'.repeat(40);
+  expect(currentRevision).not.toBe(plan.recipe.sourceRevision);
+  const current = vi.spyOn(identity, 'buildIdentity').mockImplementation(async (...args) => {
+    const result = await originalIdentity(...args);
+    return { ...result, recipe: { ...result.recipe, sourceRevision: currentRevision } };
+  });
+  const open = vi.spyOn(inputs.provider, 'open'), put = vi.spyOn(inputs.store, 'put');
+  try {
+    await expect(verifyBuildReceipts(inputs.out, manifest, inputs.store, undefined, inputs)).resolves.not.toHaveLength(0);
+    expect(manifest).toEqual(originalManifest);
+    expect(await readFile(join(inputs.out, 'plan.json'))).toEqual(originalPlan);
+    expect(await readManifest(join(inputs.out, 'builds', plan.model, plan.buildId, 'manifest.json'))).toEqual(originalManifest);
+    await expect(buildShard({ ...inputs, plan, shard: 0 })).rejects.toThrow('recipe or source revision changed');
+    await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('recipe or source revision changed');
+    expect(open).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  } finally { current.mockRestore(); open.mockRestore(); put.mockRestore(); }
+});
+
+it.each(['hash', 'sourceDirty', 'lockHash', 'id', 'source'] as const)('rejects changed producer %s during cross-commit receipt resume', async field => {
+  const { inputs, manifest } = receiptFixture, originalIdentity = identity.buildIdentity;
+  const current = vi.spyOn(identity, 'buildIdentity').mockImplementation(async (...args) => {
+    const result = await originalIdentity(...args), recipe = { ...result.recipe, sourceRevision: 'b'.repeat(40) };
+    if (field === 'sourceDirty') recipe.sourceDirty = !recipe.sourceDirty;
+    else if (field === 'source') recipe.source = { ...recipe.source, configurationId: `${recipe.source.configurationId}-changed` };
+    else if (field === 'id') recipe.id += '-changed';
+    else recipe[field] = recipe[field] === '0'.repeat(64) ? '1'.repeat(64) : '0'.repeat(64);
+    return { ...result, recipe };
+  });
+  const put = vi.spyOn(inputs.store, 'put');
+  try {
+    await expect(verifyBuildReceipts(inputs.out, manifest, inputs.store, undefined, inputs)).rejects.toThrow('recipe or source revision changed');
+    expect(put).not.toHaveBeenCalled();
+  } finally { current.mockRestore(); put.mockRestore(); }
+});
 
 it('rejects prebranch g-key receipts during finalize and receipt-only resume before payload mutation', async () => {
   const sealed = receiptFixture, out = await temporaryRoot(), store = new PublicationStore();
