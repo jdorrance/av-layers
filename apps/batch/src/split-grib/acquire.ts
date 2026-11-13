@@ -334,6 +334,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     const selected = indices ?? (source.upstream.nativeGrid ? (await getNativeMapping()).indices : activeIndices);
     const url = splitGribFieldUrl(source, field, cycle, { hour, level, baseUrl });
     const normalization = source.specs[field]!.normalization;
+    const native = source.upstream.nativeGrid;
+    const coordinateLimit = field === native?.latitude.field ? 90 : field === native?.longitude.field ? 180 : null;
     const { decoded, compressedBytes, sha256, cacheHit } = await loadSplitGribField(
       url,
       options.cacheDir,
@@ -342,6 +344,11 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       bytes => {
         const decoded = decodeSplitGribField(source, bytes, selected, target);
         verifySplitGribFieldMetadata(source, decoded, field, cycle, { hour, level });
+        if (coordinateLimit !== null) for (let i = 0; i < decoded.values.length; i++) {
+          if (decoded.missing[i] || !Number.isFinite(decoded.values[i]) || Math.abs(decoded.values[i]!) > coordinateLimit) {
+            throw new Error(`Invalid native coordinate ${field} at cell ${selected[i]}`);
+          }
+        }
         return decoded;
       }
     );
@@ -366,7 +373,6 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     const indices = Uint32Array.from({ length: native.pointCount }, (_, i) => i);
     const latitude = await loadDecodedField(native.latitude.field, 0, null, undefined, indices);
     const longitude = await loadDecodedField(native.longitude.field, 0, null, undefined, indices);
-    if (latitude.decoded.missing.some(Boolean) || longitude.decoded.missing.some(Boolean)) throw new Error('Missing native grid coordinates');
     signal.throwIfAborted();
     const mapping = prepareNativeMapping(source.grid, activeIndices, latitude.decoded.values, longitude.decoded.values);
     return { indices: mapping, receipts: [latitude.receipt, longitude.receipt], sha256: sha256Hex(new Uint8Array(mapping.buffer)) };

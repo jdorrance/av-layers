@@ -266,6 +266,7 @@ export function decodeSplitGribField(source: SplitSource,
   const codedValueCount = s5View.getUint32(5, false);
   if (codedValueCount > pointCount) throw new Error('GRIB2 coded value count exceeds grid point count');
   const drt = s5View.getUint16(9, false);
+  if (drt !== 0 && drt !== 42) throw new Error(`Unsupported Split GRIB data representation template 5.${drt}`);
   const referenceValue = s5View.getFloat32(11, false);
   const binaryScaleFactor = readSigned16(s5View, 15);
   const decimalScaleFactor = readSigned16(s5View, 17);

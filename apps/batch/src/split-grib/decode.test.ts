@@ -165,6 +165,36 @@ it('rejects oversized native point counts before allocation', () => {
   expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
 });
 
+it('rejects unsupported native packing before allocating or entering complex group loops', () => {
+  const base = nativeField(simpleField(0, 0, [250, 250, 250, 250]));
+  const section5Offset = 16 + 21 + 35 + 34, section5 = new Uint8Array(49), view = new DataView(section5.buffer);
+  section5.set(base.subarray(section5Offset, section5Offset + 21)); view.setUint32(0, section5.length);
+  section5[21] = 1; view.setUint32(31, 0xffffffff); section5[47] = 1;
+  const message = new Uint8Array(base.length + section5.length - 21);
+  message.set(base.subarray(0, section5Offset)); message.set(section5, section5Offset);
+  message.set(base.subarray(section5Offset + 21), section5Offset + section5.length);
+  new DataView(message.buffer).setBigUint64(8, BigInt(message.length));
+  // Zero-length groups consume no payload, so an unguarded decoder loops billions of times.
+  const source = `
+    import assert from 'node:assert/strict';
+    import { decodeSplitGribField } from ${JSON.stringify(new URL('./grib.ts', import.meta.url).href)};
+    import { SPLIT_PRODUCT } from ${JSON.stringify(new URL('../../../../tests/model-fixtures.ts', import.meta.url).href)};
+    import { splitSource } from ${JSON.stringify(new URL('./source.ts', import.meta.url).href)};
+    const profile = splitSource(SPLIT_PRODUCT);
+    profile.upstream.nativeGrid = ${JSON.stringify(nativeGrid)};
+    const bytes = Buffer.from(${JSON.stringify([...message])});
+    for (const name of ['Float32Array', 'Float64Array']) globalThis[name] = new Proxy(globalThis[name], {
+      construct() { throw new Error('unexpected value allocation before packing validation'); }
+    });
+    for (const drt of [2, 3, 40]) {
+      bytes.writeUInt16BE(drt, ${section5Offset + 9});
+      assert.throws(() => decodeSplitGribField(profile, bytes, Uint32Array.of(0)),
+        { message: 'Unsupported Split GRIB data representation template 5.' + drt });
+    }
+  `;
+  expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
+});
+
 it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning mode %s', scanningMode => {
   const active = Uint32Array.of(0, 1, 2, 3), values = [300, 301, 280, 281];
   for (const bits of [8, 16] as const) {

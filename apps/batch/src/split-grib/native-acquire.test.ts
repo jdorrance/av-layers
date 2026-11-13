@@ -27,6 +27,10 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(p
 async function cacheDirectory() {
   const path = await mkdtemp(join(tmpdir(), 'native-acquire-')); directories.push(path); return path;
 }
+function coordinateCachePath(cacheDir: string, field: string) {
+  const url = splitGribFieldUrl(source, field, cycle), hash = createHash('sha256').update(url).digest('hex').slice(0, 16);
+  return join(cacheDir, 'objects', `${hash}-PT000H00M.grib2`);
+}
 
 type Request = { field: string; hour: number; level: number | null };
 function request(url: string): Request {
@@ -130,17 +134,35 @@ it('maps whole columns and statistical companions into shared targets and replay
   } finally { await offline.close(); }
 });
 
-it.each(['coordinate parameter', 'coordinate missingness', 'weather grid UUID'] as const)('rejects inconsistent %s before returning a frame', async failure => {
+it.each(['coordinate parameter', 'weather grid UUID'] as const)('rejects inconsistent %s before returning a frame', async failure => {
   const cacheDir = await cacheDirectory();
   const fetchImpl = transport((selected, bytes) => {
     if (failure === 'coordinate parameter' && selected.field === 'CLAT') bytes[16 + 21 + 35 + 10] = 2;
-    if (failure === 'coordinate missingness' && selected.field === 'CLAT') return fieldBytes(source.specs.CLAT!, selected, [49.9375, null, 49.9375, 50]);
     if (failure === 'weather grid UUID' && selected.field === 'T') bytes[16 + 21 + 19]! ^= 1;
     return bytes;
   });
   const session = await createSplitGribAcquisitionSession(source, { cycle, activeIndices, cacheDir, fetchImpl });
-  try { await expect(session.acquire(3)).rejects.toThrow(failure === 'coordinate parameter' ? /parameter\/template mismatch/ : failure === 'coordinate missingness' ? /coordinate/ : /native grid identity mismatch/); }
+  try { await expect(session.acquire(3)).rejects.toThrow(failure === 'coordinate parameter' ? /parameter\/template mismatch/ : /native grid identity mismatch/); }
   finally { await session.close(); }
+});
+
+it.each([
+  { failure: 'missing latitude', field: 'CLAT', data: [49.9375, null, 49.9375, 50] },
+  { failure: 'latitude range', field: 'CLAT', data: [91, 91, 91, 91] },
+  { failure: 'longitude range', field: 'CLON', data: [181, 181, 181, 181] }
+])('rejects $failure before caching and retries corrected coordinates in the same session', async ({ field, data }) => {
+  const cacheDir = await cacheDirectory();
+  let invalid = true;
+  const fetchImpl = transport((selected, bytes) => invalid && selected.field === field
+    ? fieldBytes(source.specs[field]!, selected, data) : bytes);
+  const session = await createSplitGribAcquisitionSession(source, { cycle, activeIndices, cacheDir, fetchImpl });
+  try {
+    await expect(session.acquire(3)).rejects.toThrow(/Invalid native coordinate/);
+    await expect(readFile(coordinateCachePath(cacheDir, field))).rejects.toMatchObject({ code: 'ENOENT' });
+    invalid = false;
+    expect([...(await session.acquire(3)).terrainM]).toEqual([110, 130, 120, 100]);
+    expect(fetchImpl.mock.calls.filter(([url]) => request(String(url)).field === field)).toHaveLength(2);
+  } finally { await session.close(); }
 });
 
 it('carries a native bitmap through the donor map and pairs missing wind components', async () => {
@@ -157,13 +179,15 @@ it('carries a native bitmap through the donor map and pairs missing wind compone
   } finally { await session.close(); }
 });
 
-it('rejects a corrupt cached coordinate offline and repairs it through the normal loader', async () => {
+it.each(['UUID', 'missingness', 'range'] as const)('rejects cached coordinate %s offline and repairs it through the normal loader', async failure => {
   const cacheDir = await cacheDirectory(), fetchImpl = transport();
   const session = await createSplitGribAcquisitionSession(source, { cycle, activeIndices, cacheDir, fetchImpl });
   try { await session.acquire(3); } finally { await session.close(); }
-  const url = splitGribFieldUrl(source, 'CLON', cycle), hash = createHash('sha256').update(url).digest('hex').slice(0, 16);
-  const path = join(cacheDir, 'objects', `${hash}-PT000H00M.grib2`), bytes = await readFile(path);
-  bytes[16 + 21 + 19]! ^= 1; await writeFile(path, bytes);
+  const path = coordinateCachePath(cacheDir, 'CLON');
+  const bytes = failure === 'UUID' ? await readFile(path)
+    : fieldBytes(source.specs.CLON!, { field: 'CLON', level: null, hour: 0 }, failure === 'missingness' ? [10.0625, null, 10, 10.0625] : [181, 181, 181, 181]);
+  if (failure === 'UUID') bytes[16 + 21 + 19]! ^= 1;
+  await writeFile(path, bytes);
   fetchImpl.mockClear();
   const offline = await createSplitGribAcquisitionSession(source, { cycle, activeIndices, cacheDir, fetchImpl, offline: true });
   try { await expect(offline.acquire(3)).rejects.toThrow(/offline cache miss or invalid object.*CLON/); }
