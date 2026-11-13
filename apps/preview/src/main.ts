@@ -2,7 +2,7 @@ import { renderBuildDiagnostics } from '@av/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import type { LayerId } from '@av/contracts/layers';
+import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
@@ -274,7 +274,8 @@ function startPreview(): void {
     ribbon = { build: displayedBuild, layer };
     const title = document.createElement('p');
     title.className = 'ribbon-title';
-    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m)' : 'Top of usable lift (m)';
+    const descriptor = displayedBuild.manifest.descriptors.layers[layer];
+    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m AGL)' : 'Top of usable lift (m MSL)';
     const scale = document.createElement('div');
     scale.className = 'ribbon-scale';
     const colorCount = palette.colors.length;
@@ -296,6 +297,19 @@ function startPreview(): void {
     const body = document.createElement('div');
     body.className = 'ribbon-main';
     body.append(title, scale);
+    element<HTMLParagraphElement>('legend-reference').textContent = layer === 'usable-lift-agl'
+      ? 'AGL shows usable lift height above ground.'
+      : 'MSL includes ground elevation. Choose AGL to see usable lift height above ground.';
+    const renderStyle = displayedBuild.manifest.tool.liftRenderStyle;
+    const terrainNoLift = layer === 'usable-lift-msl'
+      && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE);
+    element<HTMLParagraphElement>('legend-no-lift').textContent = terrainNoLift
+      ? 'No usable lift: the map shows ground elevation, including at night.'
+      : 'No usable lift: clear areas on the map.';
+    const sink = displayedBuild.manifest.descriptors.methods[descriptor.methodId]?.parameters.sinkRateMps;
+    element<HTMLParagraphElement>('legend-cutoff').textContent = Number.isFinite(sink) && sink > 0
+      ? `Usable lift requires predicted updrafts above ${sink} m/s. Nearby terrain can cross this cutoff.`
+      : 'Usable lift depends on the predicted updraft and terrain.';
     legendBody.replaceChildren(body);
   }
 

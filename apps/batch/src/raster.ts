@@ -1,5 +1,5 @@
 import { performance } from 'node:perf_hooks';
-import { compilePaletteColor, LAYERS, layerPalette, paletteBinIndex, paletteInterpolation, PALETTES, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
+import { compilePaletteColor, LAYERS, layerPalette, paletteBinIndex, paletteInterpolation, PALETTES, samplePaletteColorInto, samplePaletteValueInto, STATUS_MASK, STATUS_NO_LIFT, STATUS_VALID, type LayerId, type PaletteColorMode, type PaletteColorTable } from '@av/contracts';
 import { fieldOffset, prepareGridAxis, prepareGridSampling, QUAD_OFFSETS, type GridField, type PreparedGridAxis, type PreparedGridSampling, type Sample, type SamplingMask } from '@av/forecast';
 
 export interface RasterPixels { rgba: Uint8Array; blank: boolean }
@@ -47,6 +47,11 @@ function preparedTileGeometry(mask: SamplingMask, z: number, x: number, y: numbe
   return prepareGridSampling(mask, latitudeCoordinates(z, y), longitudeCoordinates(z, x));
 }
 
+// No-lift MSL stores terrain height; colouring it leaves the forecast status unchanged.
+function colorStatus(layer: LayerId, status: number): number {
+  return layer === 'usable-lift-msl' && (status & STATUS_MASK) === STATUS_NO_LIFT ? STATUS_VALID : status;
+}
+
 function samplePixel(
   sampleInto: (x: number, y: number, out: Sample) => void,
   sample: Sample,
@@ -62,7 +67,7 @@ function samplePixel(
     let valueSum = 0, validCount = 0;
     for (const [dx, dy] of QUAD_OFFSETS) {
       sampleInto(px * 2 + dx, py * 2 + dy, sample);
-      if (paletteBinIndex(layer, sample.value, sample.status, palette.colorCount) >= 0) {
+      if (paletteBinIndex(layer, sample.value, colorStatus(layer, sample.status), palette.colorCount) >= 0) {
         valueSum += sample.value as number;
         validCount++;
       }
@@ -80,7 +85,7 @@ function samplePixel(
   let r = 0, g = 0, b = 0, alpha = 0;
   for (const [dx, dy] of QUAD_OFFSETS) {
     sampleInto(px * 2 + dx, py * 2 + dy, sample);
-    samplePaletteColorInto(palette, layer, sample.value, sample.status, color, 0);
+    samplePaletteColorInto(palette, layer, sample.value, colorStatus(layer, sample.status), color, 0);
     const opacity = color[3];
     if (!opacity) continue;
     r += color[0] * opacity; g += color[1] * opacity; b += color[2] * opacity; alpha += opacity;
@@ -95,12 +100,12 @@ function samplePixel(
 
 function raster(field: GridField, mask: SamplingMask, prepared: PreparedGridSampling, layer: LayerId, palette: PaletteColorTable): RasterPixels {
   const rgba = new Uint8Array(256 * 256 * 4);
-  const sampleInto = prepared.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift);
+  const sampleInto = prepared.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift, layer === 'usable-lift-msl');
   const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
   if (!prepared.contributors.some(idx => {
     let offset: number;
     try { offset = fieldOffset(field, idx, mask.grid.width); } catch { return false; }
-    return paletteBinIndex(layer, field.values[offset], field.flags[offset], palette.colorCount) >= 0
+    return paletteBinIndex(layer, field.values[offset], colorStatus(layer, field.flags[offset]), palette.colorCount) >= 0
       || noLiftVisible && (field.flags[offset] & STATUS_MASK) === STATUS_NO_LIFT;
   })) {
     return { rgba, blank: true };

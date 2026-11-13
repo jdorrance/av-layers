@@ -14,8 +14,8 @@ export type SampleStatus = (typeof SAMPLE_STATUSES)[number];
 
 export const LIFT_EDGES = [0,300,600,900,1200,1500,1850,2150,2450,2750,3050,3350,3650,3950,4250,4550,4900,5200,5500,5800,6100,6400,6700] as const;
 export const LIFT_COLORS = ['#55184d','#b93b88','#8f7fac','#62cbff','#0168ff','#00345d','#036d00','#35cd34','#9dff64','#fefa02','#cbc939','#d59b99','#d3595a','#f92d2d','#9b0900','#d87400','#ffa50b','#f1cd5d','#a6a7a9','#516565','#1c4f4f','#003333'] as const;
-export const LIFT_STEP_RENDER_STYLE = 'transparent-no-lift-v2' as const;
-export const LIFT_RENDER_STYLE = 'continuous-lift-rgb-v1' as const;
+export const LIFT_STEP_RENDER_STYLE = 'terrain-msl-step-v1' as const;
+export const LIFT_RENDER_STYLE = 'terrain-msl-linear-rgb-v1' as const;
 export const RAIN_EDGES = [0.1,0.5,1,2,5,10,20,50] as const;
 export const RAIN_COLORS = ['#b9e5ff','#66b3ff','#2d78d2','#36a657','#f0dc43','#f09b32','#dc493c','#963f9c'] as const;
 export const PALETTE_INTERPOLATIONS = ['step', 'linear-rgb'] as const;

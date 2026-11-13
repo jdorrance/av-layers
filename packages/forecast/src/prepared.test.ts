@@ -130,7 +130,7 @@ describe('prepared grid sampling parity', () => {
     expect(fiveCellResult).toMatchObject({ status: 0, interpolated: true });
     expect(fiveCellResult.value).toBeCloseTo(0, 15);
     expect(() => sampleCells(plan, [{ value: '1' as unknown as number, flags: 0 }, ...Array.from({ length: 4 }, () => ({ value: 1, flags: 0 }))], 'usable-lift-msl', true)).toThrow('known cell has non-finite value');
-    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: NaN, flags: 2 }, { value: 1, flags: 4 }, { value: 0, flags: 1 }, { value: 3, flags: 0 }], 'usable-lift-msl', true)).toThrow('valid cell has non-finite value');
+    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: NaN, flags: 2 }, { value: 1, flags: 4 }, { value: 0, flags: 1 }, { value: 3, flags: 0 }], 'usable-lift-msl', true)).toThrow('known cell has non-finite value');
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
     const prepared = prepareGridSampling(maskFor(grid), Float64Array.of(1), Float64Array.of(0));
     expect(() => prepared.bind({ values: new Float32Array(1), flags: new Uint8Array(1) }, 'precip-rate', false)).toThrow('field size differs from grid');

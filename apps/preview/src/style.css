@@ -86,11 +86,17 @@ button:disabled { opacity: 0.45; cursor: default; }
   pointer-events: none;
 }
 
-.ribbon.is-collapsed #legend-body { display: none; }
+.ribbon.is-collapsed #legend-body, .ribbon.is-collapsed .ribbon-key { display: none; }
 
 .ribbon.is-collapsed #legend-toggle { margin-right: 0; }
 
 .ribbon-main { display: flex; gap: 3px; align-items: stretch; height: 232px; pointer-events: none; }
+
+.ribbon-key { position: relative; margin-top: 6px; color: #2c3640; font-size: 12px; line-height: 1.4; pointer-events: auto; background: #fffffff2; border-radius: 4px; padding: 4px 6px; }
+.ribbon-key summary { cursor: pointer; }
+.ribbon-key-body { position: absolute; right: calc(100% + 6px); bottom: 0; width: min(220px, calc(100vw - 110px)); max-height: 50dvh; overflow: auto; padding: 10px; background: #fffffff2; border: 1px solid #d9e2e7; border-radius: 4px; }
+.ribbon-key p { margin: 0 0 8px; }
+.ribbon-key p:last-child { margin-bottom: 0; }
 
 .ribbon-title {
   margin: 0;

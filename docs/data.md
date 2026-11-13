@@ -91,8 +91,12 @@ for publication and expiry rules.
 ## Colour and interpolation
 
 [layers.ts](../packages/contracts/src/layers.ts) defines palette thresholds,
-colours, and legend labels, which are snapshotted into each build manifest. On
-lift tiles, `no-usable-lift` and nonpositive AGL values render transparent.
+colours, and legend labels, which are snapshotted into each build manifest.
+MSL maps colour known no-lift cells at their stored ground elevation, including
+at night. AGL maps leave no-lift cells and nonpositive values clear. Unavailable
+and outside-domain cells remain clear in both views. Point status distinguishes
+these cases; high terrain colours alone do not imply usable height above ground.
+Retained builds with older render styles leave no-lift MSL cells clear too.
 
 When all four surrounding grid cells are valid (or `no-usable-lift` on lift
 layers), the sampler interpolates bilinearly; if any contributor is missing, it
