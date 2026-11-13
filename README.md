@@ -1,7 +1,7 @@
 # Aviation Forecast Layers
 
 Maps, native weather samples and full atmospheric profiles for GFS, ICON-EU,
-RRFS and WRF Armenia. A batch job builds immutable forecast files; an API serves
+RRFS and av-wrf. A batch job builds immutable forecast files; an API serves
 them to map clients and Windgrams.
 
 The forecast workflow runs the [configured models](packages/contracts/config/models.json)

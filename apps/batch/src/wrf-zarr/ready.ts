@@ -3,7 +3,7 @@ import z from 'zod';
 import { gridSchema, sameGrid, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SAMPLE_VALUES, parseBoundedJson, sourceIntervalHours, type ModelDefinition } from '@av/contracts';
 import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 import { forecastSourcePinSchema, type ForecastSourcePin, type ForecastSourceStore } from '../provider.js';
-import { privateUpstreamPrefix, sourceCycle, sourceCycleParts } from '../source.js';
+import { privateUpstreamPrefix, sourceCycle, sourceCycleParts, sourceModelId } from '../source.js';
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/), timestamp = z.iso.datetime();
 const times = z.array(timestamp).min(1).max(MAX_SAMPLE_VALUES);
@@ -34,19 +34,20 @@ export async function readRun(model: ModelDefinition, options: {
 }) {
   const { store, signal } = options;
   if (!store) throw new Error('WRF Zarr requires source storage');
+  const sourceModel = sourceModelId(model);
   const pin = options.sourcePin && forecastSourcePinSchema.parse(options.sourcePin);
   if (pin && !options.cycle) throw new Error('Pinned WRF receipt requires an explicit cycle');
   let latest: z.infer<typeof latestSchema> | undefined;
   if (!options.cycle) {
-    const key = `${privateUpstreamPrefix(model.modelId)}latest.json`, object = await store.get(key, undefined, 4096, signal);
+    const key = `${privateUpstreamPrefix(sourceModel)}latest.json`, object = await store.get(key, undefined, 4096, signal);
     if (!object) throw new Error(`WRF latest pointer unavailable: ${key}; select --cycle explicitly`);
     if (object.bytes.length > 4096) throw new Error('WRF latest pointer exceeds byte budget');
     latest = latestSchema.parse(parseBoundedJson(object.bytes));
   }
   const cycle = sourceCycle(options.cycle ?? latest!.publish_origin_utc, model.forecast.cycleHoursUtc);
   const parts = sourceCycleParts(cycle), partition = `${parts.date}/${parts.cycleHour}`;
-  const prefix = privateUpstreamPrefix(model.modelId, parts), key = `${prefix}_ready.json`;
-  if ((pin && pin.key !== key) || (latest && (latest.model_id !== model.modelId || latest.cycle_partition !== partition || latest.ready_key !== key))) {
+  const prefix = privateUpstreamPrefix(sourceModel, parts), key = `${prefix}_ready.json`;
+  if ((pin && pin.key !== key) || (latest && (latest.model_id !== sourceModel || latest.cycle_partition !== partition || latest.ready_key !== key))) {
     throw new Error('WRF receipt key differs from its model or cycle');
   }
   const object = await store.get(key, undefined, pin?.bytes ?? MAX_MANIFEST_BYTES, signal);
@@ -57,7 +58,7 @@ export async function readRun(model: ModelDefinition, options: {
   const receipt = receiptSchema.parse(parseBoundedJson(object.bytes, MAX_MANIFEST_JSON_TOKENS, 8192));
   const hostedPath = /^attempts\/([^/]+)\/[a-f0-9]{64}\/forecast\.zarr$/.exec(receipt.zarr_relpath);
   if (receipt.zarr_relpath !== 'forecast.zarr' && (!hostedPath || hostedPath[1] !== receipt.attempt_id)) throw new Error('WRF payload path differs from its admitted attempt');
-  if (receipt.model_id !== model.modelId || receipt.cycle_partition !== partition || sourceCycle(receipt.publish_origin_utc) !== cycle
+  if (receipt.model_id !== sourceModel || receipt.cycle_partition !== partition || sourceCycle(receipt.publish_origin_utc) !== cycle
       || !sameGrid(receipt.grid, model.grid) || receipt.exported_levels_k !== model.capabilities.maxVerticalLevels) {
     throw new Error('WRF receipt model, cycle, grid or vertical levels differ from configuration');
   }

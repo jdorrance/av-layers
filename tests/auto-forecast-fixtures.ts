@@ -2,10 +2,10 @@ import { computeFreshness, type CatalogModelEntry, type ManifestV5 } from '@av/c
 import { fixtureBuild } from './forecast-fixture.js';
 
 export const AUTO_CYCLE = '2026-10-31T00:00:00.000Z';
-export const YEREVAN = { lat: 40.18, lon: 44.5 };
-export const AUCKLAND = { lat: -36.85, lon: 174.76 };
-export const ARMENIA_BOUNDS = [42, 38, 46, 43] as const;
-export const NEW_ZEALAND_BOUNDS = [166, -48, 180, -34] as const;
+export const REGION_A_POINT = { lat: 40.18, lon: 44.5 };
+export const REGION_B_POINT = { lat: -36.85, lon: 174.76 };
+export const REGION_A_BOUNDS = [42, 38, 46, 43] as const;
+export const REGION_B_BOUNDS = [166, -48, 180, -34] as const;
 export const autoTime = (hour: number): string => new Date(Date.parse(AUTO_CYCLE) + hour * 3_600_000).toISOString();
 
 export function autoBuild(model: string, bounds: Readonly<ManifestV5['descriptors']['bounds']>, hours: number[], mapFrameCount = hours.length) {

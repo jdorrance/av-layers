@@ -1,4 +1,12 @@
-import { sourceIntervalHours, type ProductDefinition } from '@av/contracts';
+import { modelIdSchema, sourceIntervalHours, type ModelDefinition, type ProductDefinition } from '@av/contracts';
+
+type SourceIdentity = Pick<ProductDefinition, 'modelId'> & Partial<Pick<ModelDefinition, 'upstream'>>;
+
+/** Resolve storage identity from trusted configuration; public model IDs remain independent. */
+export function sourceModelId(model: SourceIdentity): string {
+  const configured = model.upstream?.modelId;
+  return modelIdSchema.parse(configured === undefined ? model.modelId : configured);
+}
 
 /** Configured source clocks, URLs and copied index ownership. */
 export function sourceCycle(value: string, hours?: readonly number[]): string {
@@ -46,8 +54,8 @@ export function privateUpstreamPrefix(model: string, cycle?: ReturnType<typeof s
   return cycle ? `${root}${cycle.date}/${cycle.cycleHour}/` : root;
 }
 
-export function pinnedSourcePrefix(model: string, cycle: string, key: string): string {
-  const prefix = privateUpstreamPrefix(model, sourceCycleParts(sourceCycle(cycle)));
+export function pinnedSourcePrefix(model: SourceIdentity, cycle: string, key: string): string {
+  const prefix = privateUpstreamPrefix(sourceModelId(model), sourceCycleParts(sourceCycle(cycle)));
   if (key !== `${prefix}_ready.json`) {
     throw new Error('Pinned upstream receipt must identify the model cycle');
   }

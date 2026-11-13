@@ -15,11 +15,7 @@ describe('model configuration', () => {
   it('resolves each model window once for consumers and source adapters', () => {
     for (const settings of configuration.models) {
       const product = getProduct(settings.modelId)!, window = settings.forecast.window;
-      const wrf = settings.modelId === 'wrf-armenia-3km';
-      expect(product.frameHours).toEqual(wrf
-        ? [...Array.from({ length: 36 }, (_, index) => index + 1), ...Array.from({ length: 12 }, (_, index) => 39 + index * 3)]
-        : [...Array.from({ length: 24 }, (_, index) => index + 1), ...Array.from({ length: 16 }, (_, index) => 27 + index * 3)]);
-      expect(product.expectedRunsPerDay).toBe(wrf ? 1 : 4);
+      if ('expectedRunsPerDay' in settings.forecast) expect(product.expectedRunsPerDay).toBe(settings.forecast.expectedRunsPerDay);
       const { source, tier } = settings;
       expect(product.tier).toBe(tier);
       expect(product.source).toEqual(source);

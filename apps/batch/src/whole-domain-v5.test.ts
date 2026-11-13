@@ -1,5 +1,5 @@
 import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
-import { ARMENIA_LAMBERT } from '../../../tests/lambert-fixtures.js';
+import { NORTHERN_LAMBERT } from '../../../tests/lambert-fixtures.js';
 import { createHash } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -188,7 +188,7 @@ async function builtManifest() {
 }
 
 it('serves separate 1 km Lambert lift and native surfaces with serial and shard parity', async () => {
-  const grid = { ...ARMENIA_LAMBERT, width: 18, height: 18, x0M: 0, y0M: 0, dxM: 1000, dyM: 1000 };
+  const grid = { ...NORTHERN_LAMBERT, width: 18, height: 18, x0M: 0, y0M: 0, dxM: 1000, dyM: 1000 };
   const configured: ProductDefinition = { ...product, grid, bounds: [44, 40, 45, 41],
     terrainSubdivisionFactor: 1, frameHours: [1, 2], intervalHours: 1 };
   const geometry = planWholeDomainGrid(grid, 1);

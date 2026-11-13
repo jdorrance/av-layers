@@ -1,11 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
+import type { ArrayMetadata } from 'zarrita';
 import { parseBoundedJson, sameGrid } from '@av/contracts';
 import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 import { runConcurrent } from '../concurrent.js';
 import { COORDINATES, type WrfRun } from './ready.js';
 
 /** Validate the sole supported producer layout before decoding any weather arrays. */
-export async function validateMetadata(run: WrfRun): Promise<void> {
+export async function validateMetadata(run: WrfRun): Promise<ReadonlyMap<string, ArrayMetadata<'float32'>>> {
   const { receipt } = run, grid = receipt.grid;
   if (grid.kind !== 'lambert-conformal' || grid.earthRadiusM !== contract.earthRadiusM) throw new Error('Unsupported WRF grid');
   const [iy, ix] = contract.innerSpatialChunk, ny = Math.ceil(grid.height / iy!) * iy!, nx = Math.ceil(grid.width / ix!) * ix!;
@@ -18,6 +19,7 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
       || attrs.cape_parcel_definition !== contract.capeParcelDefinition || attrs.low_cloud_definition !== contract.lowCloudDefinition
       || !sameGrid(attrs.grid as typeof grid, grid) || !isDeepStrictEqual(attrs.lead_hours, receipt.lead_hours)) throw new Error('WRF group metadata differs from receipt or wire contract');
   const lengths: Record<string, number> = { time: receipt.lead_hours.length, level: receipt.exported_levels_k, y: grid.height, x: grid.width };
+  const arrays = new Map<string, ArrayMetadata<'float32'>>();
   await runConcurrent(contract.fields, 4, async field => {
     const meta = await metadata(`${field.name}/zarr.json`), dims = field.dims;
     const shape = dims.map(dim => lengths[dim]);
@@ -29,6 +31,7 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
       codecs: [{ name: 'sharding_indexed', configuration: { chunk_shape: inner, codecs: contract.innerCodecs, index_codecs: contract.indexCodecs, index_location: 'end' } }],
       attributes: { units: field.units, consumer_target: field.target, time_support: field.timeSupport, mantissa_keepbits: field.keepbits } };
     if (!isDeepStrictEqual(meta, required)) throw new Error(`Unsupported WRF array metadata: ${field.name}`);
+    arrays.set(field.name, meta as unknown as ArrayMetadata<'float32'>);
   });
   await runConcurrent(COORDINATES, 4, async name => {
     const dim = name.endsWith('_unix_s') ? 'time' : name, count = lengths[dim]!;
@@ -51,4 +54,5 @@ export async function validateMetadata(run: WrfRun): Promise<void> {
       if (actual !== expected) throw new Error(`WRF coordinate differs from receipt: ${name}`);
     }
   });
+  return arrays;
 }

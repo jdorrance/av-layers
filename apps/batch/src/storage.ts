@@ -5,6 +5,7 @@ import { BUILD_BUDGETS, forecastPlanDeadline } from './capacity.js';
 import type { BuildPlan } from './parallel.js';
 import { pause } from './pause.js';
 import { pinnedSourcePrefix } from './source.js';
+import { getProduct } from '@av/contracts/models';
 
 const R2_BODY_TIMEOUT_MS = 30_000;
 const R2_MAX_ATTEMPTS = 3;
@@ -139,7 +140,9 @@ function shardContext(env: NodeJS.ProcessEnv, plan: ShardPlan) {
   if (!hex || !/^[a-f0-9]{64}$/i.test(hex)) throw new Error('FORECAST_SHARD_CREDENTIAL_KEY must be 32 bytes encoded as hex');
   const deadline = shardDeadline(plan);
   const deadlineAt = plan.deadlineAt ?? new Date(deadline).toISOString();
-  const source = plan.sourcePin, sourcePrefix = source && pinnedSourcePrefix(plan.model, plan.cycle, source.key);
+  const source = plan.sourcePin, product = source && getProduct(plan.model);
+  if (source && !product) throw new Error('Pinned upstream receipt requires a configured model');
+  const sourcePrefix = source && pinnedSourcePrefix(product!, plan.cycle, source.key);
   const identity = [bucket, plan.model, plan.buildId, deadlineAt, ...(source ? [source.key, source.bytes, source.sha256] : [])];
   return { bucket, key: Buffer.from(hex, 'hex'), aad: Buffer.from(JSON.stringify(identity)), deadline, sourcePrefix };
 }

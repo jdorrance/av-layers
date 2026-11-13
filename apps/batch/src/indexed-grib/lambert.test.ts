@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest';
 import { geographicToGrid, type Grid, type LambertConformalGrid, type ModelDefinition } from '@av/contracts';
 import { parseFields, sampleFieldValuesAsync } from '@azohra/meteo.grib';
 import { INDEXED_PRODUCT } from '../../../../tests/model-fixtures.js';
-import { ARMENIA_LAMBERT, NEW_ZEALAND_LAMBERT } from '../../../../tests/lambert-fixtures.js';
+import { NORTHERN_LAMBERT, SOUTHERN_LAMBERT } from '../../../../tests/lambert-fixtures.js';
 import { indexedSource } from './source.js';
 import { acquireIndexedGribFrame, contractIndexToNativeIndex } from './acquire.js';
 import { inspectIndexedGribField } from './admission.js';
@@ -97,11 +97,11 @@ function projectedField(grid: LambertConformalGrid, firstLat: number, firstLon: 
 
 // First cells from PROJ 9.6.0 `proj -I`, then rounded to GRIB2 microdegrees.
 it.each([
-  { name: 'Armenia UPP', grid: { ...ARMENIA_LAMBERT, earthRadiusM: 6371229, latitudeOfOriginDeg: 39 },
+  { name: 'Northern UPP', grid: { ...NORTHERN_LAMBERT, earthRadiusM: 6371229, latitudeOfOriginDeg: 39 },
     firstLat: 36.936305558247, firstLon: 41.465860843988, pole: 0 },
-  { name: 'New Zealand with an explicit Earth radius', grid: NEW_ZEALAND_LAMBERT,
+  { name: 'New Zealand with an explicit Earth radius', grid: SOUTHERN_LAMBERT,
     firstLat: -47.959521734691, firstLon: 164.479954540709, pole: 128 },
-  { name: 'a southern cone with a northern projection origin', grid: { ...NEW_ZEALAND_LAMBERT, latitudeOfOriginDeg: 2 },
+  { name: 'a southern cone with a northern projection origin', grid: { ...SOUTHERN_LAMBERT, latitudeOfOriginDeg: 2 },
     firstLat: -3.491826927915, firstLon: 168.048475396235, pole: 128 }
 ])('admits quantized Lambert first cells for $name and rejects altered geometry', ({ grid, firstLat, firstLon, pole }) => {
   const { copy, section } = projectedField(grid, firstLat, firstLon, pole);

@@ -80,6 +80,8 @@ published packages at those versions.
   @hono/zod-openapi 1.6.3                  MIT
   pmtiles 4.5.0                            BSD-3-Clause
   @aws-sdk/client-s3 3.1160.0              Apache-2.0
+  @aws-sdk/checksums 3.1002.0              Apache-2.0
+  zarrita 0.7.5                            MIT
   sharp 0.35.5                            Apache-2.0
   @img/sharp-* 0.35.5                      Apache-2.0
   @img/sharp-libvips-* 1.3.4               LGPL-3.0-or-later and bundled licenses
@@ -95,6 +97,10 @@ published packages at those versions.
 
 The deployed preview includes MapLibre-LICENSE.txt copied from the installed
 MapLibre package, including its bundled component notices.
+
+Zarrita's MIT license is retained in the installed package's LICENSE file:
+https://github.com/manzt/zarrita.js/blob/main/LICENSE
+Copyright (c) 2020-2023 Trevor Manz.
 
 Sharp's Apache-2.0 license is retained in the installed package's LICENSE file:
 https://github.com/lovell/sharp/blob/v0.35.5/LICENSE

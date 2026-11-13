@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
 import { fixtureLatest, fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
-import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures.js';
+import { REGION_A_BOUNDS, REGION_B_POINT, REGION_B_BOUNDS, REGION_A_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures.js';
 import { fixturePointSample } from '../../../tests/client-point-fixture.js';
 
 class FakeElement {
@@ -346,10 +346,10 @@ it.each([
 
   if (_name === 'configured') {
     const gfs = autoBuild('gfs', [-180, -55, 180, 65], [1, 18, 36, 60, 72]);
-    const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
-    const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [1, 18, 36]);
-    const builds = new Map([gfs, armenia, nz].map(build => [build.manifest.model, build]));
-    const models = [autoCatalogRow(gfs.manifest, 27_800), autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
+    const regionA = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [1, 18, 36]);
+    const nz = autoBuild('wrf-nz-3km', REGION_B_BOUNDS, [1, 18, 36]);
+    const builds = new Map([gfs, regionA, nz].map(build => [build.manifest.model, build]));
+    const models = [autoCatalogRow(gfs.manifest, 27_800), autoCatalogRow(regionA.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
     fetchImpl.mockImplementation(async input => {
       const url = new URL(String(input));
       if (url.pathname.endsWith('/catalog')) return Response.json({ models });
@@ -358,14 +358,14 @@ it.each([
       if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest, base));
       return Response.json(fixturePointSample(build, String(input)));
     });
-    center = { lat: YEREVAN.lat, lng: YEREVAN.lon };
+    center = { lat: REGION_A_POINT.lat, lng: REGION_A_POINT.lon };
     hostTimestamp = Date.parse(autoTime(18));
     clock.mockReturnValue(Date.parse(autoTime(0)));
     const automatic = new loaded.default({ target });
     automatic.onopen();
     selects[0].value = 'auto'; selects[0].dispatch('change');
-    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${armenia.manifest.model}/${armenia.manifest.buildId}/usable-lift-msl/f018/`));
-    center = { lat: AUCKLAND.lat, lng: AUCKLAND.lon };
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${regionA.manifest.model}/${regionA.manifest.buildId}/usable-lift-msl/f018/`));
+    center = { lat: REGION_B_POINT.lat, lng: REGION_B_POINT.lon };
     for (const listener of renderListeners.get('movestart') ?? []) listener();
     for (const listener of renderListeners.get('moveend') ?? []) listener();
     await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${nz.manifest.model}/${nz.manifest.buildId}/usable-lift-msl/f018/`));
@@ -391,9 +391,9 @@ it.each([
 
     automatic.$destroy();
     expect(target.children).toHaveLength(0);
-    center = { lat: YEREVAN.lat, lng: YEREVAN.lon };
+    center = { lat: REGION_A_POINT.lat, lng: REGION_A_POINT.lon };
     moveHostTime(Date.parse(autoTime(18)));
-    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${armenia.manifest.model}/${armenia.manifest.buildId}/usable-lift-msl/f018/`));
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${regionA.manifest.model}/${regionA.manifest.buildId}/usable-lift-msl/f018/`));
     expect(document.body.children).not.toContain(root);
     expect(document.body.children).not.toContain(mobileHeader);
     win.dispatchEvent(new Event('pagehide'));

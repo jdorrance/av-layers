@@ -5,7 +5,7 @@ import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
-import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
+import { REGION_A_BOUNDS, REGION_A_POINT, REGION_B_BOUNDS, REGION_B_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
 import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
@@ -512,17 +512,41 @@ it('selects the v5 surface max zoom for each layer and renders scalar builds wit
   expect(nodes.some(child => child.className === 'av-windgram-host')).toBe(false);
 });
 
-it('starts a WRF preview inside its configured region and preserves a shared camera', async () => {
-  manifest = fixtureManifestV5({ model: 'wrf-armenia-3km' });
+it.each(MODEL_OPTIONS.filter(model => model.bounds[2] - model.bounds[0] < 360))('starts $modelId inside its configured bounds', async model => {
+  manifest = fixtureManifestV5({ model: model.modelId });
   vi.stubEnv('VITE_MODEL', manifest.model);
   await start();
-  const [west, south, east, north] = MODEL_OPTIONS.find(model => model.modelId === manifest.model)!.bounds;
+  const [west, south, east, north] = model.bounds;
   expect(map().getCenter()).toEqual({ lng: (west + east) / 2, lat: (south + north) / 2 });
-  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/wrf-armenia-3km/');
-  expect(win.location.search).toContain('model=wrf-armenia-3km');
-  win.href = 'http://localhost:5173/?model=wrf-armenia-3km&lat=40.18&lon=44.5&z=9';
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${model.modelId}/`);
+  expect(win.location.search).toContain(`model=${model.modelId}`);
+});
+
+it('preserves an explicit camera at startup and during history navigation', async () => {
+  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  win.href = 'http://localhost:5173/?model=icon-eu&lat=12&lon=34&z=9';
+  await start();
+  expect(map().getCenter()).toEqual({ lat: 12, lng: 34 });
+  expect(map().getZoom()).toBe(9);
+  win.href = 'http://localhost:5173/?model=icon-eu&lat=-23&lon=145&z=5';
   win.dispatchEvent(new Event('popstate'));
-  expect(map().getCenter()).toEqual({ lat: 40.18, lng: 44.5 });
+  expect(map().getCenter()).toEqual({ lat: -23, lng: 145 });
+  expect(map().getZoom()).toBe(5);
+});
+
+it('starts Auto from a neutral world view when the URL supplies no camera', async () => {
+  const build = autoBuild('gfs', [-180, -55, 180, 65], [1, 18, 36]);
+  fetchMock.mockImplementation(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/catalog')) return Response.json({ models: [autoCatalogRow(build.manifest, 27800)] });
+    return path.endsWith('/latest') ? Response.json(fixtureLatest(build.manifest)) : sample(input, build.manifest);
+  });
+  win.href = 'http://localhost:5173/?model=auto';
+  await import('./main');
+  map().emit('load');
+  await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/gfs/'));
+  expect(map().getCenter()).toEqual({ lng: 0, lat: 20 });
+  expect(map().getZoom()).toBe(2);
 });
 
 it('uses the attributed OpenStreetMap basemap and restores the view from the back button', async () => {
@@ -577,35 +601,35 @@ it('keeps the latest history URL when a prior model request is aborted', async (
 });
 
 it('preserves Auto and its requested time when a map move overtakes an earlier regional build', async () => {
-  const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
-  const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [1, 18, 36]);
-  const builds = new Map([armenia, nz].map(build => [build.manifest.model, build]));
-  const models = [autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
-  let releaseArmenia!: () => void;
-  const pending = new Promise<void>(resolve => { releaseArmenia = resolve; });
-  let armeniaSignal: AbortSignal | null | undefined;
+  const regionA = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [1, 18, 36]);
+  const regionB = autoBuild('wrf-region-b-3km', REGION_B_BOUNDS, [1, 18, 36]);
+  const builds = new Map([regionA, regionB].map(build => [build.manifest.model, build]));
+  const models = [autoCatalogRow(regionA.manifest, 1000), autoCatalogRow(regionB.manifest, 3000)];
+  let releaseRegionA!: () => void;
+  const pending = new Promise<void>(resolve => { releaseRegionA = resolve; });
+  let regionASignal: AbortSignal | null | undefined;
   fetchMock.mockImplementation(async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/catalog')) return Response.json({ models });
     const build = builds.get(url.pathname.split('/')[3])!;
     if (url.pathname.endsWith('/latest')) {
-      if (build === armenia) { armeniaSignal = init?.signal; await pending; }
+      if (build === regionA) { regionASignal = init?.signal; await pending; }
       return Response.json(fixtureLatest(build.manifest));
     }
     return sample(input, build.manifest);
   });
   const t = autoTime(18);
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
-  const expectedTile = `/tiles/${nz.manifest.model}/${nz.manifest.buildId}/usable-lift-agl/f018/`;
-  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&z=9&t=${encodeURIComponent(t)}`;
+  const expectedTile = `/tiles/${regionB.manifest.model}/${regionB.manifest.buildId}/usable-lift-agl/f018/`;
+  win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(t)}`;
   await import('./main');
   map().emit('load');
   try {
-    await vi.waitFor(() => expect(armeniaSignal?.aborted).toBe(false));
-    map().jumpTo({ center: [AUCKLAND.lon, AUCKLAND.lat], zoom: 9 });
+    await vi.waitFor(() => expect(regionASignal?.aborted).toBe(false));
+    map().jumpTo({ center: [REGION_B_POINT.lon, REGION_B_POINT.lat], zoom: 9 });
     await vi.waitFor(() => expect(tile()).toContain(expectedTile));
-    expect(armeniaSignal?.aborted).toBe(true);
-  } finally { releaseArmenia(); }
+    expect(regionASignal?.aborted).toBe(true);
+  } finally { releaseRegionA(); }
   await vi.advanceTimersByTimeAsync(0);
   expect(tile()).toContain(expectedTile);
   const state = new URL(win.href).searchParams;
@@ -614,7 +638,7 @@ it('preserves Auto and its requested time when a map move overtakes an earlier r
 });
 
 it('keeps a held Auto timeline change when a prior map lookup finishes', async () => {
-  const build = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [1, 18, 36]);
+  const build = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [1, 18, 36]);
   const models = [autoCatalogRow(build.manifest, 1000)];
   let catalog = Promise.resolve(models);
   let catalogSignal: AbortSignal | null | undefined;
@@ -627,7 +651,7 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
     if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
     return sample(input, build.manifest);
   });
-  win.href = `http://localhost:5173/?model=auto&lat=${YEREVAN.lat}&lon=${YEREVAN.lon}&t=${encodeURIComponent(autoTime(18))}`;
+  win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(autoTime(18))}`;
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   await import('./main');
   map().emit('load');
@@ -655,49 +679,49 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
 });
 
 it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto history restore', async action => {
-  const armenia = autoBuild('wrf-armenia-1km', ARMENIA_BOUNDS, [18, 36]);
-  const nz = autoBuild('wrf-nz-3km', NEW_ZEALAND_BOUNDS, [18, 36]);
-  const gfs = autoBuild('gfs', ARMENIA_BOUNDS, [18, 36]);
-  const builds = new Map([armenia, nz, gfs].map(build => [build.manifest.model, build]));
-  const models = [autoCatalogRow(armenia.manifest, 1000), autoCatalogRow(nz.manifest, 3000)];
-  let releaseNz!: () => void;
-  const pending = new Promise<void>(resolve => { releaseNz = resolve; });
-  let nzSignal: AbortSignal | null | undefined;
+  const regionA = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [18, 36]);
+  const regionB = autoBuild('wrf-region-b-3km', REGION_B_BOUNDS, [18, 36]);
+  const gfs = autoBuild('gfs', REGION_A_BOUNDS, [18, 36]);
+  const builds = new Map([regionA, regionB, gfs].map(build => [build.manifest.model, build]));
+  const models = [autoCatalogRow(regionA.manifest, 1000), autoCatalogRow(regionB.manifest, 3000)];
+  let releaseRegionB!: () => void;
+  const pending = new Promise<void>(resolve => { releaseRegionB = resolve; });
+  let regionBSignal: AbortSignal | null | undefined;
   fetchMock.mockImplementation(async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/catalog')) return Response.json({ models });
     const build = builds.get(url.pathname.split('/')[3])!;
     if (url.pathname.endsWith('/latest')) {
-      if (build === nz) { nzSignal = init?.signal; await pending; }
+      if (build === regionB) { regionBSignal = init?.signal; await pending; }
       return Response.json(fixtureLatest(build.manifest));
     }
     return sample(input, build.manifest);
   });
-  const autoUrl = (point: typeof YEREVAN, hour: number) =>
+  const autoUrl = (point: typeof REGION_A_POINT, hour: number) =>
     `http://localhost:5173/?model=auto&lat=${point.lat}&lon=${point.lon}&z=9&t=${encodeURIComponent(autoTime(hour))}`;
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
-  win.href = autoUrl(YEREVAN, 18);
+  win.href = autoUrl(REGION_A_POINT, 18);
   await import('./main');
   map().emit('load');
   await vi.waitFor(() => expect(tile()).toContain('/f018/'));
 
-  win.href = autoUrl(AUCKLAND, 36);
+  win.href = autoUrl(REGION_B_POINT, 36);
   win.dispatchEvent(new Event('popstate'));
   try {
-    await vi.waitFor(() => expect(nzSignal?.aborted).toBe(false));
-    if (action === 'map movement') map().jumpTo({ center: [YEREVAN.lon, YEREVAN.lat], zoom: 9 });
+    await vi.waitFor(() => expect(regionBSignal?.aborted).toBe(false));
+    if (action === 'map movement') map().jumpTo({ center: [REGION_A_POINT.lon, REGION_A_POINT.lat], zoom: 9 });
     else modelButton('gfs').dispatchEvent(new Event('click'));
-    expect(nzSignal?.aborted).toBe(true);
+    expect(regionBSignal?.aborted).toBe(true);
     await vi.waitFor(() => {
       expect(tile()).toContain('/f036/');
       const state = new URL(win.href).searchParams;
       expect(state.get('model')).toBe(action === 'map movement' ? 'auto' : 'gfs');
-      if (action === 'map movement') expect(Number(state.get('lat'))).toBe(YEREVAN.lat);
+      if (action === 'map movement') expect(Number(state.get('lat'))).toBe(REGION_A_POINT.lat);
       expect(state.get('t')).toBe(autoTime(36));
     });
-  } finally { releaseNz(); }
+  } finally { releaseRegionB(); }
   await vi.advanceTimersByTimeAsync(0);
-  expect(tile()).toContain(action === 'map movement' ? '/wrf-armenia-1km/' : '/gfs/');
+  expect(tile()).toContain(action === 'map movement' ? '/wrf-region-a-1km/' : '/gfs/');
 });
 
 it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit changes', async () => {

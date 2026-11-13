@@ -1,5 +1,6 @@
 import z from 'zod';
-import type { ModelDefinition } from '@av/contracts';
+import type { ArrayMetadata } from 'zarrita';
+import { modelIdSchema, type ModelDefinition } from '@av/contracts';
 import type { AuxField, ModelLevelFrame } from '@av/forecast/inputs';
 import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 import { createAuxiliaryTargets, createNormalizedFrameTarget, type NormalizedFrameTarget, type ResolvableForecastProvider } from '../provider.js';
@@ -27,7 +28,7 @@ function fields(target: NormalizedFrameTarget): Record<string, readonly AuxField
 }
 
 async function readField(run: WrfRun, field: typeof contract.fields[number], indices: readonly number[], active: Uint32Array,
-  targets: readonly AuxField[], signal: AbortSignal): Promise<number> {
+  targets: readonly AuxField[], metadata: ArrayMetadata<'float32'>, signal: AbortSignal): Promise<number> {
   const { grid } = run.receipt, [iy, ix] = contract.innerSpatialChunk;
   const tiles = Math.ceil(grid.height / iy!) * Math.ceil(grid.width / ix!), raw = targets.length * iy! * ix! * 4;
   const maximum = tiles * (raw + Math.ceil(raw / 256) + 128 + 16) + 4;
@@ -38,7 +39,7 @@ async function readField(run: WrfRun, field: typeof contract.fields[number], ind
     // Authenticate each source shard before inflating selected chunks into the same target buffers.
     const bytes = await run.read(shardKey(field, index), maximum);
     totalBytes += bytes.length;
-    decodeShard(bytes, grid, targets.length, active, targets, signal);
+    await decodeShard(bytes, metadata, index, active, targets, signal);
     if (sums) {
       const seconds = (Date.parse(run.receipt.window_ends_utc[index]!) - Date.parse(run.receipt.window_starts_utc[index]!)) / 1000;
       duration += seconds;
@@ -59,7 +60,7 @@ async function readField(run: WrfRun, field: typeof contract.fields[number], ind
 
 /** Read committed av-wrf cycles into sparse SI model-level frames. Storage owns transport. */
 export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecastProvider {
-  const upstream = z.strictObject({ protocol: z.literal('wrf-zarr-v3'), provider: z.string().min(1) }).parse(model.upstream);
+  const upstream = z.strictObject({ protocol: z.literal('wrf-zarr-v3'), provider: z.string().min(1), modelId: modelIdSchema.optional() }).parse(model.upstream);
   if (model.capabilities.verticalCoordinate !== 'model-levels' || model.capabilities.maxVerticalLevels > contract.maxVerticalLevels) throw new Error('WRF requires model-level columns');
   return {
     id: model.source.configurationId, provider: upstream.provider, maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,
@@ -76,7 +77,7 @@ export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecas
       const controller = new AbortController(), signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
       const active = copySourceIndices(options.activeIndices, model.grid.width * model.grid.height);
       const run = await readRun(model, { ...options, signal });
-      await validateMetadata(run);
+      const metadata = await validateMetadata(run);
       let closed = false, pending: Promise<ModelLevelFrame> | undefined;
       const stats = { sourceBytes: 0, frames: 0 };
       const acquire = async (hour: number, target?: NormalizedFrameTarget): Promise<ModelLevelFrame> => {
@@ -88,7 +89,7 @@ export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecas
         const outputs = fields(target), windowIndices = run.windowIndices.get(hour)!;
         for (const field of contract.fields) {
           const indices = field.timeSupport === 'window-mean' || field.timeSupport === 'window-rate' ? windowIndices : [index];
-          stats.sourceBytes += await readField(run, field, indices, active, outputs[field.target]!, signal);
+          stats.sourceBytes += await readField(run, field, indices, active, outputs[field.target]!, metadata.get(field.name)!, signal);
         }
         stats.frames++;
         const validAt = run.receipt.valid_times_utc[index]!, window = { start: run.receipt.window_starts_utc[windowIndices[0]!]!, end: validAt };

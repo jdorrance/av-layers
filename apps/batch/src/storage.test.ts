@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { assertBuildBucketLock, r2ClientOptions, r2ShardStorage, r2Storage, sealShardCredentials } from './storage';
 import { putImmutable } from './immutable-upload';
 import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from './capacity';
+import { getProduct } from '@av/contracts/models';
+import { privateUpstreamPrefix, sourceCycleParts, sourceModelId } from './source.js';
 
 const env = { CLOUDFLARE_ACCOUNT_ID: '0123456789abcdef0123456789abcdef', R2_ACCESS_KEY_ID: 'access', R2_SECRET_ACCESS_KEY: 'secret' };
 const plan = { model: 'gfs' as const, buildId: '20261104T190000Z-00000000-0000-4000-8000-000000000000', cycle: '2026-11-04T18:00:00.000Z', createdAt: '2026-11-04T19:00:00.000Z', deadlineAt: '2026-11-04T19:50:00.000Z' };
@@ -97,6 +99,33 @@ describe('R2 bucket lock preflight', () => {
 });
 
 describe('R2 shard credentials', () => {
+  it('scopes source reads to the configured producer while writes retain the public model identity', async () => {
+    const product = getProduct('av-wrf')!, cycle = '2026-11-04T00:00:00.000Z';
+    const sourcePrefix = privateUpstreamPrefix(sourceModelId(product), sourceCycleParts(cycle));
+    const sourcePin = { key: `${sourcePrefix}_ready.json`, bytes: 55, sha256: 'a'.repeat(64) };
+    const aliasedPlan = { ...plan, model: product.modelId, cycle, sourcePin };
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({ ContentLength: 1, ETag: 'etag' } as never);
+    try {
+      expect(sourceModelId(product)).not.toBe(product.modelId);
+      const envelope = Buffer.from(sealShardCredentials(issuer, aliasedPlan));
+      await r2ShardStorage(shard, aliasedPlan, envelope).head(sourcePin.key);
+      const credential = await (send.mock.contexts[0] as S3Client).config.credentials();
+      const jwt = Buffer.from(credential.sessionToken!, 'base64').toString().slice(4);
+      const payload = JSON.parse(Buffer.from(jwt.split('.')[1]!, 'base64url').toString());
+      expect(payload.paths.prefixPaths).toEqual([
+        `builds/${product.modelId}/${plan.buildId}/`, 'coverage/', 'terrain/prepared/', sourcePrefix
+      ]);
+      for (const source of [product.modelId, 'other-source']) {
+        const wrongSource = { ...aliasedPlan, sourcePin: { ...sourcePin,
+          key: `${privateUpstreamPrefix(source, sourceCycleParts(cycle))}_ready.json` } };
+        expect(() => sealShardCredentials(issuer, wrongSource)).toThrow('must identify the model cycle');
+        expect(() => r2ShardStorage(shard, wrongSource, envelope)).toThrow('must identify the model cycle');
+      }
+      expect(() => sealShardCredentials(issuer, { ...aliasedPlan, model: 'unregistered' })).toThrow('requires a configured model');
+    } finally { send.mockRestore(); clock.mockRestore(); }
+  });
+
   it.each([undefined, { key: 'upstream/gfs/20261104/18/_ready.json', bytes: 55, sha256: 'a'.repeat(64) }])(
     'signs action and path scoped credentials with upstream receipt %j', async sourcePin => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-04T19:10:00.000Z'));

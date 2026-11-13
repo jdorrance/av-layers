@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { DEFAULT_MODEL, getProduct } from '@av/contracts/models';
 import { modelIdSchema } from '@av/contracts';
 import { CLI_COMMANDS, CLI_OPTIONS } from './commands.js';
+import { sourceModelId } from './source.js';
 
 export async function runBatch(args = process.argv.slice(2)): Promise<void> {
   const command = args[0];
@@ -28,7 +29,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const localSource = values['source-store-dir'];
     if (localSource && product.upstream.protocol !== 'wrf-zarr-v3') throw new Error('--source-store-dir requires a WRF Zarr model');
     const remote = !directory || (privateSource && !localSource) ? (await import('./storage.js')).r2Storage() : undefined;
-    const sourceStore = localSource ? (await import('./local-source.js')).localForecastSource(localSource, product.modelId) : privateSource ? remote : undefined;
+    const sourceStore = localSource ? (await import('./local-source.js')).localForecastSource(localSource, sourceModelId(product)) : privateSource ? remote : undefined;
     const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : remote!;
     console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle,
       cacheDir: values['cache-dir'], ...(privateSource ? { sourceStore } : {}), wholeDomain: { catalogRef, storage } }));
@@ -63,7 +64,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const provider = getForecastProvider(product.modelId);
     const localSource = values['source-store-dir'];
     if (localSource !== undefined && (!localSource.trim() || product.upstream.protocol !== 'wrf-zarr-v3')) throw new Error('--source-store-dir requires a nonempty directory and a WRF Zarr model');
-    const store = localSource ? (await import('./local-source.js')).localForecastSource(localSource, product.modelId)
+    const store = localSource ? (await import('./local-source.js')).localForecastSource(localSource, sourceModelId(product))
       : provider.resolveRun ? (await import('./storage.js')).r2Storage() : undefined;
     console.log(JSON.stringify(await provider.proveInputs({ cycle: values.cycle, cacheDir: values['cache-dir'], ...(store ? { store } : {}) }), null, 2));
   } else if (command === 'validate') {

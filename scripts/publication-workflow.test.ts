@@ -7,6 +7,7 @@ import { canonicalGridJson, createSparseCoverage, encodeSparseCoverage, expected
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from '../apps/batch/src/capacity.js';
 import { localPath } from '../apps/batch/src/validate.js';
+import { privateUpstreamPrefix, sourceCycleParts, sourceModelId } from '../apps/batch/src/source.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn(), stageControl: vi.fn() }));
 vi.mock('./forecast-control.js', async importOriginal => ({
   ...await importOriginal<typeof import('./forecast-control.js')>(),
@@ -707,6 +708,26 @@ it('restricts shard writes to conditional immutable build objects', async () => 
   });
   await runForecastShard(0, storage);
   expect(storage.put).toHaveBeenCalledTimes(1);
+});
+
+it('permits only the configured source cycle when a public model has a separate producer identity', async () => {
+  const product = getProduct('av-wrf')!, cycle = '2026-11-13T00:00:00.000Z';
+  const sourcePrefix = privateUpstreamPrefix(sourceModelId(product), sourceCycleParts(cycle));
+  const plan = { model: product.modelId, buildId: manifest.buildId, cycle, createdAt: new Date().toISOString(),
+    sourcePin: { key: `${sourcePrefix}_ready.json`, bytes: 55, sha256: 'a'.repeat(64) } };
+  vi.stubEnv('MODEL', product.modelId);
+  fake.readLocal.mockResolvedValue(Buffer.from(JSON.stringify(plan)));
+  fake.readPlan.mockResolvedValue(plan);
+  const storage = { get: vi.fn(), head: vi.fn(), put: vi.fn(), list: vi.fn(), delete: vi.fn() };
+  fake.shard.mockImplementationOnce(async (_plan, _shard, { store }) => {
+    await store.get(plan.sourcePin.key);
+    for (const key of [`upstream/${product.modelId}/20261113/00/_ready.json`,
+      'upstream/other-source/20261113/00/_ready.json', `${sourcePrefix}../_ready.json`]) {
+      expect(() => store.get(key)).toThrow('cannot read');
+    }
+  });
+  await runForecastShard(0, storage);
+  expect(storage.get).toHaveBeenCalledExactlyOnceWith(plan.sourcePin.key);
 });
 
 it('records planning failure without claiming publication', async () => {

@@ -53,7 +53,8 @@ the configured cron union into the forecast workflow. The
 [split GRIB](../apps/batch/src/split-grib/README.md) adapters bind each model's
 source profile to its format-specific acquisition and decoding.
 The [WRF Zarr](../apps/batch/src/wrf-zarr/README.md) adapter reads av-wrf's
-committed native model-level arrays. The shared
+committed native model-level arrays. Each product configures its upstream model
+ID and regional geometry independently of its public catalog ID. The shared
 [provider types](../apps/batch/src/provider.ts) define cycle discovery, input
 proof, and acquisition sessions; [providers.ts](../apps/batch/src/providers.ts)
 selects the configured source protocol.

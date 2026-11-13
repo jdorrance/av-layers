@@ -416,12 +416,12 @@
       "execution": {"zoom": 10, "parallelism": 40, "schedule": ["45 3,9,15,21 * * *"]}
     },
     {
-      "modelId": "wrf-armenia-3km",
-      "id": "wrf-armenia-3km-soaring",
-      "coverageDir": "coverage/wrf-armenia-3km-land-v1",
-      "source": {"modelFamily": "wrf", "configurationId": "av-wrf-armenia-3km-v2", "domainId": "armenia"},
+      "modelId": "av-wrf",
+      "id": "av-wrf-soaring",
+      "coverageDir": "coverage/av-wrf-pilot-land-v1",
+      "source": {"modelFamily": "wrf", "configurationId": "av-wrf-pilot-v1", "domainId": "pilot"},
       "tier": "high",
-      "label": "WRF Armenia 3 km",
+      "label": "av-wrf",
       "attribution": "av-wrf · WRF-ARW / NOAA GFS · Aviation Forecast Layers",
       "layers": [
         "usable-lift-msl",
@@ -471,8 +471,8 @@
       },
       "freshness": {"maxCycleAgeHours": 6},
       "coverage": {
-        "id": "wrf-armenia-3km-land-v1",
-        "description": "Land and 50 km coastal buffer within the av-wrf Armenia 3 km Lambert domain; Russia excluded.",
+        "id": "av-wrf-pilot-land-v1",
+        "description": "Land and 50 km coastal buffer within the configured av-wrf Lambert domain; Russia excluded.",
         "west": 40.78698,
         "south": 37.812119,
         "east": 48.21302,
@@ -489,7 +489,7 @@
           ["outside_north", 43, 44.5, false]
         ]
       },
-      "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf"},
+      "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf", "modelId": "wrf-armenia-3km"},
       "terrainSubdivisionFactor": 1,
       "execution": {"zoom": 10, "parallelism": 24, "schedule": []}
     }

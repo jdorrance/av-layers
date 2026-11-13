@@ -66,7 +66,6 @@ const pointHorizonSelect = element<HTMLSelectElement>('point-horizon');
 const pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label');
 const meta = element<HTMLDListElement>('meta');
 
-const ARMENIA: [[number, number], [number, number]] = [[43.45, 38.84], [46.63, 41.3]];
 const LIFT: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
@@ -122,14 +121,10 @@ function startPreview(): void {
     modelBar.append(button);
   }
 
-  const armeniaStart = initialModel === 'icon-eu' || initialModel === AUTO_MODEL_ID;
-  const center: [number, number] = startup.camera?.center ??
-    (initialModel === 'rrfs' ? [-97.5, 39] : armeniaStart ? [45.04, 40.07] : [0, 20]);
-  const zoom = startup.camera?.zoom ?? (armeniaStart ? 7 : initialModel === 'rrfs' ? 3.2 : 2);
   const map = new maplibregl.Map({
     container: 'map',
-    center,
-    zoom,
+    center: startup.camera?.center ?? [0, 20],
+    zoom: startup.camera?.zoom ?? 2,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : basemapStyle()
@@ -782,8 +777,7 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    if (!startup.camera && armeniaStart) map.fitBounds(ARMENIA, { padding: 36, duration: 0 });
-    else if (!startup.camera) focusRegion(initialModel);
+    if (!startup.camera) focusRegion(initialModel);
     void loadModel(initialModel);
   });
 }

@@ -35,8 +35,8 @@ export const MODEL_OPTIONS = [
     ]
   },
   {
-    "modelId": "wrf-armenia-3km",
-    "label": "WRF Armenia 3 km",
+    "modelId": "av-wrf",
+    "label": "av-wrf",
     "nominalDxMeters": 3001,
     "bounds": [
       40.78698,

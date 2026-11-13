@@ -2,7 +2,7 @@
 
 Prepare the existing forecast pipeline to accept indexed GRIB2 from a private
 R2 producer. The acceptance tests use synthetic WRF and UPP fixtures for
-Armenia and New Zealand. Production continues to publish the configured GFS,
+the northern and southern hemispheres. Production continues to publish the configured GFS,
 ICON-EU, and RRFS models during this work.
 
 Use the [architecture](architecture.md), [extension guide](extensions.md),
