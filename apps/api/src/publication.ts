@@ -1,8 +1,9 @@
 import { getProduct } from '@av/contracts/models';
 import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
 import { sha256 } from './coverage';
+import { matchStorageBytes, storeStorageBytes } from './storage-cache';
 import { Problem, fail, validateId, ensureLive } from './http';
-import { binaryRead, getR2Object, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, readObjectJson, parseBoundedJson, reserveAllocation, waitFor, type WaitContext } from './resources';
+import { binaryRead, getR2Object, countCacheHit, ByteCache, MaterializedReads, ResourceLimitError, readObjectBytes, parseBoundedJson, estimateJsonBytes, reserveAllocation, waitFor, type WaitContext } from './resources';
 
 const POINTER_TTL_MS = 15_000;
 const NEGATIVE_POINTER_TTL_MS = 5_000;
@@ -12,7 +13,8 @@ const pointerCache = new WeakMap<R2Bucket, ByteCache<ModelId, PointerEntry>>();
 const pointerReads = new WeakMap<R2Bucket, MaterializedReads<ModelPointer>>();
 const pointerStates = new WeakMap<ModelPointer | Problem, { until: number; identity: string }>();
 const manifestCache = new WeakMap<R2Bucket, ByteCache<string, ManifestV5>>();
-const manifestReads = new WeakMap<R2Bucket, MaterializedReads<{ manifest: ManifestV5; bytes: number }>>();
+interface ManifestRead { manifest: ManifestV5; bytes: number; write?: { key: string; bytes: Uint8Array } }
+const manifestReads = new WeakMap<R2Bucket, MaterializedReads<ManifestRead>>();
 const artifactIndexes = new WeakMap<ManifestV5, Map<string, ManifestV5['artifacts'][number]>>();
 const productValidations = new WeakMap<ManifestV5, { product: ProductDefinition; pending: Promise<void> }>();
 
@@ -43,6 +45,23 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
       signal.addEventListener('abort', abort, { once: true });
     });
     signal.throwIfAborted();
+    const key = `pointer:${model}`;
+    const shared = !refresh && ctx?.cacheOrigin ? await matchStorageBytes(key, MAX_POINTER_BYTES, ctx, signal) : undefined;
+    if (shared && shared.until <= Date.now() + POINTER_TTL_MS) {
+      try {
+        const parsed = modelPointerSchema.parse(parseBoundedJson(shared.bytes));
+        if (parsed.model === model && shared.until > Date.now()) {
+          const identity = await sha256(new TextEncoder().encode(JSON.stringify(parsed)));
+          signal.throwIfAborted();
+          if (shared.until > Date.now()) {
+            pointerStates.set(parsed, { until: shared.until, identity });
+            entries!.set(model, { pointer: parsed, fetchedAt: shared.until - POINTER_TTL_MS }, estimateJsonBytes(parsed) + 256, shared.until);
+            countCacheHit(ctx);
+            return parsed;
+          }
+        }
+      } catch { signal.throwIfAborted(); }
+    }
     const object = await getR2Object(bucket, `catalog/${model}/latest.json`, ctx);
     if (!object) {
       const problem = new Problem(503, 'publication-unavailable', `No publication available for ${model}`);
@@ -51,18 +70,23 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
       entries!.set(model, { problem }, 256, until);
       throw problem;
     }
-    let decoded: Awaited<ReturnType<typeof readObjectJson>>;
-    try { decoded = await readObjectJson(object, MAX_POINTER_BYTES, ctx, signal); }
-    catch (error) {
+    let bytes: Uint8Array, value: unknown;
+    try {
+      bytes = await readObjectBytes(object, MAX_POINTER_BYTES, false, ctx, signal);
+      value = parseBoundedJson(bytes);
+    } catch (error) {
       if (isOperationalReadFailure(error, signal)) throw error;
       return fail(503, 'publication-invalid', 'Invalid or oversized model pointer');
     }
-    const result = modelPointerSchema.safeParse(decoded.value);
+    const result = modelPointerSchema.safeParse(value);
     if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
     const fetchedAt = Date.now(), until = fetchedAt + POINTER_TTL_MS;
     const identity = await sha256(new TextEncoder().encode(JSON.stringify(result.data)));
+    signal.throwIfAborted();
     pointerStates.set(result.data, { until, identity });
-    entries!.set(model, { pointer: result.data, fetchedAt }, decoded.estimatedBytes + 256, until);
+    entries!.set(model, { pointer: result.data, fetchedAt }, estimateJsonBytes(value) + 256, until);
+    const stored = storeStorageBytes(key, { bytes, until }, ctx);
+    if (ctx) ctx.waitUntil(stored); else await stored;
     return result.data;
   }, ctx, waiterSignal);
 }
@@ -101,35 +125,50 @@ export async function manifest(
   const cacheKey = `${model}/${build}`;
   let m = entries.get(cacheKey);
   if (m) countCacheHit(ctx);
-  let decodedBytes = 0;
+  let loaded: ManifestRead | undefined;
   if (!m) {
     let reads = manifestReads.get(bucket);
     if (!reads) { reads = new MaterializedReads(4); manifestReads.set(bucket, reads); }
-    const loaded = await reads.run(cacheKey, async signal => {
-      const object = await getR2Object(bucket, entry.manifestKey, ctx);
-      if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
-      let decoded: Awaited<ReturnType<typeof readObjectJson>>;
-      try { decoded = await readObjectJson(object, MAX_MANIFEST_BYTES, ctx, signal, MAX_MANIFEST_JSON_TOKENS); }
-      catch (error) {
-        if (isOperationalReadFailure(error, signal)) throw error;
-        return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
+    loaded = await reads.run(cacheKey, async signal => {
+      const key = `manifest:${entry.manifestKey}:${entry.cycle}:${entry.expiresAt}`;
+      const shared = ctx?.cacheOrigin ? await matchStorageBytes(key, MAX_MANIFEST_BYTES, ctx, signal) : undefined;
+      let raw: Uint8Array | undefined, published: ManifestV5 | undefined;
+      if (shared && shared.until === Date.parse(entry.expiresAt)) {
+        try {
+          const parsed = manifestV5Schema.parse(parseBoundedJson(shared.bytes, MAX_MANIFEST_JSON_TOKENS));
+          if (parsed.model === model && parsed.buildId === build && parsed.expiresAt === entry.expiresAt && parsed.cycle === entry.cycle) {
+            raw = shared.bytes; published = parsed;
+          }
+        } catch { signal.throwIfAborted(); }
       }
-      const parsed = manifestV5Schema.safeParse(decoded.value);
-      if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
-      const published = parsed.data;
+      if (!published) {
+        const object = await getR2Object(bucket, entry.manifestKey, ctx);
+        if (!object) fail(503, 'publication-incomplete', 'Manifest is missing');
+        let value: unknown;
+        try {
+          raw = await readObjectBytes(object, MAX_MANIFEST_BYTES, false, ctx, signal);
+          value = parseBoundedJson(raw, MAX_MANIFEST_JSON_TOKENS);
+        } catch (error) {
+          if (isOperationalReadFailure(error, signal)) throw error;
+          return fail(503, 'publication-invalid', 'Invalid or oversized manifest');
+        }
+        const parsed = manifestV5Schema.safeParse(value);
+        if (!parsed.success) fail(503, 'publication-invalid', 'Invalid manifest');
+        published = parsed.data;
+      } else countCacheHit(ctx);
       provenanceReference(published);
+      signal.throwIfAborted();
       const index = new Map<string, ManifestV5['artifacts'][number]>();
-      let bytes = decoded.estimatedBytes + 128;
+      let bytes = estimateJsonBytes(published) + 128;
       for (const item of published.artifacts) {
         const key = `${item.layer}/${item.frame}`;
         index.set(key, item);
         bytes += 64 + key.length * 2;
       }
       artifactIndexes.set(published, index);
-      return { manifest: published, bytes };
+      return { manifest: published, bytes, write: raw !== shared?.bytes ? { key, bytes: raw! } : undefined };
     }, ctx, waiterSignal);
     m = loaded.manifest;
-    decodedBytes = loaded.bytes;
   }
   if (m.model !== model || m.buildId !== build || m.expiresAt !== entry.expiresAt || m.cycle !== entry.cycle) {
     entries.delete(cacheKey);
@@ -138,7 +177,13 @@ export async function manifest(
   ensureLive(m.expiresAt);
   await waitFor(validateProduct(m, product), waiterSignal);
   ensureLive(m.expiresAt);
-  if (decodedBytes) entries.set(cacheKey, m, decodedBytes, Date.parse(m.expiresAt));
+  if (loaded?.write) {
+    const { key, bytes } = loaded.write;
+    loaded.write = undefined;
+    const stored = storeStorageBytes(key, { bytes, until: Date.parse(m.expiresAt) }, ctx);
+    if (ctx) ctx.waitUntil(stored); else await stored;
+  }
+  if (loaded) entries.set(cacheKey, m, loaded.bytes, Date.parse(m.expiresAt));
   return m;
 }
 

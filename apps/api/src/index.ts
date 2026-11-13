@@ -429,7 +429,7 @@ app.get('/tiles/:model/:buildId/:layer/:frame/:z/:x/:filename', async c => {
     const signal = c.req.raw.signal;
     const { tiles } = await resolveSparseTiles(c.env.BUCKET, surface, m.descriptors.bounds, c.executionCtx, signal);
     const tileMask = { tiles, maxZoom: surface.coverage.maxZoom };
-    const data = isTileCovered(tileMask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx, signal) : blank;
+    const data = isTileCovered(tileMask, z, x, y) ? await readTile(c.env.BUCKET, a.tilesKey, z, x, y, c.executionCtx, signal, { sha256: a.tilesSha256, expiresAt: m.expiresAt }) : blank;
     return response(data, 'image/webp', m.expiresAt, `${a.tilesSha256}-${z}-${x}-${y}`);
   });
 });
@@ -503,7 +503,7 @@ return {
       return complete(reject(400, 'invalid-query', 'Unknown query parameter'));
     }
     const req = request.method === 'HEAD' ? new Request(request, { method: 'GET' }) : request;
-    const observed = { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise), metrics, responseCacheEnabled: env.AV_RESPONSE_CACHE !== 'off' };
+    const observed = { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise), metrics, cacheOrigin: url.origin, responseCacheEnabled: env.AV_RESPONSE_CACHE !== 'off' };
     let result: Response;
     try { result = boundResponse(finish(request, await app.fetch(req, env, observed as unknown as Parameters<typeof app.fetch>[2]))); }
     catch (error) {

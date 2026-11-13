@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createRasterTileProtocol } from './client-raster';
+import { createRasterTileProtocol, createSourceRasterTileProtocol } from './client-raster';
 const base = 'https://api.test';
 const tile = (x = 0) => `${base}/tiles/gfs/build/usable-lift-msl/f003/7/${x}/50.webp`;
 const webp = () => new Response(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } });
 const disposals: Array<() => void> = [];
 function setup(options: Parameters<typeof createRasterTileProtocol>[1]) { const protocol = createRasterTileProtocol(base, options); disposals.push(protocol.dispose); return protocol; }
+function setupSources(options: Parameters<typeof createRasterTileProtocol>[1]) { const protocol = createSourceRasterTileProtocol(base, options); disposals.push(protocol.dispose); return protocol; }
 afterEach(() => { for (const dispose of disposals.splice(0)) dispose(); vi.useRealTimers(); vi.restoreAllMocks(); });
 function heldFetch() {
   const finish: Array<(response: Response) => void> = [];
@@ -324,4 +325,75 @@ it('bounds queued prefetches even when the prefetch lane cannot dispatch', async
   const promoted = protocol.load({ url: protocol.url(tile()) }, new AbortController());
   expect(fetchImpl).toHaveBeenCalledTimes(1);
   finish[0](webp()); await Promise.all([background, promoted]);
+});
+
+
+it('keeps prepared map sources in the background lane and promotes them without refetching', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl });
+  const source = protocol.createSource(false);
+  const prepared = Array.from({ length: 4 }, (_, i) => protocol.load({ url: source.url(tile(i)) }, new AbortController()));
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  const interactive = protocol.load({ url: protocol.url(tile(4)) }, new AbortController());
+  expect(fetchImpl).toHaveBeenCalledTimes(3);
+  source.setInteractive(true);
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
+  for (const done of finish.slice()) done(webp());
+  await interactive;
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(5));
+  finish[4](webp()); await Promise.all(prepared);
+  expect(new Set(fetchImpl.mock.calls.map(([url]) => url)).size).toBe(5);
+});
+
+it('delivers owned buffers for background map loads and preserves the byte cache after transfer', async () => {
+  const fetchImpl = vi.fn<typeof fetch>(async () => webp()), protocol = setupSources({ fetchImpl });
+  const source = protocol.createSource(false), load = () => protocol.load({ url: source.url(tile()) }, new AbortController());
+  const first = await load();
+  structuredClone(first.data, { transfer: [first.data] });
+  expect(first.data.byteLength).toBe(0);
+  const cached = await load();
+  expect(cached.data.byteLength).toBe(12);
+  structuredClone(cached.data, { transfer: [cached.data] });
+  expect((await protocol.load({ url: protocol.url(tile()) }, new AbortController())).data.byteLength).toBe(12);
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
+it('disposes a source without cancelling shared tiles or starting its queued work', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxActive: 1 });
+  const source = protocol.createSource(false), target = protocol.createSource(true);
+  const abandoned = [0, 1, 2].map(x => protocol.load({ url: source.url(tile(x)) }, new AbortController()));
+  const outcomes = Promise.allSettled(abandoned), staleUrl = source.url(tile(3));
+  const visible = protocol.load({ url: target.url(tile(0)) }, new AbortController());
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  source.dispose();
+  expect((await outcomes).every(result => result.status === 'rejected')).toBe(true);
+  expect(fetchImpl.mock.calls[0][1]!.signal!.aborted).toBe(false);
+  finish[0](webp()); await visible;
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  await expect(protocol.load({ url: staleUrl }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
+  expect(() => source.url(tile())).toThrow();
+  source.dispose();
+});
+
+it('limits retained source handles and releases them for the next selection', async () => {
+  const protocol = setupSources({ fetchImpl: vi.fn<typeof fetch>(async () => webp()) });
+  const first = protocol.createSource(true), second = protocol.createSource(false);
+  expect(() => protocol.createSource(false)).toThrow('source limit');
+  first.dispose();
+  const next = protocol.createSource(false), url = next.url(tile());
+  second.dispose(); protocol.dispose();
+  await expect(protocol.load({ url }, new AbortController())).rejects.toMatchObject({ name: 'AbortError' });
+  expect(() => protocol.createSource(false)).toThrow();
+});
+
+it('demotes queued source work while allowing the current admitted read to settle', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxActive: 1, maxPrefetchActive: 0 });
+  const source = protocol.createSource(true);
+  const active = protocol.load({ url: source.url(tile()) }, new AbortController());
+  const queued = protocol.load({ url: source.url(tile(1)) }, new AbortController());
+  source.setInteractive(false);
+  finish[0](webp()); await active;
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  source.setInteractive(true);
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  finish[1](webp()); await queued;
 });

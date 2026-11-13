@@ -80,7 +80,7 @@ class MapMock {
   sources = new Map<string, unknown>();
   layers = new Map<string, { id: string; source?: string; paint?: Record<string, number> }>();
   removed = false;
-  options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number } = {};
+  options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number; maxTileCacheSize?: number } = {};
   center = { lng: 0, lat: 0 };
   zoom = 0;
   constructor(options?: MapMock['options']) {
@@ -134,7 +134,10 @@ let manifest: ManifestV5;
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 const horizon = Date.parse('2026-10-31T00:00:00Z');
 const ui = (id: string) => doc.elements.get(id)!;
-const sourceId = () => [...map().layers.values()].find(layer => layer.source?.startsWith('av-overlay-'))!.source!;
+const sourceId = () => {
+  const overlays = [...map().layers.values()].filter(layer => layer.source?.startsWith('av-overlay-'));
+  return (overlays.find(layer => (layer.paint?.['raster-opacity'] ?? 0) > 0) ?? overlays[0])!.source!;
+};
 function modelButton(id: string): Element {
   const button = ui('models').children.find(child => child.value === id);
   if (!button) throw new Error(`Missing model button ${id}`);
@@ -185,6 +188,29 @@ beforeEach(() => {
 afterEach(() => {
   page('pagehide', false);
   vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs();
+});
+
+it('starts discovery before the map loads and bounds retained tile caches', async () => {
+  await import('./main');
+  expect(fetchMock).toHaveBeenCalled();
+  expect(map().sources.size).toBe(0);
+  expect(map().options.maxTileCacheSize).toBe(16);
+  map().emit('load');
+  await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
+  expect(sourceId()).toBeDefined();
+});
+
+it.each(['pointerenter', 'focus', 'pointerdown'])('prepares a layer on %s while preserving the displayed selection', async event => {
+  await start();
+  await selectFrame(1);
+  const active = sourceId();
+  ui('ref-msl').dispatchEvent(new Event(event));
+  const standby = [...map().layers.values()].find(layer => layer.source?.startsWith('av-overlay-') && layer.paint?.['raster-opacity'] === 0)!;
+  expect((map().getSource(standby.source!) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-msl/');
+  expect(sourceId()).toBe(active);
+  expect(ui('ref-agl').className).toContain('is-selected');
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  expect(sourceId()).toBe(standby.source);
 });
 
 it('keeps the incomplete-map warning until every failed tile recovers or leaves the viewport', async () => {

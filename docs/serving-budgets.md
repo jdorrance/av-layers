@@ -8,17 +8,25 @@ combined work across all grids selected by a request.
 ## Cache and in-flight limits
 
 - **Pointer cache:** 32 entries, 1 MiB max; 15 s positive TTL, 5 s unavailable
-  TTL. A build-ID miss coalesces a pointer refresh throttled to 1 req/s.
+  TTL. Validated pointer bytes also use the Cache API with the original absolute
+  deadline. A build-ID miss bypasses that shared entry and coalesces a pointer
+  refresh throttled to 1 req/s.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
-- **Client tile transport:** preview and Windy share `createRasterTileProtocol`.
+- **Client tile transport:** preview and Windy share the
+  [raster scheduler](../packages/client/src/client-raster.ts).
   It keeps 4 requests active, at most 2 of them prefetch, and queues 64. The
-  compressed tile cache is 48 MiB including entry overhead. Build expiry drops
+  compressed tile cache is 48 MiB including entry overhead. Preview retains at
+  most two source handles (displayed and prepared), with 16 offscreen tiles per
+  source. Prepared-source loading shares the two-request prefetch limit. Build expiry drops
   that build's cache. Palette responses stay revalidatable. Build-specific tile,
   manifest, provenance, and TileJSON responses stay immutable until `expiresAt`.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
-  concurrent cold loads. Successful static product validation follows manifest
+  concurrent cold loads. Validated manifest bytes also use the Cache API through
+  build expiry. Shared storage entries are scoped to the API origin; each read
+  verifies its body digest and each manifest rechecks retained/product binding.
+  Successful static product validation follows manifest
   and product identity; retained-entry binding and expiry run on every request.
 - **Coverage cache:** 16 entries, 24 MiB max; 2 concurrent cold loads. Verifies
   descriptor and mask SHA-256 digests. Sparse entries include decoded block masks
@@ -31,7 +39,9 @@ combined work across all grids selected by a request.
   Request-held sparse objects reserve shared allocation bytes until their last
   lease ends, including after cache eviction.
 - **PMTiles directory cache:** 256 entries, 4 MiB max (96 B/entry, max 16,384
-  entries/directory); 8 concurrent tile reads. Identical archive ranges share
+  entries/directory); 8 concurrent tile reads. Header/root and leaf range bytes
+  also use the Cache API, keyed by archive SHA-256, range and ETag through build
+  expiry. Tile payloads use the response cache. Identical archive ranges share
   materialized bytes, with 8 active ranges, 128 waiters and the default queue
   and deadline limits in `MaterializedReads`. Cancelling one waiter preserves
   the read for remaining consumers.
@@ -94,6 +104,8 @@ Response headers `X-Av-R2-Reads`, `X-Av-R2-Bytes`, `X-Av-Cache-Hits`,
 (`r2`). Overlapping waits count once. The health probe records these spans.
 Measure decode CPU locally because the deployed Worker clock advances on I/O.
 Set `AV_REQUEST_METRICS=true` for structured route logs.
+`AV_RESPONSE_CACHE=off` disables response, pointer, manifest and archive-range
+Cache API reuse; isolate-local and digest-addressed coverage caches remain enabled.
 
 Sustained load tests run for 5 minutes per cache mode (`AV_RESPONSE_CACHE=on` vs
 `off`) at 10 req/s (90% tiles, 4% samples, 6% metadata, max 20 concurrent,

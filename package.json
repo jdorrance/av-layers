@@ -35,6 +35,7 @@
     "docs:generate": "node --import tsx scripts/generate-reference.ts",
     "docs:check": "node --import tsx scripts/generate-reference.ts --check",
     "operations": "node --import tsx scripts/operations.ts",
+    "bench:preview": "node --import tsx scripts/preview-layer-bench.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
     "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check"
   },
@@ -48,6 +49,7 @@
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "22.19.15",
     "eslint": "10.14.0",
+    "playwright": "1.64.0",
     "tsx": "4.23.15",
     "typescript": "catalog:",
     "typescript-eslint": "8.72.1",

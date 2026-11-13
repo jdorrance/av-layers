@@ -44,9 +44,17 @@ function sidecar(pub: ReturnType<typeof publication>, payload: unknown = {
 
 class MemoryCache {
   entries = new Map<string, Response>();
+  internal = new Map<string, Response>();
   matches = 0;
-  async match(request: Request) { this.matches++; return this.entries.get(request.url)?.clone(); }
-  async put(request: Request, response: Response) { this.entries.set(request.url, new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers })); }
+  async match(request: Request) {
+    const internal = new URL(request.url).pathname.startsWith('/__av-storage/');
+    if (!internal) this.matches++;
+    return (internal ? this.internal : this.entries).get(request.url)?.clone();
+  }
+  async put(request: Request, response: Response) {
+    const internal = new URL(request.url).pathname.startsWith('/__av-storage/');
+    (internal ? this.internal : this.entries).set(request.url, new Response(await response.arrayBuffer(), { status: response.status, headers: response.headers }));
+  }
 }
 
 class MemoryBucket {
@@ -444,6 +452,7 @@ describe('read-only worker', () => {
     expect(await result.json()).toMatchObject({ title: 'publication-invalid' });
     expect(cache.matches).toBe(0);
     expect(bucket.reads.map(read => read.key)).toEqual(['catalog/gfs/latest.json', pub.retained.manifestKey]);
+    expect([...cache.internal.keys()].some(key => decodeURIComponent(key).includes('/manifest.json'))).toBe(false);
   });
   it('rejects hash-valid provenance with invalid JSON or mismatched identity', async () => {
     const pub = publication(primary);
@@ -452,6 +461,7 @@ describe('read-only worker', () => {
     bucket.objects.set(receipt.key, receipt.bytes);
     expect((await call(`/v1/models/gfs/runs/${primary}/provenance`)).status).toBe(503);
     bucket = new MemoryBucket();
+    cache.internal.clear();
     const malformed = new TextEncoder().encode('not JSON');
     pub.manifest.source.provenanceSha256 = createHash('sha256').update(malformed).digest('hex');
     bucket.install(pub);
@@ -557,6 +567,7 @@ describe('read-only worker', () => {
       : { model: product.modelId, bounds: product.bounds, nominalDxMeters: product.nominalDxMeters }));
     expect((await call('/v1/models/hrrr/latest')).status).toBe(404);
     bucket = new MemoryBucket();
+    cache.internal.clear();
     const broken = publication(bad);
     bucket.install(broken);
     bucket.objects.delete(broken.retained.manifestKey);
@@ -566,6 +577,7 @@ describe('read-only worker', () => {
       expect.objectContaining({ model: 'gfs', available: false, error: 'publication-incomplete' })
     ]) });
     bucket = new MemoryBucket();
+    cache.internal.clear();
     const unavailable = await call('/v1/catalog');
     expect(unavailable.status).toBe(200);
     expect(await unavailable.json()).toMatchObject({
@@ -792,6 +804,7 @@ describe('read-only worker', () => {
     const invalid = new MemoryBucket();
     invalid.objects.set('catalog/gfs/latest.json', { version: 1, model: 'gfs', retained: [] });
     bucket = invalid;
+    cache.internal.clear();
     const result = await call('/v1/models/gfs/latest');
     expect(result.status).toBe(503);
     expect(result.headers.get('cache-control')).toBe('no-store');
@@ -835,6 +848,7 @@ describe('read-only worker', () => {
     expect(ambiguous.status).toBe(503);
     expect((await ambiguous.json() as { title: string }).title).toBe('publication-invalid');
     expect([...cache.entries.keys()].filter(url => !url.startsWith('https://coverage.av/'))).toEqual([]);
+    expect([...cache.internal.keys()].some(key => decodeURIComponent(key).includes('/manifest.json'))).toBe(false);
     pub.manifest.artifacts.pop();
     expect((await call(path)).status).toBe(200);
     expect(bucket.reads.filter(read => read.key.startsWith('builds/') && read.key.endsWith('/manifest.json'))).toHaveLength(2);
@@ -878,7 +892,7 @@ describe('read-only worker', () => {
     expect(Number(warm.headers.get('x-av-cache-hits'))).toBeGreaterThan(0);
   });
 
-  it('bypasses response caching only through a deployment binding while retaining metadata caches', async () => {
+  it('bypasses response caching through a deployment binding while retaining isolate metadata caches', async () => {
     const path = `/v1/models/gfs/runs/${primary}/sample?lat=0&lon=0&frame=all&layers=precip-rate`;
     await call(path);
     const before = bucket.reads.filter(read => read.key.includes('/samples/')).length;
@@ -906,6 +920,7 @@ describe('read-only worker', () => {
     expect((await later).status).toBe(404);
     expect(bucket.reads.filter(read => read.key === 'catalog/gfs/latest.json')).toHaveLength(3);
     bucket = new MemoryBucket();
+    cache.internal.clear();
     for (let i = 0; i < 10; i++) expect((await call('/v1/models/gfs/latest')).status).toBe(503);
     expect(bucket.reads).toHaveLength(1);
     bucket.install(publication(secondary));
