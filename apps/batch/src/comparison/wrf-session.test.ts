@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PinnedBuild } from '@av/client';
+import { getProduct } from '@av/contracts/models';
+import campaign from '../../../../packages/contracts/config/wrf-comparison.json' with { type: 'json' };
 import { fixturePointBuild, fixturePointSample } from '../../../../tests/client-point-fixture.js';
 import { planWrfComparison, captureWrfComparison, reportWrfComparison } from './wrf-session.js';
 
@@ -137,11 +139,23 @@ describe('WRF comparison archive', () => {
     expect(report.availability.every(item => !item.observedByBriefing)).toBe(true);
   });
 
-  it('rejects a partial baseline instead of silently shrinking the forecast comparison', async () => {
+  it('reports hours excluded by baseline cadence without temporal interpolation', async () => {
     const { dir, options, builds } = await setup();
-    Object.assign(builds[0].manifest, JSON.parse(JSON.stringify(fixturePointBuild({ frameHours: [7] }).manifest).replaceAll('gfs', 'baseline')));
-    builds[0].manifest.tool.components = { science: 'c'.repeat(64) };
-    await expect(planWrfComparison(dir, options)).rejects.toThrow('matching control and baseline');
+    [campaign.baseline_model, ...campaign.products].forEach((id, index) => {
+      const frameHours = getProduct(id)!.frameHours.map(hour => hour + (index ? 6 : 0));
+      const { model, cycle } = builds[index].manifest;
+      Object.assign(builds[index].manifest, JSON.parse(JSON.stringify(fixturePointBuild({ frameHours }).manifest).replaceAll('gfs', model)));
+      builds[index].manifest.cycle = cycle;
+      builds[index].manifest.tool.components = { science: 'c'.repeat(64) };
+    });
+    await planWrfComparison(dir, options); await captureWrfComparison(dir);
+    const report = await reportWrfComparison(dir);
+    const times = builds[1].manifest.frames.map(frame => new Date(frame.validTime).toISOString());
+    const baseline = new Set(builds[0].manifest.frames.map(frame => new Date(frame.validTime).toISOString()));
+    expect(report.sampling.validTimes).toEqual(times.filter(time => baseline.has(time)));
+    expect(report.sampling.unpairedValidTimes.control).toEqual(times.filter(time => !baseline.has(time)));
+    expect(report.sampling.unpairedValidTimes.control).toHaveLength(4);
+    expect(report.differences.control.counts.numericPairs).toBe(40);
   });
 
 });

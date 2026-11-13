@@ -176,9 +176,7 @@ function plannedRequests(plan: Plan, manifests: ManifestV5[]): Plan['requests'] 
   });
   if (!isDeepStrictEqual(clocks[0], clocks[1])) throw new Error('WRF spin-up clocks differ');
   const wrfTimes = wrf.map(index => manifests[index].frames.map(frame => Date.parse(frame.validTime)));
-  if (!isDeepStrictEqual(wrfTimes[0], wrfTimes[1]) || wrfTimes[0].some(time => !common.includes(time))) {
-    throw new Error('All WRF valid times require matching control and baseline frames');
-  }
+  if (!isDeepStrictEqual(wrfTimes[0], wrfTimes[1])) throw new Error('WRF valid-time horizons differ');
   if (!common.length) throw new Error('Builds have no common valid times');
   const requests: Plan['requests'] = [];
   for (const [index, manifest] of manifests.entries()) {
@@ -223,7 +221,11 @@ export async function reportWrfComparison(out: string, observationPath?: string)
     buildReport(merged.filter(sample => sample.model === build.model), baseline, mappings, plan.sites,
       { pairing: { mode: 'products-at-valid-time', note: 'Matched forcing cycles; WRF publication origin follows spin-up.' } })]));
   const observations = observationPath ? await readLocalFile(observationPath, 16 * 1024 ** 2) : undefined;
-  const report = { version: 1, referenceTime: plan.referenceTime, builds: plan.builds, availability, differences,
+  const validTimes = [...new Set(merged.map(sample => new Date(sample.validTime).toISOString()))].sort();
+  const sampling = { validTimes, unpairedValidTimes: Object.fromEntries(manifests.map(manifest => [manifest.model,
+    manifest.frames.map(frame => new Date(frame.validTime).toISOString()).filter(time => !validTimes.includes(time))])),
+    qualification: 'Common valid times only; the baseline cadence can omit late WRF hours. No temporal interpolation.' };
+  const report = { version: 1, referenceTime: plan.referenceTime, builds: plan.builds, availability, sampling, differences,
     cycleQualification: 'Receipt hashes bind model/attempt/configuration. Forcing clocks use internally validated operator-supplied run locks.',
     observations: observations ? { sha256: digest(observations.toString()),
       ...observationScorecard(merged, plan.builds.map(build => build.model), plan.baseline, JSON.parse(observations.toString())) } : null,

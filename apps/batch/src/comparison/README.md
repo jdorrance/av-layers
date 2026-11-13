@@ -161,7 +161,9 @@ pnpm comparison wrf-report --out output/wrf-comparison
 pnpm comparison wrf-report --out output/wrf-comparison --observations observations.json
 ```
 
-`wrf-report.json` separates model differences from observation errors.
+`wrf-report.json` separates model differences from observation errors and lists
+every valid time excluded by sampling cadence. The baseline's three-hour tail
+omits some late WRF hours; scoring uses common times without interpolation.
 `wrf-normalized.json` retains source build, cycle, site, valid time, units,
 references and flags. Missing captures fail replay. Rerunning collection retries failed HTTP responses
 under fresh IDs while retaining each failed response.
