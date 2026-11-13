@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_PRODUCT } from '@av/contracts/models';
+import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
 import { createWholeDomainDescriptors, estimateProfileResponseBytes, layerSurface, MAX_POINT_RESPONSE_BYTES, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/client';
-import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
-import { verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
+import { fixtureBuild, fixtureManifestV5 } from '../tests/forecast-fixture.js';
+import { verifyApiDeployment, verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -148,10 +148,6 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   const sample = vi.spyOn(ApiClient.prototype, 'sample').mockResolvedValue({ version: 5, model: manifest.model, buildId: manifest.buildId, lat: 32.9, lon: -117.25, method: manifest.method, source: manifest.source, surfaces: [], expiresAt: manifest.expiresAt,
     frames: [{ ...manifest.frames[0]!, layers: Object.fromEntries(manifest.layers.map(layer => [layer, sampleLayer()])) }] });
   let corruptTile = false;
-  await expect(probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl: async input => {
-    const path = new URL(String(input)).pathname;
-    return Response.json(path === '/healthz' ? { ok: true } : { models: [{ model: manifest.model, available: true }] });
-  }, expectedModels: [manifest.model, 'another-model'] })).rejects.toThrow('Catalog omitted');
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true, deploymentId });
@@ -181,6 +177,74 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   expect(latest).toHaveBeenLastCalledWith(manifest.model, { requireLive: false, signal: undefined });
   sample.mockRejectedValueOnce(new Error('sample unavailable'));
   await expect(probeApi(options)).rejects.toThrow('sample unavailable');
+});
+
+describe('deployment publication readiness', () => {
+  const eventModel = PRODUCTS.find(product => product.execution.schedule.length === 0)!.modelId;
+  const scheduledModel = PRODUCTS.find(product => product.execution.schedule.length > 0)!.modelId;
+  const catalog = () => PRODUCTS.map(({ modelId }) => ({ model: modelId, available: modelId !== eventModel,
+    ...(modelId === eventModel ? { error: 'publication-unavailable' } : {}) }));
+  function fixture(models: unknown = catalog()) {
+    const builds = new Map(PRODUCTS.map(({ modelId }) => [modelId, fixtureBuild({ model: modelId, layers: ['precip-rate'] })]));
+    const latest = vi.spyOn(ApiClient.prototype, 'latest').mockImplementation(async model => builds.get(model)!);
+    const sample = vi.spyOn(ApiClient.prototype, 'sample').mockImplementation(async ({ manifest }, request) => ({
+      version: 5, model: manifest.model, buildId: manifest.buildId, lat: request.lat, lon: request.lon,
+      method: manifest.method, source: manifest.source, surfaces: [], expiresAt: manifest.expiresAt,
+      frames: manifest.frames.map(frame => ({ ...frame, layers: { 'precip-rate': {
+        value: 1, surfaceId: manifest.surfaces[0]!.id, status: 'valid', support: 0, interpolated: false
+      } } }))
+    }));
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/healthz') return Response.json({ ok: true, deploymentId });
+      if (path === '/v1/catalog') return Response.json({ models });
+      const model = path.startsWith('/tiles/') ? path.split('/')[2]! : path.split('/')[3]!;
+      const { manifest } = builds.get(model)!;
+      if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
+      if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+      expect(path).toMatch(/^\/tiles\//);
+      return new Response('RIFF1234WEBP0000000000000000', { headers: {
+        'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60'
+      } });
+    });
+    return { latest, sample, options: { baseUrl: 'https://api.example', expectedDeploymentId: deploymentId, fetchImpl } };
+  }
+
+  it.each([false, true])('probes published models when the event-driven model is available=%s', async available => {
+    const models = catalog().map(entry => entry.model === eventModel && available ? { model: eventModel, available } : entry);
+    const { latest, options } = fixture(models);
+    await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
+    expect(latest.mock.calls.map(([model]) => model)).toEqual(models.filter(entry => entry.available).map(entry => entry.model));
+    expect(String(options.fetchImpl.mock.calls[0]![0])).toBe('https://api.example/healthz');
+  });
+
+  it.each(['publication-invalid', 'publication-incomplete', 'not-retained', undefined])('rejects event-driven publication error %s', async error => {
+    const { latest, options } = fixture(catalog().map(entry => entry.model === eventModel ? { ...entry, error } : entry));
+    await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
+    expect(latest).not.toHaveBeenCalled();
+  });
+
+  it('requires scheduled publications and keeps explicit forecast probes strict', async () => {
+    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error: 'publication-unavailable' } : entry));
+    await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${scheduledModel}`);
+    await expect(probeApi({ ...options, model: eventModel })).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
+  });
+
+  it.each([
+    { models: catalog().filter(entry => entry.model !== eventModel), error: 'Catalog omitted' },
+    { models: [...catalog(), { model: eventModel, available: true }], error: 'Catalog repeats' },
+    { models: catalog().map(entry => entry.model === eventModel ? { ...entry, available: 'false' } : entry), error: 'catalog response does not match' }
+  ])('rejects missing, duplicate or malformed catalog entries: $error', async ({ models, error }) => {
+    const { latest, options } = fixture(models);
+    await expect(verifyApiDeployment(options)).rejects.toThrow(error);
+    expect(latest).not.toHaveBeenCalled();
+  });
+
+  it('propagates serving failures for published models', async () => {
+    const { sample, options } = fixture();
+    sample.mockRejectedValueOnce(new Error('sample unavailable'));
+    await expect(verifyApiDeployment(options)).rejects.toThrow('sample unavailable');
+  });
 });
 
 it('samples every v5 surface through one, listed and all frame selections', async () => {

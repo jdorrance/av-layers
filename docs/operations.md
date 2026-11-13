@@ -168,8 +168,11 @@ gh workflow run deploy.yml --ref main -f environment=staging
 ```
 
 Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
-the clients, deploys the API Worker, and verifies each configured model's latest
-build through the catalog, retained list, point, provenance and tile routes.
+the clients, deploys the API Worker, and checks the complete model catalog.
+Scheduled models require a publication. Event-driven models may report
+`publication-unavailable` until an external cycle is published. Every available
+model is verified through its latest build, retained list, point, provenance and
+tile routes; invalid, incomplete and expired publications fail deployment.
 After Cloudflare Pages deploys, the job checks the revision marker and Windy
 plugin CORS headers.
 
