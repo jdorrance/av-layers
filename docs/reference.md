@@ -133,6 +133,44 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
 - Publication timing: cycle age at most 12 hours; remaining horizon at least 48 hours.
 
+### WRF North Armenia 1km ICON comparison (wrf-armenia-pilot-dwd-1km-soaring)
+
+- Public model ID: `wrf-armenia-pilot-dwd-1km`; model family: `wrf`; source configuration: `wrf-armenia-pilot-dwd-1km`; domain: `armenia-1km-c1`.
+- Attribution: DWD / WRF-ARW / Aviation Forecast Layers.
+- Resolution tier: `high`.
+- Grid: `lambert-conformal`; 156 columns × 114 rows; spherical Earth radius 6370000 m; periodic longitude: false.
+- Terrain subdivision factor: `1`; fine grid: 156 columns × 114 rows.
+- Bounds [west, south, east, north]: `[43.4601,40.0018,45.5399,41.1937]`.
+- Coverage: `wrf-armenia-pilot-dwd-1km-land`. WRF North Armenia 1km ICON comparison
+- Native tile zoom: 0–10.
+- Execution: 12 target shards; at most 24 simultaneous shard jobs; worker ceiling 3; event-driven, 1 expected runs per day.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
+- Vertical coordinate: `model-levels`; maximum levels: 40.
+- Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- Publication timing: cycle age at most 6 hours; remaining horizon at least 18 hours.
+
+### WRF North Armenia 3km ICON comparison (wrf-armenia-pilot-dwd-3km-soaring)
+
+- Public model ID: `wrf-armenia-pilot-dwd-3km`; model family: `wrf`; source configuration: `wrf-armenia-pilot-dwd-3km`; domain: `armenia-3km-c1`.
+- Attribution: DWD / WRF-ARW / Aviation Forecast Layers.
+- Resolution tier: `high`.
+- Grid: `lambert-conformal`; 106 columns × 92 rows; spherical Earth radius 6370000 m; periodic longitude: false.
+- Terrain subdivision factor: `1`; fine grid: 106 columns × 92 rows.
+- Bounds [west, south, east, north]: `[42.2471,39.0954,46.7529,42.084]`.
+- Coverage: `wrf-armenia-pilot-dwd-3km-land`. WRF North Armenia 3km ICON comparison
+- Native tile zoom: 0–10.
+- Execution: 12 target shards; at most 24 simultaneous shard jobs; worker ceiling 3; event-driven, 1 expected runs per day.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 24; native samples and profiles retain the full selected axis.
+- Vertical coordinate: `model-levels`; maximum levels: 40.
+- Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- Publication timing: cycle age at most 6 hours; remaining horizon at least 18 hours.
+
 ## Scalar quantities and units
 
 Source: [layer definitions](../packages/contracts/src/layers.ts). Each product selects the method matching its vertical coordinate. See [the data guide](data.md).

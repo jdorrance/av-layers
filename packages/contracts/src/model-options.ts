@@ -44,5 +44,27 @@ export const MODEL_OPTIONS = [
       48.21302,
       42.534384
     ]
+  },
+  {
+    "modelId": "wrf-armenia-pilot-dwd-3km",
+    "label": "WRF North Armenia 3km ICON comparison",
+    "nominalDxMeters": 3000,
+    "bounds": [
+      42.2471,
+      39.0954,
+      46.7529,
+      42.084
+    ]
+  },
+  {
+    "modelId": "wrf-armenia-pilot-dwd-1km",
+    "label": "WRF North Armenia 1km ICON comparison",
+    "nominalDxMeters": 1000,
+    "bounds": [
+      43.4601,
+      40.0018,
+      45.5399,
+      41.1937
+    ]
   }
 ] as const;

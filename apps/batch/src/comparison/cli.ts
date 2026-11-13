@@ -8,6 +8,7 @@ import type { ComparisonSample, ParameterMapping } from './core.js';
 import { buildReport } from './report.js';
 import { parseSites } from './sites.js';
 import { captureComparison, planComparison, readComparisonAnalysis, replayComparison } from './session.js';
+import { planWrfComparison, captureWrfComparison, reportWrfComparison } from './wrf-session.js';
 import { captureSkySight, planSkySight, replaySkySight } from './skysight-session.js';
 
 async function readArray(path: string, maxBytes: number, maxRows: number): Promise<Record<string, unknown>[]> {
@@ -21,13 +22,22 @@ async function readArray(path: string, maxBytes: number, maxRows: number): Promi
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     out: { type: 'string' }, sites: { type: 'string' }, reference: { type: 'string' }, api: { type: 'string' }, provider: { type: 'string' },
-    left: { type: 'string' }, right: { type: 'string' }, mappings: { type: 'string' }, baseline: { type: 'string' }, regions: { type: 'string' }
+    left: { type: 'string' }, right: { type: 'string' }, mappings: { type: 'string' }, baseline: { type: 'string' }, regions: { type: 'string' }, campaign: { type: 'string' }, runs: { type: 'string' }, observations: { type: 'string' }
   } });
   const [command] = positionals;
-  if (!values.out || positionals.length !== 1 || !['plan', 'capture', 'report', 'compare', 'skysight-plan', 'skysight-capture', 'skysight-report'].includes(command)) {
+  if (!values.out || positionals.length !== 1 || !['wrf-plan', 'wrf-capture', 'wrf-report', 'plan', 'capture', 'report', 'compare', 'skysight-plan', 'skysight-capture', 'skysight-report'].includes(command)) {
     throw new Error('Usage: pnpm comparison plan|capture|report|compare|skysight-plan|skysight-capture|skysight-report --out DIR');
   }
-  if (command === 'skysight-plan') {
+  if (command === 'wrf-plan') {
+    if (!values.campaign || !values.runs || !values.api || !values.reference) throw new Error('WRF plan requires --campaign FILE --runs FILE --api URL --reference UTC');
+    const plan = await planWrfComparison(values.out, { campaign: values.campaign, runs: values.runs, api: values.api, reference: values.reference });
+    console.log(JSON.stringify({ builds: plan.builds.length, requests: plan.requests.length }));
+  } else if (command === 'wrf-capture') {
+    console.log(JSON.stringify(await captureWrfComparison(values.out)));
+  } else if (command === 'wrf-report') {
+    const report = await reportWrfComparison(values.out, values.observations);
+    console.log(JSON.stringify({ builds: report.builds.length, observations: report.observations?.observationCount ?? 0 }));
+  } else if (command === 'skysight-plan') {
     if (!values.baseline || !values.regions) throw new Error('SkySight planning requires --baseline DIR --regions FILE');
     const plan = await planSkySight(values.out, { baseline: values.baseline, regions: values.regions, referenceTime: values.reference });
     console.log(JSON.stringify({ sites: plan.sites.length, requests: plan.requests.length, pins: plan.pins }));

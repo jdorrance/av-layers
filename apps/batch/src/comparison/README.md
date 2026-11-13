@@ -126,3 +126,52 @@ for those probes. Outputs reference the original baseline without rewriting it.
 ```sh
 pnpm test apps/batch/src/comparison
 ```
+
+## WRF resolution experiment
+
+`packages/contracts/config/wrf-comparison.json` is exported from the producer's
+`config/comparisons/` campaign. The two registered WRF products use the same
+physics and 18Z forcing, six-hour spin-up, and 24 hourly published frames.
+The fine product uses a one-way 3 km parent matching the control geometry;
+fixed parent/child clocks are 15/5 seconds. Both consumer products keep model-grid spacing
+for terrain columns (`terrainSubdivisionFactor: 1`). Automatic schedules stay empty.
+
+Build each registered product from its committed producer store using
+`pnpm forecast --model MODEL --cycle PUBLISH_ORIGIN --source-store-dir STORE`.
+The [WRF provider](../wrf-zarr/README.md) owns ingestion and storage requirements.
+Coverage masks are checked in; terrain data must be staged through the normal
+[terrain workflow](../terrain/README.md) before real builds.
+
+Create `runs.json` as an array of three `{ model, buildId }` selections. Each WRF
+entry also includes its complete `runLock` object and `readyReceipt` local path.
+Use the baseline's **forcing cycle**, six hours before the WRF publication origin.
+Planning checks the ready receipt against the lock and the consumer's archived
+frame provenance SHA-256. `--reference` is the UTC briefing cutoff; builds created
+later are rejected. Reports separately record first-seen times; only captures made
+by the cutoff establish briefing availability. Archive before serving retention expires.
+
+```sh
+pnpm comparison wrf-plan --campaign packages/contracts/config/wrf-comparison.json \
+  --runs runs.json --api https://API_HOST --reference 2026-07-15T04:30:00Z \
+  --out output/wrf-comparison
+pnpm comparison wrf-capture --out output/wrf-comparison
+pnpm comparison wrf-report --out output/wrf-comparison
+pnpm comparison wrf-report --out output/wrf-comparison --observations observations.json
+```
+
+`wrf-report.json` separates model differences from observation errors.
+`wrf-normalized.json` retains source build, cycle, site, valid time, units,
+references and flags. Missing capture responses fail replay; recapture is resumable.
+The existing pairer enforces matching coordinates, valid times, references and
+statistical windows, and retains unavailable and no-lift states.
+
+Observation JSON follows [observationsSchema](wrf-scorecard.ts): `siteId`,
+`validTime`, `parameter`, `value`, `unit`, `verticalReference`, and `source`.
+Use normalized field units/references and collocated quality-controlled data.
+Flux-derived quantities also require `intervalStart` and `intervalEnd`.
+The scorecard reports paired bias, MAE, RMSE, baseline-relative MAE skill, sample
+counts and status counts per site/parameter. All three forecasts use the common
+available observation set. No-lift remains a status; maximum sampled flight
+altitude requires its own observation model before serving as ceiling truth.
+Report hashes bind the observations, plan and analysis source. Compare several
+weather regimes and held-out days before promoting a product.

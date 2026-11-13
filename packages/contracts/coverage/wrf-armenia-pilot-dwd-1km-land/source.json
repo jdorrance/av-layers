@@ -1,0 +1,188 @@
+{
+  "source": {
+    "dataset": "Natural Earth 1:50m Admin 0 Countries",
+    "release": "5.1.1",
+    "url": "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip",
+    "sha256": "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139",
+    "archiveBytes": 799734,
+    "license": "public-domain",
+    "excludedA3": [
+      "RUS"
+    ],
+    "excludedContinents": [],
+    "isoExceptions": [
+      {
+        "admin": "Ashmore and Cartier Islands",
+        "adm0_a3": "ATC",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Northern Cyprus",
+        "adm0_a3": "CYN",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "France",
+        "adm0_a3": "FRA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "FRA",
+        "iso_a2": "-99",
+        "iso_a2_eh": "FR"
+      },
+      {
+        "admin": "Indian Ocean Territories",
+        "adm0_a3": "IOA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Siachen Glacier",
+        "adm0_a3": "KAS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "Kosovo",
+        "adm0_a3": "KOS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "XK"
+      },
+      {
+        "admin": "Norway",
+        "adm0_a3": "NOR",
+        "iso_a3": "-99",
+        "iso_a3_eh": "NOR",
+        "iso_a2": "-99",
+        "iso_a2_eh": "NO"
+      },
+      {
+        "admin": "Somaliland",
+        "adm0_a3": "SOL",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      }
+    ],
+    "continentExclusions": []
+  },
+  "grid": {
+    "kind": "lambert-conformal",
+    "width": 156,
+    "height": 114,
+    "earthRadiusM": 6370000.0,
+    "centralMeridianDeg": 44.5,
+    "latitudeOfOriginDeg": 40.6,
+    "standardParallel1Deg": 39.5,
+    "standardParallel2Deg": 41.2,
+    "x0M": -77500.0,
+    "y0M": -56500.0,
+    "dxM": 1000.0,
+    "dyM": 1000.0,
+    "wrapLongitude": false
+  },
+  "output": {
+    "bytes": 2223,
+    "sha256": "189970b681f8ba2dfaa7dec0517e6468a3131d635269ef745367ee6ec554de87",
+    "counts": {
+      "activeCells": 17784
+    }
+  },
+  "halo": {
+    "bytes": 2223,
+    "sha256": "19c8d9649e737796cd3006bd24551cf4fef1a73a565b13b2c5dde011b9b952c0",
+    "counts": {
+      "haloOnlyCells": 0
+    }
+  },
+  "tiles": {
+    "bytes": 174763,
+    "sha256": "9c6649fc30a14266fa6fba433f505825c85128f6fd4507b670fa84e942124afe",
+    "countsByZoom": {
+      "0": 1,
+      "1": 1,
+      "2": 1,
+      "3": 4,
+      "4": 4,
+      "5": 4,
+      "6": 4,
+      "7": 4,
+      "8": 6,
+      "9": 12,
+      "10": 35
+    }
+  },
+  "tests": {
+    "cases": [
+      {
+        "name": "yerevan-north",
+        "lat": 40.27,
+        "lon": 44.52,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "sevan",
+        "lat": 40.55,
+        "lon": 44.96,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "aparan",
+        "lat": 40.59,
+        "lon": 44.36,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "gyumri",
+        "lat": 40.79,
+        "lon": 43.85,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "aragats-south",
+        "lat": 40.4,
+        "lon": 44.22,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "aragats-north",
+        "lat": 40.64,
+        "lon": 44.2,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      }
+    ]
+  },
+  "regeneration": {
+    "command": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model wrf-armenia-pilot-dwd-1km --output packages/contracts/coverage/wrf-armenia-pilot-dwd-1km-land",
+    "toolingSha256": "40806bd807553235f7a015ef00b50ad8e4e4bb81c2a33918c9d8ed1f7c07d75a",
+    "rasterizerSha256": "b635a4fed2dd81a9b8fe62c1908fb8531ab8ef2acb8b28d5bf93c04370d42d06",
+    "geometrySha256": "29643301dfdb465f43590341ef31853c0d7bfd0df93b0e2390c612750c1df9b5",
+    "tilesSha256": "1fca1cbf92ef6e3501211af235270e64232b92e86fbd9018f1e58f07147219a4",
+    "GEOS": "3.13.1",
+    "PROJ": "9.5.1"
+  }
+}
