@@ -662,6 +662,25 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     await second.close();
   });
 
+  it('surfaces a missing decoder runtime without downloading a valid cached field', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-runtime-')), cycle = '2026-10-08T00:00:00Z';
+    tempDirs.push(cacheDir);
+    const fetchImpl = vi.fn(syntheticFetch(cycle, []));
+    const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
+    const first = await createSplitGribAcquisitionSession(profile, options);
+    try { await first.acquire(4); } finally { await first.close(); }
+    const name = (await readdir(join(cacheDir, 'objects'))).find(name => name.endsWith('_HSURF.grib2.bz2'))!;
+    const path = join(cacheDir, 'objects', name), cached = readFileSync(path);
+    fetchImpl.mockClear();
+    vi.stubEnv('AV_ECCODES_PYTHON', join(cacheDir, 'missing-python'));
+    const second = await createSplitGribAcquisitionSession(profile, options);
+    try {
+      await expect(second.acquire(5)).rejects.toThrow('Cannot start ecCodes decoder');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(readFileSync(path)).toEqual(cached);
+    } finally { await second.close(); vi.unstubAllEnvs(); }
+  });
+
   it('does not retry or cache a response that fails GRIB validation', async () => {
     const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-invalid-'));
     tempDirs.push(cacheDir);

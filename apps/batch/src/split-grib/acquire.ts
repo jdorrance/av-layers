@@ -337,7 +337,12 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       stats,
       { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },
       async bytes => {
-        const decoded = await decoder.decode(bytes, target);
+        let decoded: DecodedSplitGribField;
+        try { decoded = await decoder.decode(bytes, target); }
+        catch (error) {
+          if (decoder.failure) controller.abort(decoder.failure);
+          throw error;
+        }
         verifySplitGribFieldMetadata(source, decoded, field, cycle, { hour, level });
         return decoded;
       }

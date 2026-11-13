@@ -133,6 +133,7 @@ export function createSplitGribDecoder(source: SplitSource, activeIndices: Uint3
 
   return {
     stats,
+    get failure(): Error | undefined { return stopped; },
     decode(bytes: Uint8Array, target?: Target): Promise<DecodedSplitGribField> {
       if (stopped) return Promise.reject(stopped);
       if (!bytes.byteLength || bytes.byteLength > MAX_SPLIT_OBJECT_BYTES) return Promise.reject(new RangeError('Split GRIB object byte length out of bounds'));
