@@ -25,6 +25,9 @@ Reload the page to pick up a newly published build (subject to the API's
 Choose **Auto** to use the finest available forecast that covers the map center
 and selected time. The URL preserves Auto and the requested time as you pan.
 
+The timeline shows the selected time, displayed time and image quality separately.
+Prepared viewport overviews respond during scrubbing; fine tiles replace a complete overview.
+
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
 [Build checks](vite.config.ts) bound startup and lazy JavaScript transfer and
@@ -46,6 +49,7 @@ publish no native profiles. Builds without a map prefix offer a 24-hour point vi
 - [src/main.ts](src/main.ts): OpenStreetMap basemap, model and AGL/MSL controls, forecast clock, and point card.
 - [src/url-state.ts](src/url-state.ts) reads and writes shared map URLs.
 - [src/raster-overlay.ts](src/raster-overlay.ts): raster replacement and prefetch.
+- [src/raster-overview.ts](src/raster-overview.ts): bounded decoded viewport images across forecast times.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.
 
@@ -54,24 +58,24 @@ See [the data guide](../../docs/data.md) for units and coverage.
 
 ## Layer benchmark
 
-[Measured results](../../docs/preview-performance.md) record the desktop baseline.
+[Measured results](../../docs/preview-performance.md) compare viewport overviews with detailed tiles.
 
 Compare the baseline and current preview in isolated Chromium sessions:
 
 ```sh
 pnpm exec playwright install chromium
-pnpm bench:preview --baseline 99cd00a --channel chrome --out output/preview-layer-bench.json
+pnpm bench:preview --baseline 2f34b65 --channel chrome --frames 40 --out output/preview-layer-bench.json
 ```
 
 Use `--channel chrome` for installed Chrome and inspect the recorded WebGL renderer.
 The [benchmark](../../scripts/preview-layer-bench.ts) loads each revision’s actual
-preview UI and serves patterned lossless WebP with controlled tile latency. It
-times `#time` input to the first render with five correct framebuffer pixels.
-Cold and warmed 24-hour drags dispatch every 60 or 120 ms; settled steps run with
-the point card closed and open. Superseded inputs remain in the report.
+preview UI and serves patterned lossless WebP over HTTP/2 with controlled latency.
+Nine framebuffer probes verify time, layer and position, recording first-correct
+and fully detailed views separately. Cold and warmed 40-frame sweeps dispatch
+every 60 or 120 ms; settled steps include the point card.
 
 Use `--scenario cold --delay-ms 250` or `500` to measure slower tile responses.
-The JSON records source fingerprints, per-input latency, request counts, retained
-JavaScript heap, and live WebGL texture storage including mipmaps and pooled
-textures. Repeated pans and time changes measure retention; adjacent PNGs show
-the final views. Texture bytes exclude driver overhead and renderbuffers.
+The JSON records source fingerprints, per-input latency, preparation and workload
+bytes, retained heap, textures and native image pixels. Repeated pans and time
+changes measure retention; adjacent PNGs show the final views. See the measured
+results for accounting scope and the transparency smoke command.

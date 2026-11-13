@@ -48,6 +48,8 @@ const opacityReadout = element<HTMLSpanElement>('opacity-readout');
 const timeInput = element<HTMLInputElement>('time');
 const dayBar = element<HTMLDivElement>('days');
 const timestamp = element<HTMLParagraphElement>('timestamp');
+const frameStatus = element<HTMLParagraphElement>('frame-status');
+const timelineStatus = element<HTMLParagraphElement>('timeline-status');
 const legend = element<HTMLElement>('legend');
 const legendBody = element<HTMLDivElement>('legend-body');
 const legendToggle = element<HTMLButtonElement>('legend-toggle');
@@ -68,6 +70,7 @@ const pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label');
 const meta = element<HTMLDListElement>('meta');
 
 const LIFT: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
+const displayedClock = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
@@ -145,7 +148,7 @@ function startPreview(): void {
   let mapFailed = false;
   let mapReady = false;
   let selectingOverlay = false;
-  let overlayState: OverlayState = { displayed: null, requested: null, incomplete: false, replacementFailed: false };
+  let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
     updateOverlayStatus();
@@ -349,7 +352,7 @@ function startPreview(): void {
     }
     const index = Math.max(0, frames.findIndex(frame => frame.id === selectedFrame));
     if (document.activeElement !== timeInput) timeInput.value = String(index);
-    timestamp.textContent = selected ? clockLabel(Date.parse(selected.validTime), offset) : 'No frame selected';
+    timestamp.textContent = selected ? `Selected · ${clockLabel(Date.parse(selected.validTime), offset)}` : 'No frame selected';
   }
 
   function removeOverlay(dispose = false): void {
@@ -362,15 +365,28 @@ function startPreview(): void {
   }
 
   function updateOverlayStatus(): void {
-    const { displayed, requested, incomplete, replacementFailed } = overlayState;
+    const { displayed, requested, quality, viewLoading, overviewReady, overviewTotal, overviewFailed, incomplete, replacementFailed } = overlayState;
     const showing = displayed ? `Showing ${displayed.build.manifest.model} ${displayed.frame} ${displayed.layer}.` : 'No forecast displayed.';
     const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
     const olderBuild = displayed && displayed.build !== build;
+    const displayedTime = displayed?.build.manifest.frames.find(frame => frame.id === displayed.frame)?.validTime;
+    const displayedLabel = displayedTime ? `${displayedClock.format(Date.parse(displayedTime))} UTC` : '';
+    frameStatus.dataset.quality = quality ?? 'none';
+    const status = !displayed ? requested ? 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
+      : pending ? `Showing ${displayedLabel} · Loading selected time…`
+      : quality === 'overview' ? `${displayedLabel} · Overview · ${replacementFailed ? 'Detail unavailable' : 'Loading detail…'}`
+      : viewLoading ? `${displayedLabel} · Loading this view…`
+      : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
+    if (frameStatus.textContent !== status) frameStatus.textContent = status;
+    timelineStatus.dataset.ready = String(overviewReady); timelineStatus.dataset.total = String(overviewTotal);
+    timelineStatus.hidden = overviewTotal === 0;
+    timelineStatus.textContent = overviewReady === overviewTotal ? 'Timeline ready'
+      : `${overviewReady + overviewFailed === overviewTotal ? 'Timeline partly ready' : 'Preparing timeline'} · ${overviewReady} / ${overviewTotal} times ready`;
     const alert = replacementFailed || incomplete;
     tileErrorBox.className = alert ? 'toast error' : 'toast status';
     tileErrorBox.role = alert ? 'alert' : 'status';
-    tileErrorBox.hidden = !alert && !pending && !pendingModel && !olderBuild;
-    tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : pending ? `Loading ${requested.frame} ${requested.layer}. ${showing}` : olderBuild ? showing : '';
+    tileErrorBox.hidden = !alert && !pendingModel && !olderBuild;
+    tileErrorBox.textContent = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : olderBuild ? showing : '';
     if (displayed) renderRibbon(displayed.layer, displayed.build);
     else { legend.hidden = true; legendBody.replaceChildren(); }
     if (!selectingOverlay) updatePointSelection();

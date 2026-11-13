@@ -30,6 +30,18 @@ combined work across all grids selected by a request.
   with 16 offscreen tiles per source. The 96 MiB admission estimate charges visible
   and cached tiles at twice RGBA storage; large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
+  With viewport overviews, one transport handle loads up to two coarse tiles at once.
+  Up to 40 decoded 256² images share a 24 MiB reservation within the 96 MiB estimate;
+  one image source uploads the selected overview. Fine-source admission can shrink to one.
+  Overview retention stops when one fine source and that reservation cannot fit.
+  A complete overview remains visible if detailed tiles fail. Time changes with an
+  admitted overview window defer cold detail for 100 ms; prepared detail switches immediately.
+  The overview queue replaces speculative high-resolution byte prefetch and prepares
+  the selected layer before additional fine sources. Viewport, layer, build and expiry
+  changes release decoded overviews. Unsupported browsers retain the raster-only path.
+  Speculative overview preparation stops after 1 MiB of returned compressed tile bytes
+  per viewport context, including cache reuse. An in-flight pair may finish; explicit
+  time selections remain eligible. The timeline reports partial readiness when limited.
   MapLibre's texture pool and browser allocations are separate; the
   [input benchmark](preview-performance.md) records retained texture storage.
   Prepared-source loading shares the two-request prefetch limit. Cold selections

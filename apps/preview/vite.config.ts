@@ -9,7 +9,8 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  plugins: [browserBundleBudget(355_000, 31_000), {
+  // Coarse timeline build measures 355,969 B gzip; retain a narrow startup allowance.
+  plugins: [browserBundleBudget(357_000, 31_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {
