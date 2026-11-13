@@ -145,8 +145,10 @@ Coverage masks are checked in; terrain data must be staged through the normal
 Create `runs.json` as an array of three `{ model, buildId }` selections. Each WRF
 entry also includes its complete `runLock` object and `readyReceipt` local path.
 Use the baseline's **forcing cycle**, six hours before the WRF publication origin.
-Planning checks the ready receipt against the lock and the consumer's archived
-frame provenance SHA-256. `--reference` is the UTC briefing cutoff; builds created
+Planning binds the ready receipt to the consumer's archived source SHA-256.
+Forcing clocks come from operator-supplied run locks, checked for internal
+consistency. Selected layer conventions, method parameters and consumer science
+versions must match across all three builds. `--reference` is the UTC briefing cutoff; builds created
 later are rejected. Reports separately record first-seen times; only captures made
 by the cutoff establish briefing availability. Archive before serving retention expires.
 
@@ -161,17 +163,19 @@ pnpm comparison wrf-report --out output/wrf-comparison --observations observatio
 
 `wrf-report.json` separates model differences from observation errors.
 `wrf-normalized.json` retains source build, cycle, site, valid time, units,
-references and flags. Missing capture responses fail replay; recapture is resumable.
+references and flags. Missing captures fail replay. Rerunning collection retries failed HTTP responses
+under fresh IDs while retaining each failed response.
 The existing pairer enforces matching coordinates, valid times, references and
 statistical windows, and retains unavailable and no-lift states.
 
-Observation JSON follows [observationsSchema](wrf-scorecard.ts): `siteId`,
-`validTime`, `parameter`, `value`, `unit`, `verticalReference`, and `source`.
-Use normalized field units/references and collocated quality-controlled data.
-Flux-derived quantities also require `intervalStart` and `intervalEnd`.
-The scorecard reports paired bias, MAE, RMSE, baseline-relative MAE skill, sample
-counts and status counts per site/parameter. All three forecasts use the common
-available observation set. No-lift remains a status; maximum sampled flight
-altitude requires its own observation model before serving as ceiling truth.
+Observation JSON follows [observationsSchema](wrf-scorecard.ts). Supply exact
+comparison-site coordinates, explicit time support and quality-controlled data
+in the normalized field units and reference. Interval observations require the
+same averaging window. Usable-lift observations include valid/no-lift status.
+The scorecard reports paired bias, MAE, RMSE, baseline-relative MAE skill,
+missingness and support exclusions per site/parameter. Numeric scores share the
+same available observations across all three forecasts; usable-lift contingency
+counts retain hits, misses, false alarms and correct negatives. Maximum sampled
+flight altitude requires its own observation model before serving as ceiling truth.
 Report hashes bind the observations, plan and analysis source. Compare several
 weather regimes and held-out days before promoting a product.

@@ -26,7 +26,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
   } });
   const [command] = positionals;
   if (!values.out || positionals.length !== 1 || !['wrf-plan', 'wrf-capture', 'wrf-report', 'plan', 'capture', 'report', 'compare', 'skysight-plan', 'skysight-capture', 'skysight-report'].includes(command)) {
-    throw new Error('Usage: pnpm comparison plan|capture|report|compare|skysight-plan|skysight-capture|skysight-report --out DIR');
+    throw new Error('Usage: pnpm comparison plan|capture|report|compare|skysight-plan|skysight-capture|skysight-report|wrf-plan|wrf-capture|wrf-report --out DIR');
   }
   if (command === 'wrf-plan') {
     if (!values.campaign || !values.runs || !values.api || !values.reference) throw new Error('WRF plan requires --campaign FILE --runs FILE --api URL --reference UTC');

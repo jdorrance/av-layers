@@ -575,10 +575,10 @@
       "coverage": {
         "id": "wrf-armenia-pilot-dwd-3km-land",
         "description": "WRF North Armenia 3km ICON comparison",
-        "west": 42.2471,
-        "south": 39.0954,
-        "east": 46.7529,
-        "north": 42.084,
+        "west": 42.581,
+        "south": 39.3437,
+        "east": 46.419,
+        "north": 41.8413,
         "seaBufferMeters": 50000,
         "excludedA3": [
           "RUS"
@@ -711,10 +711,10 @@
       "coverage": {
         "id": "wrf-armenia-pilot-dwd-1km-land",
         "description": "WRF North Armenia 1km ICON comparison",
-        "west": 43.4601,
-        "south": 40.0018,
-        "east": 45.5399,
-        "north": 41.1937,
+        "west": 43.5688,
+        "south": 40.0836,
+        "east": 45.4312,
+        "north": 41.1128,
         "seaBufferMeters": 50000,
         "excludedA3": [
           "RUS"

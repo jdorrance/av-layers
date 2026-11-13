@@ -50,10 +50,10 @@ export const MODEL_OPTIONS = [
     "label": "WRF North Armenia 3km ICON comparison",
     "nominalDxMeters": 3000,
     "bounds": [
-      42.2471,
-      39.0954,
-      46.7529,
-      42.084
+      42.581,
+      39.3437,
+      46.419,
+      41.8413
     ]
   },
   {
@@ -61,10 +61,10 @@ export const MODEL_OPTIONS = [
     "label": "WRF North Armenia 1km ICON comparison",
     "nominalDxMeters": 1000,
     "bounds": [
-      43.4601,
-      40.0018,
-      45.5399,
-      41.1937
+      43.5688,
+      40.0836,
+      45.4312,
+      41.1128
     ]
   }
 ] as const;

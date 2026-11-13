@@ -13,11 +13,12 @@ async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'wrf-comparison-')); dirs.push(dir);
   const models = ['baseline', 'control', 'fine'];
   const builds = models.map(model => JSON.parse(JSON.stringify(fixturePointBuild({ frameHours: [7, 8] })).replaceAll('gfs', model)) as PinnedBuild);
+  builds.forEach(build => { build.manifest.tool.components = { science: 'c'.repeat(64) }; });
   const cycle = builds[0].manifest.cycle, origin = new Date(Date.parse(cycle) + 6 * 3600000).toISOString();
   builds.slice(1).forEach(build => { build.manifest.cycle = origin; });
   const runs = await Promise.all(builds.map(async (build, index) => {
     const runLock = { model_id: build.manifest.model, publish_origin_utc: build.manifest.cycle, forcing_cycle_utc: cycle,
-      config_sha256: 'a'.repeat(64), forcing_profile_id: 'forcing', attempt_id: 'attempt' };
+      wrf_init_utc: cycle, spinup_hours: 6, config_sha256: 'a'.repeat(64), forcing_profile_id: 'forcing', attempt_id: 'attempt' };
     const readyReceipt = join(dir, `ready-${index}.json`);
     await writeFile(readyReceipt, JSON.stringify(runLock));
     return { model: build.manifest.model, buildId: build.manifest.buildId, ...(index ? { runLock, readyReceipt } : {}) };
@@ -94,6 +95,53 @@ describe('WRF comparison archive', () => {
       return Response.json(body);
     });
     await expect(planWrfComparison(second.dir, second.options)).rejects.toThrow('source pin');
+  });
+
+  it('resumes partial planning and failed HTTP captures while preserving failure evidence', async () => {
+    const { dir, options, fetcher } = await setup(), delegate = fetcher.getMockImplementation()!;
+    let fail = true;
+    fetcher.mockImplementation(async (...args) => fail && String(args[0]).includes('/fine/')
+      ? new Response('transient', { status: 500 }) : delegate(...args));
+    await expect(planWrfComparison(dir, options)).rejects.toThrow('HTTP 500');
+    fail = false;
+    const plan = await planWrfComparison(dir, options);
+    expect(plan.builds[2].manifestId).toBe('manifest-2-retry-1');
+    fetcher.mockResolvedValueOnce(new Response('transient', { status: 500 }));
+    await expect(captureWrfComparison(dir)).rejects.toThrow('HTTP 500');
+    await captureWrfComparison(dir);
+    expect(JSON.parse(await readFile(join(dir, 'captures', 'samples-0.json'), 'utf8')).status).toBe(500);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    await reportWrfComparison(dir);
+    const normalized = JSON.parse(await readFile(join(dir, 'wrf-normalized.json'), 'utf8'));
+    expect(normalized[0].sourceRef).toContain('samples-0-retry-1');
+  });
+  it('rejects an edited request list before collection or scoring', async () => {
+    const { dir, options } = await setup(), plan = await planWrfComparison(dir, options);
+    plan.requests.pop();
+    await writeFile(join(dir, 'wrf-plan.json'), JSON.stringify(plan));
+    await expect(captureWrfComparison(dir)).rejects.toThrow('complete comparison plan');
+    await expect(reportWrfComparison(dir)).rejects.toThrow('complete comparison plan');
+  });
+  it('rejects mismatched consumer science and inconsistent spin-up clocks', async () => {
+    const first = await setup(); first.builds[2].manifest.tool.components = { science: 'd'.repeat(64) };
+    await expect(planWrfComparison(first.dir, first.options)).rejects.toThrow('science versions');
+    const second = await setup(); second.runs[2].runLock!.spinup_hours = 7;
+    await writeFile(second.runsPath, JSON.stringify(second.runs));
+    await expect(planWrfComparison(second.dir, second.options)).rejects.toThrow('initialization clocks');
+  });
+  it('requires the selected samples to have been captured before the briefing', async () => {
+    const { dir, options, builds } = await setup();
+    await planWrfComparison(dir, { ...options, reference: builds[0].manifest.createdAt });
+    await captureWrfComparison(dir);
+    const report = await reportWrfComparison(dir);
+    expect(report.availability.every(item => !item.observedByBriefing)).toBe(true);
+  });
+
+  it('rejects a partial baseline instead of silently shrinking the forecast comparison', async () => {
+    const { dir, options, builds } = await setup();
+    Object.assign(builds[0].manifest, JSON.parse(JSON.stringify(fixturePointBuild({ frameHours: [7] }).manifest).replaceAll('gfs', 'baseline')));
+    builds[0].manifest.tool.components = { science: 'c'.repeat(64) };
+    await expect(planWrfComparison(dir, options)).rejects.toThrow('matching control and baseline');
   });
 
 });

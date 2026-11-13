@@ -140,7 +140,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Resolution tier: `high`.
 - Grid: `lambert-conformal`; 156 columns × 114 rows; spherical Earth radius 6370000 m; periodic longitude: false.
 - Terrain subdivision factor: `1`; fine grid: 156 columns × 114 rows.
-- Bounds [west, south, east, north]: `[43.4601,40.0018,45.5399,41.1937]`.
+- Bounds [west, south, east, north]: `[43.5688,40.0836,45.4312,41.1128]`.
 - Coverage: `wrf-armenia-pilot-dwd-1km-land`. WRF North Armenia 1km ICON comparison
 - Native tile zoom: 0–10.
 - Execution: 12 target shards; at most 24 simultaneous shard jobs; worker ceiling 3; event-driven, 1 expected runs per day.
@@ -159,7 +159,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Resolution tier: `high`.
 - Grid: `lambert-conformal`; 106 columns × 92 rows; spherical Earth radius 6370000 m; periodic longitude: false.
 - Terrain subdivision factor: `1`; fine grid: 106 columns × 92 rows.
-- Bounds [west, south, east, north]: `[42.2471,39.0954,46.7529,42.084]`.
+- Bounds [west, south, east, north]: `[42.581,39.3437,46.419,41.8413]`.
 - Coverage: `wrf-armenia-pilot-dwd-3km-land`. WRF North Armenia 3km ICON comparison
 - Native tile zoom: 0–10.
 - Execution: 12 target shards; at most 24 simultaneous shard jobs; worker ceiling 3; event-driven, 1 expected runs per day.
