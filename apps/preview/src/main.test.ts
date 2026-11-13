@@ -202,6 +202,26 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   expect(sourceId()).toBeDefined();
 });
 
+it('explains clear areas and MSL terrain using the displayed build cutoff', async () => {
+  const method = manifest.descriptors.layers['usable-lift-msl'].methodId;
+  manifest.descriptors.methods[method].parameters.sinkRateMps = 1.8;
+  await start();
+  expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (m AGL)')).toBe(true);
+  ui('ref-msl').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(visit(ui('legend-body')).some(node => node.textContent === 'Top of usable lift (m MSL)')).toBe(true));
+  expect(ui('legend-reference').textContent).toContain('MSL includes ground elevation. Choose AGL');
+  expect(ui('legend-cutoff').textContent).toContain('predicted updrafts above 1.8 m/s');
+  expect(ui('legend-no-lift').style.background)
+    .toBe(manifest.descriptors.palettes.find(palette => palette.id === 'lift')?.noLiftColor);
+  ui('legend-key').open = true;
+  ui('legend-key-toggle').focus();
+  const tile = {};
+  map().emit('error', { sourceId: sourceId(), tile });
+  map().emit('sourcedata', { sourceId: sourceId(), tile });
+  expect(ui('legend-key').open).toBe(true);
+  expect(doc.activeElement).toBe(ui('legend-key-toggle'));
+});
+
 it.each([true, false])('publishes the initial regional camera without adding history (discovery first: %s)', async discoveryFirst => {
   manifest = fixtureManifestV5({ model: 'icon-eu' });
   vi.stubEnv('VITE_MODEL', manifest.model);

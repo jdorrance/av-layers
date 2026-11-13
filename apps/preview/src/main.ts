@@ -266,7 +266,8 @@ function startPreview(): void {
     legend.hidden = false;
     const title = document.createElement('p');
     title.className = 'ribbon-title';
-    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m)' : 'Top of usable lift (m)';
+    const descriptor = displayedBuild.manifest.descriptors.layers[layer];
+    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m AGL)' : 'Top of usable lift (m MSL)';
     const scale = document.createElement('div');
     scale.className = 'ribbon-scale';
     const colorCount = palette.colors.length;
@@ -288,6 +289,14 @@ function startPreview(): void {
     const body = document.createElement('div');
     body.className = 'ribbon-main';
     body.append(title, scale);
+    element<HTMLParagraphElement>('legend-reference').textContent = layer === 'usable-lift-agl'
+      ? 'AGL shows usable lift height above ground.'
+      : 'MSL includes ground elevation. Choose AGL to see usable lift height above ground.';
+    element<HTMLSpanElement>('legend-no-lift').style.background = palette.noLiftColor ?? 'transparent';
+    const sink = displayedBuild.manifest.descriptors.methods[descriptor.methodId]?.parameters.sinkRateMps;
+    element<HTMLParagraphElement>('legend-cutoff').textContent = Number.isFinite(sink) && sink > 0
+      ? `Usable lift requires predicted updrafts above ${sink} m/s. Nearby terrain can cross this cutoff.`
+      : 'Usable lift depends on the predicted updraft and terrain.';
     legendBody.replaceChildren(body);
   }
 
