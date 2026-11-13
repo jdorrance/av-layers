@@ -153,8 +153,9 @@ every pack, terrain array, mapping and raster input.
 
 ## Serving and clients
 
-The API serves published, unexpired builds from R2, caching metadata and PMTiles
-directories and coalescing identical reads within the
+Workers Cache serves immutable tile hits before the API executes. Tile misses
+validate the publication and read R2. The API caches metadata and PMTiles
+directories and coalesces identical reads within the
 [serving budgets](serving-budgets.md). [wrangler.json](../apps/api/wrangler.json)
 configures the Worker and R2 bindings.
 

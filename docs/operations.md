@@ -176,6 +176,14 @@ tile routes; invalid, incomplete and expired publications fail deployment.
 After Cloudflare Pages deploys, the job checks the revision marker and Windy
 plugin CORS headers.
 
+Deployment checks each available model's tile front cache with bounded repeated
+GETs. Workers Cache serves tile hits before API admission; TTL ends by the
+forecast expiry. Normal publication preserves unexpired builds. Manual early
+withdrawal also requires purging that build's tile path from
+[Workers Cache](https://developers.cloudflare.com/workers/cache/purge/).
+Deployment versions use separate caches. Point and discovery routes retain
+their request-time checks.
+
 The Worker and browsers serve v5. Publish a fresh v5 forecast for each model
 when cutting over an environment with older builds, then rerun deployment if
 the serving probe stopped it. Existing v5 pins remain readable through expiry.

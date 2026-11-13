@@ -204,7 +204,8 @@ describe('deployment publication readiness', () => {
       if (path.endsWith('/provenance')) return inlineProvenance(manifest);
       expect(path).toMatch(/^\/tiles\//);
       return new Response('RIFF1234WEBP0000000000000000', { headers: {
-        'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60'
+        'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
+        'cf-cache-status': 'HIT', age: '0', 'x-av-response-cache': 'not-applicable'
       } });
     });
     return { latest, sample, options: { baseUrl: 'https://api.example', expectedDeploymentId: deploymentId, fetchImpl } };
@@ -216,6 +217,65 @@ describe('deployment publication readiness', () => {
     await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
     expect(latest.mock.calls.map(([model]) => model)).toEqual(models.filter(entry => entry.available).map(entry => entry.model));
     expect(String(options.fetchImpl.mock.calls[0]![0])).toBe('https://api.example/healthz');
+  });
+
+  it('fills the front cache with ordinary GETs and waits for its hit', async () => {
+    vi.useFakeTimers();
+    const { options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
+    let cacheRequests = 0;
+    options.fetchImpl.mockImplementation(async (input, init) => {
+      const response = await original(input, init);
+      if (String(input).includes('/tiles/') && init?.cache === undefined) {
+        expect(init?.headers).toEqual({ accept: 'image/webp' });
+        if (++cacheRequests === 1) response.headers.set('cf-cache-status', 'MISS');
+      }
+      return response;
+    });
+    const result = expect(verifyApiDeployment(options)).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
+    expect(cacheRequests).toBe(PRODUCTS.filter(product => product.modelId !== eventModel).length + 1);
+  });
+
+  it.each([
+    { edge: 'HIT', application: 'hit', age: '0' },
+    { edge: 'MISS', application: 'not-applicable', age: '0' },
+    { edge: 'HIT', application: 'not-applicable', age: 'invalid' },
+    { edge: 'HIT', application: 'not-applicable', age: '9007199254740992' }
+  ])('rejects an unproven front-cache hit: $edge/$application/$age', async ({ edge, application, age }) => {
+    vi.useFakeTimers();
+    const { options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
+    let cacheRequests = 0;
+    options.fetchImpl.mockImplementation(async (input, init) => {
+      const response = await original(input, init);
+      if (String(input).includes('/tiles/') && init?.cache === undefined) {
+        cacheRequests++;
+        response.headers.set('cf-cache-status', edge);
+        response.headers.set('x-av-response-cache', application);
+        response.headers.set('age', age);
+      }
+      return response;
+    });
+    const result = expect(verifyApiDeployment(options)).rejects.toThrow('Tile was not served by the front cache');
+    await vi.advanceTimersByTimeAsync(2000);
+    await result;
+    expect(cacheRequests).toBe(3);
+  });
+
+  it.each([206, 503, 200])('rejects a partial, failing or corrupt cached tile: HTTP %s', async status => {
+    vi.useFakeTimers();
+    const { options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
+    options.fetchImpl.mockImplementation(async (input, init) => {
+      const response = await original(input, init);
+      if (String(input).includes('/tiles/') && init?.cache === undefined) {
+        return new Response(status === 200 ? 'invalid'.repeat(5) : response.body,
+          { status, headers: response.headers });
+      }
+      return response;
+    });
+    const result = expect(verifyApiDeployment(options)).rejects.toThrow('Tile edge cache returned an invalid tile');
+    await vi.advanceTimersByTimeAsync(2000);
+    await result;
   });
 
   it.each(['publication-invalid', 'publication-incomplete', 'not-retained', undefined])('rejects event-driven publication error %s', async error => {
@@ -319,7 +379,7 @@ it('fails clearly when every bounded candidate is outside coverage', async () =>
   expect(tileRequests).toEqual([]);
 });
 
-it('pages the extended native timeline and probes full profiles and point batches within budgets', async () => {
+it.each([false, true])('pages native profiles and records tile metrics with front-cache hit=%s', async frontHit => {
   const legacy = fixtureManifestV5({ layers: ['precip-rate'] });
   const product = DEFAULT_PRODUCT, nativeLayers = product.layers.filter(layer => layerSurface(layer) === 'native');
   const frames = product.frameHours.map(hour => ({ ...legacy.frames[0]!, id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(Date.parse(legacy.cycle) + hour * 3_600_000).toISOString() }));
@@ -342,10 +402,18 @@ it('pages the extended native timeline and probes full profiles and point batche
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
-      'server-timing': 'worker;dur=18.25, admit;dur=2.00, r2;dur=7.50', 'x-av-r2-reads': '2', 'x-av-response-cache': 'miss' } });
+      'server-timing': 'worker;dur=18.25, admit;dur=2.00, r2;dur=7.50', 'x-av-r2-reads': '2',
+      'x-av-response-cache': frontHit ? 'not-applicable' : 'miss', 'cf-cache-status': frontHit ? 'HIT' : 'MISS', age: '4' } });
   } });
-  expect(observeProbe).toHaveBeenCalledWith('tile', expect.objectContaining({ responseCache: 'miss', r2Reads: 2,
-    serverTimingMs: { worker: 18.25, admit: 2, r2: 7.5 } }));
+  if (frontHit) {
+    const reading = observeProbe.mock.calls.find(([route]) => route === 'tile')![1];
+    expect(reading).toMatchObject({ responseCache: 'not-applicable', edgeCache: 'HIT', ageSeconds: 4 });
+    expect(reading.r2Reads).toBeUndefined();
+    expect(reading.serverTimingMs).toBeUndefined();
+  } else {
+    expect(observeProbe).toHaveBeenCalledWith('tile', expect.objectContaining({ responseCache: 'miss', edgeCache: 'MISS', r2Reads: 2,
+      serverTimingMs: { worker: 18.25, admit: 2, r2: 7.5 } }));
+  }
   for (const [, request] of sample.mock.calls) {
     expect(request.frames).not.toBe('all');
     expect(request.frames!.length * request.layers!.length).toBeLessThanOrEqual(manifest.descriptors.maxSampleValues);
