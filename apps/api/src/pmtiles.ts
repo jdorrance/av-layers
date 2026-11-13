@@ -30,6 +30,10 @@ export class DirectoryCache extends ResolvedValueCache {
   override getDirectory(source: Source, offset: number, length: number, header: Header, signal?: AbortSignal): Promise<Entry[]> {
     return super.getDirectory(metadataSource(source), offset, length, header, signal);
   }
+  override invalidate(source: Source): Promise<void> {
+    if (source instanceof R2Source) source.invalidateMetadata();
+    return super.invalidate(source);
+  }
   override prune(): void {
     const ordered = [...this.cache].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
     const weight = (data: typeof ordered[number][1]['data']) => Array.isArray(data) ? data.length * 96 : data instanceof ArrayBuffer ? data.byteLength : 512;
@@ -52,7 +56,9 @@ function metadataSource(source: Source): Source {
 }
 
 export class R2Source implements Source {
+  private metadataInvalidated = false;
   constructor(private bucket: R2Bucket, private key: string, private ctx?: WaitContext, private signal?: AbortSignal, private identity?: ArchiveIdentity) {}
+  invalidateMetadata(): void { this.metadataInvalidated = true; }
   getKey(): string {
     if (!bucketIds.has(this.bucket)) bucketIds.set(this.bucket, ++nextBucketId);
     return `${bucketIds.get(this.bucket)}:${this.key}:${this.identity?.sha256 ?? ''}`;
@@ -64,8 +70,9 @@ export class R2Source implements Source {
     const waiterSignal = this.signal && signal ? AbortSignal.any([this.signal, signal]) : this.signal ?? signal;
     const sharedKey = metadata && this.identity && /^[a-f0-9]{64}$/.test(this.identity.sha256)
       ? `archive:${this.key}:${this.identity.sha256}:${offset}:${length}:${etag ?? ''}` : undefined;
-    return reads.run(`${this.key}:${this.identity?.sha256 ?? ''}:${offset}:${length}:${etag ?? ''}:${metadata}`, async operationSignal => {
-      const cached = sharedKey ? await matchStorageBytes(sharedKey, length, this.ctx, operationSignal) : undefined;
+    const refreshMetadata = metadata && this.metadataInvalidated;
+    return reads.run(`${this.key}:${this.identity?.sha256 ?? ''}:${offset}:${length}:${etag ?? ''}:${metadata}:${refreshMetadata}`, async operationSignal => {
+      const cached = sharedKey && !refreshMetadata ? await matchStorageBytes(sharedKey, length, this.ctx, operationSignal) : undefined;
       if (cached && cached.until <= Date.parse(this.identity!.expiresAt) && (!etag || cached.etag === etag)) {
         countCacheHit(this.ctx);
         return { data: cached.bytes.buffer as ArrayBuffer, etag: cached.etag };

@@ -99,6 +99,41 @@ it.each([1, -1])('retains the previous prepared frame at the timeline boundary w
   } finally { f.overlay.destroy(); }
 });
 
+it('retries partially failed speculative tiles before replacing the displayed view', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const displayed = f.displayed(), damaged = f.stage();
+    await f.complete(damaged);
+    f.emit('error', { sourceId: damaged, tile: {}, error: new Error('temporary tile failure') });
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.sources.has(damaged)).toBe(false);
+    expect(f.displayed()).toBe(displayed);
+    expect(f.states.at(-1)?.incomplete).toBe(false);
+    await f.complete();
+    expect(f.states.at(-1)).toMatchObject({ displayed: { layer: 'usable-lift-msl' }, incomplete: false });
+  } finally { f.overlay.destroy(); }
+});
+
+it('rebuilds a damaged previous source before switching back after a pan', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const damaged = f.displayed();
+    f.emit('movestart');
+    f.emit('error', { sourceId: damaged, tile: {}, error: new Error('new viewport failed') });
+    f.emit('moveend'); await f.complete();
+    f.overlay.select(b, 'usable-lift-msl', frame); await Promise.resolve();
+    const healthy = f.displayed();
+    expect(f.sources.has(damaged)).toBe(false);
+    f.overlay.select(b, 'usable-lift-agl', frame);
+    expect(f.displayed()).toBe(healthy);
+    expect(f.states.at(-1)?.incomplete).toBe(false);
+    await f.complete();
+    expect(f.states.at(-1)).toMatchObject({ displayed: { layer: 'usable-lift-agl' }, incomplete: false });
+  } finally { f.overlay.destroy(); }
+});
+
 it('prepares an intended time without selecting it and follows the scrub direction', async () => {
   const f = fixture(), b = build(), [first, next, following] = b.manifest.frames;
   try {
@@ -366,8 +401,7 @@ it('allows a healthy replacement to finish after the displayed source reports an
   await f.complete(next);
   expect(f.states.at(-1)?.incomplete).toBe(false);
   expect(f.states.at(-1)?.replacementFailed).toBe(false);
-  expect(f.sources.has(old)).toBe(true);
-  expect(f.opacity.get(old)).toBe(0);
+  expect(f.sources.has(old)).toBe(false);
   f.overlay.destroy();
 });
 

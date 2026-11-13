@@ -193,7 +193,7 @@ function startPreview(): void {
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
-    if (applyingHistory || !urlReady || pendingModel) return;
+    if (applyingHistory || !mapReady || !urlReady || pendingModel) return;
     const camera = map.getCenter();
     const validTime = currentModel === AUTO_MODEL_ID ? requestedTime ?? undefined : build?.manifest.frames.find(item => item.id === selectedFrame)?.validTime;
     const next = previewUrl(window.location.pathname, {
@@ -783,9 +783,10 @@ function startPreview(): void {
   syncModels();
 
   map.on('load', () => {
-    mapReady = true;
     if (!startup.camera) focusRegion(currentModel);
+    mapReady = true;
     updateOverlay();
+    writeUrl('replace');
   });
   void loadModel(initialModel);
 }

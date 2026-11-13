@@ -134,14 +134,15 @@ try {
         samples.intentPreparedTime.push(await select('usable-lift-agl',frame)); await quiet();
       }
       for (let i=0;i<5;i++) {
-        const before = requests, targetBefore = requestCounts.get('usable-lift-agl/f024') ?? 0;
-        const value = await page.evaluate(async () => {
+        const frame = await page.evaluate(() => window.bench.snapshot().displayed?.frame === 'f024' ? 'f021' : 'f024');
+        const target = `usable-lift-agl/${frame}`, before = requests, targetBefore = requestCounts.get(target) ?? 0;
+        const value = await page.evaluate(async frame => {
           const first = window.bench.select('usable-lift-msl','f003').catch(()=>undefined);
           await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));
-          const second = window.bench.select('usable-lift-agl','f024');
+          const second = window.bench.select('usable-lift-agl',frame);
           await first; return second;
-        });
-        samples.scrub.push({...value,requests:requests-before,targetRequests:(requestCounts.get('usable-lift-agl/f024') ?? 0)-targetBefore}); await quiet();
+        },frame);
+        samples.scrub.push({...value,requests:requests-before,targetRequests:(requestCounts.get(target) ?? 0)-targetBefore}); await quiet();
       }
       for (let i=0;i<5;i++) {
         await page.evaluate(lon=>window.bench.pan(lon),-100+(i%2?0:5)); await quiet();

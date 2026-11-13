@@ -136,7 +136,25 @@ it('honors cancellation and absolute expiry while consuming shared cache bytes',
   expect(inFlightAllocationBytes()).toBe(0);
 });
 
-function archiveFixture() {
+it('stops a late cache miss at the pointer deadline before reading or caching an unavailable publication', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(NOW);
+  let release!: () => void;
+  cache.match.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(undefined); }));
+  const fixture = createV5Fixture(), owner = context();
+  const get = fixture.get.getMockImplementation()!;
+  fixture.get.mockResolvedValue(null);
+  const pending = expect(pointer(fixture.bucket, fixture.manifest.model, false, owner.ctx)).rejects.toThrow('Object read deadline exceeded');
+  await vi.advanceTimersByTimeAsync(15_000);
+  await pending;
+  release(); await owner.settle();
+  expect(fixture.get).not.toHaveBeenCalled();
+  fixture.get.mockImplementation(get);
+  expect((await pointer(fixture.bucket, fixture.manifest.model, false, owner.ctx)).latestBuildId).toBe(fixture.buildId);
+  await owner.settle(); expect(fixture.get).toHaveBeenCalledTimes(1);
+  expect(inFlightAllocationBytes()).toBe(0);
+});
+
+function archiveFixture(etag = 'archive-etag') {
   const bytes = new Uint8Array(16387), view = new DataView(bytes.buffer);
   bytes.set(new TextEncoder().encode('PMTiles')); bytes[7] = 3;
   for (const [offset, value] of [[8, 127], [16, 5], [40, 132], [48, 5], [56, 16384], [64, 3], [72, 1], [80, 1], [88, 1]]) view.setBigUint64(offset, BigInt(value), true);
@@ -144,9 +162,9 @@ function archiveFixture() {
   bytes.set([1, 0, 0, 5, 1], 127); bytes.set([1, 0, 1, 3, 1], 132); bytes.set([7, 8, 9], 16384);
   const identity = { sha256: createHash('sha256').update(bytes).digest('hex'), expiresAt: new Date(NOW + 60_000).toISOString() };
   const get = vi.fn(async (_key: string, options: { range: { offset: number; length: number }; onlyIf?: { etagMatches: string } }) => {
-    if (options.onlyIf && options.onlyIf.etagMatches !== 'archive-etag') return { etag: 'archive-etag' };
+    if (options.onlyIf && options.onlyIf.etagMatches !== etag) return { etag };
     const { offset, length } = options.range;
-    return { size: bytes.length, etag: 'archive-etag', body: new Response(bytes.slice(offset, offset + length)).body! };
+    return { size: bytes.length, etag, body: new Response(bytes.slice(offset, offset + length)).body! };
   });
   return { identity, get, bucket: { get } as unknown as R2Bucket };
 }
@@ -161,6 +179,22 @@ it('shares PMTiles header/root and leaf ranges across isolates while reading add
   await next.settle(); expect(second.get).toHaveBeenCalledTimes(1);
   expect(second.get).toHaveBeenCalledWith('archive', { range: { offset: 16384, length: 3 }, onlyIf: { etagMatches: 'archive-etag' } });
   expect(next.ctx.metrics).toMatchObject({ r2Reads: 1, cacheHits: 2 });
+  expect(inFlightAllocationBytes()).toBe(0);
+});
+
+it('refreshes shared archive metadata after an ETag mismatch and shares the recovered ranges', async () => {
+  const first = archiveFixture(), owner = context();
+  await readTile(first.bucket, 'archive', 0, 0, 0, owner.ctx, undefined, first.identity); await owner.settle();
+  const second = archiveFixture('new-etag'), next = context();
+  expect(new Uint8Array(await readTile(second.bucket, 'archive', 0, 0, 0, next.ctx, undefined, second.identity))).toEqual(Uint8Array.of(7, 8, 9));
+  await next.settle();
+  expect(second.get).toHaveBeenCalledTimes(4);
+  expect(second.get).toHaveBeenNthCalledWith(1, 'archive', { range: { offset: 16384, length: 3 }, onlyIf: { etagMatches: 'archive-etag' } });
+  expect(second.get).toHaveBeenNthCalledWith(2, 'archive', { range: { offset: 0, length: 16384 } });
+  const third = archiveFixture('new-etag'), visitor = context();
+  expect(new Uint8Array(await readTile(third.bucket, 'archive', 0, 0, 0, visitor.ctx, undefined, third.identity))).toEqual(Uint8Array.of(7, 8, 9));
+  await visitor.settle(); expect(third.get).toHaveBeenCalledTimes(1);
+  expect(third.get).toHaveBeenCalledWith('archive', { range: { offset: 16384, length: 3 }, onlyIf: { etagMatches: 'new-etag' } });
   expect(inFlightAllocationBytes()).toBe(0);
 });
 

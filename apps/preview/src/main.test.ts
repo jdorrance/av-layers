@@ -104,7 +104,9 @@ class MapMock {
   getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
   fitBounds(bounds: [[number, number], [number, number]]): void {
     const [[west, south], [east, north]] = bounds;
+    this.emit('movestart');
     this.center = { lng: (west + east) / 2, lat: (south + north) / 2 };
+    this.emit('moveend');
   }
   jumpTo(camera: { center: [number, number]; zoom: number }, event: Record<string, unknown> = {}): void {
     this.emit('movestart', event);
@@ -198,6 +200,31 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   map().emit('load');
   await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
   expect(sourceId()).toBeDefined();
+});
+
+it.each([true, false])('publishes the initial regional camera without adding history (discovery first: %s)', async discoveryFirst => {
+  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  vi.stubEnv('VITE_MODEL', manifest.model);
+  let release!: () => void;
+  const discovery = new Promise<void>(resolve => { release = resolve; });
+  fetchMock.mockImplementationOnce(async () => { await discovery; return latest(); });
+  const push = vi.spyOn(win.history, 'pushState'), replace = vi.spyOn(win.history, 'replaceState');
+  await import('./main');
+  expect(fetchMock).toHaveBeenCalled();
+  if (discoveryFirst) {
+    release();
+    await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
+    expect(replace).not.toHaveBeenCalled();
+  }
+  map().emit('load');
+  if (!discoveryFirst) release();
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
+  expect(sourceId()).toBeDefined();
+  const query = new URL(win.href).searchParams;
+  expect(Number(query.get('lat'))).toBe(map().getCenter().lat);
+  expect(Number(query.get('lon'))).toBe(map().getCenter().lng);
+  expect(replace).toHaveBeenCalledOnce();
+  expect(push).not.toHaveBeenCalled();
 });
 
 it.each(['pointerenter', 'focus', 'pointerdown'])('prepares a layer on %s while preserving the displayed selection', async event => {

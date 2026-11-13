@@ -16,10 +16,10 @@ export async function matchStorageBytes(key: string, limit: number, ctx: WaitCon
   let hit: Response | undefined;
   try { hit = await store.cache.match(store.request); }
   catch { signal.throwIfAborted(); return; }
-  if (!hit?.body) return;
   let release: (() => void) | undefined;
   try {
     signal.throwIfAborted();
+    if (!hit?.body) return;
     const until = Number(hit.headers.get('x-av-until'));
     const length = Number(hit.headers.get('x-av-bytes'));
     const digest = hit.headers.get('x-av-sha256');
@@ -32,7 +32,7 @@ export async function matchStorageBytes(key: string, limit: number, ctx: WaitCon
   } catch {
     signal.throwIfAborted();
     return;
-  } finally { release?.(); void hit.body.cancel().catch(() => {}); }
+  } finally { release?.(); void hit?.body?.cancel().catch(() => {}); }
 }
 
 /** Optional writes retain their byte permit until Cache API settlement. */

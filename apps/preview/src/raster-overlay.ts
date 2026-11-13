@@ -75,7 +75,7 @@ export class RasterOverlay {
     this.replacementFailed = false;
     this.incomplete = this.problem(next);
     this.cancelPrefetch();
-    if (previous && previous.build !== next.build) {
+    if (previous && (previous.build !== next.build || this.problem(previous))) {
       this.drop(previous); this.staging = null;
       if (previous.build.manifest.buildId !== next.build.manifest.buildId) this.protocol?.evictBuild(previous.build.manifest.buildId);
     }
@@ -130,7 +130,7 @@ export class RasterOverlay {
       if (this.staging) this.staging.transport.setInteractive(false);
       this.cancelPrefetch(); this.prepareNext(); this.emit(); return;
     }
-    if (matches(this.staging, this.requested)) {
+    if (matches(this.staging, this.requested) && !this.problem(this.staging)) {
       this.staging!.transport.setInteractive(true);
       this.cancelPrefetch(); this.emit(); this.render(); return;
     }
