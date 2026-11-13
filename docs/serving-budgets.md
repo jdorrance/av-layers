@@ -23,7 +23,7 @@ combined work across all grids selected by a request.
   the Cache API stores bounded bodies under the existing response pool.
 - **Client tile transport:** preview and Windy share the
   [raster scheduler](../packages/client/src/client-raster.ts).
-  It keeps 4 requests active and queues 64. Background work starts while fewer
+  It keeps 16 requests active and queues 64. Background work starts while fewer
   than 2 background reads are active; admitted reads finish after demotion. The
   compressed tile cache is 48 MiB including entry overhead. Preview retains up to
   four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
