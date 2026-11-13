@@ -150,7 +150,6 @@ function startPreview(): void {
     overlayState = state;
     updateOverlayStatus();
   });
-  let timelineRaf: number | null = null;
   let timelineDays: { build: PinnedBuild; offset: number; buttons: HTMLButtonElement[] } | null = null;
   let ribbon: { build: PinnedBuild; layer: LayerId } | null = null;
   let pendingModel: ModelId | null = null;
@@ -354,8 +353,6 @@ function startPreview(): void {
   }
 
   function removeOverlay(dispose = false): void {
-    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
-    timelineRaf = null;
     overlay.clear(dispose);
   }
 
@@ -447,11 +444,7 @@ function startPreview(): void {
     requestedTime = frame.validTime;
     updateTimeUi();
     pointSeries.followMapFrame(selectedFrame);
-    if (timelineRaf !== null) window.cancelAnimationFrame(timelineRaf);
-    timelineRaf = null;
-    const layer = activeLayer();
-    if (mapReady && build && layer && overlay.isPrepared(build, layer, frame.id)) updateOverlay();
-    else timelineRaf = window.requestAnimationFrame(() => { timelineRaf = null; updateOverlay(); });
+    updateOverlay();
     updatePointSelection();
     if (history !== 'none') {
       writeUrl(history);
