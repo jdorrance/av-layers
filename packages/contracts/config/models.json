@@ -251,7 +251,14 @@
         "protocol": "split-grib2",
         "provider": "DWD",
         "centre": 78,
-        "urlTemplate": "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{cycleHour}/{fieldLower}/icon-eu_europe_regular-lat-lon_{kind}_{runStamp}{suffix}_{field}.grib2.bz2",
+        "urlTemplate": "https://opendata.dwd.de/weather/nwp/v1/m/icon-eu/p/{field}{levelPath}/r/{referenceTime}/s/PT{forecastHour}H00M.grib2",
+        "nativeGrid": {
+          "number": 62,
+          "uuid": "832c1507fbc73eb384139890094d2c60",
+          "pointCount": 768608,
+          "latitude": {"field": "CLAT", "kind": "time-invariant", "parameter": [191, 1], "surface": [1, 0]},
+          "longitude": {"field": "CLON", "kind": "time-invariant", "parameter": [191, 2], "surface": [1, 0]}
+        },
         "auxSurface": {
           "pblHeightM": {"field": "MH", "kind": "single-level", "parameter": [19, 3], "surface": [1, 0], "unit": "m"},
           "gust10mMps": {"field": "VMAX_10M", "kind": "single-level", "parameter": [2, 22], "surface": [103, 10], "statistic": 2, "unit": "m/s"},

@@ -18,6 +18,7 @@ export interface WholeDomainCapacityInput {
   nativeMask: Pick<CoverageMask, 'tiles' | 'maxZoom'>;
   maxLevels?: number;
   retainedGeometryFields?: number;
+  sourceMappingBytesPerCell?: number;
   auxiliarySurfaceFields?: number;
   auxiliaryLevelFields?: number;
   groupFrames?: number;
@@ -51,7 +52,7 @@ export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: 
   return { native: product.layers.filter(layer => layerSurface(layer) === 'native'), fine: product.layers.filter(layer => layerSurface(layer) === 'fine') };
 }
 
-export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields'>,
+export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'sourceMappingBytesPerCell' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields'>,
   geometry: CapacityGeometry, groups: readonly (readonly number[])[]): WholeDomainCapacityInput & { mapFrames: number } {
   const hours = groups.flat(), fine = geometry.fine.mask;
   const nativeBlocks = geometry.native.mask.coverage.blockIds, dense = geometry.nativeMask;
@@ -62,6 +63,7 @@ export function wholeDomainCapacityInput(product: ProductDefinition, provider: P
     nativeMaskBytes: dense.output.byteLength + dense.halo.byteLength + dense.tiles.byteLength,
     terrainBytes: geometry.terrain?.arrayBytes ?? fine.coverage.offsets[fine.coverage.blockIds.length]! * PREPARED_TERRAIN_CELL_BYTES,
     maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
+    sourceMappingBytesPerCell: provider.sourceMappingBytesPerCell ?? 0,
     auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
     frames: hours.length, mapFrames: mapFrameCount({ ...product, frameHours: hours }),
     groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: layers.native.length, fineLayers: layers.fine.length
@@ -99,6 +101,8 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   if (!Number.isSafeInteger(frames) || frames < 1 || !Number.isSafeInteger(mapFrames) || mapFrames < 0 || mapFrames > frames) throw new Error('Invalid frame capacity');
   const maxLevels = input.maxLevels ?? 256, retainedGeometryFields = input.retainedGeometryFields ?? 257;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(retainedGeometryFields) || retainedGeometryFields < 0 || retainedGeometryFields > 257) throw new Error('Invalid provider capacity');
+  const sourceMappingBytesPerCell = input.sourceMappingBytesPerCell ?? 0;
+  if (!Number.isSafeInteger(sourceMappingBytesPerCell) || sourceMappingBytesPerCell < 0 || sourceMappingBytesPerCell > 32) throw new Error('Invalid source mapping capacity');
   const fineActive = fine.coverage.offsets[fine.coverage.blockIds.length]!;
   const layouts = wholeDomainSampleGroupLayouts(input);
   const nativeSampleBytes = (layouts.native?.storedCells ?? 0) * frames * nativeLayers * CELL_BYTES, fineSampleBytes = (layouts.fine?.storedCells ?? 0) * mapFrames * fineLayers * CELL_BYTES;
@@ -130,6 +134,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     profiles: nativeSampleOnly ? nativeCells * 4 + profileRecordBytes(maxLevels) : 0,
     diagnostics: mapFrames ? nativeCells * 9 : 0,
     retainedGeometry: nativeActive * retainedGeometryFields * CELL_BYTES,
+    sourceMapping: nativeActive * sourceMappingBytesPerCell,
     rawCompanions: nativeActive * 6 * 9,
     terrain: mapFrames ? terrainBytes : 0,
     terrainValidation: mapFrames ? Math.min(terrainBytes, ASSET_MAX_BYTES * 1.25) : 0,

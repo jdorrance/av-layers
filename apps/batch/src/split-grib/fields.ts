@@ -22,10 +22,8 @@ export function formatSplitGribRunStamp(source: SplitSource, cycleIso: string): 
   };
 }
 
-/**
- * Construct the official DWD Open Data `.grib2.bz2` URL for a regular-lat-lon Split GRIB field.
- */
-export function splitGribRegularFieldUrl(source: SplitSource,
+/** Construct a configured field URL, including native-grid vertical selectors. */
+export function splitGribFieldUrl(source: SplitSource,
   field: string,
   cycleIso: string,
   options: {
@@ -45,8 +43,12 @@ export function splitGribRegularFieldUrl(source: SplitSource,
   if (!Number.isInteger(hour) || hour < 0 || hour > 120) throw new Error(`Source forecast hour out of range: ${hour}`);
   const suffix = spec.kind === 'time-invariant' ? (levelRequired ? `_${level}` : '')
     : `_${String(hour).padStart(3, '0')}${levelRequired ? `_${level}` : ''}`;
-  const template = options.baseUrl ? source.upstream.urlTemplate.replace(/^.*?(?=\/\{cycleHour\})/, options.baseUrl.replace(/\/+$/, '')) : source.upstream.urlTemplate;
-  return sourceUrl(template, { ...formatSplitGribRunStamp(source, cycleIso), field, fieldLower: field.toLowerCase(), kind: spec.kind, suffix });
+  const marker = source.upstream.nativeGrid ? '/{field}' : '/{cycleHour}';
+  const template = options.baseUrl ? options.baseUrl.replace(/\/+$/, '') + source.upstream.urlTemplate.slice(source.upstream.urlTemplate.indexOf(marker)) : source.upstream.urlTemplate;
+  return sourceUrl(template, { ...formatSplitGribRunStamp(source, cycleIso), field, fieldLower: field.toLowerCase(), kind: spec.kind, suffix,
+    levelPath: levelRequired ? `/lvt1/${spec.firstFixedSurfaceType}/lv1/${level}` : '',
+    referenceTime: validateSplitGribCycle(source, cycleIso).slice(0, 16).replace(':', '%3A'),
+    forecastHour: String(spec.kind === 'time-invariant' ? 0 : hour).padStart(3, '0') });
 }
 
 /**
@@ -74,19 +76,21 @@ export function verifySplitGribFieldMetadata(source: SplitSource,
   if (decoded.identification.centre !== source.upstream.centre) {
     throw new Error(`Split GRIB ${field} unexpected originating centre ${decoded.identification.centre} (expected ${source.upstream.centre})`);
   }
-  const lonFirstNorm = ((decoded.grid.longitudeOfFirstGridPoint + 180) % 360 + 360) % 360 - 180;
-  const lonLastNorm = ((decoded.grid.longitudeOfLastGridPoint + 180) % 360 + 360) % 360 - 180;
-  const latSouth = Math.min(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
-  const latNorth = Math.max(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
-  if (
-    Math.abs(lonFirstNorm - source.grid.lon0) > 1e-4 ||
-    Math.abs(latNorth - source.grid.lat0) > 1e-4 ||
-    Math.abs(latSouth - (source.grid.lat0 + (source.grid.height - 1) * source.grid.dy)) > 1e-4 ||
-    Math.abs(lonLastNorm - (source.grid.lon0 + (source.grid.width - 1) * source.grid.dx)) > 1e-4 ||
-    Math.abs(decoded.grid.iDirectionIncrement - source.grid.dx) > 1e-6 ||
-    Math.abs(Math.abs(decoded.grid.jDirectionIncrement) - Math.abs(source.grid.dy)) > 1e-6
-  ) {
-    throw new Error(`Split GRIB ${field} horizontal grid geometry mismatch`);
+  if (decoded.grid.kind === 'latlon') {
+    const lonFirstNorm = ((decoded.grid.longitudeOfFirstGridPoint + 180) % 360 + 360) % 360 - 180;
+    const lonLastNorm = ((decoded.grid.longitudeOfLastGridPoint + 180) % 360 + 360) % 360 - 180;
+    const latSouth = Math.min(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
+    const latNorth = Math.max(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
+    if (
+      Math.abs(lonFirstNorm - source.grid.lon0) > 1e-4 ||
+      Math.abs(latNorth - source.grid.lat0) > 1e-4 ||
+      Math.abs(latSouth - (source.grid.lat0 + (source.grid.height - 1) * source.grid.dy)) > 1e-4 ||
+      Math.abs(lonLastNorm - (source.grid.lon0 + (source.grid.width - 1) * source.grid.dx)) > 1e-4 ||
+      Math.abs(decoded.grid.iDirectionIncrement - source.grid.dx) > 1e-6 ||
+      Math.abs(Math.abs(decoded.grid.jDirectionIncrement) - Math.abs(source.grid.dy)) > 1e-6
+    ) {
+      throw new Error(`Split GRIB ${field} horizontal grid geometry mismatch`);
+    }
   }
 
   const p = decoded.product;

@@ -10,7 +10,7 @@ import { readLocalFile } from '../local-file.js';
 import { discoverSplitGribRun } from './discover.js';
 import {
   formatSplitGribRunStamp,
-  splitGribRegularFieldUrl,
+  splitGribFieldUrl,
   validateSplitGribCycle,
   verifySplitGribFieldMetadata
 } from './fields.js';
@@ -18,6 +18,7 @@ import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
 import { pause } from '../pause.js';
+import { MAX_NATIVE_MAPPING_DISTANCE_M, prepareNativeMapping } from './native-grid.js';
 
 const DEFAULT_CONCURRENCY = 8;
 const MAX_TRANSFER_ATTEMPTS = 3;
@@ -290,7 +291,7 @@ export function computeSplitGribModelLevelHeights(source: SplitSource,
 
 export async function createSplitGribAcquisitionSession(source: SplitSource, options: SplitGribAcquisitionOptions) {
   options.signal?.throwIfAborted();
-  const baseUrl = options.baseUrl ?? source.upstream.urlTemplate.split('/{cycleHour}')[0]!;
+  const baseUrl = options.baseUrl;
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > DEFAULT_CONCURRENCY) throw new Error(`Split GRIB concurrency must be an integer from 1 to ${DEFAULT_CONCURRENCY}`);
   const activeIndices = copySourceIndices(options.activeIndices, source.grid.width * source.grid.height);
@@ -314,6 +315,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   };
 
   let staticGeometryPromise: Promise<SplitGribStaticGeometryCache> | null = null;
+  let nativeMappingPromise: Promise<{ indices: Uint32Array; receipts: SplitGribObjectReceipt[]; sha256: string }> | null = null;
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   let active: Promise<ModelLevelFrame> | undefined;
@@ -326,9 +328,11 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     field: string,
     hour: number,
     level: number | null = null,
-    target?: { values: Float32Array; missing: Uint8Array }
+    target?: { values: Float32Array; missing: Uint8Array },
+    indices?: Uint32Array
   ): Promise<{ readonly decoded: DecodedSplitGribField; readonly receipt: SplitGribObjectReceipt }> => {
-    const url = splitGribRegularFieldUrl(source, field, cycle, { hour, level, baseUrl });
+    const selected = indices ?? (source.upstream.nativeGrid ? (await getNativeMapping()).indices : activeIndices);
+    const url = splitGribFieldUrl(source, field, cycle, { hour, level, baseUrl });
     const normalization = source.specs[field]!.normalization;
     const { decoded, compressedBytes, sha256, cacheHit } = await loadSplitGribField(
       url,
@@ -336,7 +340,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       stats,
       { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },
       bytes => {
-        const decoded = decodeSplitGribField(source, bytes, activeIndices, target);
+        const decoded = decodeSplitGribField(source, bytes, selected, target);
         verifySplitGribFieldMetadata(source, decoded, field, cycle, { hour, level });
         return decoded;
       }
@@ -356,6 +360,17 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       }
     };
   };
+
+  const getNativeMapping = () => nativeMappingPromise ??= (async () => {
+    const native = source.upstream.nativeGrid!;
+    const indices = Uint32Array.from({ length: native.pointCount }, (_, i) => i);
+    const latitude = await loadDecodedField(native.latitude.field, 0, null, undefined, indices);
+    const longitude = await loadDecodedField(native.longitude.field, 0, null, undefined, indices);
+    if (latitude.decoded.missing.some(Boolean) || longitude.decoded.missing.some(Boolean)) throw new Error('Missing native grid coordinates');
+    signal.throwIfAborted();
+    const mapping = prepareNativeMapping(source.grid, activeIndices, latitude.decoded.values, longitude.decoded.values);
+    return { indices: mapping, receipts: [latitude.receipt, longitude.receipt], sha256: sha256Hex(new Uint8Array(mapping.buffer)) };
+  })().catch(error => { nativeMappingPromise = null; throw error; });
 
   const getFluxField = (
     field: string,
@@ -398,7 +413,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         missingTerrain: hsurfRes.decoded.missing,
         hgtM,
         missingHgt,
-        receipts: [hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
+        receipts: [...(source.upstream.nativeGrid ? (await getNativeMapping()).receipts : []), hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
       };
     })().catch(error => {
       staticGeometryPromise = null;
@@ -467,7 +482,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         }
       }
     }
-    // Admitted template 3.0 has east/north +i/+j axes; scan order changes sample order.
+    // DWD native U/V and regular-grid +i/+j components are east/north winds.
     const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined) => {
       if (!u || !v) return;
       for (let i = 0; i < activeIndices.length; i++) if (u.missing[i] || v.missing[i]) {
@@ -551,6 +566,10 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         provider: source.upstream.provider,
         model: source.model.modelId,
         gridKind: 'regridded-regular-lat-lon',
+        ...(source.upstream.nativeGrid ? {
+          nativeGrid: { number: source.upstream.nativeGrid.number, uuid: source.upstream.nativeGrid.uuid, pointCount: source.upstream.nativeGrid.pointCount },
+          remapping: { method: 'nearest-cell', maxDistanceM: MAX_NATIVE_MAPPING_DISTANCE_M, sha256: (await getNativeMapping()).sha256 }
+        } : {}),
         runStamp,
         cycle,
         hour,
@@ -591,6 +610,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       await Promise.allSettled([active]);
       fluxCache.clear();
       staticGeometryPromise = null;
+      nativeMappingPromise = null;
     }
   };
 }

@@ -3,7 +3,7 @@ import { splitSource } from './source.js';
 const profile = splitSource(SPLIT_PRODUCT);
 import { describe, expect, it, vi } from 'vitest';
 import { candidateSplitGribCycles, discoverSplitGribRun, splitGribRunSentinelUrls } from './discover.js';
-import { formatSplitGribRunStamp, splitGribRegularFieldUrl } from './fields.js';
+import { formatSplitGribRunStamp, splitGribFieldUrl } from './fields.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 
 async function withProbeTimers<T>(start: () => Promise<T>): Promise<T> {
@@ -28,18 +28,18 @@ describe('ICON-EU run admission', () => {
     const urls = splitGribRunSentinelUrls(profile, cycles[0]);
     expect(new Set(urls).size).toBe(urls.length);
     for (const field of ['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S']) {
-      expect(urls).toContain(splitGribRegularFieldUrl(profile, field, cycles[0], { hour: lastHour }));
+      expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0], { hour: lastHour }));
     }
     for (const field of ['T', 'P']) for (const level of [profile.modelLevels[0], profile.modelLevels.at(-1)]) {
-      expect(urls).toContain(splitGribRegularFieldUrl(profile, field, cycles[0], { hour: lastHour, level }));
+      expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0], { hour: lastHour, level }));
     }
     for (const level of [profile.halfLevels[0], profile.halfLevels.at(-1)]) {
-      expect(urls).toContain(splitGribRegularFieldUrl(profile, 'HHL', cycles[0], { level }));
+      expect(urls).toContain(splitGribFieldUrl(profile, 'HHL', cycles[0], { level }));
     }
   });
   it.each(['PS', 'T_2M', 'QV_2M', 'T', 'P', 'HHL'])('skips a run with a missing %s endpoint', async field => {
     const level = field === 'T' ? profile.modelLevels.at(-1) : field === 'P' ? profile.modelLevels[0] : field === 'HHL' ? profile.halfLevels[0] : undefined;
-    const missing = splitGribRegularFieldUrl(profile, field, cycles[0], { hour: lastHour, level });
+    const missing = splitGribFieldUrl(profile, field, cycles[0], { hour: lastHour, level });
     const fetchImpl = vi.fn<typeof fetch>(async input => new Response(null, { status: String(input) === missing ? 404 : 200 }));
     const result = await discoverSplitGribRun(profile, { now, fetchImpl });
     expect(result.cycle).toBe(cycles[1]);

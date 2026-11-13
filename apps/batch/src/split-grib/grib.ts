@@ -12,9 +12,16 @@ import { decodeCcsdsSamples } from './codec/ccsds.js';
 export interface DecodedSplitGribField {
   readonly discipline: number;
   readonly identification: Identification;
-  readonly grid: Extract<ReturnType<typeof parseGrid>, { kind: 'latlon' }> & {
+  readonly grid: (Extract<ReturnType<typeof parseGrid>, { kind: 'latlon' }> & {
     readonly scanningMode: number;
     readonly earthShapeCode: number;
+  }) | {
+    readonly kind: 'unstructured';
+    readonly numberOfDataPoints: number;
+    readonly earthShapeCode: number;
+    readonly numberOfGridUsed: number;
+    readonly numberOfGridInReference: number;
+    readonly uuidOfHGrid: string;
   };
   readonly product: {
     readonly templateNumber: number;
@@ -168,29 +175,32 @@ function parseSection4Metadata(
   };
 }
 
-/**
- * Decode a DWD Split GRIB-EU GRIB2 (or `.grib2.bz2`) buffer in pure TypeScript and
- * extract `activeIndices` in normalized north-to-south (`-j`) grid order.
- */
-export function decodeSplitGribField(source: SplitSource,
-  inputBytes: Uint8Array,
-  activeIndices: Uint32Array,
-  target?: { values: Float32Array; missing: Uint8Array }
-): DecodedSplitGribField {
-  const gribBytes = isBzip2Compressed(inputBytes) ? decompressBzip2(inputBytes, MAX_SPLIT_OBJECT_BYTES) : inputBytes;
-  if (gribBytes.byteLength > MAX_SPLIT_OBJECT_BYTES) throw new Error('Split GRIB expanded object byte length out of bounds');
-  const fields = parseFields(gribBytes);
-  if (fields.length !== 1) {
-    throw new Error(`Expected exactly 1 GRIB2 field in Split GRIB object, found ${fields.length}`);
-  }
-  const field = fields[0]!;
-  const grid = parseGrid(field.section3);
-  const s3View = new DataView(
-    field.section3.buffer,
-    field.section3.byteOffset,
-    field.section3.byteLength
-  );
+function sourceGrid(source: SplitSource, section3: Uint8Array): DecodedSplitGribField['grid'] {
+  if (section3.byteLength < 14) throw new Error('Truncated GRIB2 Section 3');
+  const s3View = new DataView(section3.buffer, section3.byteOffset, section3.byteLength);
   const gridTemplateNumber = s3View.getUint16(12, false);
+  const native = source.upstream.nativeGrid;
+  if (native) {
+    if (gridTemplateNumber !== 101) throw new Error(`Expected GRIB2 grid template 3.101 (unstructured), got 3.${gridTemplateNumber}`);
+    if (section3.byteLength !== 35 || section3[5] !== 0 || section3[10] !== 0 || section3[11] !== 0) {
+      throw new Error('Unsupported Split GRIB unstructured grid layout');
+    }
+    const grid = {
+      kind: 'unstructured' as const,
+      numberOfDataPoints: s3View.getUint32(6, false),
+      earthShapeCode: s3View.getUint8(14),
+      numberOfGridUsed: s3View.getUint16(15, false) * 256 + s3View.getUint8(17),
+      numberOfGridInReference: s3View.getUint8(18),
+      uuidOfHGrid: Buffer.from(section3.subarray(19, 35)).toString('hex')
+    };
+    if (grid.numberOfDataPoints !== native.pointCount || grid.numberOfGridUsed !== native.number ||
+        grid.numberOfGridInReference !== 1 || grid.uuidOfHGrid !== native.uuid || grid.earthShapeCode !== 6) {
+      throw new Error('Split GRIB native grid identity mismatch');
+    }
+    return grid;
+  }
+  if (section3.byteLength < 72) throw new Error('Truncated GRIB2 regular grid');
+  const grid = parseGrid(section3);
   if (grid.kind !== 'latlon' || gridTemplateNumber !== 0) {
     throw new Error(`Expected GRIB2 grid template 3.0 (regular lat/lon), got 3.${gridTemplateNumber}`);
   }
@@ -216,6 +226,29 @@ export function decodeSplitGribField(source: SplitSource,
   if (southToNorth ? grid.latitudeOfFirstGridPoint >= grid.latitudeOfLastGridPoint
     : grid.latitudeOfFirstGridPoint <= grid.latitudeOfLastGridPoint) {
     throw new Error('Split GRIB scanning mode disagrees with latitude endpoints');
+  }
+  return { ...grid, scanningMode, earthShapeCode };
+}
+
+/** Decode selected native mesh cells or regular north-to-south grid indices into caller-owned targets. */
+export function decodeSplitGribField(source: SplitSource,
+  inputBytes: Uint8Array,
+  activeIndices: Uint32Array,
+  target?: { values: Float32Array; missing: Uint8Array }
+): DecodedSplitGribField {
+  const gribBytes = isBzip2Compressed(inputBytes) ? decompressBzip2(inputBytes, MAX_SPLIT_OBJECT_BYTES) : inputBytes;
+  if (gribBytes.byteLength > MAX_SPLIT_OBJECT_BYTES) throw new Error('Split GRIB expanded object byte length out of bounds');
+  const fields = parseFields(gribBytes);
+  if (fields.length !== 1) {
+    throw new Error(`Expected exactly 1 GRIB2 field in Split GRIB object, found ${fields.length}`);
+  }
+  const field = fields[0]!;
+  const grid = sourceGrid(source, field.section3), pointCount = grid.numberOfDataPoints;
+  for (const index of activeIndices) {
+    if (index >= pointCount) throw new RangeError(`Active cell index ${index} exceeds Split GRIB grid size ${pointCount}`);
+  }
+  if (target && (target.values.length !== activeIndices.length || target.missing.length !== activeIndices.length)) {
+    throw new RangeError('Split GRIB target length mismatch');
   }
 
   const id = field.identification;
@@ -327,17 +360,13 @@ export function decodeSplitGribField(source: SplitSource,
 
   const outValues = target?.values ?? allocValues(activeIndices.length);
   const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
-  if (outValues.length !== activeIndices.length || outMissing.length !== activeIndices.length) throw new RangeError('Split GRIB target length mismatch');
 
   for (let i = 0; i < activeIndices.length; i += 1) {
-    const targetIdx = activeIndices[i]!;
-    if (targetIdx >= pointCount) {
-      throw new RangeError(`Active cell index ${targetIdx} exceeds Split GRIB grid size ${pointCount}`);
+    let sourceIdx = activeIndices[i]!;
+    if (grid.kind === 'latlon' && grid.scanningMode === 64) {
+      const row = Math.floor(sourceIdx / grid.ni);
+      sourceIdx += (grid.nj - 1 - 2 * row) * grid.ni;
     }
-    const row = Math.floor(targetIdx / width);
-    const col = targetIdx - row * width;
-    const sourceRow = southToNorth ? height - 1 - row : row;
-    const sourceIdx = sourceRow * width + col;
     const value = fullValues[sourceIdx]!;
     if (Number.isFinite(value)) {
       outValues[i] = value;
@@ -351,11 +380,7 @@ export function decodeSplitGribField(source: SplitSource,
   return {
     discipline: field.discipline,
     identification: field.identification,
-    grid: {
-      ...grid,
-      scanningMode,
-      earthShapeCode
-    },
+    grid,
     product,
     representation: {
       dataRepresentationTemplateNumber: drt,

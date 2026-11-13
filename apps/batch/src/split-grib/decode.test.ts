@@ -1,4 +1,5 @@
 import { SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
+import { getProduct } from '@av/contracts/models';
 import { splitSource } from './source.js';
 const profile = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 2, height: 2 } });
 import { execFileSync } from 'node:child_process';
@@ -75,6 +76,94 @@ function simpleField(bits: 0 | 8 | 16, scanningMode: 0 | 64, values: readonly (n
   message.set(Buffer.from('7777'), offset);
   return message;
 }
+
+const nativeGrid = { ...splitSource(getProduct('icon-eu')!).upstream.nativeGrid!, pointCount: 4 };
+const nativeProfile = { ...profile, upstream: { ...profile.upstream, nativeGrid } };
+
+function nativeField(regular: Uint8Array, sectionLength = 35): Uint8Array {
+  const offset = 16 + 21, grid = new Uint8Array(sectionLength), view = new DataView(grid.buffer);
+  view.setUint32(0, sectionLength); grid[4] = 3;
+  view.setUint32(6, nativeGrid.pointCount); view.setUint16(12, 101); grid[14] = 6;
+  grid[17] = nativeGrid.number; grid[18] = 1;
+  grid.set(Buffer.from(nativeGrid.uuid, 'hex').subarray(0, Math.max(0, sectionLength - 19)), 19);
+  const result = new Uint8Array(regular.length - 72 + sectionLength);
+  result.set(regular.subarray(0, offset)); result.set(grid, offset);
+  result.set(regular.subarray(offset + 72), offset + sectionLength);
+  new DataView(result.buffer).setBigUint64(8, BigInt(result.length));
+  return result;
+}
+
+it.each([8, 16] as const)('extracts %s-bit native cells in repeated donor order with bitmap missingness', bits => {
+  const bytes = nativeField(simpleField(bits, 64, [300, null, 280, 281]));
+  const active = Uint32Array.of(3, 1, 0, 3, 2), target = {
+    values: new Float32Array(new SharedArrayBuffer(20)), missing: new Uint8Array(new SharedArrayBuffer(5))
+  };
+  const decoded = decodeSplitGribField(nativeProfile, bytes, active, target);
+  expect(decoded.grid).toEqual({ kind: 'unstructured', numberOfDataPoints: 4, earthShapeCode: 6,
+    numberOfGridUsed: 62, numberOfGridInReference: 1, uuidOfHGrid: nativeGrid.uuid });
+  expect(decoded.values).toBe(target.values); expect(decoded.missing).toBe(target.missing);
+  expect([...decoded.values]).toEqual([281, NaN, 300, 281, 280]);
+  expect([...decoded.missing]).toEqual([0, 1, 0, 0, 0]);
+});
+
+it.each([0, 42] as const)('decodes constant native template 5.%s and bitmap missingness', drt => {
+  const bytes = nativeField(simpleField(0, 64, [250, null, 250, 250], { drt }));
+  const decoded = decodeSplitGribField(nativeProfile, bytes, Uint32Array.of(1, 3, 0, 1));
+  expect([...decoded.values]).toEqual([NaN, 250, 250, NaN]);
+  expect([...decoded.missing]).toEqual([1, 0, 0, 1]);
+});
+
+it('extracts native donors from the nonconstant libaec reference block', () => {
+  const count = ccsdsOptions.sampleCount;
+  const base = nativeField(simpleField(16, 0, Array<number>(count).fill(250), { drt: 42 }));
+  const section5 = 16 + 21 + 35 + 34, section7 = section5 + 25 + 6;
+  const bytes = new Uint8Array(section7 + 5 + ccsdsPayload.length + 4), view = new DataView(bytes.buffer);
+  bytes.set(base.subarray(0, section7 + 5)); bytes.set(ccsdsPayload, section7 + 5);
+  bytes.set(Buffer.from('7777'), bytes.length - 4);
+  view.setBigUint64(8, BigInt(bytes.length)); view.setUint32(16 + 21 + 6, count);
+  view.setFloat32(section5 + 11, 0); view.setUint32(section7, 5 + ccsdsPayload.length);
+  const source = { ...nativeProfile, upstream: { ...nativeProfile.upstream, nativeGrid: { ...nativeGrid, pointCount: count } } };
+  const decoded = decodeSplitGribField(source, bytes, Uint32Array.of(8, 0, 3, 8));
+  expect([...decoded.values]).toEqual([1011, 1000, 999, 1011]);
+  expect([...decoded.missing]).toEqual([0, 0, 0, 0]);
+});
+
+it('validates native mesh identity and layout before decoding values', () => {
+  const regular = simpleField(8, 0, [300, 301, 280, 281]);
+  expect(() => decodeSplitGribField(nativeProfile, regular, Uint32Array.of(0))).toThrow('Expected GRIB2 grid template 3.101');
+  for (const sectionLength of [34, 36]) {
+    expect(() => decodeSplitGribField(nativeProfile, nativeField(regular, sectionLength), Uint32Array.of(0)))
+      .toThrow('Unsupported Split GRIB unstructured grid layout');
+  }
+  for (const offset of [5, 10, 11, 6, 14, 15, 17, 18, 19, 34]) {
+    const bytes = nativeField(regular);
+    bytes[16 + 21 + offset] ^= 1;
+    expect(() => decodeSplitGribField(nativeProfile, bytes, Uint32Array.of(0))).toThrow(/native grid identity|unstructured grid layout/);
+  }
+  expect(() => decodeSplitGribField(nativeProfile, nativeField(regular), Uint32Array.of(4))).toThrow('exceeds Split GRIB grid size');
+  expect(() => decodeSplitGribField(nativeProfile, nativeField(regular), Uint32Array.of(0), {
+    values: new Float32Array(2), missing: new Uint8Array(1)
+  })).toThrow('target length mismatch');
+});
+
+it('rejects oversized native point counts before allocation', () => {
+  const message = nativeField(simpleField(8, 0, [300, 301, 280, 281], { drt: 42, codedCount: 0xffffffff }));
+  new DataView(message.buffer).setUint32(16 + 21 + 6, 0xffffffff);
+  const source = `
+    import assert from 'node:assert/strict';
+    import { decodeSplitGribField } from ${JSON.stringify(new URL('./grib.ts', import.meta.url).href)};
+    import { SPLIT_PRODUCT } from ${JSON.stringify(new URL('../../../../tests/model-fixtures.ts', import.meta.url).href)};
+    import { splitSource } from ${JSON.stringify(new URL('./source.ts', import.meta.url).href)};
+    const profile = splitSource(SPLIT_PRODUCT);
+    profile.upstream.nativeGrid = ${JSON.stringify(nativeGrid)};
+    const bytes = Buffer.from(${JSON.stringify([...message])});
+    for (const name of ['Float32Array', 'Float64Array']) globalThis[name] = new Proxy(globalThis[name], {
+      construct() { throw new Error('unexpected value allocation before native grid validation'); }
+    });
+    assert.throws(() => decodeSplitGribField(profile, bytes, Uint32Array.of(0)), /native grid identity mismatch/);
+  `;
+  expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
+});
 
 it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning mode %s', scanningMode => {
   const active = Uint32Array.of(0, 1, 2, 3), values = [300, 301, 280, 281];
@@ -177,7 +266,7 @@ it('ignores unused bitmap padding bits when validating coverage', () => {
   expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
 });
 
-it('recovers late-lead statistical windows from one Float64 array per field', () => {
+it.each(['regular', 'native'] as const)('recovers late-lead %s statistical windows from one Float64 array per field', kind => {
   const makeStat = (endHour: number, reference: number, delta: number): Uint8Array => {
     const base = simpleField(8, 0, [250 + delta, 250, 250, 250]);
     const s4 = new Uint8Array(58), v4 = new DataView(s4.buffer);
@@ -194,11 +283,12 @@ it('recovers late-lead statistical windows from one Float64 array per field', ()
     const view = new DataView(out.buffer);
     view.setBigUint64(8, BigInt(out.length));
     view.setFloat32(16 + 21 + 72 + 58 + 11, reference);
-    return out;
+    return kind === 'native' ? nativeField(out) : out;
   };
   const reference = 134_217_728; // 2^27: exact in Float32, while +123 loses low bits in Float32.
-  const prev = decodeSplitGribField(profile, makeStat(71, reference, 0), Uint32Array.of(0));
-  const curr = decodeSplitGribField(profile, makeStat(72, reference, 123), Uint32Array.of(0));
+  const source = kind === 'native' ? nativeProfile : profile;
+  const prev = decodeSplitGribField(source, makeStat(71, reference, 0), Uint32Array.of(0));
+  const curr = decodeSplitGribField(source, makeStat(72, reference, 123), Uint32Array.of(0));
   expect(curr.values).toBeInstanceOf(Float64Array);
   expect(curr.values[0]! - prev.values[0]!).toBe(123);
   const recovered = recoverSplitGribFlux(profile, 'sensibleHeatFlux', curr, prev, 72);

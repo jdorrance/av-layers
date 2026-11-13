@@ -6,6 +6,7 @@ export function createSplitGribProvider(model: ModelDefinition): ResolvableForec
   const source = splitSource(model);
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true, retainedGeometryFields: source.modelLevels.length + 1,
+    sourceMappingBytesPerCell: source.upstream.nativeGrid ? Uint32Array.BYTES_PER_ELEMENT : 0,
     auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
     auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
     async resolveCycle(options) {
