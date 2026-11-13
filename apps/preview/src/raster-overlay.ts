@@ -100,7 +100,7 @@ export class RasterOverlay {
   };
   private readonly settled = (): boolean => {
     if (!this.moving || this.map.isMoving?.()) return false;
-    this.moving = false;
+    this.moving = false; this.sourceLimits.clear();
     const selection = this.requested, pending = this.slots.find(slot => slot !== this.active && matches(slot, selection));
     if ((!pending && !this.retryEmpty) || !selection || selection.build.expiresAtMs <= Date.now()) {
       this.prepareNext(); return false;
@@ -149,10 +149,12 @@ export class RasterOverlay {
     }
     let target = this.slots.find(slot => matches(slot, this.requested));
     if (target && this.problem(target)) { this.drop(target); target = undefined; }
+    const ready = !!target && target.successful && this.tilesSettled(target);
     const future = this.predicted(this.requested);
     for (const slot of [...this.slots]) {
       if (slot === this.active || slot === target) continue;
-      if (slot.build !== build || this.problem(slot) || ((!slot.successful || !this.tilesSettled(slot)) && !future.some(value => matches(slot, value)))) this.drop(slot);
+      // MapLibre admits image work before our transport; cold selection frees those slots too.
+      if (slot.build !== build || this.problem(slot) || ((!slot.successful || !this.tilesSettled(slot)) && (!ready || !future.some(value => matches(slot, value))))) this.drop(slot);
       else slot.transport.setInteractive(false);
     }
     if (target) {

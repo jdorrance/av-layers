@@ -2,7 +2,7 @@ import { Map as PreviewMap, type MapOptions } from 'maplibre-gl';
 export * from 'maplibre-gl';
 
 interface TextureMemory { bytes: number; peakBytes: number; rasterBytes: number; peakRasterBytes: number; textures: number; peakTextures: number }
-interface InputSample { index: number; inputAt: number; ms: number; rendered: boolean; renders: number; pixels?: number[][]; sources: number }
+interface InputSample { index: number; inputAt: number; inputEpochMs: number; ms: number; rendered: boolean; renders: number; pixels?: number[][]; sources: number }
 export interface PreviewBench {
   ready: Promise<void>;
   select(index: number): Promise<InputSample>;
@@ -106,7 +106,7 @@ function installBench(map: PreviewMap): void {
   void fetch('/bench/config.json').then(response => response.json()).then((config: { frames: string[] }) => { frames = config.frames; map.triggerRepaint(); });
   function finish(rendered: boolean, pixels?: number[][]) {
     if (!waiting) return;
-    const value: InputSample = { index: waiting.index, inputAt: waiting.inputAt, ms: performance.now() - waiting.inputAt,
+    const value: InputSample = { index: waiting.index, inputAt: waiting.inputAt, inputEpochMs: performance.timeOrigin + waiting.inputAt, ms: performance.now() - waiting.inputAt,
       rendered, renders: renders - waiting.render, pixels, sources: sources() };
     clearTimeout(waiting.timer); samples.push(value); waiting.resolve(value); waiting = undefined;
   }

@@ -68,6 +68,7 @@ try {
     const sourceSha256 = await sourceHash(codeRoot);
     let requests = 0, active = 0, peakActive = 0, bytes = 0, lastRequest = 0, base = '';
     const urls = new Set<string>(), errors: string[] = [];
+    const requestTimings: { frame: string; startedAt: number; finishedAt?: number }[] = [];
     const server = createServer(async (request, response) => {
       const url = new URL(request.url!, 'http://localhost');
       const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
@@ -82,13 +83,15 @@ try {
         if (url.pathname.startsWith('/tiles/')) {
           requests++; active++; peakActive = Math.max(peakActive, active); lastRequest = Date.now(); urls.add(url.pathname);
           const [, , , , layer, frame] = url.pathname.split('/'), image = images.get(`${layer}/${frame}`);
+          const timing = { frame, startedAt: Date.now() } as { frame: string; startedAt: number; finishedAt?: number };
+          requestTimings.push(timing);
           const cancellation = new AbortController();
           response.once('close', () => cancellation.abort());
           try {
             await delay(tileDelayMs, undefined, { signal: cancellation.signal });
             if (!image) { response.writeHead(404); response.end(); return; }
             response.writeHead(200, { 'content-type': 'image/webp', 'content-length': image.length, 'cache-control': 'public, max-age=3600, immutable' });
-            bytes += image.length; response.end(image);
+            bytes += image.length; timing.finishedAt = Date.now(); response.end(image);
           } catch (error) { if (!cancellation.signal.aborted) throw error; }
           finally { active--; lastRequest = Date.now(); }
           return;
@@ -135,11 +138,14 @@ try {
         const { context, page } = await openPage();
         try {
           environment ??= await page.evaluate(() => window.bench.snapshot());
-          const before = requests;
+          const before = requests, timingStart = requestTimings.length;
           const result = await page.evaluate(interval => window.bench.drag(Array.from({ length: 23 }, (_, index) => index + 1), interval), intervalMs);
           const key = `coldDay${intervalMs}ms`;
           samples[key] = result.samples;
-          summary[key] = { ...summarize(result.samples), staleFramePaints: result.staleFramePaints, lastTargetMs: result.lastTargetMs, requests: requests - before };
+          const finalInput = result.samples.at(-1)!, targetFrame = build.manifest.frames[finalInput.index].id;
+          const targetHttp = requestTimings.slice(timingStart).filter(timing => timing.frame === targetFrame).map(timing => ({ startMs: timing.startedAt - finalInput.inputEpochMs,
+            endMs: timing.finishedAt === undefined ? null : timing.finishedAt - finalInput.inputEpochMs }));
+          summary[key] = { ...summarize(result.samples), staleFramePaints: result.staleFramePaints, lastTargetMs: result.lastTargetMs, requests: requests - before, targetHttp };
           finalEnvironment = await page.evaluate(() => window.bench.snapshot());
         } finally { await context.close(); }
       }

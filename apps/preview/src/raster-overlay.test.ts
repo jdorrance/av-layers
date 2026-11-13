@@ -512,6 +512,24 @@ it('makes explicit layer intent ready before later timeline frames without chang
   } finally { f.overlay.destroy(); }
 });
 
+it('releases unfinished background sources before a cold timeline selection', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    const displayed = f.displayed();
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    const superseded = sourceFor(f, 'usable-lift-agl', frames[2].id)!;
+    f.emit('sourcedata', { sourceId: superseded, tile: {} });
+    f.emit('sourcedataloading', { sourceId: superseded, tile: {} });
+    f.overlay.select(b, 'usable-lift-agl', frames[3].id);
+    expect(f.sources.has(superseded)).toBe(false);
+    expect(f.sources.size).toBe(2);
+    expect(f.displayed()).toBe(displayed);
+    await f.complete();
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[3].id);
+  } finally { f.overlay.destroy(); }
+});
+
 it('shrinks the prepared window on resize and admits no speculative sources over budget', async () => {
   const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
   try {
@@ -544,6 +562,19 @@ it('rejects readiness for moving, damaged, expired, and disposed prepared source
   f.overlay.destroy();
   expect(f.sources.size).toBe(0);
   expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(false);
+});
+
+it('recomputes memory admission after selection during camera movement', async () => {
+  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
+    f.emit('movestart');
+    f.overlay.select(b, 'usable-lift-agl', frames[2].id);
+    f.setCoveringCount(64);
+    f.emit('moveend'); await completeWindow(f);
+    expect(f.sources.size).toBe(2);
+    expect(f.states.at(-1)?.displayed?.frame).toBe(frames[2].id);
+  } finally { f.overlay.destroy(); }
 });
 
 
