@@ -2,13 +2,13 @@ import { appendFileSync, readFileSync } from 'node:fs';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
-import { getProduct, MODEL_IDS } from '@av/contracts/models';
+import { getProduct } from '@av/contracts/models';
 import { MAX_FORECAST_SHARDS, readBuildPlan, type BuildPlan } from '../apps/batch/src/parallel.js';
 import { workflowAuthority } from '../apps/batch/src/authority.js';
 import { assertBuildBucketLock, r2ShardStorage, r2Storage, sealShardCredentials } from '../apps/batch/src/storage.js';
 import { assertCurrentMain, downloadForecastArtifact, finalizeAndPublish, planForecast, prepareForecastTerrain, resumePublication, runForecastShard } from './publication-workflow.js';
 import { uploadForecastControlPlan } from './forecast-control.js';
-import { probeApi, readResponseBytes, retryProbe, validateApiBaseUrl, type RetryOptions } from './smoke-api.js';
+import { readResponseBytes, retryProbe, validateApiBaseUrl, verifyApiDeployment, type RetryOptions } from './smoke-api.js';
 
 export type EnvironmentName = 'staging' | 'production';
 export type WranglerConfig = Record<EnvironmentName, { name: string; bucket: string }>;
@@ -240,9 +240,7 @@ export async function runOperation(command: string): Promise<void> {
   await pnpm(['--filter', '@av/preview', 'build'], { ...process.env, AV_API_BASE: cloud.apiBaseUrl, VITE_BUILD_REVISION: deploymentId });
   await assertCurrentMain();
   await pnpm(['--filter', '@av/api', 'exec', 'wrangler', 'deploy', '--env', cloud.targetEnv, '--var', `AV_DEPLOYMENT_ID:${deploymentId}`]);
-  for (const model of MODEL_IDS) {
-    await probeApi({ baseUrl: cloud.apiBaseUrl, model, expectedDeploymentId: deploymentId, expectedModels: MODEL_IDS });
-  }
+  await verifyApiDeployment({ baseUrl: cloud.apiBaseUrl, expectedDeploymentId: deploymentId });
   await pnpm(['exec', 'wrangler', 'pages', 'deploy', 'apps/preview/dist', '--project-name', cloud.pagesProjectName, '--branch', 'main']);
   await verifyPagesRevision({ url: pages.url, expectedDeploymentId: deploymentId });
   await verifyWindyPluginBundle({ url: pages.url, expectedApiBaseUrl: cloud.apiBaseUrl });
