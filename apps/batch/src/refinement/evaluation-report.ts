@@ -71,7 +71,7 @@ export function selectEvaluationPopulation(mask: CoverageMask, spec: EvaluationP
   };
 }
 
-export interface StatusHistogramRow {
+interface StatusHistogramRow {
   readonly status: number;
   readonly left: number;
   readonly right: number;
@@ -151,7 +151,7 @@ export function summarizePopulationFields(
   };
 }
 
-export interface EvaluationRuntimeMetrics {
+interface EvaluationRuntimeMetrics {
   readonly elapsedMs: number;
   readonly peakRssBytes: number;
   readonly render?: Readonly<Record<string, unknown>>;

@@ -25,7 +25,7 @@ export interface NativeRasterSource {
   on(event: SourceEventName, listener: (event: RasterSourceEvent) => void): unknown;
   off(event: SourceEventName, listener: (event: RasterSourceEvent) => void): unknown;
 }
-export interface NativeRasterLayer {
+interface NativeRasterLayer {
   source(): NativeRasterSource | undefined;
   isLoading(): boolean;
   layer(): { id: string };

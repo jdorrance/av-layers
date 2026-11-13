@@ -9,7 +9,7 @@ import { putImmutable } from '../immutable-upload.js';
 import { ASSET_MAX_BYTES, CATALOG_MAX_BYTES, TERRAIN_PACKING, TERRAIN_SOURCE, dataIdentity, encodeJson, parseJson, sha256, terrainCatalogSchema, terrainGeometrySchema, terrainInventorySchema, terrainTileSchema, type TerrainAsset, type TerrainInventory, type TerrainStorage, type TerrainTile, type TerrainTileSource } from './contract.js';
 import { fetchSourceTile, INVENTORY_MAX_BYTES, parseSourceInventory, type SourceOptions } from './source.js';
 
-export const TERRAIN_REPACK_RECIPE = Object.freeze({
+const TERRAIN_REPACK_RECIPE = Object.freeze({
   ...TERRAIN_PACKING, rasterio: '1.4.3', numpy: '2.2.6', python: '3.12', gdal: '3.9.3',
   compression: 'DEFLATE', level: 6, predictor: 3, overviews: 'preserve-existing'
 } as const);
@@ -138,7 +138,7 @@ async function proveAsset(store: TerrainStorage, receipt: Receipt, signal?: Abor
 }
 
 /** The sole native helper operates in a private temporary directory and verifies losslessness before returning. */
-export async function repackTerrain(source: Uint8Array, signal?: AbortSignal): Promise<PackingResult> {
+async function repackTerrain(source: Uint8Array, signal?: AbortSignal): Promise<PackingResult> {
   signal?.throwIfAborted();
   if (!source.byteLength || source.byteLength > ASSET_MAX_BYTES) throw new Error('Terrain source exceeds asset byte budget');
   const directory = await mkdtemp(join(tmpdir(), 'av-terrain-repack-'));

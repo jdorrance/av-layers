@@ -81,6 +81,21 @@ it.each(['cycle', 'profile', 'flux', 'precipitation'] as const)('rejects a misma
   expect(close).toHaveBeenCalledOnce();
 });
 
+it.each([false, true])('includes native decoder RSS in build admission (excess=%s)', async excess => {
+  const { options, open, close } = await fixture();
+  const implementation = open.getMockImplementation()!;
+  const nativePeakRssBytes = excess ? BUILD_BUDGETS.peakRssBytes : 128 * 1024 ** 2;
+  open.mockImplementation(async input => ({ ...await implementation(input), nativePeakRssBytes }));
+  const before = process.resourceUsage().maxRSS * 1024;
+  const build = buildForecast(options);
+  if (excess) await expect(build).rejects.toThrow('Forecast process RSS exceeds the build budget');
+  else {
+    const manifest = manifestV5Schema.parse(JSON.parse(await readFile(await build, 'utf8')));
+    expect(manifest.metrics.peakRssBytes).toBeGreaterThanOrEqual(before + nativePeakRssBytes);
+  }
+  expect(close).toHaveBeenCalledOnce();
+});
+
 it('journals a failed prefetch against its own frame and phase', async () => {
   const { out, options, acquire, frame, close } = await fixture();
   acquire.mockImplementation(async (hour, active) => {

@@ -21,6 +21,7 @@
     "comparison": "node --import tsx apps/batch/src/comparison/cli.ts",
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
+    "unused": "knip && knip --production --include files,dependencies,unlisted",
     "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -32,11 +33,12 @@
     "dev": "node --import tsx scripts/dev-fixture.ts",
     "masks:build": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py",
     "tools:pmtiles": "node scripts/setup-pmtiles.mjs",
+    "tools:eccodes": "node scripts/setup-eccodes.mjs",
     "docs:generate": "node --import tsx scripts/generate-reference.ts",
     "docs:check": "node --import tsx scripts/generate-reference.ts --check",
     "operations": "node --import tsx scripts/operations.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
-    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check"
+    "verify": "node scripts/setup-pmtiles.mjs --check && node scripts/setup-eccodes.mjs --check && pnpm lint && pnpm unused && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check"
   },
   "devDependencies": {
     "@av/client": "workspace:*",
@@ -48,6 +50,7 @@
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "22.19.15",
     "eslint": "10.14.0",
+    "knip": "6.45.1",
     "tsx": "4.23.15",
     "typescript": "catalog:",
     "typescript-eslint": "8.72.1",

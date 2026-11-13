@@ -668,7 +668,7 @@ export async function runEvaluation(options: RunEvaluationOptions): Promise<Eval
     };
     const runtime = {
       elapsedMs: Date.now() - started,
-      peakRssBytes: process.resourceUsage().maxRSS * 1024,
+      peakRssBytes: process.resourceUsage().maxRSS * 1024 + (acquisition.session.nativePeakRssBytes ?? 0),
       render: {
         ...renderTotals,
         bytesRatio: renderTotals.step.bytes ? renderTotals.smooth.bytes / renderTotals.step.bytes : 0

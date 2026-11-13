@@ -1,0 +1,9 @@
+{
+  "python": "3.12",
+  "apiVersion": "2.50.0",
+  "packages": {
+    "eccodes": "2.50.1",
+    "eccodeslib": "2.50.0.34",
+    "numpy": "2.2.6"
+  }
+}

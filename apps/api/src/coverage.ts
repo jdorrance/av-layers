@@ -3,11 +3,11 @@ import { SAMPLE_SHARD_TARGET_BYTES, prepareShardedSamplePackLayout, type Sharded
 import { getR2Object, countCacheHit, ByteCache, MaterializedReads, readObjectBytes, readBoundedStream, parseBoundedJson, reserveAllocation, estimateJsonBytes, type WaitContext } from './resources';
 
 export class CoverageError extends Error {}
-export interface FrameGroupShard {
+interface FrameGroupShard {
   group: number; firstFrame: number; frameCount: number; blockShard: number;
   firstBlock: number; blockCount: number; storedCells: number; bytes: number; key: string; sha256: string;
 }
-export interface FrameGroup {
+interface FrameGroup {
   group: number; firstFrame: number; frameCount: number; channelCount: number; shards: readonly FrameGroupShard[];
 }
 export interface ResolvedSparseCoverage {

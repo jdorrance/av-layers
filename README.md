@@ -17,6 +17,7 @@ Use the pnpm version in [package.json](package.json). Run from the repository ro
 ```sh
 pnpm install
 pnpm tools:pmtiles
+pnpm tools:eccodes
 pnpm dev
 ```
 
@@ -31,6 +32,8 @@ The [terrain example](docs/development.md#terrain-refinement) uses
 Complete [setup](docs/development.md#setup) in each new worktree.
 Run `pnpm test` while working. `pnpm test:integration` exercises local workerd,
 PMTiles, and the Windy bundle. Run `pnpm verify` for both suites and app builds.
+`pnpm unused` checks files, dependencies and internal exports with [Knip](knip.jsonc).
+Its production pass also checks module reachability without test imports.
 
 [Local development](docs/development.md) covers test data and server options.
 

@@ -5,7 +5,7 @@ import { buildWindgramView as buildView } from './windgram-view.ts';
 import { readWindgram as readView } from './windgram-inspector.ts';
 
 export { createPointForecast } from './from-av-profile.ts';
-export type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
+export type { SiteForecast } from './internal-meteo.ts';
 export type { WindgramView, WindgramOptions, WindgramReading } from './scene-types.ts';
 
 /** Build from a validated forecast. Retain the original scene handle for rendering and inspection. */

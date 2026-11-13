@@ -14,7 +14,7 @@ import {
   validateSplitGribCycle,
   verifySplitGribFieldMetadata
 } from './fields.js';
-import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
+import { createSplitGribDecoder, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
 import { pause } from '../pause.js';
@@ -124,7 +124,7 @@ async function loadSplitGribField(
   cacheDir: string,
   stats: SplitGribTransportStats,
   options: { readonly fetchImpl?: typeof fetch; readonly signal?: AbortSignal; readonly readOnlyCache?: boolean; readonly offline?: boolean },
-  decode: (bytes: Uint8Array) => DecodedSplitGribField
+  decode: (bytes: Uint8Array) => Promise<DecodedSplitGribField>
 ): Promise<{ readonly decoded: DecodedSplitGribField; readonly compressedBytes: number; readonly sha256: string; readonly cacheHit: boolean }> {
   options.signal?.throwIfAborted();
   const keyHash = createHash('sha256').update(url).digest('hex');
@@ -135,7 +135,7 @@ async function loadSplitGribField(
   try {
     cached = await readLocalFile(cachePath, MAX_SPLIT_OBJECT_BYTES);
     options.signal?.throwIfAborted();
-    const decoded = decode(cached);
+    const decoded = await decode(cached);
     stats.cacheHits += 1;
     return { decoded, compressedBytes: cached.byteLength, sha256: sha256Hex(cached), cacheHit: true };
   } catch (error) {
@@ -173,7 +173,7 @@ async function loadSplitGribField(
   options.signal?.throwIfAborted();
   stats.downloads += 1;
   stats.downloadedBytes += buffer.byteLength;
-  const decoded = decode(buffer);
+  const decoded = await decode(buffer);
   await mkdir(dirname(cachePath), { recursive: true });
   const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
   try {
@@ -316,6 +316,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   let staticGeometryPromise: Promise<SplitGribStaticGeometryCache> | null = null;
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  const decoder = createSplitGribDecoder(source, activeIndices, signal);
   let active: Promise<ModelLevelFrame> | undefined;
   const fluxCache = new Map<
     string,
@@ -335,8 +336,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       options.cacheDir,
       stats,
       { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },
-      bytes => {
-        const decoded = decodeSplitGribField(source, bytes, activeIndices, target);
+      async bytes => {
+        const decoded = await decoder.decode(bytes, target);
         verifySplitGribFieldMetadata(source, decoded, field, cycle, { hour, level });
         return decoded;
       }
@@ -566,8 +567,9 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
 
   return {
     cycle,
+    get nativePeakRssBytes(): number { return decoder.stats.peakNativeRssBytes; },
     get stats(): Readonly<SplitGribTransportStats> {
-      return { ...stats };
+      return { ...stats, decoder: { ...decoder.stats } };
     },
     async acquire(hour: number, target?: NormalizedFrameTarget): Promise<ModelLevelFrame> {
       signal.throwIfAborted();
@@ -588,7 +590,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     },
     async close(): Promise<void> {
       controller.abort(new Error('Split GRIB acquisition session is closed'));
-      await Promise.allSettled([active]);
+      await Promise.allSettled([active, decoder.close()]);
       fluxCache.clear();
       staticGeometryPromise = null;
     }

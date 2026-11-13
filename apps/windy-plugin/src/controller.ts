@@ -39,7 +39,7 @@ export interface HostTileLayer {
   remove?(): unknown;
 }
 
-export interface HostMap {
+interface HostMap {
   addLayer(layer: HostTileLayer): unknown;
   removeLayer(layer: HostTileLayer): unknown;
 }

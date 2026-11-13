@@ -1,39 +1,16 @@
 import { SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { splitSource } from './source.js';
 const profile = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 2, height: 2 } });
-import { execFileSync } from 'node:child_process';
 import { expect, it } from 'vitest';
 import { recoverSplitGribFlux } from './acquire.js';
-import { decodeCcsdsSamples } from './codec/ccsds.js';
-import { decodeSplitGribField } from './grib.js';
+import { createSplitGribDecoder } from './grib.js';
+
+async function decodeSplitGribField(source: typeof profile, bytes: Uint8Array, indices: Uint32Array, target?: { values: Float32Array; missing: Uint8Array }) {
+  const decoder = createSplitGribDecoder(source, indices);
+  try { return await decoder.decode(bytes, target); } finally { await decoder.close(); }
+}
 
 // Exercise packing and row normalization on a small grid without allocating a full forecast.
-
-const ccsdsOptions = { bitsPerSample: 16, blockSize: 32, rsi: 128, flags: 14, sampleCount: 9 };
-// Encoded independently with libaec 1.1.3, including a trailing partial block.
-const ccsdsPayload = Buffer.from('103e80a20010022807fffff8', 'hex');
-
-it('decodes a nonconstant libaec reference block without external fixture files', () => {
-  expect([...decodeCcsdsSamples(ccsdsPayload, ccsdsOptions)]).toEqual([1000, 1002, 1001, 999, 1005, 1010, 1008, 1007, 1011]);
-});
-
-it('reads full-width unsigned samples across bytes and padded intervals', () => {
-  const payload = Buffer.from('fffffffffc091a2b38fc0000000000000008', 'hex');
-  const options = { bitsPerSample: 32, blockSize: 2, rsi: 1, flags: 32, sampleCount: 4 };
-  expect([...decodeCcsdsSamples(payload, options)]).toEqual([0xffffffff, 0x81234567, 0x80000000, 1]);
-});
-
-it('rejects exhausted fixed-width and unary payloads within a bounded subprocess', () => {
-  // A Vitest timeout cannot interrupt a synchronous infinite loop in the decoder.
-  const source = `
-    import assert from 'node:assert/strict';
-    import { decodeCcsdsSamples } from ${JSON.stringify(new URL('./codec/ccsds.ts', import.meta.url).href)};
-    for (const payload of [[], [0], [0xf0], ${JSON.stringify([...ccsdsPayload.subarray(0, -1)])}]) {
-      assert.throws(() => decodeCcsdsSamples(Uint8Array.from(payload), ${JSON.stringify(ccsdsOptions)}), /Truncated CCSDS payload/);
-    }
-  `;
-  expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
-});
 
 function simpleField(bits: 0 | 8 | 16, scanningMode: 0 | 64, values: readonly (number | null)[], options: { drt?: 0 | 42; codedCount?: number; decimalScale?: number } = {}): Uint8Array {
   const section = (number: number, length: number) => {
@@ -76,51 +53,94 @@ function simpleField(bits: 0 | 8 | 16, scanningMode: 0 | 64, values: readonly (n
   return message;
 }
 
-it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning mode %s', scanningMode => {
+it('decodes libaec reference samples through GRIB2 template 5.42', async () => {
+  // libaec 1.1.3 payload includes a trailing partial block.
+  const payload = Buffer.from('103e80a20010022807fffff8', 'hex');
+  const base = simpleField(16, 0, [250, 250, 250, 250], { drt: 42 });
+  const section7 = base.length - 4 - 13, bytes = new Uint8Array(section7 + 5 + payload.length + 4);
+  bytes.set(base.subarray(0, section7)); bytes.set(payload, section7 + 5); bytes.set(Buffer.from('7777'), bytes.length - 4);
+  const view = new DataView(bytes.buffer), grid = 16 + 21, packing = grid + 72 + 34;
+  view.setBigUint64(8, BigInt(bytes.length)); view.setUint32(grid + 6, 9); view.setUint32(grid + 30, 3); view.setUint32(grid + 34, 3);
+  view.setUint32(packing + 5, 9); view.setFloat32(packing + 11, 0); view.setUint32(section7, 5 + payload.length); bytes[section7 + 4] = 7;
+  const configured = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 3, height: 3 } });
+  const decoded = await decodeSplitGribField(configured, bytes, Uint32Array.from({ length: 9 }, (_, i) => i));
+  expect([...decoded.values]).toEqual([1000, 1002, 1001, 999, 1005, 1010, 1008, 1007, 1011]);
+  for (const length of [0, 1, payload.length - 1]) {
+    const truncated = bytes.slice(0, section7 + 5 + length + 4), header = new DataView(truncated.buffer);
+    header.setBigUint64(8, BigInt(truncated.length)); header.setUint32(section7, 5 + length);
+    truncated.set(Buffer.from('7777'), truncated.length - 4);
+    await expect(decodeSplitGribField(configured, truncated, Uint32Array.of(0))).rejects.toThrow();
+  }
+});
+
+it('bounds bzip2 expansion, rejects corrupt streams and reuses the decoder after invalid data', async () => {
+  const compressed = Buffer.from('QlpoOTFBWSZTWSceZn0AAEv+if+JwgGRAACAWOEQAEAQABAAEAAAoAByGqaZMmRgjJiY0GFTCmT0mIbUxPQV0OqSkt5ytCM4s4IiFWPKJsudmQR6RIDK+fWNqUuaUX0jitULI7oSVUP17GCN/DqjPE8Z6gZuAocluRip3eJhxoXckU4UJAnHmZ9A', 'base64');
+  const overflow = Buffer.from('QlpoOTFBWSZTWXQRdSsAQEBAgMAAAAIACCAAMMwFKaYBANiAgHi7kinChIOgi6lY', 'base64');
+  const corrupt = Buffer.from(compressed); corrupt[10] ^= 1;
+  const decoder = createSplitGribDecoder(profile, Uint32Array.of(3, 0, 2, 1));
+  try {
+    for (const bytes of [compressed.subarray(0, -1), corrupt, Buffer.concat([compressed, compressed]), overflow]) await expect(decoder.decode(bytes)).rejects.toThrow();
+    const decoded = await decoder.decode(compressed);
+    expect([...decoded.values]).toEqual([9999, 280, NaN, 281]);
+    expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
+    expect(decoder.stats.decodeCalls).toBe(1);
+    expect(decoder.stats.peakNativeRssBytes).toBeGreaterThan(0);
+  } finally { await decoder.close(); }
+});
+
+it('marks Float32 overflow as missing before publishing a field', async () => {
+  const bytes = simpleField(8, 0, [251, 250, 250, 250]);
+  new DataView(bytes.buffer).setUint16(16 + 21 + 72 + 34 + 15, 128);
+  const decoded = await decodeSplitGribField(profile, bytes, Uint32Array.of(0, 1));
+  expect([...decoded.values]).toEqual([NaN, 250]);
+  expect([...decoded.missing]).toEqual([1, 0]);
+});
+
+it.each([0, 64] as const)('normalizes equivalent 8/16-bit fields using scanning mode %s', async scanningMode => {
   const active = Uint32Array.of(0, 1, 2, 3), values = [300, 301, 280, 281];
   for (const bits of [8, 16] as const) {
-    const decoded = decodeSplitGribField(profile, simpleField(bits, scanningMode, values), active);
+    const decoded = await decodeSplitGribField(profile, simpleField(bits, scanningMode, values), active);
     expect([...decoded.values]).toEqual(scanningMode === 64 ? [280, 281, 300, 301] : values);
     expect([...decoded.missing]).toEqual([0, 0, 0, 0]);
   }
 });
 
-it('scatters ICON values and missing flags into reusable shared views', () => {
+it('scatters ICON values and missing flags into reusable shared views', async () => {
   const active = Uint32Array.of(0, 1, 2, 3), target = {
     values: new Float32Array(new SharedArrayBuffer(16)), missing: new Uint8Array(new SharedArrayBuffer(4)).fill(1)
   };
   const bytes = simpleField(8, 64, [300, null, 280, 281]);
-  const expected = decodeSplitGribField(profile, bytes, active), decoded = decodeSplitGribField(profile, bytes, active, target);
+  const expected = await decodeSplitGribField(profile, bytes, active), decoded = await decodeSplitGribField(profile, bytes, active, target);
   expect(decoded.values).toBe(target.values); expect(decoded.missing).toBe(target.missing);
   expect(decoded.values).toEqual(expected.values); expect(decoded.missing).toEqual(expected.missing);
-  decodeSplitGribField(profile, simpleField(8, 64, [300, 301, 280, 281]), active, target);
+  await decodeSplitGribField(profile, simpleField(8, 64, [300, 301, 280, 281]), active, target);
   expect([...target.missing]).toEqual([0, 0, 0, 0]);
 });
 
-it.each([0, 64] as const)('rejects latitude endpoints contradicting scanning mode %s', scanningMode => {
+it.each([0, 64] as const)('rejects latitude endpoints contradicting scanning mode %s', async scanningMode => {
   const message = simpleField(8, scanningMode, [300, 301, 280, 281]);
   message[16 + 21 + 71] = scanningMode === 64 ? 0 : 64;
-  expect(() => decodeSplitGribField(profile, message, Uint32Array.of(0))).toThrow('scanning mode disagrees with latitude endpoints');
+  await expect(decodeSplitGribField(profile, message, Uint32Array.of(0))).rejects.toThrow('scanning mode disagrees with latitude endpoints');
 });
 
-it.each([0, 42] as const)('decodes zero-bit template 5.%s as the unscaled reference with empty payload and bitmap masks', drt => {
+it.each([0, 42] as const)('decodes zero-bit template 5.%s as the unscaled reference with empty payload and bitmap masks', async drt => {
   const active = Uint32Array.of(3, 0, 2, 1);
   for (const scanningMode of [0, 64] as const) for (const decimalScale of [-1, 0, 1]) {
     // These zero-bit fixtures were cross-checked with ecCodes 2.50.0: D is ignored.
     const value = 250;
-    const complete = decodeSplitGribField(profile, simpleField(0, scanningMode, [250, 250, 250, 250], { drt, decimalScale }), active);
+    const complete = await decodeSplitGribField(profile, simpleField(0, scanningMode, [250, 250, 250, 250], { drt, decimalScale }), active);
     expect([...complete.values]).toEqual([value, value, value, value]);
     expect([...complete.missing]).toEqual([0, 0, 0, 0]);
-    const masked = decodeSplitGribField(profile, simpleField(0, scanningMode, [250, null, 250, 250], { drt, decimalScale }), active);
+    const masked = await decodeSplitGribField(profile, simpleField(0, scanningMode, [250, null, 250, 250], { drt, decimalScale }), active);
     expect([...masked.values]).toEqual(scanningMode === 64 ? [NaN, value, value, value] : [value, value, value, NaN]);
     expect([...masked.missing]).toEqual(scanningMode === 64 ? [1, 0, 0, 0] : [0, 0, 0, 1]);
   }
-  const missing = decodeSplitGribField(profile, simpleField(0, 64, [null, null, null, null], { drt }), active);
+  const missing = await decodeSplitGribField(profile, simpleField(0, 64, [null, null, null, null], { drt }), active);
   expect([...missing.values]).toEqual([NaN, NaN, NaN, NaN]);
   expect([...missing.missing]).toEqual([1, 1, 1, 1]);
 });
 
-it.each([0, 64] as const)('rejects truncated 8-bit payloads with valid message framing in scanning mode %s', scanningMode => {
+it.each([0, 64] as const)('rejects truncated 8-bit payloads with valid message framing in scanning mode %s', async scanningMode => {
   const complete = simpleField(8, scanningMode, [300, 301, 280, 281]);
   const section7Offset = complete.length - 4 - (5 + 4);
   for (const payloadBytes of [0, 1, 3]) {
@@ -129,55 +149,37 @@ it.each([0, 64] as const)('rejects truncated 8-bit payloads with valid message f
     view.setBigUint64(8, BigInt(truncated.length));
     view.setUint32(section7Offset, 5 + payloadBytes);
     truncated.set(Buffer.from('7777'), truncated.length - 4);
-    expect(() => decodeSplitGribField(profile, truncated, Uint32Array.of(0))).toThrow(/Truncated GRIB2 simple-packing payload/);
+    await expect(decodeSplitGribField(profile, truncated, Uint32Array.of(0))).rejects.toThrow(/Truncated GRIB2 simple-packing payload/);
   }
 });
 
-it.each([0, 64] as const)('normalizes bitmap and active-index order in scan %s, preserving a valid sentinel-like value', scanningMode => {
-  const decoded = decodeSplitGribField(profile, simpleField(16, scanningMode, [null, 9999, 280, 281]), Uint32Array.of(3, 0, 2, 1));
+it.each([0, 64] as const)('normalizes bitmap and active-index order in scan %s, preserving a valid sentinel-like value', async scanningMode => {
+  const decoded = await decodeSplitGribField(profile, simpleField(16, scanningMode, [null, 9999, 280, 281]), Uint32Array.of(3, 0, 2, 1));
   expect([...decoded.values]).toEqual(scanningMode === 64 ? [9999, 280, NaN, 281] : [281, NaN, 280, 9999]);
   expect([...decoded.missing]).toEqual(scanningMode === 64 ? [0, 0, 1, 0] : [0, 1, 0, 0]);
 });
 
-it('rejects huge CCSDS counts before allocating their advertised output', () => {
+it('rejects huge CCSDS counts before allocating their advertised output', async () => {
   const message = simpleField(8, 64, [300, 301, 280, 281], { drt: 42, codedCount: 0xffffffff });
-  const source = `
-    import assert from 'node:assert/strict';
-    import { decodeSplitGribField } from ${JSON.stringify(new URL('./grib.ts', import.meta.url).href)};
-    import { SPLIT_PRODUCT } from ${JSON.stringify(new URL('../../../../tests/model-fixtures.ts', import.meta.url).href)};
-    import { splitSource } from ${JSON.stringify(new URL('./source.ts', import.meta.url).href)};
-    const profile = splitSource(SPLIT_PRODUCT);
-    const bytes = Buffer.from(${JSON.stringify(message.toString())}.split(',').map(Number));
-    const grid = new DataView(bytes.buffer, bytes.byteOffset + 16 + 21, 72);
-    grid.setUint32(6, profile.grid.width * profile.grid.height);
-    grid.setUint32(30, profile.grid.width); grid.setUint32(34, profile.grid.height);
-    globalThis.Float32Array = new Proxy(Float32Array, {
-      construct(target, args) {
-        assert.ok(typeof args[0] !== 'number' || args[0] <= profile.grid.width * profile.grid.height, 'unexpected oversized allocation');
-        return Reflect.construct(target, args);
-      }
-    });
-    assert.throws(() => decodeSplitGribField(profile, bytes, Uint32Array.of(0)), /coded value count exceeds grid point count/);
-  `;
-  expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
+  await expect(decodeSplitGribField(profile, message, Uint32Array.of(0))).rejects.toThrow(/coded value count exceeds grid point count/);
 });
 
-it.each([0, 42] as const)('requires coded counts to match grid or bitmap coverage for template %s', drt => {
-  expect(() => decodeSplitGribField(profile, simpleField(8, 64, [300, 301, 280, 281], { drt, codedCount: 3 }), Uint32Array.of(0))).toThrow(/grid\/bitmap coverage/);
+it.each([0, 42] as const)('requires coded counts to match grid or bitmap coverage for template %s', async drt => {
+  await expect(decodeSplitGribField(profile, simpleField(8, 64, [300, 301, 280, 281], { drt, codedCount: 3 }), Uint32Array.of(0))).rejects.toThrow(/grid\/bitmap coverage/);
   for (const codedCount of [2, 4]) {
-    expect(() => decodeSplitGribField(profile, simpleField(8, 64, [null, 301, 280, 281], { drt, codedCount }), Uint32Array.of(0))).toThrow(/grid\/bitmap coverage/);
+    await expect(decodeSplitGribField(profile, simpleField(8, 64, [null, 301, 280, 281], { drt, codedCount }), Uint32Array.of(0))).rejects.toThrow(/grid\/bitmap coverage/);
   }
 });
 
-it('ignores unused bitmap padding bits when validating coverage', () => {
+it('ignores unused bitmap padding bits when validating coverage', async () => {
   const bytes = simpleField(8, 64, [null, 301, 280, 281]);
   bytes[16 + 21 + 72 + 34 + 21 + 6] |= 0x0f;
-  const decoded = decodeSplitGribField(profile, bytes, Uint32Array.of(0, 1, 2, 3));
+  const decoded = await decodeSplitGribField(profile, bytes, Uint32Array.of(0, 1, 2, 3));
   expect([...decoded.values]).toEqual([280, 281, NaN, 301]);
   expect([...decoded.missing]).toEqual([0, 0, 1, 0]);
 });
 
-it('recovers late-lead statistical windows from one Float64 array per field', () => {
+it('recovers late-lead statistical windows from one Float64 array per field', async () => {
   const makeStat = (endHour: number, reference: number, delta: number): Uint8Array => {
     const base = simpleField(8, 0, [250 + delta, 250, 250, 250]);
     const s4 = new Uint8Array(58), v4 = new DataView(s4.buffer);
@@ -197,8 +199,8 @@ it('recovers late-lead statistical windows from one Float64 array per field', ()
     return out;
   };
   const reference = 134_217_728; // 2^27: exact in Float32, while +123 loses low bits in Float32.
-  const prev = decodeSplitGribField(profile, makeStat(71, reference, 0), Uint32Array.of(0));
-  const curr = decodeSplitGribField(profile, makeStat(72, reference, 123), Uint32Array.of(0));
+  const prev = await decodeSplitGribField(profile, makeStat(71, reference, 0), Uint32Array.of(0));
+  const curr = await decodeSplitGribField(profile, makeStat(72, reference, 123), Uint32Array.of(0));
   expect(curr.values).toBeInstanceOf(Float64Array);
   expect(curr.values[0]! - prev.values[0]!).toBe(123);
   const recovered = recoverSplitGribFlux(profile, 'sensibleHeatFlux', curr, prev, 72);

@@ -27,7 +27,7 @@ export interface XcCaptureOptions {
   runtimesAfter?: readonly XcRuntime[];
 }
 
-export interface XcNativeProfile {
+interface XcNativeProfile {
   validTime: string;
   levels: { heightM: number; pressureHpa: number | null; temperatureC: number | null; dewPointC: number | null }[];
 }

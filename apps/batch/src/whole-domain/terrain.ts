@@ -1,6 +1,6 @@
 import type { Grid, SparseCoverage } from '@av/contracts';
 import type { TerrainAsset, TerrainStorage } from '../terrain/contract.js';
-import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, readSparsePreparedTerrain, type SparseTerrainOptions, type SparseTerrainRef } from '../terrain/sparse.js';
+import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, type SparseTerrainOptions, type SparseTerrainRef } from '../terrain/sparse.js';
 import { loadTerrainCatalog, stageSparsePreparedTerrain, loadSparsePreparedTerrain } from '../terrain/staging.js';
 import { openTerrainSourceCache } from '../terrain/source-cache.js';
 
@@ -49,5 +49,3 @@ export function loadWholeDomainTerrain(input: WholeDomainTerrainInput & { out: s
   return loadSparsePreparedTerrain({ ref: input.ref, out: input.out, grid: input.grid, coverage: input.coverage,
     coverageDescriptor: input.coverageDescriptor, signal: input.signal, collect: input.collect });
 }
-
-export { readSparsePreparedTerrain };

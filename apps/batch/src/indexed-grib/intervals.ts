@@ -6,7 +6,7 @@ import { parseProduct, type Identification } from '@azohra/meteo.grib';
 import { IndexedGribError } from './errors.ts';
 import type { DecodedFieldReceipt, IndexedGribIntervalReceipt } from './types.ts';
 
-export const HOUR_MS = 3_600_000;
+const HOUR_MS = 3_600_000;
 
 export function validAt(referenceTime: string, hour: number): string {
   return new Date(Date.parse(referenceTime) + hour * HOUR_MS).toISOString().replace('.000Z', 'Z');
@@ -16,7 +16,7 @@ export function indexedGribWindowStart(source: IndexedSource, hour: number): num
   return sourceWindowStart(source.model.forecast, hour);
 }
 
-export interface IndexedGribStatRange {
+interface IndexedGribStatRange {
   process: number;
   incrementType: number;
   rangeUnit: number;

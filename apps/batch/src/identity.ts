@@ -52,7 +52,10 @@ export interface WholeDomainIdentityInput { k: number; nativeCoverageHash: strin
 
 export async function buildIdentity(product: ProductDefinition, coverageHash: string, { root = ROOT, wholeDomain }: { root?: string; wholeDomain?: WholeDomainIdentityInput } = {}): Promise<BuildIdentity> {
   const groups = {
-    adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
+    adapter: { directories: ['apps/batch/src'], settings: [
+      'apps/batch/pmtiles.json', 'apps/batch/eccodes.json', 'apps/batch/eccodes-requirements.txt',
+      'apps/batch/src/split-grib/decode.py'
+    ] },
     science: {
       directories: [
         'packages/forecast/src',

@@ -67,7 +67,7 @@ interface WindgramSeries {
   dash: string | null;
   path: string;
 }
-export interface WindgramHour extends PublicHour {
+interface WindgramHour extends PublicHour {
   temperatureF: number | null;
   gustKt: number | null;
 }

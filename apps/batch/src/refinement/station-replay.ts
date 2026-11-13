@@ -89,7 +89,7 @@ interface FrameVariantReport {
   readonly exclusions: StationVariantExclusionCounts;
 }
 
-export interface FrameDiagnosticReport {
+interface FrameDiagnosticReport {
   readonly method: 'neutral-probe-native-excess-v1';
   readonly probes: number;
   readonly medianReferenceTerrainM: number | null;
@@ -118,13 +118,13 @@ interface FrameReport {
   readonly diagnostics?: FrameDiagnosticReport;
 }
 
-export interface HourBandAggregate {
+interface HourBandAggregate {
   readonly hourUtc: number;
   readonly gate: PooledTemperatureMetrics;
   readonly byElevationOffset: Readonly<Record<ElevationOffsetBand, PooledTemperatureMetrics>>;
 }
 
-export interface VariantAggregate {
+interface VariantAggregate {
   readonly id: string;
   readonly model: string;
   readonly kind: VariantDefinition['kind'];
@@ -162,7 +162,7 @@ export interface TemperatureGateEvidence {
   readonly noRegression: boolean | null;
 }
 
-export interface StationReplayReport {
+interface StationReplayReport {
   readonly schemaVersion: 1;
   readonly status: 'complete' | 'incomplete';
   readonly generatedAt: string;
@@ -239,6 +239,8 @@ export interface StationReplayReport {
     readonly rssEndBytes: number;
     readonly rssPeakObservedBytes: number;
     readonly maxRssBytes: number;
+    readonly nativePeakRssBytes: number;
+    readonly combinedPeakRssUpperBoundBytes: number;
     readonly peakSparseDiagnosticsBufferBytes: number;
     readonly peakSparseIndexBufferBytes: number;
     readonly peakClearanceMappingBytes: number;
@@ -250,7 +252,7 @@ export interface StationReplayReport {
   readonly constraints: readonly string[];
 }
 
-export interface RunStationReplayOptions {
+interface RunStationReplayOptions {
   readonly observations: string;
   readonly out: string;
   readonly controls: Readonly<Record<string, { manifestPath: string; cacheDir?: string }>>;
@@ -258,7 +260,7 @@ export interface RunStationReplayOptions {
   readonly providerFactory?: (model: string) => ForecastProvider;
 }
 
-export interface StationReplayRunResult {
+interface StationReplayRunResult {
   readonly report: StationReplayReport;
   readonly path: string;
   readonly sha256: string;
@@ -591,6 +593,7 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
   const startedAt = new Date().toISOString(), wallStart = process.hrtime.bigint(), cpuStart = process.cpuUsage();
   const rssStart = process.memoryUsage().rss;
   let rssPeak = rssStart;
+  let nativePeakRssBytes = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () => { throw new Error('Station replay is offline: network access disabled'); }) as typeof fetch;
   try {
@@ -774,6 +777,7 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
             }
           }
         } finally {
+          nativePeakRssBytes = Math.max(nativePeakRssBytes, session.nativePeakRssBytes ?? 0);
           try {
             await session.close();
           } catch (error) {
@@ -899,6 +903,8 @@ export async function runStationReplay(options: RunStationReplayOptions): Promis
         rssEndBytes: rssEnd,
         rssPeakObservedBytes: rssPeak,
         maxRssBytes: resourceMaxRssBytes(maxRssRaw),
+        nativePeakRssBytes,
+        combinedPeakRssUpperBoundBytes: resourceMaxRssBytes(maxRssRaw) + nativePeakRssBytes,
         peakSparseDiagnosticsBufferBytes,
         peakSparseIndexBufferBytes,
         peakClearanceMappingBytes,

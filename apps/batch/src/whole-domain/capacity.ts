@@ -20,6 +20,7 @@ export interface WholeDomainCapacityInput {
   retainedGeometryFields?: number;
   auxiliarySurfaceFields?: number;
   auxiliaryLevelFields?: number;
+  acquisitionWorkspaceBytes?: number;
   groupFrames?: number;
   fine: SparseCoverageMask;
   nativeMaskBytes: number;
@@ -51,7 +52,7 @@ export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: 
   return { native: product.layers.filter(layer => layerSurface(layer) === 'native'), fine: product.layers.filter(layer => layerSurface(layer) === 'fine') };
 }
 
-export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields'>,
+export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields' | 'acquisitionWorkspaceBytes'>,
   geometry: CapacityGeometry, groups: readonly (readonly number[])[]): WholeDomainCapacityInput & { mapFrames: number } {
   const hours = groups.flat(), fine = geometry.fine.mask;
   const nativeBlocks = geometry.native.mask.coverage.blockIds, dense = geometry.nativeMask;
@@ -63,6 +64,7 @@ export function wholeDomainCapacityInput(product: ProductDefinition, provider: P
     terrainBytes: geometry.terrain?.arrayBytes ?? fine.coverage.offsets[fine.coverage.blockIds.length]! * PREPARED_TERRAIN_CELL_BYTES,
     maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
     auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
+    acquisitionWorkspaceBytes: provider.acquisitionWorkspaceBytes?.(geometry.acquisitionActive.length) ?? 0,
     frames: hours.length, mapFrames: mapFrameCount({ ...product, frameHours: hours }),
     groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: layers.native.length, fineLayers: layers.fine.length
   };
@@ -122,7 +124,10 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   const auxiliarySurface = input.auxiliarySurfaceFields ?? 0, auxiliaryLevels = input.auxiliaryLevelFields ?? 0;
   if (![auxiliarySurface, auxiliaryLevels].every(value => Number.isSafeInteger(value) && value >= 0 && value <= 32)) throw new RangeError('Invalid auxiliary field capacity');
   const nativeFrame = normalizedFrameBytes(nativeActive, input.product.capabilities.verticalCoordinate, { maxLevels, auxiliarySurfaceFields: auxiliarySurface, auxiliaryLevelFields: auxiliaryLevels });
+  const acquisitionWorkspace = input.acquisitionWorkspaceBytes ?? 0;
+  if (!Number.isSafeInteger(acquisitionWorkspace) || acquisitionWorkspace < 0) throw new RangeError('Invalid acquisition workspace bytes');
   const workingSet = {
+    acquisitionWorkspace,
     nativeFrame,
     prefetchFrame: nativeFrame,
     nativeFields,

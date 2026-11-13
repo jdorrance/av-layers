@@ -1,7 +1,7 @@
 import { computeFreshness, type CatalogModelEntry, type ManifestV5 } from '@av/contracts/publication';
 import { fixtureBuild } from './forecast-fixture.js';
 
-export const AUTO_CYCLE = '2026-10-31T00:00:00.000Z';
+const AUTO_CYCLE = '2026-10-31T00:00:00.000Z';
 export const REGION_A_POINT = { lat: 40.18, lon: 44.5 };
 export const REGION_B_POINT = { lat: -36.85, lon: 174.76 };
 export const REGION_A_BOUNDS = [42, 38, 46, 43] as const;
