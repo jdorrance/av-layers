@@ -15,7 +15,7 @@ import { describeSparseCoverage } from './coverage.js';
 import { createBuildPlan, buildShard, finalizeBuild, readBuildPlan, verifyBuildReceipts, type BuildPlan } from './parallel.js';
 import { seedTerrainCatalog, TerrainTestStorage } from './terrain/test-fixtures.js';
 import { acquisitionSupport, loadBundledFineCoverage, nativeSparseMask, sparseActiveIndices, stageFineCoverage, wholeDomainPlan } from './whole-domain/coverage.js';
-import { admitWholeDomain, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
+import { admitWholeDomain, wholeDomainCapacityInput, wholeDomainSampleGroupLayouts } from './whole-domain/capacity.js';
 import { samplePackWriterBufferBytes } from './sample-pack-v5.js';
 import { rasterWorkerCount } from './raster-pool.js';
 import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, checkPerformance } from './capacity.js';
@@ -1122,6 +1122,20 @@ describe('whole-domain v5 production', () => {
       frames: product.frameHours.length, nativeLayers: 1, fineLayers: 2, columns, terrainBytes: active.length * 5, maxLevels: 3, retainedGeometryFields: 0 };
     const admitted = admitWholeDomain(input);
     expect(admitted.violations).toEqual([]);
+    const mappingInput = wholeDomainCapacityInput(product, { maxLevels: 3, sourceMappingBytesPerCell: 4 }, {
+      plan, native: { mask: native }, nativeMask, fine: { mask: fine }, acquisitionActive: active, columns,
+      terrain: { arrayBytes: input.terrainBytes }
+    }, [product.frameHours]);
+    const mapped = admitWholeDomain(mappingInput);
+    expect(mapped.workingSet.sourceMapping).toBe(active.byteLength);
+    expect(mapped.estimatedPeakBytes - admitted.estimatedPeakBytes).toBe(active.byteLength);
+    for (const sourceMappingBytesPerCell of [-1, 0.5, 33, NaN]) {
+      expect(() => admitWholeDomain({ ...input, sourceMappingBytesPerCell })).toThrow('Invalid source mapping capacity');
+    }
+    const atLimit = { ...input, columns: { ...columns,
+      byteLength: columns.byteLength + BUILD_BUDGETS.workingSetBytes - admitted.estimatedPeakBytes + admitted.workingSet.prefetchFrame! } };
+    expect(admitWholeDomain(atLimit).violations).toEqual([]);
+    expect(admitWholeDomain({ ...atLimit, sourceMappingBytesPerCell: 4 }).violations).toContain('whole-domain working set exceeds the 2 GiB process budget');
     const layouts = wholeDomainSampleGroupLayouts(input);
     expect(admitted.workingSet.packBuffers).toBe(samplePackWriterBufferBytes(layouts.native!) + samplePackWriterBufferBytes(layouts.fine!));
     vi.mocked(rasterWorkerCount).mockReturnValueOnce(3);

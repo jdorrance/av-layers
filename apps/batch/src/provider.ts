@@ -48,6 +48,8 @@ export interface ForecastProvider {
   directTargets?: boolean;
   /** Cached Float32 value/Uint8 mask pairs retained alongside each normalized frame. */
   retainedGeometryFields?: number;
+  /** Retained source-grid mapping bytes per active normalized cell. */
+  sourceMappingBytesPerCell?: number;
   auxiliarySurfaceFields?: number;
   auxiliaryLevelFields?: number;
   resolveRun?(options: ForecastRunOptions): Promise<{ cycle: string; sourcePin: ForecastSourcePin }>;

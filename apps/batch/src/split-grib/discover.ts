@@ -1,7 +1,7 @@
 import type { SplitSource } from './source.js';
 import { recentSourceCycles } from '../source.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
-import { splitGribRegularFieldUrl, validateSplitGribCycle } from './fields.js';
+import { splitGribFieldUrl, validateSplitGribCycle } from './fields.js';
 import { pause } from '../pause.js';
 
 const PROBE_CONCURRENCY = 4;
@@ -39,13 +39,15 @@ export function splitGribRunSentinelUrls(source: SplitSource,
   const lowestLevel = source.modelLevels[0]!;
   const highestLevel = source.modelLevels.at(-1)!;
   return [
-    splitGribRegularFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
-    ...[topHalfLevel, bottomHalfLevel].map(level => splitGribRegularFieldUrl(source, source.fields.halfLevelHeight, cycle, { level, baseUrl: options.baseUrl })),
-    ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => splitGribRegularFieldUrl(source, field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
-    ...(source.model.layers.includes('precip-rate') ? [splitGribRegularFieldUrl(source, source.fields.precipitation!, cycle, { hour: lastHour, baseUrl: options.baseUrl })] : []),
-    ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribRegularFieldUrl(source, spec.field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
-    ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribRegularFieldUrl(source, spec.field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl }))),
-    ...[source.fields.temperature, source.fields.pressure].flatMap(field => [lowestLevel, highestLevel].map(level => splitGribRegularFieldUrl(source, field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
+    ...(source.upstream.nativeGrid ? [source.upstream.nativeGrid.latitude.field, source.upstream.nativeGrid.longitude.field]
+      .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl })) : []),
+    splitGribFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
+    ...[topHalfLevel, bottomHalfLevel].map(level => splitGribFieldUrl(source, source.fields.halfLevelHeight, cycle, { level, baseUrl: options.baseUrl })),
+    ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => splitGribFieldUrl(source, field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...(source.model.layers.includes('precip-rate') ? [splitGribFieldUrl(source, source.fields.precipitation!, cycle, { hour: lastHour, baseUrl: options.baseUrl })] : []),
+    ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
+    ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl }))),
+    ...[source.fields.temperature, source.fields.pressure].flatMap(field => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
   ];
 }
 
@@ -86,7 +88,7 @@ export async function discoverSplitGribRun(source: SplitSource,
 ): Promise<SplitGribDiscoveryResult> {
   options.signal?.throwIfAborted();
   const fetchFn = options.fetchImpl ?? fetch;
-  const baseUrl = options.baseUrl ?? source.upstream.urlTemplate.split('/{cycleHour}')[0]!;
+  const baseUrl = options.baseUrl;
   const candidates = candidateSplitGribCycles(source, options.now);
   const DISCOVERY_TIMEOUT_MS = source.upstream.discoveryCandidates * DEFAULT_PROBE_TIMEOUT_MS;
   const deadline = new AbortController();
@@ -122,6 +124,6 @@ export async function discoverSplitGribRun(source: SplitSource,
       }
     }
 
-    throw new Error(`No complete DWD Split GRIB regular-lat-lon main run found across candidate cycles${deadline.signal.aborted ? '; discovery deadline exceeded' : ''}: ${failures.join('; ')}`);
+    throw new Error(`No complete DWD Split GRIB main run found across candidate cycles${deadline.signal.aborted ? '; discovery deadline exceeded' : ''}: ${failures.join('; ')}`);
   } finally { clearTimeout(timer); }
 }

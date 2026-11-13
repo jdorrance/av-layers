@@ -160,7 +160,7 @@ retains WRF/WPS and forcing-data notices. This project derives terrain-adjusted
 lift, map tiles, native samples and profiles from those fields.
 
 DWD ICON-EU operational data
-Dataset and attribution: https://opendata.dwd.de/weather/nwp/icon-eu/
+Dataset and attribution: https://opendata.dwd.de/weather/nwp/v1/m/icon-eu/
 Deutscher Wetterdienst (DWD) distributes ICON-EU open data under CC BY 4.0
 (https://www.dwd.de/EN/service/copyright/copyright_node.html). Forecast lift
 fields are derived by this project; DWD supplies the meteorological inputs.

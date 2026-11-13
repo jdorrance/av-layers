@@ -30,7 +30,7 @@ import { createSamplePackBuilder } from '../sample-pack.js';
 import { encodeJson, sha256, TERRAIN_SOURCE } from '../terrain/contract.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_METHOD } from '../terrain/prepare.js';
 import { createSplitGribAcquisitionSession } from '../split-grib/acquire.js';
-import { splitGribRegularFieldUrl } from '../split-grib/fields.js';
+import { splitGribFieldUrl } from '../split-grib/fields.js';
 import { createIndexedGribAcquisitionSession } from '../indexed-grib/acquire.js';
 import { decodeSamplePack } from './evaluation-input.js';
 import { runEvaluation, runEvaluationCli, sampleNativeTargetFields } from './evaluate.js';
@@ -524,7 +524,7 @@ describe('paired evaluation CLI orchestration', () => {
   it('preserves corrupt ICON cache and never fetches in offline read-only mode', async () => {
     const root = await mkdtemp(join(tmpdir(), 'av-offline-icon-')); roots.push(root);
     const cacheDir = join(root, 'cache'), iconCycle = '2026-10-08T00:00:00Z';
-    const url = splitGribRegularFieldUrl(splitSource(SPLIT_PRODUCT), 'HSURF', iconCycle, { hour: 0, level: null });
+    const url = splitGribFieldUrl(splitSource(SPLIT_PRODUCT), 'HSURF', iconCycle, { hour: 0, level: null });
     const fileName = url.split('/').at(-1)!, keyHash = createHash('sha256').update(url).digest('hex');
     const cachePath = join(cacheDir, 'objects', `${keyHash.slice(0, 16)}-${fileName}`);
     const corrupt = Buffer.from('corrupt-cache-object');

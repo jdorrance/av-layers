@@ -1,5 +1,5 @@
 import z from 'zod';
-import { regularLatLonGridSchema, type ModelDefinition } from '@av/contracts';
+import { MAX_GRID_CELLS, regularLatLonGridSchema, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
 
 const field = z.object({ field: z.string().min(1), kind: z.enum(['time-invariant', 'single-level', 'model-level']),
@@ -14,6 +14,9 @@ const auxSurfaceSchema = z.partialRecord(z.enum(Object.keys(AUX_SURFACE_UNITS) a
 const auxLevelsSchema = z.partialRecord(z.enum(Object.keys(AUX_LEVEL_UNITS) as [keyof typeof AUX_LEVEL_UNITS, ...Array<keyof typeof AUX_LEVEL_UNITS>]), auxiliary.extend({ kind: z.literal('model-level') }));
 const upstreamSchema = z.object({ protocol: z.literal('split-grib2'), provider: z.string().min(1), centre: z.number().int().nonnegative(),
   urlTemplate: z.string().url(), modelLevels: z.array(z.number().int().positive()).min(1).max(256),
+  nativeGrid: z.object({ number: z.number().int().nonnegative().max(65535), uuid: z.string().regex(/^[a-f0-9]{32}$/),
+    pointCount: z.number().int().positive().max(MAX_GRID_CELLS),
+    latitude: field.extend({ kind: z.literal('time-invariant') }), longitude: field.extend({ kind: z.literal('time-invariant') }) }).strict().optional(),
   discoveryLagHours: z.number().nonnegative(), discoveryCandidates: z.number().int().min(1).max(24),
   auxSurface: auxSurfaceSchema.optional(), auxLevels: auxLevelsSchema.optional(),
   fields: z.object({ staticTerrain: field, halfLevelHeight: field, surfacePressure: field, temperature2m: field,
@@ -38,7 +41,8 @@ export function splitSource(model: ModelDefinition) {
     if (Object.hasOwn(fields ?? {}, u) !== Object.hasOwn(fields ?? {}, v)) throw new Error('Auxiliary Split GRIB wind components must be configured together');
   }
   const coreFields = Object.values(upstream.fields).filter(value => value !== undefined);
-  const configuredFields = [...coreFields, ...Object.values(upstream.auxSurface ?? {}), ...Object.values(upstream.auxLevels ?? {})];
+  const configuredFields = [...coreFields, ...Object.values(upstream.auxSurface ?? {}), ...Object.values(upstream.auxLevels ?? {}),
+    ...(upstream.nativeGrid ? [upstream.nativeGrid.latitude, upstream.nativeGrid.longitude] : [])];
   if (new Set(configuredFields.map(spec => spec.field)).size !== configuredFields.length) throw new Error('Duplicate Split GRIB source field');
   const specs = Object.fromEntries(configuredFields.map(value => [value.field, { field: value.field, kind: value.kind,
     discipline: 0, parameterCategory: value.parameter[0], parameterNumber: value.parameter[1], templateNumber: 'statistic' in value && value.statistic !== undefined ? 8 : 0,

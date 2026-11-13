@@ -5,7 +5,10 @@ import models from '../scripts/fixtures/source-models.json' with { type: 'json' 
 function source(protocol: keyof typeof models) {
   const product = getProduct(models[protocol]);
   if (!product || product.upstream.protocol !== protocol) throw new Error(`Missing ${protocol} test source`);
-  const { auxSurface: _auxSurface, auxLevels: _auxLevels, ...upstream } = product.upstream;
+  const { auxSurface: _auxSurface, auxLevels: _auxLevels, nativeGrid: _nativeGrid, ...fields } = product.upstream;
+  const upstream: Record<string, unknown> = { ...fields, ...(protocol === 'split-grib2' ? {
+    urlTemplate: 'https://opendata.dwd.de/weather/nwp/icon-eu/grib/{cycleHour}/{fieldLower}/icon-eu_europe_regular-lat-lon_{kind}_{runStamp}{suffix}_{field}.grib2.bz2'
+  } : {}) };
   const layers = renderedLayers(product.layers).filter(layer => protocol === 'indexed-grib2' || layer !== 'precip-rate');
   const capabilities = { ...product.capabilities, daylightFrames: protocol === 'split-grib2' ? 'regional-daylight' as const : 'all-hours' as const };
   const frameHours = Array.from({ length: 24 }, (_, index) => index + 1);

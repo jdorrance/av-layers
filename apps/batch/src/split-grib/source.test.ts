@@ -26,7 +26,7 @@ import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
 import { decodeSplitGribField } from './grib.js';
-import { splitGribRegularFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
+import { splitGribFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
 import { isBzip2Compressed } from './codec/bzip2.js';
 
@@ -74,6 +74,7 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
     });
     if (field === 'V_10M' && Number(hour) === 4) {
       const decoded = decodeSplitGribField(configured, bytes, Uint32Array.of(0, 1));
+      if (decoded.grid.kind !== 'latlon') throw new Error('Expected regular fixture grid');
       expect(decoded.grid.uvRelativeToGrid).toBe(uvRelativeToGrid);
       expect(decoded.grid.scanningMode).toBe(scanningMode);
       expect([...decoded.values]).toEqual([4, -2]);
@@ -421,16 +422,16 @@ it('recovers ICON precipitation intervals, retains raw companions and masks decr
 describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
   it('constructs canonical DWD Open Data URLs and sentinel probes', () => {
     const cycle = '2026-10-08T00:00:00Z';
-    expect(splitGribRegularFieldUrl(profile, 'HSURF', cycle)).toBe(
+    expect(splitGribFieldUrl(profile, 'HSURF', cycle)).toBe(
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/hsurf/icon-eu_europe_regular-lat-lon_time-invariant_2026100800_HSURF.grib2.bz2'
     );
-    expect(splitGribRegularFieldUrl(profile, 'HHL', cycle, { level: 75 })).toBe(
+    expect(splitGribFieldUrl(profile, 'HHL', cycle, { level: 75 })).toBe(
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/hhl/icon-eu_europe_regular-lat-lon_time-invariant_2026100800_75_HHL.grib2.bz2'
     );
-    expect(splitGribRegularFieldUrl(profile, 'ASHFL_S', cycle, { hour: 6 })).toBe(
+    expect(splitGribFieldUrl(profile, 'ASHFL_S', cycle, { hour: 6 })).toBe(
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/ashfl_s/icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2'
     );
-    expect(splitGribRegularFieldUrl(profile, 'T', cycle, { hour: 6, level: 74 })).toBe(
+    expect(splitGribFieldUrl(profile, 'T', cycle, { hour: 6, level: 74 })).toBe(
       'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t/icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2'
     );
     const sentinels = splitGribRunSentinelUrls(profile, cycle);

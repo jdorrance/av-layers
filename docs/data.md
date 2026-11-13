@@ -55,6 +55,10 @@ its grid and ground reference. Output masks select coverage; halo cells supply
 boundary contributors. No-lift and unavailable values retain their selected
 surface's status. Missing advertised assets fail the request.
 
+ICON-EU's native surface uses the configured regular output grid. Its
+[source adapter](../apps/batch/src/split-grib/README.md) selects one triangular-mesh
+column for each output cell before terrain refinement and point interpolation.
+
 ## Time and retention
 
 - `cycle`: upstream model initialization time (UTC).
