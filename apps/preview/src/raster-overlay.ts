@@ -84,12 +84,14 @@ export class RasterOverlay {
     this.armExpiry(); this.emit();
   };
   private readonly move = (): void => {
+    this.cancelPaint();
     this.moving = true; this.preferred = null; this.warmFailed = []; this.sourceLimits.clear();
     this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.armExpiry();
   };
   private readonly resized = (): void => {
+    this.cancelPaint();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.prepareNext(); this.armExpiry();

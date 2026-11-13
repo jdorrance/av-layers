@@ -242,6 +242,33 @@ it.each(['render', 'idle'] as const)('restores the painted frame when an unpaint
   } finally { f.overlay.destroy(); }
 });
 
+it.each(['movestart', 'resize'] as const)('invalidates an unpainted replacement on %s until its viewport settles', async event => {
+  const f = fixture(32), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
+    const original = f.painted(), replacement = sourceFor(f, 'usable-lift-msl', frame)!;
+    await f.complete(replacement);
+    f.overlay.select(b, 'usable-lift-msl', frame);
+    expect(f.opacity.get(replacement)).toBe(0.7);
+    expect(f.painted()).toBe(original);
+    f.emit(event);
+    const tile = {};
+    f.emit('sourcedataloading', { sourceId: replacement, tile }); f.emit('render');
+    expect(f.painted()).toBe(original);
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-agl');
+    f.emit('sourcedata', { sourceId: replacement, tile }); f.emit('render');
+    expect(f.painted()).toBe(original);
+    if (event === 'movestart') {
+      f.emit('moveend');
+      expect(f.sources.has(replacement)).toBe(false);
+      await f.complete(sourceFor(f, 'usable-lift-msl', frame)!);
+    } else f.emit('render');
+    expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
+    expect(f.painted()).not.toBe(original);
+    expect(f.sources.size).toBeLessThanOrEqual(4);
+  } finally { f.overlay.destroy(); }
+});
+
 it.each(['failure', 'clear', 'expire', 'build'] as const)('discards an unpainted replacement on %s', async action => {
   const f = fixture(32), b = build(), [first, second, third] = b.manifest.frames;
   try {
