@@ -1,11 +1,11 @@
 # Aviation Forecast Layers
 
-Maps, native weather samples and full atmospheric profiles for GFS, ICON-EU and
-RRFS. A batch job builds immutable forecast files; an API serves them to map
-clients and Windgrams.
+Maps, native weather samples and full atmospheric profiles for GFS, ICON-EU,
+RRFS and WRF Armenia. A batch job builds immutable forecast files; an API serves
+them to map clients and Windgrams.
 
 The forecast workflow runs the [configured models](packages/contracts/config/models.json)
-in parallel; their source profiles select NOAA or DWD inputs. Whole-domain
+in parallel; their source profiles select NOAA, DWD or av-wrf inputs. Whole-domain
 terrain columns derive MSL and AGL lift; see [science](docs/science.md#terrain-columns).
 Coverage excludes Africa, Russia, China, Antarctica and Greenland. See
 [deployments](docs/status.md) for live applications and runs.

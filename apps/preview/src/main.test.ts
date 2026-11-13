@@ -2,6 +2,7 @@ import { SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createWholeDomainDescriptors, type ManifestV5 } from '@av/contracts';
+import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { ARMENIA_BOUNDS, AUCKLAND, NEW_ZEALAND_BOUNDS, YEREVAN, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
@@ -509,6 +510,19 @@ it('selects the v5 surface max zoom for each layer and renders scalar builds wit
   const nodes = visit(ui('point-body').children[0]);
   expect(nodes.find(child => child.className === 'av-point-chart')).toBeTruthy();
   expect(nodes.some(child => child.className === 'av-windgram-host')).toBe(false);
+});
+
+it('starts a WRF preview inside its configured region and preserves a shared camera', async () => {
+  manifest = fixtureManifestV5({ model: 'wrf-armenia-3km' });
+  vi.stubEnv('VITE_MODEL', manifest.model);
+  await start();
+  const [west, south, east, north] = MODEL_OPTIONS.find(model => model.modelId === manifest.model)!.bounds;
+  expect(map().getCenter()).toEqual({ lng: (west + east) / 2, lat: (south + north) / 2 });
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/wrf-armenia-3km/');
+  expect(win.location.search).toContain('model=wrf-armenia-3km');
+  win.href = 'http://localhost:5173/?model=wrf-armenia-3km&lat=40.18&lon=44.5&z=9';
+  win.dispatchEvent(new Event('popstate'));
+  expect(map().getCenter()).toEqual({ lat: 40.18, lng: 44.5 });
 });
 
 it('uses the attributed OpenStreetMap basemap and restores the view from the back button', async () => {

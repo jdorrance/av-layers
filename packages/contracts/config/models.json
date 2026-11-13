@@ -414,6 +414,84 @@
       },
       "terrainSubdivisionFactor": 2,
       "execution": {"zoom": 10, "parallelism": 40, "schedule": ["45 3,9,15,21 * * *"]}
+    },
+    {
+      "modelId": "wrf-armenia-3km",
+      "id": "wrf-armenia-3km-soaring",
+      "coverageDir": "coverage/wrf-armenia-3km-land-v1",
+      "source": {"modelFamily": "wrf", "configurationId": "av-wrf-armenia-3km-v2", "domainId": "armenia"},
+      "tier": "high",
+      "label": "WRF Armenia 3 km",
+      "attribution": "av-wrf · WRF-ARW / NOAA GFS · Aviation Forecast Layers",
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {"verticalCoordinate": "model-levels", "maxVerticalLevels": 40, "daylightFrames": "all-hours"},
+      "grid": {
+        "kind": "lambert-conformal",
+        "width": 204,
+        "height": 174,
+        "earthRadiusM": 6370000,
+        "centralMeridianDeg": 44.5,
+        "latitudeOfOriginDeg": 40.2,
+        "standardParallel1Deg": 38.5,
+        "standardParallel2Deg": 41.8,
+        "x0M": -304500,
+        "y0M": -259500,
+        "dxM": 3000,
+        "dyM": 3000,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "intervalHours": 1,
+        "intervalChange": {"fromHour": 39, "hours": 3},
+        "cycleHoursUtc": [0],
+        "statisticsResetHours": null,
+        "expectedRunsPerDay": 1,
+        "window": {"hourlyThrough": 36, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 36, "framesPerShard": 2}
+      },
+      "freshness": {"maxCycleAgeHours": 6},
+      "coverage": {
+        "id": "wrf-armenia-3km-land-v1",
+        "description": "Land and 50 km coastal buffer within the av-wrf Armenia 3 km Lambert domain; Russia excluded.",
+        "west": 40.78698,
+        "south": 37.812119,
+        "east": 48.21302,
+        "north": 42.534384,
+        "seaBufferMeters": 50000,
+        "excludedA3": ["RUS"],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["yerevan", 40.179, 44.499, true],
+          ["lake_sevan", 40.5, 45.2, true],
+          ["tbilisi", 41.715, 44.827, true],
+          ["outside_west", 40, 40, false],
+          ["outside_north", 43, 44.5, false]
+        ]
+      },
+      "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf"},
+      "terrainSubdivisionFactor": 1,
+      "execution": {"zoom": 10, "parallelism": 24, "schedule": []}
     }
   ]
 }

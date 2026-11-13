@@ -38,8 +38,9 @@ pnpm input:proof --model MODEL --cache-dir .cache/MODEL
 ## Add a source protocol
 
 The [provider registry](../apps/batch/src/providers.ts) binds model settings to
-configured [indexed GRIB](../apps/batch/src/indexed-grib/README.md) or
-[split GRIB](../apps/batch/src/split-grib/README.md) factories. A new source format
+configured [indexed GRIB](../apps/batch/src/indexed-grib/README.md),
+[split GRIB](../apps/batch/src/split-grib/README.md) or
+[WRF Zarr](../apps/batch/src/wrf-zarr/README.md) factories. A new source format
 adds a factory implementing
 [ResolvableForecastProvider](../apps/batch/src/provider.ts) and one protocol entry
 in that registry. Keep source metadata validation, downloads, decoding, interval
@@ -93,11 +94,14 @@ neighboring cells for stencil operations, and
 [coverage.ts](../apps/batch/src/coverage.ts) separates public output cells from
 halo cells. Finish with `pnpm docs:generate` and `pnpm verify`.
 
-## Publish an external indexed GRIB2 cycle
+## Publish an external cycle
 
 Configure an event-driven indexed GRIB2 product with the producer's grid and
 field identities. Commit the inputs as described in the
 [private producer guide](../apps/batch/src/indexed-grib/README.md#private-producer-storage).
+
+For av-wrf, use the [WRF Zarr adapter](../apps/batch/src/wrf-zarr/README.md)
+and its [wire contract](../packages/contracts/schemas/wrf-zarr-v3.schema.json).
 
 Dispatch `upstream-cycle-ready` after the input commit. Send `environment`,
 `model`, and the UTC `cycle` in `client_payload`.

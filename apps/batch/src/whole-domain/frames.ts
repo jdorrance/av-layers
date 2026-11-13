@@ -118,7 +118,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       profileWriter = createShardedSamplePackWriter(profileLayout, prepared.native.mask.coverage,
         { root, model: product.modelId, buildId, surfaceId: 'native', kind: 'profiles', group: options.sampleGroup ?? 0 }, { signal });
     }
-    const workingHalo = mask.halo.slice();
+    const workingHalo = Uint8Array.from(mask.halo);
     for (let i = 0; i < workingHalo.length; i++) workingHalo[i] |= prepared.requiredDonors[i]!;
     const workingMask = { ...mask, halo: workingHalo };
     const diagnosticCells = mask.grid.width * mask.grid.height;

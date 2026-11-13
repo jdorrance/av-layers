@@ -146,6 +146,13 @@ Dataset and attribution: https://registry.opendata.aws/noaa-rrfs-ops/
 NOAA/NODD distributes these source data under CC0-1.0. Forecast lift fields
 are derived by this project; NOAA supplies the meteorological inputs.
 
+av-wrf regional WRF-ARW forecasts
+Producer: https://github.com/jdorrance/av-wrf
+WRF-ARW: https://www.mmm.ucar.edu/models/wrf
+The av-wrf producer supplies native model-level weather fields. Its repository
+retains WRF/WPS and forcing-data notices. This project derives terrain-adjusted
+lift, map tiles, native samples and profiles from those fields.
+
 DWD ICON-EU operational data
 Dataset and attribution: https://opendata.dwd.de/weather/nwp/icon-eu/
 Deutscher Wetterdienst (DWD) distributes ICON-EU open data under CC BY 4.0

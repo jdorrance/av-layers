@@ -60,6 +60,23 @@ it('uses the local terrain store without constructing R2 storage', async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+it('passes a local WRF source and local terrain to the normal build without opening R2', async () => {
+  await runBatch(['build', '--model', 'wrf-armenia-3km', '--cycle', '2026-11-13T00:00:00Z',
+    '--source-store-dir', 'producer', '--terrain-store-dir', 'terrain', '--terrain-catalog-ref', 'catalog.json']);
+  expect(fake.storage).not.toHaveBeenCalled();
+  expect(fake.build).toHaveBeenCalledWith('wrf-armenia-3km', expect.objectContaining({
+    cycle: '2026-11-13T00:00:00Z', sourceStore: { get: expect.any(Function), head: expect.any(Function) },
+    wholeDomain: { catalogRef, storage: expect.any(Object) }
+  }));
+});
+
+it.each(['build', 'input-proof'])('rejects a local source for a non-Zarr %s', async command => {
+  await expect(runBatch([command, '--model', 'gfs', '--source-store-dir', 'producer',
+    ...(command === 'build' ? ['--terrain-catalog-ref', 'catalog.json'] : [])])).rejects.toThrow('--source-store-dir requires');
+  expect(fake.build).not.toHaveBeenCalled();
+  expect(fake.storage).not.toHaveBeenCalled();
+});
+
 it.each([
   ['--terrain-store-dir', 'terrain'],
   ['--terrain-store-dir', '', '--terrain-catalog-ref', 'catalog.json'],
@@ -104,8 +121,9 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
   expect(report.capacity.workingSet.shardAssembly).toBeGreaterThan(0);
   expect(report.capacity.violations).toEqual([]);
   expect(report.violations).toEqual([]);
-  expect(report.retention).toEqual({ cadenceHours: 6, retentionDays: 7, retainedPerModel: 28,
-    retentionBasis: 'schedule', retainedNumericBytes: 28 * report.capacity.numericBytes });
+  const eventDriven = model === 'wrf-armenia-3km', retained = eventDriven ? 7 : 28;
+  expect(report.retention).toEqual({ cadenceHours: eventDriven ? 24 : 6, retentionDays: 7, retainedPerModel: retained,
+    retentionBasis: eventDriven ? 'expected-runs' : 'schedule', retainedNumericBytes: retained * report.capacity.numericBytes });
   expect(report.capacity.tiles).toBeGreaterThan(0);
   expect(report.capacity.tiles).toBeLessThanOrEqual(BUILD_BUDGETS.tiles);
   expect(report.capacity.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);

@@ -25,6 +25,13 @@ it('rejects shallow wide containers and deeply nested graphs even below the byte
   expect(parseBoundedJson(encodeBoundedJson(escaped, 128))).toEqual(escaped);
 });
 
+it('admits a bounded producer inventory without changing serving container limits', () => {
+  const bytes = new TextEncoder().encode(JSON.stringify(Array(1046).fill(['field/c/0', 'a'.repeat(64)])));
+  expect(() => parseBoundedJson(bytes)).toThrow('property budget');
+  expect(parseBoundedJson(bytes, 16_384, 1046)).toHaveLength(1046);
+  expect(() => parseBoundedJson(bytes, 16_384, 1045)).toThrow('property budget');
+});
+
 it('preserves UTF-8 keys and values with escaped quotes, backslashes and structural punctuation', () => {
   const value = { '雪🌦️': ['Ā\\\"[]{}:,', '\\', '"', '\ud800', { unicode: 'é🪂', escaped: '\\"{[,:]}' }] };
   expect(parseBoundedJson(encodeBoundedJson(value, 1024))).toEqual(value);

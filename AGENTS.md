@@ -24,7 +24,7 @@ tests, commands, comments, config, and UI.
   and [serving budgets](docs/serving-budgets.md). A path that keeps the forecast
   result and does less work replaces the heavier one. Raise a limit only with
   a measurement.
-- GFS, ICON-EU, RRFS, and the current layers are the implemented scope. A new model or product waits
+- GFS, ICON-EU, RRFS, WRF Armenia, and the current layers are the implemented scope. A new model or product waits
   for a real caller and follows [extensions](docs/extensions.md).
 - Remove unreachable code, exports, docs, and comments in the change that
   leaves them unreached. A comment records an obligation the code cannot state.

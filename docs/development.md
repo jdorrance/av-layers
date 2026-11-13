@@ -67,6 +67,26 @@ pnpm sample-preview --manifest output/builds/MODEL/BUILD_ID/manifest.json
 This validates the build, seeds local Wrangler storage, and starts the API and
 preview server.
 
+### WRF Zarr
+
+Read a committed `av-wrf` store with an explicit UTC cycle. The source directory
+contains `upstream/`; terrain uses the same pinned catalog as other forecasts.
+
+```sh
+pnpm input:proof --model wrf-armenia-3km --cycle 2026-11-13T00:00:00Z \
+  --source-store-dir ../av-wrf/output/forecast-20261113/store
+pnpm forecast --model wrf-armenia-3km --cycle 2026-11-13T00:00:00Z \
+  --source-store-dir ../av-wrf/output/forecast-20261113/store --out output/wrf-preview \
+  --terrain-catalog-ref output/terrain-catalog-ref.json --terrain-store-dir .cache/terrain
+pnpm sample-preview --manifest output/wrf-preview/builds/wrf-armenia-3km/BUILD_ID/manifest.json
+```
+
+Preview opens on Armenia and serves native weather profiles plus terrain-derived
+lift. The build includes 48 frames through 72 hours. The [adapter](../apps/batch/src/wrf-zarr/README.md)
+verifies producer receipts and preserves model-level pressures and Earth-relative
+winds. Omit `--source-store-dir` to read private R2. WRF is event-driven;
+scheduled `all` runs continue selecting scheduled models.
+
 ### Terrain refinement
 
 Save the terrain import's catalog reference as `output/terrain-catalog-ref.json`.
