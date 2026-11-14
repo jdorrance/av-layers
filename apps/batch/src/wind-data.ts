@@ -14,7 +14,7 @@ import { readLocalFile } from './local-file.js';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 type WindGrids = Pick<WholeDomainGrid, 'native' | 'fine'>;
-interface WindCapacity { mapFrames: number; numericBytes: number; estimatedPeakBytes: number }
+interface WindCapacity { mapFrames: number; numericBytes: number; estimatedPeakBytes: number; workingSet?: Record<string, number> }
 interface WindTerrain { elevationM: Float32Array; valid: Uint8Array }
 interface WindObject { key: string; bytes: number; sha256: string; contentType: string }
 export interface WindSparsity { activeIndices?: Uint32Array; fineCoverage?: SparseCoverage }
@@ -52,7 +52,7 @@ function selectActiveTiles(grid: WholeDomainGrid['native'], size: number, kind: 
   return { total, count: tiles.length, tiles, mask: encodeTileMask(present, total) };
 }
 
-function admitWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacity, sparsity?: WindSparsity): number {
+export function estimateWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacity, sparsity?: WindSparsity) {
   const tileSize = maxLevels <= 77 ? 16 : 8;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(capacity.mapFrames) || capacity.mapFrames < 1 || capacity.mapFrames > 256 || !Number.isSafeInteger(capacity.numericBytes) || capacity.numericBytes < 0 || !Number.isSafeInteger(capacity.estimatedPeakBytes) || capacity.estimatedPeakBytes < 0) throw new Error('Invalid wind capacity');
   const windSel = selectActiveTiles(plan.native, tileSize, 'wind', sparsity), fineSel = selectActiveTiles(plan.fine, 64, 'fine', sparsity);
@@ -62,14 +62,22 @@ function admitWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacit
   const overviews = overviewStrides(plan.native).map(stride => windOverviewLayout(plan.native, stride));
   const overviewBytes = overviews.reduce((sum, item) => sum + item.count * (item.chunkBytes + 32), 0);
   const windChunkBytes = wind.chunkBytes, fineChunkBytes = fine.chunkBytes, pages = wind.pages + fine.pages + overviews.reduce((sum, item) => sum + item.pages, 0);
+  const objects = capacity.mapFrames * (2 * pages + 1) + 1;
   if (capacity.mapFrames * (2 * pages + 1) > MAX_FORECAST_RECEIPT_ENTRIES) throw new Error('Wind objects exceed receipt budget');
   const frameDescriptorBytes = 1024 + pages * 256 + (windSel.mask?.length ?? 0) + (fineSel.mask?.length ?? 0);
   const rootDescriptorBytes = 1024 + capacity.mapFrames * 256;
   const encodedBytes = capacity.mapFrames * (windSel.count * windChunkBytes + fineSel.count * fineChunkBytes + (windSel.count + fineSel.count) * 32 + overviewBytes + frameDescriptorBytes) + rootDescriptorBytes;
   const shardBytes = Math.max(Math.min(windSel.count, WIND_INDEX_ENTRIES) * windChunkBytes, Math.min(fineSel.count, WIND_INDEX_ENTRIES) * fineChunkBytes, ...overviews.map(item => Math.min(item.count, WIND_INDEX_ENTRIES) * item.chunkBytes));
   const uploadBytes = 2 * shardBytes;
-  if (windChunkBytes > WIND_CHUNK_LIMIT || shardBytes > MAX_V5_SHARD_BYTES || frameDescriptorBytes > WIND_FRAME_LIMIT || rootDescriptorBytes > WIND_ROOT_LIMIT || !Number.isSafeInteger(encodedBytes) || !Number.isSafeInteger(capacity.numericBytes + encodedBytes) || capacity.numericBytes + encodedBytes > BUILD_BUDGETS.numericBytes || capacity.estimatedPeakBytes + 8 * 1024 * 1024 + uploadBytes > BUILD_BUDGETS.workingSetBytes) throw new Error('Wind data exceeds build capacity');
-  return tileSize;
+  // Sequential post-loop wind upload runs after archivesAndValidation frees its buffers.
+  const postLoopOverlap = Math.min(uploadBytes, capacity.workingSet?.archivesAndValidation ?? 0);
+  const peakWithWindBytes = capacity.estimatedPeakBytes + 8 * 1024 * 1024 + uploadBytes - postLoopOverlap;
+  if (windChunkBytes > WIND_CHUNK_LIMIT || shardBytes > MAX_V5_SHARD_BYTES || frameDescriptorBytes > WIND_FRAME_LIMIT || rootDescriptorBytes > WIND_ROOT_LIMIT || !Number.isSafeInteger(encodedBytes) || !Number.isSafeInteger(capacity.numericBytes + encodedBytes) || capacity.numericBytes + encodedBytes > BUILD_BUDGETS.numericBytes || peakWithWindBytes > BUILD_BUDGETS.workingSetBytes) throw new Error('Wind data exceeds build capacity');
+  return { tileSize, encodedBytes, objects, shardBytes, peakWithWindBytes };
+}
+
+function admitWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacity, sparsity?: WindSparsity): number {
+  return estimateWindData(maxLevels, plan, capacity, sparsity).tileSize;
 }
 
 function encodeFineTargets(prepared: WholeDomainPrepared, terrain: WindTerrain, lift: GridField, x0: number, y0: number): Uint8Array {

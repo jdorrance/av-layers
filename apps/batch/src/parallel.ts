@@ -225,7 +225,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   const groups = partitionForecastHours(resolveProductFrameHours(product, mask, options.cycle), options.shards ?? product.execution.shards);
   const execution = { zoom: product.maxNativeZoom, workers: product.execution.workers };
   const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
-  const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, groups));
+  const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, groups, Boolean(options.numericWind)));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const numericWind = Boolean(options.numericWind && capacity.mapFrames);
   if (numericWind) createWindDataWriter(root, product.modelId, stamp.buildId, provider.maxLevels, prepared.plan, capacity, options.signal, windSparsity(prepared));
@@ -292,7 +292,7 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   // Receipt-only resume can cross unrelated commits; producer content and dirty state stay pinned.
   const recipe = resume ? { ...identity.recipe, sourceRevision: plan.recipe.sourceRevision } : identity.recipe;
   if (!same(plan.recipe, recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
-  if (plan.numericWind) createWindDataWriter(resolve(inputs.out), plan.model, plan.buildId, provider.maxLevels, prepared.plan, admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, plan.groups)), inputs.signal, windSparsity(prepared));
+  if (plan.numericWind) createWindDataWriter(resolve(inputs.out), plan.model, plan.buildId, provider.maxLevels, prepared.plan, admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, plan.groups, true)), inputs.signal, windSparsity(prepared));
   return { plan, prepared, identity, product };
 }
 
@@ -323,7 +323,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
   try {
     const whole = prepared;
     if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
-    const capacity = admitWholeDomain(wholeDomainCapacityInput(options.product, options.provider, whole, [plan.groups[shard]]));
+    const capacity = admitWholeDomain(wholeDomainCapacityInput(options.product, options.provider, whole, [plan.groups[shard]], Boolean(plan.numericWind)));
     const numericWriter = plan.numericWind && capacity.mapFrames ? createWindDataWriter(root, plan.model, plan.buildId, options.provider.maxLevels, whole.plan, capacity, options.signal, windSparsity(whole)) : undefined;
     const result = await buildWholeDomainFrames({ ...options, prepared: whole, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
       sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], deadlineAt: deadline, journalPrefix: prefix, sampleGroup: shard,

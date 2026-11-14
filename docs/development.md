@@ -83,10 +83,11 @@ pnpm forecast --model av-wrf --cycle 2026-11-13T00:00:00Z \
 pnpm sample-preview --manifest output/wrf-preview/builds/av-wrf/BUILD_ID/manifest.json
 ```
 
-Set `AV_NUMERIC_WIND=true` on the forecast command (or pass `wind-data: true`
-when manually dispatching `.github/workflows/forecast.yml`) to emit sparse
-numeric wind chunks. Scheduled workflow runs leave numeric wind off by default
-until per-model steady-state retention storage is verified.
+Scheduled and `repository_dispatch` runs of `.github/workflows/forecast.yml`
+enable sparse numeric wind (`AV_NUMERIC_WIND=true`) by default (pass
+`wind-data: false` on a manual `workflow_dispatch` to skip wind). For local CLI
+builds, set `AV_NUMERIC_WIND=true` on `pnpm forecast` to emit numeric wind
+chunks.
 
 Preview opens on the configured extent and serves native weather profiles plus
 terrain-derived lift. The [adapter](../apps/batch/src/wrf-zarr/README.md)

@@ -49,6 +49,30 @@ it.each(PRODUCTS)('admits actual full and partial shard pages for $modelId', pro
     { mapFrames: 1, numericBytes: 0, estimatedPeakBytes: 0 })).not.toThrow();
 });
 
+it.each(PRODUCTS)('admits sparse wind alongside configured whole-domain and shard capacity for $modelId', async product => {
+  const [{ loadCoverage }, { getForecastProvider }, { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport, nativeSparseMask }, { packedTerrainColumnBudget }, { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput }] = await Promise.all([
+    import('./coverage.js'), import('./providers.js'), import('./whole-domain/coverage.js'),
+    import('@av/forecast/refinement'), import('./whole-domain/capacity.js')
+  ]);
+  const mask = await loadCoverage(product), plan = wholeDomainPlan(product)!, provider = getForecastProvider(product.modelId);
+  const fine = await loadBundledFineCoverage(product, plan), { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+  const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels,
+    { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
+  const geometry = { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns };
+  const groups = partitionForecastHours(product.frameHours, product.execution.shards);
+  const sparsity = { activeIndices: active, fineCoverage: fine.mask.coverage };
+  const fullCapacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, geometry, groups, true));
+  expect(fullCapacity.violations).toEqual([]);
+  expect(() => createWindDataWriter('.', product.modelId, 'build', provider.maxLevels, plan, fullCapacity, undefined, sparsity)).not.toThrow();
+  for (const group of groups) {
+    const shardCapacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, geometry, [group], true));
+    expect(shardCapacity.violations).toEqual([]);
+    if (shardCapacity.mapFrames > 0) {
+      expect(() => createWindDataWriter('.', product.modelId, 'build', provider.maxLevels, plan, shardCapacity, undefined, sparsity)).not.toThrow();
+    }
+  }
+});
+
 it('rejects an encoded object set that cannot fit its receipt before creating artifacts', () => {
   const grid = { kind: 'regular-latlon' as const, width: 16 * 512 * 32, height: 16, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
   expect(() => createWindDataWriter('.', 'gfs', 'build', 1, { native: grid, fine: grid },

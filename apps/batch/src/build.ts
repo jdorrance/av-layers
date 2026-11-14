@@ -41,7 +41,7 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
     nativeCoverageHash: prepared.native.hash, terrain: prepared.terrain } });
   const preparation = { elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 };
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
-  const capacity = options.numericWind ? planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, prepared, [options.product.frameHours])).capacity : undefined;
+  const capacity = options.numericWind ? planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, prepared, [options.product.frameHours], true)).capacity : undefined;
   const writer = capacity?.mapFrames ? createWindDataWriter(options.out, options.product.modelId, stamp.buildId, options.provider.maxLevels, prepared.plan, capacity, options.signal,
     { activeIndices: prepared.acquisitionActive, fineCoverage: prepared.fine.mask.coverage }) : undefined;
   const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix,

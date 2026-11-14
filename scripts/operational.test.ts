@@ -112,6 +112,12 @@ describe('declarative workflows', () => {
       expect(model).toMatchObject({ type: 'string', required: true });
       expect(model.default).toBe(name === 'maintenance.yml' ? undefined : 'all');
     }
+    const windInput = record(record(record(record(forecast.on).workflow_dispatch).inputs)['wind-data']);
+    expect(windInput).toMatchObject({ type: 'boolean', default: true });
+    expect(record(caller.with)['wind-data']).toBe("${{ github.event_name != 'workflow_dispatch' || inputs['wind-data'] }}");
+    const modelWorkflow = workflow('forecast-model.yml');
+    expect(record(record(record(modelWorkflow.on).workflow_call).inputs)['wind-data']).toMatchObject({ type: 'boolean', default: true });
+    expect(record(modelWorkflow.env).AV_NUMERIC_WIND).toBe("${{ inputs['wind-data'] }}");
   });
 
   it('isolates forecast shards from publication credentials and preserves the resume path', () => {
