@@ -30,10 +30,10 @@ import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, r2WaitDuration, ResourceLimitError, waitFor, type WaitContext } from './resources';
-import { windFrameSchema } from '@av/contracts/wind-data';
+import { WIND_INDEX_ENTRIES, windFrameSchema } from '@av/contracts/wind-data';
 import { windChunk, windFrame } from './wind-data';
-import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
-import { Problem, fail, query, response, json, finish, cached, validIp, canceledRequest, handleError } from './http';
+import { pointer, pointerCacheState, admit, manifest, provenanceReference, publicManifest, artifact, readProvenance, readProvenanceFrame } from './publication';
+import { Problem, fail, query, response, json, finish, cached, validIp, validateId, canceledRequest, handleError } from './http';
 import { apiDocs } from './api-docs';
 
 type Env = {
@@ -58,7 +58,7 @@ function layerId(value: string): LayerId {
 
 export function createApp({ products = Object.fromEntries(PRODUCTS.map(product => [product.modelId, product])) }: { products?: Record<string, ProductDefinition> } = {}) {
 let discoveryConfig: Promise<string> | undefined;
-async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string): Promise<Response> {
+async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string, representationSuffix = ''): Promise<Response> {
   const states = observed.map(pointerCacheState), now = Date.now();
   const deadlines = states.map(state => state?.until ?? now);
   for (const expiry of expiries) {
@@ -67,7 +67,7 @@ async function discovery(c: Context<Env>, build: () => unknown, observed: readon
   }
   const until = deadlines.length ? Math.min(...deadlines) : now;
   const config = await (discoveryConfig ??= sha256(new TextEncoder().encode(JSON.stringify(products))));
-  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
+  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}${representationSuffix}`;
   return cached(c.req.raw, expiresAt, c.executionCtx, async () => json(build()), representation, until);
 }
 const modelId = (c: Context<Env>): ModelId => {
@@ -228,7 +228,7 @@ registerJsonRoute(
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model], signal);
     const metrics = (c.executionCtx as WaitContext).metrics;
     if (metrics) metrics.buildId = m.buildId;
-    const servedManifest = { ...m, source: servedSource(m, url.origin) };
+    const servedManifest = publicManifest(m, entry, url.origin);
     return discovery(c, () => ({
       pointer: modelPointerSchema.parse(ptr),
       ...(url.searchParams.has('expand') ? {
@@ -236,7 +236,7 @@ registerJsonRoute(
         templates: Object.fromEntries(renderedLayers(m.layers, m.descriptors.layers).map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
       } : {}),
       freshness: computeFreshness(m)
-    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt);
+    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt, !m.mapData && entry.mapData ? `:wind:${entry.mapData.sha256}` : '');
   }
 );
 
@@ -259,9 +259,10 @@ registerJsonRoute(
   {},
   manifestResponseSchema,
   async (c, url) => {
-    const m = await pinnedManifest(c);
-    const served = { ...m, source: servedSource(m, url.origin) };
-    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-v2`), 'source-v2');
+    const { entry, manifest: m } = await pinnedBuild(c);
+    const served = publicManifest(m, entry, url.origin);
+    const revision = !m.mapData && entry.mapData ? 'v3' : 'v2';
+    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-${revision}`), `source-${revision}`);
   }
 );
 
@@ -354,7 +355,7 @@ app.openAPIRegistry.registerPath(
 );
 app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
   query(new URL(c.req.url), []);
-  const { entry, manifest: m } = await pinnedBuild(c), frame = requiredParam(c, 'frame');
+  const { entry, manifest: m } = await pinnedBuild(c), frame = validateId(requiredParam(c, 'frame'));
   const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
     const loaded = await windFrame(c.env.BUCKET, m, entry, frame, c.executionCtx, c.req.raw.signal);
     return response(loaded.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, loaded.sha256);
@@ -366,9 +367,9 @@ app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
 app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
   query(new URL(c.req.url), []);
   const { entry, manifest: m } = await pinnedBuild(c);
-  const frame = requiredParam(c, 'frame'), kind = requiredParam(c, 'kind'), span = /^(0|[1-9][0-9]{0,9})(?:-(0|[1-9][0-9]{0,9}))?$/.exec(requiredParam(c, 'tile'));
+  const frame = validateId(requiredParam(c, 'frame')), kind = requiredParam(c, 'kind'), span = /^(0|[1-9][0-9]{0,9})(?:-(0|[1-9][0-9]{0,9}))?$/.exec(requiredParam(c, 'tile'));
   const start = span ? Number(span[1]) : -1, end = span ? Number(span[2] ?? span[1]) : -1;
-  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || start < 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start >= 64) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || start < 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start >= 64 || Math.floor(start / WIND_INDEX_ENTRIES) !== Math.floor(end / WIND_INDEX_ENTRIES)) fail(400, 'invalid-parameter', 'Invalid wind chunk');
   const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
     const chunk = await windChunk(c.env.BUCKET, m, entry, frame, kind, start, c.executionCtx, c.req.raw.signal, end - start + 1);
     return response(chunk as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt, chunk.etag);

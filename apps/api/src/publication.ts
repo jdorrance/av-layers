@@ -239,6 +239,11 @@ export function servedSource(m: ManifestV5, origin: string): ManifestV5['source'
   return { ...m.source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` };
 }
 
+/** Copy a retained wind reference onto a manifest published before that field was written. */
+export function publicManifest(m: ManifestV5, entry: { mapData?: ManifestV5['mapData'] }, origin: string): ManifestV5 {
+  return { ...m, ...(m.mapData || !entry.mapData ? {} : { mapData: entry.mapData }), source: servedSource(m, origin) };
+}
+
 export function artifact(m: ManifestV5, layer: LayerId, frame: string) {
   validateId(frame);
   const item = artifactIndexes.get(m)?.get(`${layer}/${frame}`);

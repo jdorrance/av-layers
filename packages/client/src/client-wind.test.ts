@@ -585,3 +585,50 @@ it('skips outside sparse wind/fine tiles during admission, aligns 8-tile spans, 
   expect(resilient.sample(5, 120, 'surface')).toEqual({ status: 'valid', u: 7, v: 9 });
   source.dispose(); resilient.dispose();
 });
+
+it('caches 409 non-numeric builds per buildId, admits overview-less viewports up to the full budget, and invalidates field slots on reload', async () => {
+  const nonNumeric = build(), frame = nonNumeric.manifest.frames[0].id, cache = new WindDataCache();
+  const unavailFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 409 }));
+  const probe = new WindDataSource('https://api.test', { fetchImpl: unavailFetch, cache });
+  expect(await probe.load({ build: nonNumeric, frame, bounds })).toBe('unavailable');
+  expect(cache.isBuildUnavailable(nonNumeric.manifest.buildId)).toBe(true);
+  expect(await probe.load({ build: nonNumeric, frame: nonNumeric.manifest.frames[1].id, bounds })).toBe('unavailable');
+  expect(unavailFetch).toHaveBeenCalledTimes(1);
+  probe.dispose();
+
+  // Overview-less regional build (e.g. pre-overview av-wrf at z=8.02: 55 wind + 6 fine = 7.34 MiB > 4 MiB) uses SINGLE_VIEW_MAX_BYTES.
+  const regional = build();
+  regional.manifest.buildId = 'av-wrf-no-overview';
+  regional.manifest.descriptors.bounds = [0, 0, 160, 80];
+  regional.manifest.surfaces[0]!.grid = { kind: 'regular-latlon', width: 176, height: 80, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+  regional.manifest.surfaces[1]!.grid = { kind: 'regular-latlon', width: 176, height: 80, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+  let windSpeed = 4;
+  const makeRegionalWind = (u: number) => encodeWindColumns(Array.from({ length: 256 }, () => ({
+    surface: { u, v: -2 },
+    levels: Array.from({ length: 40 }, (_, i) => ({ height: 50 + i * 100, wind: { u, v: -2 } }))
+  })));
+  const regionalFine = new Uint8Array(64 * 64 * WIND_FINE_CELL_BYTES), rfv = new DataView(regionalFine.buffer);
+  for (let i = 0; i < 64 * 64; i++) { rfv.setFloat32(i * WIND_FINE_CELL_BYTES, 100, true); rfv.setFloat32(i * WIND_FINE_CELL_BYTES + 4, 1500, true); rfv.setUint8(i * WIND_FINE_CELL_BYTES + 8, 16); }
+  const firstWind = makeRegionalWind(windSpeed);
+  const noOverviewDesc = (f: string) => JSON.stringify({
+    version: 3, frame: f, levels: 40, tileSize: 16, fineTileSize: 64,
+    wind: [{ sha256: 'a'.repeat(64), bytes: 55 * firstWind.length, indexSha256: 'b'.repeat(64), count: 55 }],
+    fine: [{ sha256: 'c'.repeat(64), bytes: 6 * regionalFine.length, indexSha256: 'd'.repeat(64), count: 6 }]
+  });
+  const regionalFetch = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (/\/data\/f\d+$/.test(path)) return new Response(noOverviewDesc(path.split('/').at(-1)!), { headers: { 'content-type': 'application/json' } });
+    return reply(path.includes('/wind/') ? makeRegionalWind(windSpeed) : regionalFine);
+  });
+  const regionalSource = new WindDataSource('https://api.test', { fetchImpl: regionalFetch });
+  expect(55 * firstWind.length + 6 * regionalFine.length).toBeGreaterThan(WIND_NUMERIC_BYTES / 2);
+  expect(await regionalSource.load({ build: regional, frame, bounds: [0, 0, 160, 80] })).toBe('ready');
+  const surfaceField = regionalSource.field('surface');
+  expect(surfaceField.sample(10, 10)).toEqual({ status: STATUS_VALID, u: 4, v: -2 });
+
+  // Reloading a new frame on the same WindDataSource invalidates cached quantized field slots.
+  windSpeed = 9;
+  expect(await regionalSource.load({ build: regional, frame: regional.manifest.frames[1].id, bounds: [0, 0, 160, 80] })).toBe('ready');
+  expect(surfaceField.sample(10, 10)).toEqual({ status: STATUS_VALID, u: 9, v: -2 });
+  regionalSource.dispose();
+});

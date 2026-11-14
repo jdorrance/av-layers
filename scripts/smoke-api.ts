@@ -161,7 +161,7 @@ function requestReading(path: string, response: Response, startedAt: number): [M
 /** One live serving check for deployment and monitoring, pinned to a single immutable build. */
 export async function probeApi(options: {
   baseUrl: string; model: string; expectedDeploymentId?: string; requireLive?: boolean;
-  expectedBuild?: Pick<ManifestV5, 'buildId' | 'frames' | 'layers'>; signal?: AbortSignal;
+  expectedBuild?: Pick<ManifestV5, 'buildId' | 'frames' | 'layers'> & Partial<Pick<ManifestV5, 'mapData'>>; signal?: AbortSignal;
   fetchImpl?: typeof fetch; now?: () => number; observeManifest?: (manifest: ManifestV5) => void;
   observeProbe?: (route: MeasuredRoute, reading: ProbeReading) => void;
   observeClient?: (metric: ApiClientMetric) => void;
@@ -188,6 +188,9 @@ export async function probeApi(options: {
   if (options.expectedBuild) {
     invariant(manifest.buildId === options.expectedBuild.buildId, 'Latest API build has not reached the published build');
     invariant(JSON.stringify(manifest.frames) === JSON.stringify(options.expectedBuild.frames) && JSON.stringify(manifest.layers) === JSON.stringify(options.expectedBuild.layers), 'Published frame or layer listing differs from the API');
+    if ('mapData' in options.expectedBuild) {
+      invariant(manifest.mapData?.sha256 === options.expectedBuild.mapData?.sha256 && manifest.mapData?.bytes === options.expectedBuild.mapData?.bytes, 'Published numeric wind reference differs from the API');
+    }
   }
   options.observeManifest?.(manifest);
   const runs = await json(`/v1/models/${options.model}/runs`) as { retained?: Array<{ buildId?: string }> };
@@ -256,7 +259,7 @@ export async function verifyApiDeployment(options: {
   }
 }
 
-export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: Pick<ManifestV5, 'model' | 'buildId' | 'frames' | 'layers'>; fetchImpl?: typeof fetch }): Promise<void> {
+export async function verifyPublishedForecast(options: RetryOptions & { baseUrl: string; manifest: Pick<ManifestV5, 'model' | 'buildId' | 'frames' | 'layers'> & Partial<Pick<ManifestV5, 'mapData'>>; fetchImpl?: typeof fetch }): Promise<void> {
   const signal = probeSignal(options.signal, 60_000);
   await retryProbe('Published forecast', async () => {
     await probeApi({ baseUrl: options.baseUrl, model: options.manifest.model, expectedBuild: options.manifest, fetchImpl: options.fetchImpl, signal });

@@ -52,7 +52,7 @@ async function restoreShardPayload(store: ObjectStorage, root: string, plan: Bui
     if (!object.key.startsWith(buildPrefix) || keys.has(object.key) || name.split('/').some(segment => !/^[a-zA-Z0-9._-]+$/.test(segment) || segment === '.' || segment === '..')) {
       throw new Error('Forecast shard payload key is invalid');
     }
-    if (name.startsWith('surfaces/') && object.bytes > MAX_V5_SHARD_BYTES) throw new Error('Forecast shard numeric payload exceeds byte budget');
+    if ((name.startsWith('surfaces/') || name.startsWith('map-data/')) && object.bytes > MAX_V5_SHARD_BYTES) throw new Error('Forecast shard numeric payload exceeds byte budget');
     keys.add(object.key);
     requiredBytes += object.bytes;
   }

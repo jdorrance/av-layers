@@ -140,6 +140,7 @@ it.each([
   ['duplicate', 'payload key is invalid', 1],
   ['oversize', 'Too big', 1],
   ['numeric-oversize', 'numeric payload exceeds byte budget', 1],
+  ['map-data-oversize', 'numeric payload exceeds byte budget', 1],
   ['digest', 'payload integrity mismatch', 2],
   ['etag', 'payload integrity mismatch', 2],
   ['length', 'payload integrity mismatch', 2]
@@ -155,6 +156,7 @@ it.each([
       if (failure === 'duplicate') receipt.objects = [object, object];
       if (failure === 'oversize') receipt.objects = [{ ...object, bytes: BUILD_BUDGETS.samplePackBytes + 1 }];
       if (failure === 'numeric-oversize') receipt.objects = [{ ...object, key: receipt.surfaces[0]!.shards[0]!.key, bytes: MAX_V5_SHARD_BYTES + 1 }];
+      if (failure === 'map-data-oversize') receipt.objects = [{ ...object, key: `builds/${plan.model}/${plan.buildId}/map-data/f001/wind-0.bin`, bytes: MAX_V5_SHARD_BYTES + 1 }];
       await seed(receipt);
       const original = store.get.bind(store);
       const get = vi.spyOn(store, 'get').mockImplementation(async (key, ...args) => {

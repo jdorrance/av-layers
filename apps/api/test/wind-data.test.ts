@@ -46,6 +46,29 @@ it('keeps mapData in stored pointers and projects the public v5 pointer unchange
   expect(modelPointerSchema.parse(newer)).toEqual(modelPointerSchema.parse(old));
 });
 
+it('copies a retained wind reference onto manifests that omitted mapData', async () => {
+  const store = bucket(), model = local.manifest.model, stored = { ...local.manifest };
+  delete stored.mapData;
+  const pointerKey = `catalog/${model}/latest.json`, manifestKey = entry().manifestKey;
+  const pointer = { version: 1, model, latestBuildId: stored.buildId, retained: [entry()] };
+  const get = async (key: string, options?: { range?: { offset: number; length: number } }) => {
+    if (key !== pointerKey && key !== manifestKey) return store.get(key, options);
+    const bytes = new TextEncoder().encode(JSON.stringify(key === pointerKey ? pointer : stored));
+    return { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) };
+  };
+  const app = createApp({ products: { [model]: OFFLINE_PRODUCT } });
+  const env = { BUCKET: { get } as unknown as R2Bucket, AV_RESPONSE_CACHE: 'off' };
+  const call = (path: string) => app.fetch(new Request(`https://api.test${path}`), env, ctx);
+  const latest = await call(`/v1/models/${model}/latest?expand=manifest`);
+  expect(latest.status, await latest.clone().text()).toBe(200);
+  expect((await latest.json()).manifest.mapData).toEqual(numeric.reference);
+  const run = await call(`/v1/models/${model}/runs/${stored.buildId}`);
+  expect(run.status, await run.clone().text()).toBe(200);
+  const published = await run.json();
+  expect(published.mapData).toEqual(numeric.reference);
+  expect(published.source.provenanceUrl).toContain(`/runs/${stored.buildId}/provenance`);
+});
+
 it('serves authenticated bounded chunks and rejects absent references and bad digests', async () => {
   const frame = local.manifest.frames[0].id, store = bucket();
   const result = await windFrame(store.bucket, local.manifest, entry(), frame, ctx, signal);
@@ -320,6 +343,12 @@ it('sets edge cache revalidation on frame descriptors and validates multi-tile c
   };
   const app = createApp({ products: { [model]: OFFLINE_PRODUCT } });
   const env = { BUCKET: { get } as unknown as R2Bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, NUMERIC_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' };
+  const latestRes = await app.fetch(new Request(`https://api.test/v1/models/${model}/latest?expand=manifest`), env, ctx);
+  expect(latestRes.status).toBe(200);
+  expect(((await latestRes.json()) as { manifest: ManifestV5 }).manifest.mapData).toEqual(numeric.reference);
+  const runRes = await app.fetch(new Request(`https://api.test/v1/models/${model}/runs/${local.manifest.buildId}`), env, ctx);
+  expect(runRes.status).toBe(200);
+  expect(((await runRes.json()) as ManifestV5).mapData).toEqual(numeric.reference);
   const base = `https://api.test/v1/models/${model}/runs/${local.manifest.buildId}/data/${frame}`;
   const frameRes = await app.fetch(new Request(base, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
   expect(frameRes.status).toBe(200);
@@ -329,4 +358,8 @@ it('sets edge cache revalidation on frame descriptors and validates multi-tile c
   expect(spanRes.status).toBe(200);
   const badSpan = await app.fetch(new Request(`${base}/wind/2-1`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
   expect(badSpan.status).toBe(400);
+  const crossPage = await app.fetch(new Request(`${base}/wind/511-512`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
+  expect(crossPage.status).toBe(400);
+  const longFrame = await app.fetch(new Request(`https://api.test/v1/models/${model}/runs/${local.manifest.buildId}/data/${'f'.repeat(129)}`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
+  expect(longFrame.status).toBe(400);
 });

@@ -10,7 +10,8 @@ export interface WindSample { status: WindStatus; u: number | null; v: number | 
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
-const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8;
+const MAX_CHUNKS = 64, DETAIL_MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, SINGLE_VIEW_MAX_BYTES = WIND_NUMERIC_BYTES - WIND_FRAME_LIMIT;
+const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
 const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
@@ -29,8 +30,21 @@ interface CachedBytes {
 /** Share immutable buffers and decoded views across viewports within a strict byte limit. */
 export class WindDataCache {
   private readonly entries = new Set<CachedBytes>();
+  private readonly unavailableBuilds = new Set<string>();
   private bytes = 0;
   spansUnsupported = false;
+
+  isBuildUnavailable(buildId: string): boolean {
+    return this.unavailableBuilds.has(buildId);
+  }
+
+  markBuildUnavailable(buildId: string): void {
+    if (this.unavailableBuilds.size >= 64) {
+      const oldest = this.unavailableBuilds.values().next().value;
+      if (oldest !== undefined) this.unavailableBuilds.delete(oldest);
+    }
+    this.unavailableBuilds.add(buildId);
+  }
 
   hasReady(url: string, limit: number, now = Date.now()): boolean {
     for (const e of this.entries) if (e.url === url && e.used !== null && e.expiresAt > now && e.bytes.length === limit) return true;
@@ -59,6 +73,7 @@ export class WindDataCache {
   }
 
   clear(): void {
+    this.unavailableBuilds.clear();
     for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
   }
 
@@ -190,6 +205,7 @@ function validateChunk(kind: string, bytes: Uint8Array, tileSize: number, levels
 export class WindDataSource {
   private controller?: AbortController;
   private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; windMask?: TileMask; fineMask?: TileMask; overview?: Overview };
+  private generation = 0;
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
   private readonly cache: WindDataCache;
@@ -208,11 +224,13 @@ export class WindDataSource {
     const keys = new Float64Array(FIELD_SLOTS).fill(-1);
     const uv = new Float32Array(FIELD_SLOTS * 2), statuses = new Uint8Array(FIELD_SLOTS);
     const out = { u: null as number | null, v: null as number | null, status: STATUS_UNAVAILABLE };
+    let gen = this.generation;
     return {
       sample: (lat: number, lon: number) => {
         if (!this.current || this.current.build.expiresAtMs <= Date.now()) {
           this.current = undefined; out.status = STATUS_UNAVAILABLE; out.u = out.v = null; return out;
         }
+        if (gen !== this.generation) { keys.fill(-1); gen = this.generation; }
         const wrapped = normalizeLon(lon);
         const iy = Math.round((lat + 90) * 500), ix = Math.round((wrapped + 180) * 500);
         const tag = iy * 180_002 + ix, slot = ((Math.imul(iy, 2654435761) ^ Math.imul(ix, 2246822519)) >>> 0) & (FIELD_SLOTS - 1);
@@ -243,7 +261,7 @@ export class WindDataSource {
   }
 
   async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
-    this.controller?.abort(); this.current = undefined;
+    this.controller?.abort(); this.current = undefined; this.generation++;
     if (this.disposed) throw new Error('Wind source is disposed');
     const controller = new AbortController(); this.controller = controller;
     const previous = this.pending;
@@ -274,6 +292,7 @@ export class WindDataSource {
 
   private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal): Promise<'ready' | 'unavailable'> {
     if (build.expiresAtMs <= Date.now() || Date.parse(build.manifest.expiresAt) !== build.expiresAtMs) return 'unavailable';
+    if (this.cache.isBuildUnavailable(build.manifest.buildId)) return 'unavailable';
     if (!build.manifest.frames.slice(0, build.manifest.mapFrameCount ?? build.manifest.frames.length).some(item => item.id === frame)) return 'unavailable';
     if (!bounds.every(Number.isFinite) || bounds[1] < -90 || bounds[3] > 90 || bounds[1] > bounds[3] || bounds[0] < -180 || bounds[0] > 180 || bounds[2] < -180 || bounds[2] > 180) throw new RangeError('Invalid wind bounds');
     const native = build.manifest.surfaces.find(s => s.kind === 'native'), fine = build.manifest.surfaces.find(s => s.kind === 'fine');
@@ -281,7 +300,7 @@ export class WindDataSource {
     const baseSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     baseSignal.throwIfAborted();
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
-    const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'unsupported-span'> => {
+    const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span'> => {
       attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
@@ -290,7 +309,8 @@ export class WindDataSource {
         reqSig.throwIfAborted();
         const res = await (this.options.fetchImpl ?? fetch)(url, { signal: reqSig, redirect: 'error' });
         if (targets.length > 1 && (res.status === 400 || res.status === 404)) { await res.body?.cancel(); return 'unsupported-span'; }
-        if (res.status === 404 || res.status === 409) { await res.body?.cancel(); return null; }
+        if (res.status === 409) { await res.body?.cancel(); return 'product-unavailable'; }
+        if (res.status === 404) { await res.body?.cancel(); return null; }
         if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
         const declared = res.headers.get('content-length');
         if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
@@ -318,6 +338,7 @@ export class WindDataSource {
     };
     const descEntry = this.hold(this.cache.take(root, WIND_FRAME_LIMIT, build.expiresAtMs));
     const descUsed = descEntry.used ?? await readStream(root, 'application/json', [descEntry]);
+    if (descUsed === 'product-unavailable') { this.cache.markBuildUnavailable(build.manifest.buildId); return 'unavailable'; }
     if (descUsed === null || descUsed === 'unsupported-span') return 'unavailable';
     const descriptor = parseWindFrame(descEntry.bytes.subarray(0, descUsed));
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
@@ -335,7 +356,7 @@ export class WindDataSource {
     const selectOverview = () => {
       for (const level of descriptor.overview ?? []) {
         const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, bounds, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
-        if (!tiles || tiles.length * layout.chunkBytes > MAX_BYTES) continue;
+        if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
         return {
           overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
           tasks: tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }))
@@ -366,8 +387,8 @@ export class WindDataSource {
         if (kind === 'wind') wind.set(tile, entry.decoded as PackedWindChunk);
         else (targetOverview ? targetOverview.data : fineData).set(tile, entry.decoded as DataView);
       };
-      const check = (used: number | null | 'unsupported-span', expected: number) => {
-        if (used === null || used === 'unsupported-span') throw new Error('Numeric chunk missing');
+      const check = (used: number | null | 'product-unavailable' | 'unsupported-span', expected: number) => {
+        if (typeof used !== 'number') throw new Error('Numeric chunk missing');
         if (used !== expected) throw new Error('Numeric chunk length mismatch');
       };
       let next = 0;
@@ -375,7 +396,7 @@ export class WindDataSource {
         try {
           while (next < batches.length) {
             const b = batches[next++]!, entries = b.tiles.map(t => this.hold(this.cache.take(`${root}/${b.kind}/${t}`, b.bytes, build.expiresAtMs)));
-            if (entries.length > 1 && !this.cache.spansUnsupported) {
+            if (entries.length > 1 && !this.cache.spansUnsupported && entries.every(e => e.used === null)) {
               const used = await readStream(`${root}/${b.kind}/${b.tiles[0]}-${b.tiles.at(-1)}`, 'application/octet-stream', entries, attemptSig);
               if (used !== 'unsupported-span') { check(used, entries.length * b.bytes); entries.forEach((e, i) => commit(b.kind, b.tiles[i]!, e)); continue; }
               this.cache.spansUnsupported = true;
@@ -394,7 +415,8 @@ export class WindDataSource {
     };
 
     let overview: Overview | undefined;
-    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= MAX_BYTES) {
+    const detailBudget = descriptor.overview?.length ? DETAIL_MAX_BYTES : SINGLE_VIEW_MAX_BYTES;
+    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= detailBudget) {
       const detailTasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
       try {
         await fetchTasks(detailTasks);
@@ -415,6 +437,7 @@ export class WindDataSource {
 
     baseSignal.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
+    this.generation++;
     this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, windMask, fineMask, overview };
     return 'ready';
   }
@@ -491,7 +514,7 @@ export class WindDataSource {
   }
 
   dispose(): void {
-    this.disposed = true; this.controller?.abort(); this.current = undefined;
+    this.disposed = true; this.controller?.abort(); this.current = undefined; this.generation++;
     if (!this.active) this.release();
   }
 }

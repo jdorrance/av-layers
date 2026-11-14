@@ -28,6 +28,7 @@ export class WindOverlay {
   private height = 0;
   private scale = 1;
   private barbScale = 1;
+  private lastDpr = 0;
   private panX = 0;
   private panY = 0;
   private mapLost = false;
@@ -43,6 +44,7 @@ export class WindOverlay {
   };
 
   private readonly move = (): void => {
+    if ((window.devicePixelRatio || 1) !== this.lastDpr) { this.resize(); return; }
     const view = this.currentView(), prev = this.view;
     this.view = view;
     if (!prev || prev.zoom !== view.zoom || prev.bearing !== view.bearing || prev.pitch !== view.pitch || view.pitch !== 0) this.resetTrails();
@@ -65,6 +67,7 @@ export class WindOverlay {
     const canvas = this.map.getCanvas();
     this.width = canvas.clientWidth; this.height = canvas.clientHeight;
     const w = Math.max(1, this.width), h = Math.max(1, this.height), dpr = window.devicePixelRatio || 1;
+    this.lastDpr = dpr;
     const showBarbs = this.options.visible && this.options.style !== 'trails', showTrails = this.options.visible && this.options.style !== 'barbs';
     const barbBudget = w * h <= MAX_PIXELS ? MAX_RETINA_BARB_PIXELS : (showTrails ? MAX_PIXELS * 0.8 : MAX_PIXELS - 1);
     const bScale = Math.min(dpr, 2, Math.sqrt(barbBudget / (w * h)), 4096 / w, 4096 / h);

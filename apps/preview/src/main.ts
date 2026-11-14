@@ -209,7 +209,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   function updateWind(): void {
     if (!windControls.state.visible) { cancelWindRequest(); return; }
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
-    if (!build.manifest.mapData) { clearWind(); return; }
+    if (windCache.isBuildUnavailable(build.manifest.buildId)) { clearWind(); return; }
     const bounds = map.getBounds(), west = bounds.getWest(), east = bounds.getEast();
     const view: [number, number, number, number] = [east - west >= 360 ? -180 : normalizeLon(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : normalizeLon(east), Math.min(90, bounds.getNorth())];
     const identity = windView;
@@ -236,7 +236,14 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     windLoading = true;
     const retainFallback = () => Boolean(windView && windView.build === request.build && windView.frame === request.frame && coversBounds(windView.bounds, request.bounds));
     try {
-      const status = await request.source.load({ ...request, signal: request.controller.signal });
+      let status: 'ready' | 'unavailable';
+      try {
+        status = await request.source.load({ ...request, signal: request.controller.signal });
+      } catch (error) {
+        if (!(error instanceof RangeError) || !windView || retainFallback() || request.controller.signal.aborted) throw error;
+        windView.source.dispose(); windView = null; windDisplayed = false; windOverlay.clear();
+        status = await request.source.load({ ...request, signal: request.controller.signal });
+      }
       if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
       if (status === 'ready') { windView?.source.dispose(); windView = request; if (windDisplayed) setWindField(); setWindStatus('ready'); }
       else setWindStatus(retainFallback() ? 'ready' : status);

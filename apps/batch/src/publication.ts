@@ -267,7 +267,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
     if (value.hour !== reference.hour) throw new Error('Rollback provenance hour mismatch');
   }
   await verifyV5Dependencies(store, manifest, options.signal);
-  if (retained.mapData && manifest.mapData && (retained.mapData.sha256 !== manifest.mapData.sha256 || retained.mapData.bytes !== manifest.mapData.bytes)) throw new Error('Rollback wind identity mismatch');
+  if (manifest.mapData && (!retained.mapData || retained.mapData.sha256 !== manifest.mapData.sha256 || retained.mapData.bytes !== manifest.mapData.bytes)) throw new Error('Rollback wind identity mismatch');
   const windRef = retained.mapData ?? manifest.mapData;
   if (windRef) await verifyRemoteWind(store, manifest, windRef, options.signal);
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');

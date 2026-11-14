@@ -91,8 +91,9 @@ for publication and expiry rules.
 ## Numeric wind map data
 
 Builds opted in via `AV_NUMERIC_WIND=true` publish verified binary wind fields
-alongside map rasters (`mapData` on the manifest and retained pointer; non-numeric
-builds omit `mapData` and return HTTP `409 product-unavailable` on `/data/...`).
+alongside map rasters (`mapData` on the retained pointer; the served manifest
+includes that reference when the stored manifest omitted it). Non-numeric
+builds omit `mapData` and return HTTP `409 product-unavailable` on `/data/...`.
 [wind-data.ts](../packages/contracts/src/wind-data.ts) owns the wire contract:
 
 - `GET /v1/models/{model}/runs/{buildId}/data/{frame}` returns a JSON

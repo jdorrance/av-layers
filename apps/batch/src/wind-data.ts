@@ -52,13 +52,6 @@ function selectActiveTiles(grid: WholeDomainGrid['native'], size: number, kind: 
   return { total, count: tiles.length, tiles, mask: encodeTileMask(present, total) };
 }
 
-export function windSparsityMasks(plan: WindGrids, maxLevels: number, sparsity: WindSparsity): { windMask?: string; fineMask?: string } {
-  const tileSize = maxLevels + 1 <= 77 ? 16 : 8;
-  const wind = selectActiveTiles(plan.native, tileSize, 'wind', sparsity);
-  const fine = selectActiveTiles(plan.fine, 64, 'fine', sparsity);
-  return { ...(wind.mask ? { windMask: wind.mask } : {}), ...(fine.mask ? { fineMask: fine.mask } : {}) };
-}
-
 function admitWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacity, sparsity?: WindSparsity): number {
   const tileSize = maxLevels <= 77 ? 16 : 8;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(capacity.mapFrames) || capacity.mapFrames < 1 || capacity.mapFrames > 256 || !Number.isSafeInteger(capacity.numericBytes) || capacity.numericBytes < 0 || !Number.isSafeInteger(capacity.estimatedPeakBytes) || capacity.estimatedPeakBytes < 0) throw new Error('Invalid wind capacity');

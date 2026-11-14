@@ -168,12 +168,20 @@ let deferWind = false;
 let deferWindCancellation = false;
 let windCancel: (() => void) | null = null;
 let rejectWind = false;
+let markBuildUnavailable = false;
+let failOnceBudget = false;
 const windStatuses: string[] = [];
 let windSample = { status: 'valid', u: 3, v: 4 };
 vi.mock('@av/client/wind', async importOriginal => ({ ...await importOriginal<typeof import('@av/client/wind')>(), WindDataSource: class {
-  constructor(_base: string, options?: { fetchImpl?: typeof fetch }) { windFetches.push(options?.fetchImpl); }
-  load(request: { frame: string; signal?: AbortSignal }) {
+  private readonly cache?: { markBuildUnavailable(buildId: string): void };
+  constructor(_base: string, options?: { fetchImpl?: typeof fetch; cache?: { markBuildUnavailable(buildId: string): void } }) {
+    windFetches.push(options?.fetchImpl);
+    this.cache = options?.cache;
+  }
+  load(request: { build: PinnedBuild; frame: string; signal?: AbortSignal; bounds?: readonly [number, number, number, number] }) {
     windLoads.push(request);
+    if (markBuildUnavailable) { this.cache?.markBuildUnavailable(request.build.manifest.buildId); return Promise.resolve('unavailable'); }
+    if (failOnceBudget) { failOnceBudget = false; return Promise.reject(new RangeError('Wind cache exceeds byte budget')); }
     return rejectWind ? Promise.reject(new Error('network')) : deferWind ? new Promise((resolve, reject) => {
       windResolve = resolve;
       request.signal?.addEventListener('abort', () => {
@@ -266,6 +274,7 @@ beforeEach(() => {
   vi.resetModules();
   maps.length = 0; protocols.clear(); initializationError = null; autoLoadRaster = true; setWorkerUrl.mockClear();
   windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
+  markBuildUnavailable = false; failOnceBudget = false;
   deferWindCancellation = false; windCancel = null;
   windSample = { status: 'valid', u: 3, v: 4 };
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
@@ -273,7 +282,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', '');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = fixtureManifestV5({ mapData: MAP_DATA });
+  manifest = fixtureManifestV5();
   vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
@@ -1666,16 +1675,21 @@ it('hides precip-rate in preview while keeping future non-lift layers and km/mi 
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
 });
 
-it('skips numeric wind descriptor requests when manifest omits mapData and retains covering overview on failed detail zoom', async () => {
-  manifest = fixtureManifestV5();
+it('caches 409 non-numeric builds per buildId, supports pre-mapData builds, and retries uncovered pans on cache pressure', async () => {
+  markBuildUnavailable = true;
   await start();
-  expect(windLoads).toHaveLength(0);
+  expect(windLoads).toHaveLength(1);
   expect(windStatuses.at(-1)).toBe('unavailable');
+  map().bounds = { west: -116, east: -115, south: 32, north: 33 };
+  map().emit('moveend');
+  await selectFrame(1);
+  expect(windLoads).toHaveLength(1);
 
-  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
+  markBuildUnavailable = false;
+  manifest = fixtureManifestV5({ model: 'icon-eu' });
   deferWind = true;
   modelButton('icon-eu').dispatchEvent(new Event('click'));
-  await vi.waitFor(() => expect(windLoads).toHaveLength(1));
+  await vi.waitFor(() => expect(windLoads).toHaveLength(2));
   windResolve!('ready');
   await Promise.resolve();
   const initialField = windFields.at(-1);
@@ -1684,9 +1698,17 @@ it('skips numeric wind descriptor requests when manifest omits mapData and retai
   map().bounds = { west: map().bounds.west + 0.1, east: map().bounds.east - 0.1, south: map().bounds.south + 0.1, north: map().bounds.north - 0.1 };
   map().zoom += 2;
   map().emit('moveend');
-  expect(windLoads).toHaveLength(2);
+  expect(windLoads).toHaveLength(3);
   windResolve!('unavailable');
   await Promise.resolve();
   expect(windStatuses.at(-1)).toBe('ready');
   expect(windFields.at(-1)).toBe(initialField);
+
+  failOnceBudget = true;
+  map().bounds = { west: map().bounds.west + 2, east: map().bounds.east + 2, south: map().bounds.south, north: map().bounds.north };
+  map().emit('moveend');
+  await vi.waitFor(() => expect(windLoads).toHaveLength(5));
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windStatuses.at(-1)).toBe('ready');
 });
