@@ -9,6 +9,7 @@ import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/prepare.js';
 import type { ForecastProvider } from '../provider.js';
 
 export const MAX_PACKED_COLUMN_BYTES = 512 * 1024 * 1024;
+export const WIND_WORKING_SET_RESERVE_BYTES = 8 * 1024 * 1024;
 
 export interface WholeDomainCapacityInput {
   product: ProductDefinition;
@@ -30,6 +31,7 @@ export interface WholeDomainCapacityInput {
   fineLayers: number;
   columns: Pick<PreparedPackedTerrainColumns, 'byteLength' | 'workspaceBufferBytes' | 'workspaceObjectBudgetBytes' | 'outputBufferBytes'>;
   terrainBytes: number;
+  windWorkingSetBytes?: number;
 }
 
 type CapacityGeometry = {
@@ -53,10 +55,10 @@ export function wholeDomainSurfaceLayers(product: ProductDefinition): { native: 
 }
 
 export function wholeDomainCapacityInput(product: ProductDefinition, provider: Pick<ForecastProvider, 'maxLevels' | 'retainedGeometryFields' | 'sourceMappingBytesPerCell' | 'auxiliarySurfaceFields' | 'auxiliaryLevelFields'>,
-  geometry: CapacityGeometry, groups: readonly (readonly number[])[]): WholeDomainCapacityInput & { mapFrames: number } {
+  geometry: CapacityGeometry, groups: readonly (readonly number[])[], numericWind = false): WholeDomainCapacityInput & { mapFrames: number } {
   const hours = groups.flat(), fine = geometry.fine.mask;
   const nativeBlocks = geometry.native.mask.coverage.blockIds, dense = geometry.nativeMask;
-  const layers = wholeDomainSurfaceLayers(product);
+  const layers = wholeDomainSurfaceLayers(product), mapFrames = mapFrameCount({ ...product, frameHours: hours });
   return {
     product, plan: geometry.plan, nativeBlocks, nativeActive: geometry.acquisitionActive.length,
     nativeMask: geometry.native.mask, fine, columns: geometry.columns,
@@ -65,8 +67,9 @@ export function wholeDomainCapacityInput(product: ProductDefinition, provider: P
     maxLevels: provider.maxLevels, retainedGeometryFields: provider.retainedGeometryFields ?? 0,
     sourceMappingBytesPerCell: provider.sourceMappingBytesPerCell ?? 0,
     auxiliarySurfaceFields: provider.auxiliarySurfaceFields ?? 0, auxiliaryLevelFields: provider.auxiliaryLevelFields ?? 0,
-    frames: hours.length, mapFrames: mapFrameCount({ ...product, frameHours: hours }),
-    groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: layers.native.length, fineLayers: layers.fine.length
+    frames: hours.length, mapFrames,
+    groupFrames: Math.max(...groups.map(group => group.length)), nativeLayers: layers.native.length, fineLayers: layers.fine.length,
+    ...(numericWind && mapFrames ? { windWorkingSetBytes: WIND_WORKING_SET_RESERVE_BYTES } : {})
   };
 }
 
@@ -153,9 +156,10 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     archivesAndValidation: largestShard + 64 * 1024 * 1024,
     runtimeAndNativeReserve: 256 * 1024 * 1024
   };
+  const windReserveBytes = input.windWorkingSetBytes ?? 0;
   let inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   let prefetchFrameCount: 0 | 1 = 1;
-  if (inlinePeakBytes > BUILD_BUDGETS.workingSetBytes) {
+  if (inlinePeakBytes + windReserveBytes > BUILD_BUDGETS.workingSetBytes) {
     prefetchFrameCount = 0;
     inlinePeakBytes -= workingSet.prefetchFrame;
     workingSet.prefetchFrame = 0;
@@ -170,7 +174,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     const peak = inlinePeakBytes + (raster ? sharedInputBytes + raster * RASTER_WORKER_RESERVE_BYTES - workingSet.rasterInline : 0) +
       (derive ? deriveSharedInputs + derive * (RASTER_WORKER_RESERVE_BYTES + workerColumns) : 0);
     const total = raster + derive, imbalance = Math.abs(raster - derive);
-    if (peak > BUILD_BUDGETS.workingSetBytes || total < selectedTotal || (total === selectedTotal &&
+    if (peak + windReserveBytes > BUILD_BUDGETS.workingSetBytes || total < selectedTotal || (total === selectedTotal &&
         (imbalance > selectedImbalance || (imbalance === selectedImbalance && raster <= rasterWorkers)))) continue;
     rasterWorkers = raster; deriveWorkers = derive; selectedTotal = total; selectedImbalance = imbalance;
   }

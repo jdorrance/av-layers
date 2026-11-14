@@ -50,10 +50,15 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput } = await import('./whole-domain/capacity.js');
     const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
     const groups = partitionForecastHours(product.frameHours, product.execution.shards);
+    const numericWind = process.env.AV_NUMERIC_WIND === 'true';
     const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider,
-      { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns }, groups));
+      { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns }, groups, numericWind));
+    const wind = numericWind && capacity.mapFrames
+      ? (await import('./wind-data.js')).estimateWindData(provider.maxLevels + 1, plan, capacity, { activeIndices: active, fineCoverage: fine.mask.coverage })
+      : undefined;
     const report = { mode: 'whole-domain', model: product.modelId, k: plan.k, fineGrid: plan.fine, capacity,
-      retention: { ...retention, retainedNumericBytes: retention.retainedPerModel * capacity.numericBytes },
+      ...(wind ? { wind } : {}),
+      retention: { ...retention, retainedNumericBytes: retention.retainedPerModel * (capacity.numericBytes + (wind?.encodedBytes ?? 0)) },
       violations: [...capacity.violations, ...retentionViolations] };
     console.log(JSON.stringify(report, null, 2));
     if (report.violations.length) process.exitCode = 1;
