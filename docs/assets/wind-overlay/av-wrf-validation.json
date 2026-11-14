@@ -1,0 +1,30 @@
+{
+  "date": "2026-11-14",
+  "model": "av-wrf",
+  "cycle": "2026-11-13T00:00:00.000Z",
+  "buildId": "20261114T055211Z-45ef7d4d-cd37-475d-aa54-9f7107677376",
+  "sourceReceiptSha256": "cbec17e419bd204c0b03711369c6cd008e7bb199177e2c3303853a11db31c650",
+  "grid": { "projection": "lambert-conformal", "width": 204, "height": 174, "spacingM": 3000, "levels": 40 },
+  "frames": 48,
+  "mapFrames": 48,
+  "elapsedMs": 435274,
+  "peakRssBytes": 1652408320,
+  "phasesMs": { "acquireMs": 146, "deriveMs": 25030, "packMs": 18362, "renderMs": 341871, "preparationMs": 366, "assemblyMs": 4, "validateMs": 64798 },
+  "windBytes": 953490971,
+  "windObjects": 241,
+  "existingNumericBytes": 1230263616,
+  "browser": {
+    "validTime": "2026-11-14T09:00:00.000Z",
+    "center": { "latitude": 40.45, "longitude": 44.3, "zoom": 9 },
+    "basemap": "OpenStreetMap fallback; Google Terrain key unconfigured",
+    "viewport": { "width": 390, "height": 844 },
+    "heightRail": { "width": 48, "height": 198 },
+    "timelineBottomMargin": 8,
+    "horizontalOverflow": false,
+    "consoleWarningsOrErrors": 0,
+    "checks": ["white trails", "XC barbs", "flow and sparse barbs", "Surface", "600 m AGL", "Top of lift", "pause and resume", "visibility", "metric and imperial", "point wind", "previous and next day preserve hour"],
+    "screenshot": "av-wrf-local-review.png"
+  },
+  "conditions": "Local producer store and verified terrain cache; configured forecast and raster resolution; numeric wind enabled; other repository checks ran concurrently.",
+  "scope": "Complete local build. Deployment uploads, CDN latency and actual-phone performance remain separate measurements."
+}

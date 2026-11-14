@@ -96,8 +96,8 @@ decoder internals and the default framebuffer are outside these logical counts.
 Mobile hardware, real basemap work and constrained bandwidth need separate profiles.
 
 With the wind UI, numeric sampler, Google Terrain and the shared numeric/raster
-request scheduler, startup JavaScript measured **370,034 bytes** and the lazy
-chunk **28,928 bytes** gzip on Node 22.23.4 on 14 November 2026. The
+request scheduler, startup JavaScript measured **369,652 bytes** and the lazy
+chunk **28,927 bytes** gzip on Node 22.23.4 on 14 November 2026. The
 [build gate](../apps/preview/vite.config.ts) allows 371,000 startup and 31,000
 lazy bytes. The numeric source stays in startup. The separate MapLibre worker
 measured **150,556 bytes** gzip. These are build measurements; the timeline

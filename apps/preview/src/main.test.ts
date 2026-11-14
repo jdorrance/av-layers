@@ -206,7 +206,11 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
   windChange = state => { windState = state; options.onChange(state); };
   return { get state() { return windState; }, setStatus(status: string) { windStatuses.push(status); }, setUnits() {}, destroy() {} };
 } }));
-vi.mock('./compact-timeline', () => ({ createCompactTimeline: () => ({ update() {}, destroy() {} }) }));
+let timelineSelect: (index: number) => void;
+vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
+  timelineSelect = options.onSelect;
+  return { update() {}, destroy() {} };
+} }));
 
 let doc: Document;
 let win: Window;
@@ -708,24 +712,17 @@ it('updates each cold slider selection synchronously and writes history on commi
   expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[2].validTime);
 });
 
-it('retains day buttons and the scale while scrubbing and rebuilds day clicks for a new longitude', async () => {
+it('wires compact timeline selections to history and retains the scale while scrubbing', async () => {
   await start();
-  const days = [...ui('days').children], scale = ui('legend-body').children[0];
+  const scale = ui('legend-body').children[0];
   await selectFrame(0);
   await selectFrame(1);
-  expect(ui('days').children).toEqual(days);
   expect(ui('legend-body').children[0]).toBe(scale);
   const push = vi.spyOn(win.history, 'pushState');
-  days.at(-1)!.dispatchEvent(new Event('click'));
+  timelineSelect(0);
   expect(push).toHaveBeenCalledOnce();
-  expect(ui('days').children).toEqual(days);
-  map().jumpTo({ center: [179, 20], zoom: 2 });
-  expect(ui('days').children[0]).not.toBe(days[0]);
-  const lastDay = ui('days').children.at(-1)!;
-  const index = manifest.frames.findIndex(frame => new Date(Date.parse(frame.validTime) + 12 * 3600_000).toISOString().slice(0, 10) === lastDay.value);
-  lastDay.dispatchEvent(new Event('click'));
-  expect(ui('time').value).toBe(String(index));
-  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[index].validTime);
+  expect(ui('time').value).toBe('0');
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[0].validTime);
   ui('ref-msl').dispatchEvent(new Event('click'));
   await Promise.resolve();
   expect(ui('legend-body').children[0]).not.toBe(scale);
@@ -876,7 +873,6 @@ it('stops the previous freshness interval when a replacement load fails', async 
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
   expect(vi.getTimerCount()).toBeGreaterThan(0); // The committed overlay keeps its expiry deadline.
   expect(modelButton(manifest.model).disabled).toBe(false);
-  expect(ui('days').children).toHaveLength(0);
   expect(ui('time').disabled).toBe(true);
 });
 
@@ -1055,7 +1051,6 @@ it('lets a user switch back to GFS when ICON has no publication yet', async () =
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('error').textContent).toContain('No publication available'));
   expect(modelButton('gfs').disabled).toBe(false);
-  expect(ui('days').children).toHaveLength(0);
   modelButton('gfs').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('time').disabled).toBe(false));
   expect(ui('error').hidden).toBe(true);

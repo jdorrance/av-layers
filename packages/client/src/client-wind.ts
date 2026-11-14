@@ -181,9 +181,8 @@ export class WindDataSource {
     const tasks = [...winds.map(tile => ({ kind: 'wind' as const, tile })), ...fines.map(tile => ({ kind: 'fine' as const, tile }))];
     combined = AbortSignal.any([combined, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(tasks.length / 4) * REQUEST_TIMEOUT_MS)))]);
     let next = 0;
-    try {
-      const jobs = Array.from({ length: Math.min(4, tasks.length) }, async () => {
-        try {
+    const jobs = Array.from({ length: Math.min(4, tasks.length) }, async () => {
+      try {
         while (next < tasks.length) {
           const task = tasks[next++], bytes = await fetchBytes(`${root}/${task.kind}/${task.tile}`, 'application/octet-stream', task.kind === 'wind' ? windBytes : fineBytes);
           if (!bytes) throw new Error('Numeric chunk missing');
@@ -203,11 +202,10 @@ export class WindDataSource {
             fineData.set(task.tile, view);
           }
         }
-        } catch (error) { controller.abort(); throw error; }
-      });
-      const settled = await Promise.allSettled(jobs), failed = settled.find(result => result.status === 'rejected');
-      if (failed?.status === 'rejected') throw failed.reason;
-    } catch (error) { controller.abort(); throw error; }
+      } catch (error) { controller.abort(); throw error; }
+    });
+    const settled = await Promise.allSettled(jobs), failed = settled.find(result => result.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
     combined.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
     this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData };

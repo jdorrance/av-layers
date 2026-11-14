@@ -29,7 +29,7 @@ import { writeServingGroups } from './serving-groups.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import { hourSampleParts, verifyPublicationReceipts } from './build-receipts.js';
 import { createWindDataWriter, localWindData } from './wind-data.js';
-import { WIND_CHUNK_LIMIT, WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, windDataSchema, parseWindFrame, windLayout } from '@av/contracts/wind-data';
+import { WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 
 export { MAX_FORECAST_SHARDS } from '@av/contracts';
 const digestSchema = artifactSchema.shape.tilesSha256;
@@ -387,15 +387,12 @@ async function assembleWindData(root: string, plan: BuildPlan, whole: WholeDomai
       if (!bytes || bytes.length !== frame.bytes || sha256(bytes) !== frame.sha256) throw new Error('Numeric wind frame receipt digest mismatch');
       const descriptor = parseWindFrame(bytes);
       if (descriptor.frame !== frame.id) throw new Error('Numeric wind frame identity mismatch');
+      assertWindFrameLayout(descriptor, whole.plan);
       expected.set(key, frame);
       for (const kind of ['wind', 'fine'] as const) {
-        const grid = kind === 'wind' ? whole.plan.native : whole.plan.fine, size = kind === 'wind' ? descriptor.tileSize : descriptor.fineTileSize;
-        const { chunkBytes, pages, pageCount } = windLayout(grid.width, grid.height, size, kind === 'wind' ? descriptor.levels : undefined);
-        if (chunkBytes > WIND_CHUNK_LIMIT || descriptor[kind].length !== pages) throw new Error('Numeric wind frame layout mismatch');
         for (const [page, shard] of descriptor[kind].entries()) {
-          const n = pageCount(page), base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
-          if (shard.count !== n || shard.bytes !== n * chunkBytes) throw new Error('Numeric wind shard layout mismatch');
-          expected.set(`${base}.idx`, { bytes: n * 32, sha256: shard.indexSha256 });
+          const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
+          expected.set(`${base}.idx`, { bytes: shard.count * 32, sha256: shard.indexSha256 });
           expected.set(`${base}.bin`, { bytes: shard.bytes, sha256: shard.sha256 });
         }
       }

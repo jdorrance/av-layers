@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { getProduct } from '@av/contracts/models';
 import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, renderedFrames, getProvenanceReference, manifestV5Schema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type ManifestV5, type ModelId, type StoredModelPointer } from '@av/contracts';
-import { WIND_CHUNK_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, windDataSchema, parseWindFrame, windLayout } from '@av/contracts/wind-data';
+import { WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -283,20 +283,17 @@ async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, refe
   if (!root || root.bytes.length !== reference.bytes || sha256(root.bytes) !== reference.sha256) throw new Error('Remote wind root missing or corrupt');
   const data = windDataSchema.parse(decode(root.bytes)), frames = renderedFrames(manifest);
   if (data.model !== manifest.model || data.buildId !== manifest.buildId || data.frames.length !== frames.length || data.frames.some((item, i) => item.id !== frames[i].id)) throw new Error('Remote wind root identity mismatch');
+  const native = manifest.surfaces.find(surface => surface.kind === 'native'), fine = manifest.surfaces.find(surface => surface.kind === 'fine');
+  if (!native || !fine) throw new Error('Remote wind surface missing');
   for (const frame of data.frames) {
     const object = await store.get(`${prefix}/map-data/${frame.id}.json`, undefined, frame.bytes, signal);
     if (!object || object.bytes.length !== frame.bytes || sha256(object.bytes) !== frame.sha256) throw new Error('Remote wind frame missing or corrupt');
     const descriptor = parseWindFrame(object.bytes);
     if (descriptor.frame !== frame.id) throw new Error('Remote wind frame identity mismatch');
+    assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
     for (const kind of ['wind', 'fine'] as const) {
-      const surface = manifest.surfaces.find(item => item.kind === (kind === 'wind' ? 'native' : 'fine'));
-      if (!surface) throw new Error('Remote wind surface missing');
-      const size = kind === 'wind' ? descriptor.tileSize : descriptor.fineTileSize;
-      const { chunkBytes, pages, pageCount } = windLayout(surface.grid.width, surface.grid.height, size, kind === 'wind' ? descriptor.levels : undefined);
-      if (chunkBytes > WIND_CHUNK_LIMIT || descriptor[kind].length !== pages) throw new Error('Remote wind layout mismatch');
       for (const [page, shard] of descriptor[kind].entries()) {
-        const expected = pageCount(page), base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
-        if (shard.count !== expected || shard.bytes !== expected * chunkBytes) throw new Error('Remote wind shard layout mismatch');
+        const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
         for (const [key, sha256, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
           const receipt = byKey.get(key);
           if (receipt) {

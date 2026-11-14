@@ -32,12 +32,12 @@ import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
-import { clockLabel, dayKey, dayLabel, frameIndexFor } from './timeline';
+import { clockLabel, frameIndexFor } from './timeline';
 import { WindOverlay } from './wind-overlay';
 import { createWindControls, type WindStatus } from './wind-controls';
 import { createCompactTimeline } from './compact-timeline';
 import { WindDataSource } from '@av/client/wind';
-import { displayedWindSpeed } from './wind-speed';
+import { displayedWindSpeed } from '@av/contracts/units';
 import { googleTerrainStyle, type TerrainBasemap } from './basemap';
 
 type PointWindgram = typeof import('@av/windgram');
@@ -61,7 +61,6 @@ const refMsl = element<HTMLButtonElement>('ref-msl');
 const opacityInput = element<HTMLInputElement>('opacity');
 const opacityReadout = element<HTMLSpanElement>('opacity-readout');
 const timeInput = element<HTMLInputElement>('time');
-const dayBar = element<HTMLDivElement>('days');
 const timestamp = element<HTMLParagraphElement>('timestamp');
 const frameStatus = element<HTMLParagraphElement>('frame-status');
 const timelineStatus = element<HTMLParagraphElement>('timeline-status');
@@ -142,6 +141,18 @@ interface InitialDiscovery {
   auto?: Promise<AutoForecastSelection | null>;
 }
 
+interface WindView {
+  build: PinnedBuild;
+  frame: string;
+  bounds: [number, number, number, number];
+  source: WindDataSource;
+}
+
+interface WindRequest extends WindView {
+  controller: AbortController;
+  key: string;
+}
+
 function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null, initialDiscovery: InitialDiscovery | null): void {
   modelBar.replaceChildren();
   modelButtons.length = 0;
@@ -187,7 +198,6 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     reconcileWind();
     updateOverlayStatus();
   }, scheduler.fetch);
-  let timelineDays: { build: PinnedBuild; offset: number; buttons: HTMLButtonElement[] } | null = null;
   let ribbon: { build: PinnedBuild; layer: LayerId } | null = null;
   let pendingModel: ModelId | null = null;
   let resumeModel: ModelId | null = null;
@@ -206,16 +216,12 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   let applyingHistory: number | null = null;
   let opacityCommitted = false;
   let legendOpen = true;
-  let windAbort: AbortController | null = null;
-  let windKey = '';
-  let windReady = false;
+  let windView: WindView | null = null;
+  let windRequest: WindRequest | null = null;
   let windLoadStatus: WindStatus = 'unavailable';
   let windDisplayed = false;
-  let windIdentity: { build: PinnedBuild; frame: string; bounds: [number, number, number, number] } | null = null;
   let windHeight: 'surface' | number | 'lift' = 'surface';
   let locationRevision = 0;
-  let windSource = new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch });
-  let pendingWindSource: WindDataSource | null = null;
   let windLoading = false;
   let queuedWindLoad: (() => void) | null = null;
   const windOverlay = new WindOverlay(map);
@@ -235,18 +241,20 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
 
   function setWindField(): void {
+    const view = windView;
+    if (!view) return;
     const height = windControls.state.height;
     windHeight = height;
     windOverlay.setField({ sample(lat, lon) {
-      const sample = windSource.sample(lat, normalizeLon(lon), height);
+      const sample = view.source.sample(lat, normalizeLon(lon), height);
       return { ...sample, status: sample.status === 'valid' ? STATUS_VALID : 1 };
     } });
   }
 
   function reconcileWind(): void {
     const displayed = overlayState.displayed;
-    const matches = windReady && windLoadStatus !== 'unavailable' && windLoadStatus !== 'zoom-in'
-      && windIdentity && displayed?.build === windIdentity.build && displayed.frame === windIdentity.frame;
+    const matches = windView && windLoadStatus !== 'unavailable' && windLoadStatus !== 'zoom-in'
+      && displayed?.build === windView.build && displayed.frame === windView.frame;
     if (matches && !windDisplayed) {
       setWindField();
       windDisplayed = true;
@@ -263,23 +271,25 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     windControls.setStatus(status);
   }
 
-  function clearWind(): void {
-    windAbort?.abort();
-    windAbort = null;
-    pendingWindSource?.dispose();
-    pendingWindSource = null;
+  function cancelWindRequest(): void {
+    windRequest?.controller.abort();
+    windRequest?.source.dispose();
+    windRequest = null;
     queuedWindLoad = null;
-    windKey = '';
-    windReady = false;
+  }
+
+  function clearWind(): void {
+    cancelWindRequest();
+    windView?.source.dispose();
+    windView = null;
     windDisplayed = false;
-    windIdentity = null;
     windOverlay.clear();
     setWindStatus('unavailable');
     updatePointWind();
   }
 
   function updatePointWind(): void {
-    const context = pointSeries.current, identity = windIdentity;
+    const context = pointSeries.current, identity = windView;
     if (!context || !windDisplayed || !identity || context.build !== identity.build || pointSeries.frameId !== identity.frame) {
       pointWind.textContent = '';
       return;
@@ -287,8 +297,8 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     const point = context.point;
     const validTime = identity.build.manifest.frames.find(frame => frame.id === identity.frame)?.validTime;
     if (!validTime) { pointWind.textContent = ''; return; }
-    const sample = windSource.sample(point.lat, point.lon, windControls.state.height);
-    const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(sample.u, sample.v, pointUnitSystem) : null;
+    const sample = identity.source.sample(point.lat, point.lon, windControls.state.height);
+    const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(Math.hypot(sample.u, sample.v), pointUnitSystem) : null;
     const value = speed !== null
       ? `${speed} ${pointUnitSystem === 'metric' ? 'km/h' : 'mph'}`
       : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
@@ -297,12 +307,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   function updateWind(): void {
     if (!windControls.state.visible) {
-      windAbort?.abort();
-      windAbort = null;
-      pendingWindSource?.dispose();
-      pendingWindSource = null;
-      queuedWindLoad = null;
-      windKey = '';
+      cancelWindRequest();
       return;
     }
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
@@ -310,73 +315,55 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     const west = bounds.getWest(), east = bounds.getEast();
     const wrap = (lon: number) => ((lon + 180) % 360 + 360) % 360 - 180;
     const view: [number, number, number, number] = [east - west >= 360 ? -180 : wrap(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : wrap(east), Math.min(90, bounds.getNorth())];
-    const identity = windIdentity;
+    const identity = windView;
     const span = (west: number, east: number) => (east - west + 360) % 360 || (east === west ? 0 : 360);
-    const covered = identity && windReady && identity.build === build && identity.frame === selectedFrame
+    const covered = identity && identity.build === build && identity.frame === selectedFrame
       && view[1] >= identity.bounds[1] && view[3] <= identity.bounds[3]
       && span(identity.bounds[0], view[0]) + span(view[0], view[2]) <= span(identity.bounds[0], identity.bounds[2]);
     if (covered) {
-      windAbort?.abort(); windAbort = null;
-      pendingWindSource?.dispose(); pendingWindSource = null;
-      windKey = '';
+      cancelWindRequest();
       setWindStatus('ready');
       reconcileWind();
       return;
     }
     const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view]);
-    if (key === windKey) return;
-    windAbort?.abort();
-    pendingWindSource?.dispose();
+    if (key === windRequest?.key) return;
     if (!identity || identity.build !== build || identity.frame !== selectedFrame) clearWind();
-    windKey = key;
+    else cancelWindRequest();
     setWindStatus('loading');
-    const request = new AbortController();
-    windAbort = request;
-    const source = new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch });
-    pendingWindSource = source;
-    const requestedBuild = build, requestedFrame = selectedFrame;
-    const start = (): void => {
-      queuedWindLoad = null;
-      if (request.signal.aborted) return;
-      windLoading = true;
-      let finished = false;
-      const finish = (): void => {
-        if (finished) return;
-        finished = true;
-        windLoading = false;
-        queuedWindLoad?.();
-      };
-      void source.load({ build: requestedBuild, frame: requestedFrame, bounds: view, signal: request.signal }).then(status => {
-        finish();
-        if (request.signal.aborted || windAbort !== request || !ensureLive()) return;
-        windAbort = null;
-        pendingWindSource = null;
-        if (status === 'ready') {
-          windSource.dispose();
-          windSource = source;
-          windIdentity = { build: requestedBuild, frame: requestedFrame, bounds: view };
-          windReady = true;
-          if (windDisplayed) setWindField();
-        } else {
-          source.dispose();
-          windKey = '';
-        }
-        setWindStatus(status);
-        reconcileWind();
-      }).catch(() => {
-        finish();
-        if (request.signal.aborted || windAbort !== request) return;
-        windAbort = null;
-        pendingWindSource = null;
-        source.dispose();
-        windKey = '';
+    const request: WindRequest = { build, frame: selectedFrame, bounds: view, key,
+      controller: new AbortController(), source: new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch }) };
+    windRequest = request;
+    // A retired load releases its decoded maps before the latest viewport can allocate.
+    if (windLoading) queuedWindLoad = () => { void loadWind(request); };
+    else void loadWind(request);
+  }
+
+  async function loadWind(request: WindRequest): Promise<void> {
+    windLoading = true;
+    try {
+      const status = await request.source.load({ ...request, signal: request.controller.signal });
+      if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
+      if (status === 'ready') {
+        windView?.source.dispose();
+        windView = request;
+        if (windDisplayed) setWindField();
+      }
+      setWindStatus(status);
+      reconcileWind();
+    } catch {
+      if (windRequest === request && !request.controller.signal.aborted) {
         setWindStatus('unavailable');
         reconcileWind();
-      });
-    };
-    // A retired load releases its decoded maps before the latest viewport can allocate.
-    if (windLoading) queuedWindLoad = start;
-    else start();
+      }
+    } finally {
+      if (windRequest === request) windRequest = null;
+      if (windView !== request) request.source.dispose();
+      windLoading = false;
+      const next = queuedWindLoad;
+      queuedWindLoad = null;
+      next?.();
+    }
   }
 
   function updateScale(): void {
@@ -476,7 +463,6 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   function setControlsEnabled(enabled: boolean): void {
     for (const button of modelButtons) button.disabled = mapFailed || pendingModel !== null;
-    for (const button of Array.from(dayBar.children)) (button as HTMLButtonElement).disabled = !enabled;
     refAgl.disabled = !enabled;
     refMsl.disabled = !enabled;
     opacityInput.disabled = !enabled;
@@ -553,41 +539,15 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   }
 
   function updateTimeUi(): void {
-    compactTimeline.update(build ? renderedFrames(build.manifest) : [], selectedFrame, !build || expired || mapFailed);
+    const frames = build ? renderedFrames(build.manifest) : [];
+    compactTimeline.update(frames, selectedFrame, !build || expired || mapFailed);
     if (!build || !selectedFrame) {
-      timelineDays = null;
-      dayBar.replaceChildren();
       timestamp.textContent = expired ? 'Build expired — overlay removed' : 'No frame selected';
       return;
     }
-    const frames = renderedFrames(build.manifest);
     const offset = longitudeOffsetHours(mapLon()) * 60;
-    const today = dayKey(Date.now(), offset);
     const selected = frames.find(frame => frame.id === selectedFrame) ?? frames[0];
-    const selectedKey = selected ? dayKey(Date.parse(selected.validTime), offset) : '';
-    if (timelineDays?.build !== build || timelineDays.offset !== offset) {
-      const buttons: HTMLButtonElement[] = [];
-      frames.forEach((frame, index) => {
-        const key = dayKey(Date.parse(frame.validTime), offset);
-        if (buttons.at(-1)?.value === key) return;
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.value = key;
-        button.addEventListener('click', () => selectIndex(index, 'push'));
-        buttons.push(button);
-      });
-      timelineDays = { build, offset, buttons };
-      dayBar.replaceChildren(...buttons);
-      timeInput.min = '0';
-      timeInput.max = String(Math.max(0, frames.length - 1));
-    }
-    for (const button of timelineDays.buttons) {
-      const key = button.value;
-      button.className = key === selectedKey ? 'day is-selected' : 'day';
-      button.ariaPressed = String(key === selectedKey);
-      button.textContent = dayLabel(key, today);
-      button.disabled = expired || mapFailed;
-    }
+    timeInput.max = String(Math.max(0, frames.length - 1));
     const index = Math.max(0, frames.findIndex(frame => frame.id === selectedFrame));
     if (document.activeElement !== timeInput) timeInput.value = String(index);
     timestamp.textContent = selected ? `Selected · ${clockLabel(Date.parse(selected.validTime), offset)}` : 'No frame selected';
@@ -840,7 +800,6 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
       if (requestAbort.signal.aborted || loadAbort !== requestAbort || (error instanceof DOMException && error.name === 'AbortError')) return;
       showError(error instanceof Error ? error.message : String(error));
       freshness.textContent = 'No viewable build';
-      dayBar.replaceChildren();
       setControlsEnabled(false);
     } finally {
       if (loadAbort === requestAbort) {
@@ -1035,7 +994,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     legendToggle.ariaLabel = legendOpen ? 'Collapse lift scale' : 'Show lift scale';
     legendToggle.textContent = legendOpen ? '⌃' : '⌄';
   });
-  const pointControls = [pointCard, refAgl, refMsl, timeInput, dayBar, element('wind-controls'), element('compact-timeline'), element('display-units')];
+  const pointControls = [pointCard, refAgl, refMsl, timeInput, element('wind-controls'), element('compact-timeline'), element('display-units')];
   document.addEventListener('pointerdown', event => {
     if (!pointSeries.current) return;
     const target = event.target;
@@ -1068,7 +1027,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
     clearWind(); locationRevision++;
-    windOverlay.destroy(); windSource.dispose(); windControls.destroy(); compactTimeline.destroy();
+    windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
     terrain?.dispose();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
     expiryTimer = null;
@@ -1104,7 +1063,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     updatePointSeries = null;
     pointSelection = null;
     disposeExpiry();
-    windOverlay.destroy(); windSource.dispose(); windControls.destroy(); compactTimeline.destroy();
+    windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
     terrain?.dispose();
     overlay.destroy(); scheduler.dispose(); map.remove();
   }, globalListener);

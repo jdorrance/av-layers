@@ -39,10 +39,24 @@ timeline. The corrected timeline ends at y=836. The plan distinguishes the imple
 prototype from the sparse int16/GPU candidates used in its earlier estimates.
 The performance gates below remain open.
 
-Validation: `pnpm verify` passed 2,570 unit tests and 193 integration tests,
-lint, typechecks, generated-reference checks and application builds. The additional
-`AV_REAL_WIND_TEST=1` cached GFS encoder/API round-trip passed. Browser checks confirmed
-style-menu focus, point units, Top-of-lift selection and the phone layout.
+The follow-up refactor groups resident/pending wind state, removes hidden legacy
+timeline controls, shares speed formatting and centralizes frame-layout validation.
+Independent client, backend and scientific reviewers found no further actionable
+defects. Both full verification passes succeeded; the final pass enabled real
+GFS and av-wrf round-trips: **2,571 unit tests and 195 integration tests**, plus
+lint, types, generated references and builds.
+
+The [local av-wrf run](assets/wind-overlay/av-wrf-validation.json) built all 48
+frames from the 2026-11-13 00Z producer store with verified terrain and numeric
+wind. It completed in **7m15s**, with **1.54 GiB peak RSS** and **909.3 MiB** of
+wind artifacts. Other repository checks ran concurrently. The
+[development guide](development.md#wrf-zarr) owns reproduction commands.
+
+The [local map check](assets/wind-overlay/av-wrf-local-review.png) used that build
+at 09:00 UTC on November 14. All three wind styles, Surface/600 m AGL/Top of lift,
+pause/visibility, shared units, point wind and previous/next-day controls passed.
+At 390 × 844, the height rail measured 48 × 198 px and the timeline retained its
+8 px bottom margin without horizontal overflow. Browser warnings/errors were empty.
 
 ## Findings resolved in the plan
 
@@ -218,6 +232,6 @@ no network or GPU timing.
 
 The [existing timeline results](preview-performance.md) establish current painted
 raster performance under their documented synthetic network/device conditions.
-They are the regression baseline for this feature. The current Float32 encoder,
-numeric routes and Canvas2D viewer require separate complete-build and real-device
-measurements. GPU selection and the grouped-field comparison remain planned.
+They are the regression baseline for this feature. The local av-wrf run above
+adds a complete-build measurement. RRFS, real-device and deployed serving
+measurements remain open. GPU selection and the grouped-field comparison remain planned.

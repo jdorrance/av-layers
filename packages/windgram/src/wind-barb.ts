@@ -1,9 +1,4 @@
-import { DISPLAY_MPH_PER_MPS, KPH_PER_MPS } from '@av/contracts/units';
-
-export function displayedBarbSpeed(speedMps: number, system: 'metric' | 'imperial'): number | null {
-  if (!Number.isFinite(speedMps) || speedMps < 0) return null;
-  return Math.trunc(speedMps * (system === 'metric' ? KPH_PER_MPS : DISPLAY_MPH_PER_MPS));
-}
+export { displayedWindSpeed as displayedBarbSpeed } from '@av/contracts/units';
 
 export function quantizedBarbSpeed(speed: number): number {
   return speed > 0 ? Math.max(5, Math.round(speed / 5) * 5) : 0;

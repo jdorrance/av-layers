@@ -3,8 +3,8 @@ import { mkdir, open, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { sparseCoverageLookup } from '@av/contracts/sparse-coverage';
 import { STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
-import { parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
+import { encodeBoundedJson, parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
 import { encodeWindColumns, normalizedWindColumn } from '@av/forecast/wind';
 import type { NormalizedFrame } from '@av/forecast/inputs';
 import type { GridField } from '@av/forecast/sampler';
@@ -13,14 +13,12 @@ import { BUILD_BUDGETS, MAX_FORECAST_RECEIPT_ENTRIES, MAX_V5_SHARD_BYTES } from 
 import { readLocalFile } from './local-file.js';
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
-const json = (value: unknown, limit: number) => {
-  const bytes = Buffer.from(JSON.stringify(value));
-  if (bytes.length > limit) throw new Error('Wind descriptor exceeds byte budget');
-  return bytes;
-};
+type WindGrids = Pick<WholeDomainGrid, 'native' | 'fine'>;
+interface WindCapacity { mapFrames: number; numericBytes: number; estimatedPeakBytes: number }
+interface WindTerrain { elevationM: Float32Array; valid: Uint8Array }
+interface WindObject { key: string; bytes: number; sha256: string; contentType: string }
 
-export function createWindDataWriter(root: string, model: string, buildId: string, maxLevels: number, plan: Pick<WholeDomainGrid, 'native' | 'fine'>, capacity: { mapFrames: number; numericBytes: number; estimatedPeakBytes: number }, signalOuter?: AbortSignal) {
-  const prefix = `builds/${model}/${buildId}/map-data`, directory = resolve(root, prefix);
+function admitWindData(maxLevels: number, plan: WindGrids, capacity: WindCapacity): number {
   const tileSize = maxLevels <= 77 ? 16 : 8;
   if (!Number.isSafeInteger(maxLevels) || maxLevels < 1 || maxLevels > 256 || !Number.isSafeInteger(capacity.mapFrames) || capacity.mapFrames < 1 || capacity.mapFrames > 256 || !Number.isSafeInteger(capacity.numericBytes) || capacity.numericBytes < 0 || !Number.isSafeInteger(capacity.estimatedPeakBytes) || capacity.estimatedPeakBytes < 0) throw new Error('Invalid wind capacity');
   const tiles = (grid: WholeDomainGrid['native'], size: number) => {
@@ -39,9 +37,34 @@ export function createWindDataWriter(root: string, model: string, buildId: strin
   const shardBytes = Math.max(Math.min(nativeTiles, WIND_INDEX_ENTRIES) * windChunkBytes, Math.min(fineTiles, WIND_INDEX_ENTRIES) * fineChunkBytes);
   const uploadBytes = 2 * shardBytes;
   if (windChunkBytes > WIND_CHUNK_LIMIT || shardBytes > MAX_V5_SHARD_BYTES || frameDescriptorBytes > WIND_FRAME_LIMIT || rootDescriptorBytes > WIND_ROOT_LIMIT || !Number.isSafeInteger(encodedBytes) || !Number.isSafeInteger(capacity.numericBytes + encodedBytes) || capacity.numericBytes + encodedBytes > BUILD_BUDGETS.numericBytes || capacity.estimatedPeakBytes + 8 * 1024 * 1024 + uploadBytes > BUILD_BUDGETS.workingSetBytes) throw new Error('Wind data exceeds build capacity');
+  return tileSize;
+}
+
+function encodeFineTargets(prepared: WholeDomainPrepared, terrain: WindTerrain, lift: GridField, x0: number, y0: number): Uint8Array {
+  const grid = prepared.plan.fine, size = 64, data = new Uint8Array(size * size * WIND_FINE_CELL_BYTES);
+  const view = new DataView(data.buffer);
+  for (let i = 0; i < size * size; i++) {
+    const x = x0 + i % size, y = y0 + Math.floor(i / size);
+    const cell = x < grid.width && y < grid.height ? sparseCoverageLookup(prepared.fine.mask.coverage, x, y) : undefined;
+    const pos = i * WIND_FINE_CELL_BYTES, valid = cell != null && terrain.valid[cell.offset] === 1 && Number.isFinite(terrain.elevationM[cell.offset]);
+    const liftValid = cell != null && Number.isFinite(lift.values[cell.offset]);
+    const terrainStatus = cell == null ? STATUS_OUTSIDE : valid ? STATUS_VALID : STATUS_UNAVAILABLE;
+    const liftFlags = cell == null ? STATUS_OUTSIDE : liftValid ? lift.flags[cell.offset] : (lift.flags[cell.offset] & SUPPORT_MASK) | STATUS_UNAVAILABLE;
+    view.setFloat32(pos, valid ? terrain.elevationM[cell!.offset] : 0, true);
+    view.setFloat32(pos + 4, liftValid ? lift.values[cell!.offset] : 0, true);
+    view.setUint8(pos + 8, terrainStatus | ((liftFlags & STATUS_MASK) << 2) | (cell?.output ? 16 : 0));
+    view.setUint8(pos + 9, liftFlags & SUPPORT_MASK);
+  }
+  return data;
+}
+
+/** Stream bounded wind chunks and retain their publication receipts until finish. */
+export function createWindDataWriter(root: string, model: string, buildId: string, maxLevels: number, plan: WindGrids, capacity: WindCapacity, signalOuter?: AbortSignal) {
+  const tileSize = admitWindData(maxLevels, plan, capacity);
+  const prefix = `builds/${model}/${buildId}/map-data`, directory = resolve(root, prefix);
   const frames: Array<{ id: string; bytes: number; sha256: string }> = [];
-  const objects: Array<{ key: string; bytes: number; sha256: string; contentType: string }> = [];
-  async function writeFrame(frame: NormalizedFrame, id: string, lift: GridField, prepared: WholeDomainPrepared, terrain: { elevationM: Float32Array; valid: Uint8Array }, frameSignal?: AbortSignal) {
+  const objects: WindObject[] = [];
+  async function writeFrame(frame: NormalizedFrame, id: string, lift: GridField, prepared: WholeDomainPrepared, terrain: WindTerrain, frameSignal?: AbortSignal) {
     const signal = frameSignal && signalOuter ? AbortSignal.any([signalOuter, frameSignal]) : frameSignal ?? signalOuter;
     signal?.throwIfAborted();
     if (frames.length >= capacity.mapFrames || frame.hgtM.length < 1 || frame.hgtM.length > maxLevels || !sameGrid(prepared.plan.native, plan.native) || !sameGrid(prepared.plan.fine, plan.fine)) throw new Error('Wind frame exceeds admitted capacity');
@@ -57,7 +80,6 @@ export function createWindDataWriter(root: string, model: string, buildId: strin
       const size = kind === 'wind' ? tileSize : 64;
       const grid = kind === 'wind' ? prepared.plan.native : prepared.plan.fine;
       const width = Math.ceil(grid.width / size), { count, pageCount } = windLayout(grid.width, grid.height, size, kind === 'wind' ? frame.hgtM.length : undefined);
-      if (!Number.isSafeInteger(count) || count < 1 || count > WIND_INDEX_ENTRIES * WIND_FRAME_MAX_PAGES) throw new Error('Wind grid exceeds index budget');
       const shards: WindFrame['wind'] = [];
       for (let first = 0, page = 0; first < count; first += WIND_INDEX_ENTRIES, page++) {
         signal?.throwIfAborted();
@@ -68,33 +90,13 @@ export function createWindDataWriter(root: string, model: string, buildId: strin
           for (let n = 0; n < length; n++) {
             signal?.throwIfAborted();
             const tile = first + n, x0 = (tile % width) * size, y0 = Math.floor(tile / width) * size;
-            const indices = Array.from({ length: size * size }, (_, i) => {
+            const data = kind === 'wind' ? encodeWindColumns(Array.from({ length: size * size }, (_, i) => {
               const x = x0 + i % size, y = y0 + Math.floor(i / size);
-              return x < grid.width && y < grid.height ? y * grid.width + x : -1;
-            });
-            let data: Uint8Array;
-            if (kind === 'wind') {
-              data = encodeWindColumns(indices.map(index => {
-                const slot = index < 0 ? -1 : slotFor(index);
-                return slot < 0 ? null : normalizedWindColumn(frame, slot);
-              }), frame.hgtM.length);
-            } else {
-              data = new Uint8Array(size * size * WIND_FINE_CELL_BYTES);
-              const view = new DataView(data.buffer);
-              for (let i = 0; i < indices.length; i++) {
-                const index = indices[i], offset = index < 0 ? undefined : sparseCoverageLookup(prepared.fine.mask.coverage, index % grid.width, Math.floor(index / grid.width));
-                const pos = i * WIND_FINE_CELL_BYTES, valid = offset != null && terrain.valid[offset.offset] === 1 && Number.isFinite(terrain.elevationM[offset.offset]);
-                const liftValid = offset != null && Number.isFinite(lift.values[offset.offset]);
-                const terrainStatus = offset == null ? STATUS_OUTSIDE : valid ? STATUS_VALID : STATUS_UNAVAILABLE;
-                const liftFlags = offset == null ? STATUS_OUTSIDE : liftValid ? lift.flags[offset.offset] : (lift.flags[offset.offset] & SUPPORT_MASK) | STATUS_UNAVAILABLE;
-                view.setFloat32(pos, valid ? terrain.elevationM[offset!.offset] : 0, true);
-                view.setFloat32(pos + 4, liftValid ? lift.values[offset!.offset] : 0, true);
-                view.setUint8(pos + 8, terrainStatus | ((liftFlags & STATUS_MASK) << 2) | (offset?.output ? 16 : 0));
-                view.setUint8(pos + 9, liftFlags & SUPPORT_MASK);
-              }
-            }
+              const slot = x < grid.width && y < grid.height ? slotFor(y * grid.width + x) : -1;
+              return slot < 0 ? null : normalizedWindColumn(frame, slot);
+            }), frame.hgtM.length) : encodeFineTargets(prepared, terrain, lift, x0, y0);
             if (data.length > WIND_CHUNK_LIMIT) throw new Error('Wind chunk exceeds byte budget');
-            Buffer.from(hash(data), 'hex').copy(indexes, n * 32); digest.update(data);
+            createHash('sha256').update(data).digest().copy(indexes, n * 32); digest.update(data);
             await file.writeFile(data); bytes += data.length;
           }
         } finally { await file.close(); }
@@ -109,8 +111,7 @@ export function createWindDataWriter(root: string, model: string, buildId: strin
     };
     const data = windFrameSchema.parse({ version: 3, frame: id, levels: frame.hgtM.length, tileSize, fineTileSize: 64, wind: await writeGrid('wind'), fine: await writeGrid('fine') });
     signal?.throwIfAborted();
-    const bytes = json(data, WIND_FRAME_LIMIT);
-    parseWindFrame(bytes);
+    const bytes = encodeBoundedJson(data, WIND_FRAME_LIMIT);
     await writeFile(resolve(directory, `${id}.json`), bytes, { flag: 'wx' });
     signal?.throwIfAborted();
     const sha256 = hash(bytes);
@@ -123,7 +124,7 @@ export function createWindDataWriter(root: string, model: string, buildId: strin
   }
   async function finish(expectedFrames = capacity.mapFrames) {
     finishShard(expectedFrames);
-    const bytes = json(windDataSchema.parse({ version: 1, model, buildId, frames }), WIND_ROOT_LIMIT);
+    const bytes = encodeBoundedJson(windDataSchema.parse({ version: 1, model, buildId, frames }), WIND_ROOT_LIMIT);
     await writeFile(resolve(root, `builds/${model}/${buildId}/map-data.json`), bytes, { flag: 'wx' });
     return { bytes: bytes.length, sha256: hash(bytes) };
   }
@@ -137,24 +138,21 @@ export async function localWindData(root: string, manifest: ManifestV5, signal?:
   if (!rootBytes) return null;
   const data = windDataSchema.parse(parseBoundedJson(rootBytes)), expected = manifest.frames.slice(0, manifest.mapFrameCount ?? manifest.frames.length);
   if (data.model !== manifest.model || data.buildId !== manifest.buildId || data.frames.length !== expected.length || data.frames.some((frame, i) => frame.id !== expected[i].id)) throw new Error('Wind root identity mismatch');
-  const objects: Array<{ key: string; sha256: string; bytes: number; contentType: string }> = [];
+  const native = manifest.surfaces.find(surface => surface.kind === 'native'), fine = manifest.surfaces.find(surface => surface.kind === 'fine');
+  if (!native || !fine) throw new Error('Wind surface missing');
+  const objects: WindObject[] = [];
   for (const frame of data.frames) {
     signal?.throwIfAborted();
     const key = `${prefix}/map-data/${frame.id}.json`, bytes = await readLocalFile(resolve(root, key), WIND_FRAME_LIMIT, frame.bytes);
     if (hash(bytes) !== frame.sha256) throw new Error('Wind frame digest mismatch');
     const descriptor = parseWindFrame(bytes);
     if (descriptor.frame !== frame.id) throw new Error('Wind frame identity mismatch');
+    assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
     objects.push({ key, sha256: frame.sha256, bytes: frame.bytes, contentType: 'application/json' });
     for (const kind of ['wind', 'fine'] as const) {
-      const surface = manifest.surfaces.find(item => item.kind === (kind === 'wind' ? 'native' : 'fine'));
-      if (!surface) throw new Error('Wind surface missing');
-      const size = kind === 'wind' ? descriptor.tileSize : descriptor.fineTileSize;
-      const { chunkBytes, pages, pageCount } = windLayout(surface.grid.width, surface.grid.height, size, kind === 'wind' ? descriptor.levels : undefined);
-      if (chunkBytes > WIND_CHUNK_LIMIT || descriptor[kind].length !== pages) throw new Error('Wind layout mismatch');
       for (const [page, shard] of descriptor[kind].entries()) {
         signal?.throwIfAborted();
-        const expectedCount = pageCount(page);
-        if (shard.count !== expectedCount || shard.bytes !== expectedCount * chunkBytes) throw new Error('Wind shard layout mismatch');
+        const chunkBytes = shard.bytes / shard.count;
         const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`, idxKey = `${base}.idx`, dataKey = `${base}.bin`;
         const index = await readLocalFile(resolve(root, idxKey), WIND_INDEX_ENTRIES * 32, shard.count * 32);
         if (hash(index) !== shard.indexSha256) throw new Error('Wind index digest mismatch');

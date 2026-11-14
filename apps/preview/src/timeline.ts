@@ -2,16 +2,6 @@ export function dayKey(utcMs: number, offsetMinutes: number): string {
   return new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
 }
 
-export function dayLabel(key: string, todayKey: string): string {
-  const day = Date.parse(`${key}T00:00:00Z`);
-  const today = Date.parse(`${todayKey}T00:00:00Z`);
-  const diff = Math.round((day - today) / 86_400_000);
-  if (diff === -1) return 'Yesterday';
-  if (diff === 0) return 'Today';
-  if (diff === 1) return 'Tomorrow';
-  return new Date(day).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-}
-
 export function clockLabel(validMs: number, offsetMinutes: number): string {
   const local = new Date(validMs + offsetMinutes * 60_000);
   const utc = new Date(validMs);

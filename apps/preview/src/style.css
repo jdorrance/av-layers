@@ -54,7 +54,7 @@ button, #opacity-label {
   font: 13px/1 ui-sans-serif, system-ui, sans-serif;
 }
 
-.model-button, .ref, .day {
+.model-button, .ref {
   border: 0;
   background: transparent;
   color: #1c2430;
@@ -64,7 +64,7 @@ button, #opacity-label {
 
 .model-button + .model-button, .ref + .ref { border-left: 1px solid #e4e9ee; }
 
-.model-button.is-selected, .ref.is-selected, .day.is-selected {
+.model-button.is-selected, .ref.is-selected {
   background: #16324f;
   color: #fff;
 }
@@ -161,11 +161,6 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-radius: 4px;
   padding: 0;
 }
-
-#days { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-#days[hidden] { display: none; }
-
-.day { border-radius: 999px; padding: 6px 10px; background: #f3f6f8; }
 
 #time { width: 100%; accent-color: #16324f; }
 

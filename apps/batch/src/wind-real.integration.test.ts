@@ -9,6 +9,8 @@ import { STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/layers';
 import { decodePackedWindChunk, encodeWindColumns, normalizedWindColumn, samplePackedWindColumns } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.js';
 import { getForecastProvider } from './providers.js';
+import { localForecastSource } from './local-source.js';
+import { sourceModelId } from './source.js';
 import { createWindDataWriter, localWindData } from './wind-data.js';
 import type { WholeDomainPrepared } from './whole-domain/prepare.js';
 
@@ -38,14 +40,21 @@ function windAtHeight(column: Column, height: number) {
   return null;
 }
 
-it.skipIf(!process.env.AV_REAL_WIND_TEST)('encodes actual cached GFS normalized winds without network', async () => {
-  const product = getProduct('gfs')!, point = prepareGridGeometry(product.grid).geographicToGrid(40, -100)!;
+const realCases = [
+  { model: 'gfs', enabled: !!process.env.AV_REAL_WIND_TEST, cycle: '2026-11-03T12:00:00.000Z', hour: 4, lat: 40, lon: -100 },
+  { model: 'av-wrf', enabled: !!process.env.AV_REAL_WRF_STORE, cycle: '2026-11-13T00:00:00.000Z', hour: 6, lat: 40.5, lon: 44.5 }
+] as const;
+
+for (const testCase of realCases) it.skipIf(!testCase.enabled)(`round-trips real ${testCase.model} winds through the encoder and API without network`, async () => {
+  const product = getProduct(testCase.model)!, point = prepareGridGeometry(product.grid).geographicToGrid(testCase.lat, testCase.lon)!;
   const x = Math.floor(point.x) - 3, y = Math.floor(point.y) - 3;
   const activeIndices = Uint32Array.from(Array.from({ length: 64 }, (_, i) => (y + Math.floor(i / 8)) * product.grid.width + (x + i % 8)));
-  const provider = getForecastProvider('gfs');
-  const session = await provider.open({ cycle: '2026-11-03T12:00:00.000Z', cacheDir: '.cache/gfs', activeIndices, offline: true, readOnlyCache: true });
+  const provider = getForecastProvider(testCase.model);
+  const store = testCase.model === 'av-wrf' ? localForecastSource(process.env.AV_REAL_WRF_STORE!, sourceModelId(product)) : undefined;
+  const session = await provider.open({ cycle: testCase.cycle, cacheDir: `.cache/${testCase.model}`, activeIndices,
+    ...(store ? { store } : { offline: true, readOnlyCache: true }) });
   try {
-    const frame = await session.acquire(4), original = Array.from(activeIndices, (_, i) => normalizedWindColumn(frame, i));
+    const frame = await session.acquire(testCase.hour), original = Array.from(activeIndices, (_, i) => normalizedWindColumn(frame, i));
     const bytes = encodeWindColumns(original), decoded = decodeColumns(bytes), chunk = decodePackedWindChunk(bytes);
     expect(bytes.length).toBeLessThanOrEqual(256 * 1024);
     expect(decoded).toEqual(original);
@@ -59,15 +68,16 @@ it.skipIf(!process.env.AV_REAL_WIND_TEST)('encodes actual cached GFS normalized 
         expect({ u: result.u, v: result.v }).toEqual(expected ?? { u: null, v: null });
       }
     }
-    if (product.grid.kind !== 'regular-latlon') throw new Error('Expected GFS latitude-longitude grid');
-    const grid = { ...product.grid, width: 8, height: 8, lon0: product.grid.lon0 + x * product.grid.dx, lat0: product.grid.lat0 + y * product.grid.dy, wrapLongitude: false };
+    const grid = product.grid.kind === 'regular-latlon'
+      ? { ...product.grid, width: 8, height: 8, lon0: product.grid.lon0 + x * product.grid.dx, lat0: product.grid.lat0 + y * product.grid.dy, wrapLongitude: false }
+      : { ...product.grid, width: 8, height: 8, x0M: product.grid.x0M + x * product.grid.dxM, y0M: product.grid.y0M + y * product.grid.dyM };
     const coverage = sparseCoverageFromDense({ width: 8, height: 8, wrapLongitude: false, gridHash: 'a'.repeat(64), output: new Uint8Array(8).fill(255), halo: new Uint8Array(8) });
     const prepared = { plan: { native: grid, fine: grid }, fine: { mask: { coverage } } } as unknown as WholeDomainPrepared;
     const cropped = { ...frame, grid, activeIndices: Uint32Array.from({ length: 64 }, (_, i) => i) };
     const out = await mkdtemp(join(tmpdir(), 'av-real-wind-'));
     try {
-      const manifest = fixtureBuild().manifest;
-      manifest.cycle = frame.cycle; manifest.expiresAt = '2026-11-05T12:00:00.000Z';
+      const manifest = fixtureBuild({ model: testCase.model }).manifest;
+      manifest.cycle = frame.cycle; manifest.expiresAt = new Date(Date.parse(frame.validAt) + 24 * 3_600_000).toISOString();
       manifest.frames = [manifest.frames[0]]; manifest.mapFrameCount = 1;
       for (const surface of manifest.surfaces) surface.grid = grid;
       const writer = createWindDataWriter(out, manifest.model, manifest.buildId, provider.maxLevels, prepared.plan, { mapFrames: 1, numericBytes: 0, estimatedPeakBytes: 0 });
@@ -83,7 +93,7 @@ it.skipIf(!process.env.AV_REAL_WIND_TEST)('encodes actual cached GFS normalized 
       } };
       const modulePath = '../../api/src/wind-data.js';
       const api = await import(modulePath) as { windChunk(bucket: unknown, manifest: ManifestV5, entry: unknown, frame: string, kind: 'wind', tile: number, ctx: unknown, signal: AbortSignal): Promise<Uint8Array> };
-      vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime('2026-11-04T12:00:00.000Z');
+      vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(frame.validAt);
       const entry = { buildId: manifest.buildId, manifestKey: `builds/${manifest.model}/${manifest.buildId}/manifest.json`, cycle: manifest.cycle, expiresAt: manifest.expiresAt, mapData: reference };
       const served = decodeColumns(await api.windChunk(bucket, manifest, entry, manifest.frames[0].id, 'wind', 0, { waitUntil() {} }, new AbortController().signal));
       for (let i = 0; i < 64; i++) expect(served[Math.floor(i / 8) * 16 + i % 8]).toEqual(original[i]);

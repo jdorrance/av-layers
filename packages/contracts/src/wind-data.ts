@@ -1,5 +1,6 @@
 import z from 'zod';
 import { parseBoundedJson, ResourceLimitError } from './json.ts';
+import type { Grid } from './geometry.ts';
 
 export const WIND_CHUNK_LIMIT = 256 * 1024;
 export const WIND_INDEX_ENTRIES = 512;
@@ -27,4 +28,18 @@ export type WindFrame = z.infer<typeof windFrameSchema>;
 export function parseWindFrame(bytes: Uint8Array): WindFrame {
   if (bytes.byteLength > WIND_FRAME_LIMIT) throw new ResourceLimitError('Wind frame exceeds byte budget');
   return windFrameSchema.parse(parseBoundedJson(bytes));
+}
+
+/** Bind chunk and shard sizes to the publication's native and fine grids. */
+export function assertWindFrameLayout(frame: WindFrame, grids: { native: Pick<Grid, 'width' | 'height'>; fine: Pick<Grid, 'width' | 'height'> }): void {
+  for (const kind of ['wind', 'fine'] as const) {
+    const grid = kind === 'wind' ? grids.native : grids.fine;
+    const size = kind === 'wind' ? frame.tileSize : frame.fineTileSize;
+    const { count, chunkBytes, pages, pageCount } = windLayout(grid.width, grid.height, size, kind === 'wind' ? frame.levels : undefined);
+    if (!Number.isSafeInteger(count) || count < 1 || chunkBytes > WIND_CHUNK_LIMIT || frame[kind].length !== pages) throw new Error('Wind layout mismatch');
+    for (const [page, shard] of frame[kind].entries()) {
+      const count = pageCount(page);
+      if (shard.count !== count || shard.bytes !== count * chunkBytes) throw new Error('Wind shard layout mismatch');
+    }
+  }
 }

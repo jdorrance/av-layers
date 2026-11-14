@@ -1,4 +1,4 @@
-import { WIND_CHUNK_LIMIT, WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, windDataSchema, parseWindFrame, windLayout } from '@av/contracts/wind-data';
+import { WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 import type { ManifestV5, StoredModelPointer } from '@av/contracts';
 import { sha256 } from './coverage';
 import { ensureLive, fail } from './http';
@@ -39,20 +39,14 @@ async function loadFrame(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: s
   if (root.model !== m.model || root.buildId !== m.buildId || root.frames.length !== expectedFrames.length || root.frames.some((item, i) => item.id !== expectedFrames[i])) return fail(503, 'publication-invalid', 'Wind descriptor identity mismatch');
   const ref = root.frames.find(item => item.id === frame)!;
   const bytes = await verified(bucket, `${prefix}/map-data/${frame}.json`, ref, WIND_FRAME_LIMIT, entry.expiresAt, ctx, signal);
+  const native = m.surfaces.find(surface => surface.kind === 'native'), fine = m.surfaces.find(surface => surface.kind === 'fine');
+  if (!native || !fine) return fail(503, 'publication-invalid', 'Wind grid missing');
   let descriptor;
-  try { descriptor = parseWindFrame(bytes); } catch { return fail(503, 'publication-invalid', 'Invalid wind frame descriptor'); }
+  try {
+    descriptor = parseWindFrame(bytes);
+    assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
+  } catch { return fail(503, 'publication-invalid', 'Invalid wind frame descriptor'); }
   if (descriptor.frame !== frame) return fail(503, 'publication-invalid', 'Wind frame identity mismatch');
-  for (const kind of ['wind', 'fine'] as const) {
-    const surface = m.surfaces.find(item => item.kind === (kind === 'wind' ? 'native' : 'fine'));
-    if (!surface) return fail(503, 'publication-invalid', 'Wind grid missing');
-    const size = kind === 'wind' ? descriptor.tileSize : descriptor.fineTileSize;
-    const { count: tiles, chunkBytes, pages, pageCount } = windLayout(surface.grid.width, surface.grid.height, size, kind === 'wind' ? descriptor.levels : undefined);
-    if (!Number.isSafeInteger(tiles) || chunkBytes > WIND_CHUNK_LIMIT || descriptor[kind].length !== pages) return fail(503, 'publication-invalid', 'Invalid wind grid layout');
-    for (let i = 0; i < descriptor[kind].length; i++) {
-      const shard = descriptor[kind][i], count = pageCount(i);
-      if (shard.count !== count || shard.bytes !== count * chunkBytes) return fail(503, 'publication-invalid', 'Invalid wind shard layout');
-    }
-  }
   ensureLive(entry.expiresAt);
   signal.throwIfAborted();
   return { descriptor, bytes, prefix };
