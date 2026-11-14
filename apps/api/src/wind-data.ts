@@ -1,4 +1,4 @@
-import { WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
+import { WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame, type WindFrame } from '@av/contracts/wind-data';
 import type { ManifestV5, StoredModelPointer } from '@av/contracts';
 import { sha256 } from './coverage';
 import { ensureLive, fail } from './http';
@@ -13,7 +13,11 @@ const hexSlice = (bytes: Uint8Array, start: number, end: number): string => {
   return out;
 };
 type Entry = StoredModelPointer['retained'][number];
+interface ParsedRoot { model: string; buildId: string; frameIds: string[]; framesById: Map<string, { id: string; bytes: number; sha256: string }> }
+interface ParsedFrame { descriptor: WindFrame; parts: Map<string, WindFrame['wind']> }
 const caches = new WeakMap<R2Bucket, ByteCache<string, Uint8Array>>();
+const parsedRoots = new WeakMap<R2Bucket, ByteCache<string, ParsedRoot>>();
+const parsedFrames = new WeakMap<R2Bucket, ByteCache<string, ParsedFrame>>();
 
 async function verified(bucket: R2Bucket, key: string, ref: { bytes: number; sha256: string }, limit: number, expiresAt: string, ctx: WaitContext, signal: AbortSignal): Promise<Uint8Array> {
   signal.throwIfAborted();
@@ -50,37 +54,57 @@ async function loadFrame(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: s
   if (m.mapData && (m.mapData.sha256 !== mapData.sha256 || m.mapData.bytes !== mapData.bytes)) {
     return fail(503, 'publication-invalid', 'Wind descriptor identity mismatch');
   }
-  if (!m.frames.slice(0, m.mapFrameCount ?? m.frames.length).some(item => item.id === frame)) return fail(404, 'unknown-resource', 'Unknown numeric frame');
-  ensureLive(entry.expiresAt);
-  const prefix = `builds/${m.model}/${m.buildId}`;
-  const rootBytes = await verified(bucket, `${prefix}/map-data.json`, mapData, WIND_ROOT_LIMIT, entry.expiresAt, ctx, signal);
-  let root;
-  try { root = windDataSchema.parse(parseBoundedJson(rootBytes)); } catch { return fail(503, 'publication-invalid', 'Invalid wind descriptor'); }
   const expectedFrames = m.frames.slice(0, m.mapFrameCount ?? m.frames.length).map(item => item.id);
-  if (root.model !== m.model || root.buildId !== m.buildId || root.frames.length !== expectedFrames.length || root.frames.some((item, i) => item.id !== expectedFrames[i])) return fail(503, 'publication-invalid', 'Wind descriptor identity mismatch');
-  const ref = root.frames.find(item => item.id === frame)!;
+  if (!expectedFrames.includes(frame)) return fail(404, 'unknown-resource', 'Unknown numeric frame');
+  ensureLive(entry.expiresAt);
+  const until = Date.parse(entry.expiresAt), prefix = `builds/${m.model}/${m.buildId}`;
+  const rootBytes = await verified(bucket, `${prefix}/map-data.json`, mapData, WIND_ROOT_LIMIT, entry.expiresAt, ctx, signal);
+  let rootCache = parsedRoots.get(bucket);
+  if (!rootCache) { rootCache = new ByteCache(32, 512 * 1024); parsedRoots.set(bucket, rootCache); }
+  const rootKey = `${mapData.sha256}:${mapData.bytes}`;
+  let root = rootCache.get(rootKey);
+  if (!root) {
+    let parsed;
+    try { parsed = windDataSchema.parse(parseBoundedJson(rootBytes)); } catch { return fail(503, 'publication-invalid', 'Invalid wind descriptor'); }
+    root = { model: parsed.model, buildId: parsed.buildId, frameIds: parsed.frames.map(item => item.id), framesById: new Map(parsed.frames.map(item => [item.id, item])) };
+    rootCache.set(rootKey, root, rootBytes.byteLength + 256, until);
+  }
+  if (root.model !== m.model || root.buildId !== m.buildId || root.frameIds.length !== expectedFrames.length || root.frameIds.some((id, i) => id !== expectedFrames[i])) {
+    return fail(503, 'publication-invalid', 'Wind descriptor identity mismatch');
+  }
+  const ref = root.framesById.get(frame)!;
   const bytes = await verified(bucket, `${prefix}/map-data/${frame}.json`, ref, WIND_FRAME_LIMIT, entry.expiresAt, ctx, signal);
   const native = m.surfaces.find(surface => surface.kind === 'native'), fine = m.surfaces.find(surface => surface.kind === 'fine');
   if (!native || !fine) return fail(503, 'publication-invalid', 'Wind grid missing');
-  let descriptor;
-  try {
-    descriptor = parseWindFrame(bytes);
-    assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
-  } catch { return fail(503, 'publication-invalid', 'Invalid wind frame descriptor'); }
-  if (descriptor.frame !== frame) return fail(503, 'publication-invalid', 'Wind frame identity mismatch');
+  let frameCache = parsedFrames.get(bucket);
+  if (!frameCache) { frameCache = new ByteCache(128, 1024 * 1024); parsedFrames.set(bucket, frameCache); }
+  const frameKey = `${ref.sha256}:${ref.bytes}:${native.gridHash}:${fine.gridHash}`;
+  let parsedFrame = frameCache.get(frameKey);
+  if (!parsedFrame) {
+    let descriptor;
+    try {
+      descriptor = parseWindFrame(bytes);
+      assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
+    } catch { return fail(503, 'publication-invalid', 'Invalid wind frame descriptor'); }
+    if (descriptor.frame !== frame) return fail(503, 'publication-invalid', 'Wind frame identity mismatch');
+    parsedFrame = { descriptor, parts: new Map(windFrameParts(descriptor).map(part => [part.kind, part.shards])) };
+    frameCache.set(frameKey, parsedFrame, bytes.byteLength + 512, until);
+  } else if (parsedFrame.descriptor.frame !== frame) {
+    return fail(503, 'publication-invalid', 'Wind frame identity mismatch');
+  }
   ensureLive(entry.expiresAt);
   signal.throwIfAborted();
-  return { descriptor, bytes, sha256: ref.sha256, prefix };
+  return { descriptor: parsedFrame.descriptor, parts: parsedFrame.parts, bytes, sha256: ref.sha256, prefix };
 }
 
 export async function windFrame(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: string, ctx: WaitContext, signal: AbortSignal) {
   const result = await loadFrame(bucket, m, entry, frame, ctx, signal);
-  return { ...result, bytes: result.bytes.slice() };
+  return { descriptor: result.descriptor, bytes: result.bytes.slice(), sha256: result.sha256, prefix: result.prefix };
 }
 
 export async function windChunk(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: string, kind: string, tile: number, ctx: WaitContext, signal: AbortSignal, count = 1): Promise<Uint8Array<ArrayBuffer> & { etag?: string }> {
-  const { descriptor, prefix } = await loadFrame(bucket, m, entry, frame, ctx, signal);
-  const page = Math.floor(tile / WIND_INDEX_ENTRIES), index = tile % WIND_INDEX_ENTRIES, shard = windFrameParts(descriptor).find(part => part.kind === kind)?.shards[page];
+  const { parts, prefix } = await loadFrame(bucket, m, entry, frame, ctx, signal);
+  const page = Math.floor(tile / WIND_INDEX_ENTRIES), index = tile % WIND_INDEX_ENTRIES, shard = parts.get(kind)?.[page];
   if (!shard || count < 1 || index + count > shard.count) return fail(404, 'unknown-resource', 'Unknown wind chunk');
   const chunkBytes = shard.bytes / shard.count, offset = index * chunkBytes, length = count * chunkBytes;
   if (length > MAX_WIND_SPAN_BYTES) return fail(400, 'invalid-parameter', 'Wind chunk span exceeds byte budget');

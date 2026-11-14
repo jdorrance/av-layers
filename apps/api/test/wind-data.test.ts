@@ -363,3 +363,15 @@ it('sets edge cache revalidation on frame descriptors and validates multi-tile c
   const longFrame = await app.fetch(new Request(`https://api.test/v1/models/${model}/runs/${local.manifest.buildId}/data/${'f'.repeat(129)}`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
   expect(longFrame.status).toBe(400);
 });
+
+it('reuses cached parsed root and frame descriptors across chunk requests without reparsing JSON', async () => {
+  const frame = local.manifest.frames[0].id, store = bucket();
+  await windChunk(store.bucket, local.manifest, entry(), frame, 'wind', 0, ctx, signal);
+  const parseSpy = vi.spyOn(JSON, 'parse');
+  try {
+    await windChunk(store.bucket, local.manifest, entry(), frame, 'fine', 0, ctx, signal);
+    await windChunk(store.bucket, local.manifest, entry(), frame, 'overview-2', 0, ctx, signal);
+    await windFrame(store.bucket, local.manifest, entry(), frame, ctx, signal);
+    expect(parseSpy).not.toHaveBeenCalled();
+  } finally { parseSpy.mockRestore(); }
+});

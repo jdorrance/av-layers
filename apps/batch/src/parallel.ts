@@ -406,20 +406,31 @@ async function assembleWindData(root: string, plan: BuildPlan, whole: WholeDomai
     if (store) await verifyObjectReceipts(store, numeric.objects.map(object => ({ ...object, etag: object.etag! })), signal);
   }
   const key = `${prefix}/map-data.json`, reference = { bytes: rootBytes.length, sha256: sha256(rootBytes) };
+  let rootReceipt: ObjectReceipt | undefined;
   if (checkOnly) {
-    const bytes = await readLocalFile(localPath(root, key), WIND_ROOT_LIMIT, reference.bytes);
-    if (!bytes.equals(rootBytes)) throw new Error('Numeric wind root differs from shard receipts');
+    const localBytes = await readLocalFile(localPath(root, key), WIND_ROOT_LIMIT, reference.bytes).catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === 'ENOENT' && store) return null;
+      throw error;
+    });
+    const bytes = localBytes ?? (await store!.get(key, undefined, reference.bytes, signal))?.bytes;
+    if (!bytes || !Buffer.from(bytes).equals(rootBytes)) throw new Error('Numeric wind root differs from shard receipts');
+    if (store) {
+      const head = await store.head(key, signal);
+      if (!head || head.size !== reference.bytes || !head.etag) throw new Error('Numeric wind root receipt missing in remote store');
+      rootReceipt = { key, bytes: reference.bytes, sha256: reference.sha256, etag: head.etag };
+    }
   } else {
     await mkdir(localPath(root, prefix), { recursive: true });
     await writeFile(localPath(root, key), rootBytes);
-    if (store) await putImmutableReceipt(store, key, rootBytes, 'application/json', signal);
+    if (store) rootReceipt = await putImmutableReceipt(store, key, rootBytes, 'application/json', signal, reference.sha256);
   }
   if (!store) {
     const manifest = { model: plan.model, buildId: plan.buildId, frames: frames.map(frame => ({ id: frame.id })), mapFrameCount: frames.length,
       surfaces: [{ kind: 'native', grid: whole.plan.native }, { kind: 'fine', grid: whole.plan.fine }] } as ManifestV5;
     await localWindData(root, manifest, signal);
   }
-  return reference;
+  const windReceipts: ObjectReceipt[] = store ? [...receipts.flatMap(receipt => (receipt.numeric?.objects ?? []).map(object => ({ ...object, etag: object.etag! }))), rootReceipt!] : [];
+  return { reference, objects: windReceipts };
 }
 
 /** Repack hour packs into serving groups, then use the ordinary full-build validator/publisher. */
@@ -444,7 +455,8 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     assertWholeDomainReceipt(receipt, plan, shard, options.product, whole, options.provider.maxLevels);
     receipts.push(receipt);
   }
-  const mapData = await assembleWindData(root, plan, prepared, receipts, options.store, options.signal);
+  const assembledWind = await assembleWindData(root, plan, prepared, receipts, options.store, options.signal);
+  const mapData = assembledWind?.reference;
   const { capacity, layouts, profileLayout } = planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, whole, plan.groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
@@ -499,7 +511,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     return receipt.objects;
   }) : undefined;
   const hourSampleKeys = new Set(receipts.flatMap(receipt => receipt.surfaces.flatMap(surface => surface.shards.map(shard => shard.key))));
-  const objects = hourObjects ? [...hourObjects.filter(object => !hourSampleKeys.has(object.key)), ...servingObjects] : undefined;
+  const objects = hourObjects ? [...hourObjects.filter(object => !hourSampleKeys.has(object.key)), ...servingObjects, ...(assembledWind?.objects ?? [])] : undefined;
   options.signal?.throwIfAborted();
   if (objects) await writeReceipt(localPath(root, `builds/${plan.model}/${plan.buildId}/serving-receipts.json`), { version: 1, planHash: planHash(plan), objects: servingObjects });
   return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups, profileGroups, mapData,
@@ -541,10 +553,12 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
     receipts.push(receipt);
   }
-  const mapData = await assembleWindData(root, plan, whole, receipts, store, signal, true);
+  const assembledWind = await assembleWindData(root, plan, whole, receipts, store, signal, true);
+  const mapData = assembledWind?.reference;
   if (manifest.mapData && (!mapData || manifest.mapData.sha256 !== mapData.sha256 || manifest.mapData.bytes !== mapData.bytes)) throw new Error('Manifest numeric wind identity mismatch');
-  if (plan.numericWind) onNumericReceipts?.(receipts.flatMap(receipt => (receipt.numeric?.objects ?? []).map(object => ({ ...object, etag: object.etag! }))));
-  return verifyPublicationReceipts({ root, manifest, store, plan, receipts, product: admitted.product, whole, signal });
+  if (plan.numericWind && assembledWind) onNumericReceipts?.(assembledWind.objects);
+  const baseReceipts = await verifyPublicationReceipts({ root, manifest, store, plan, receipts, product: admitted.product, whole, signal });
+  return [...baseReceipts, ...(assembledWind?.objects ?? [])];
 }
 
 export { type WholeDomainReceipt };

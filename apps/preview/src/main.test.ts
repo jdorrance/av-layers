@@ -216,15 +216,25 @@ vi.mock('./wind-overlay', () => ({ WindOverlay: class {
   setOptions() {}
   destroy() {}
 } }));
-vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options: { onChange: typeof windChange }) => {
-  windState = { style: 'trails', visible: true, paused: false, height: 'surface' };
-  windChange = state => { windState = state; options.onChange(state); };
-  return { get state() { return windState; }, setStatus(status: string) { windStatuses.push(status); }, setUnits() {}, destroy() {} };
+let preferredWindVisible = true;
+vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options: { initial?: Partial<typeof windState>; onChange: typeof windChange }) => {
+  windState = { style: options.initial?.style ?? 'trails', visible: options.initial?.visible ?? preferredWindVisible, paused: false, height: options.initial?.height ?? 'surface' };
+  windChange = state => { windState = state; preferredWindVisible = state.visible; options.onChange(state); };
+  return {
+    get state() { return windState; },
+    preferredVisible: () => preferredWindVisible,
+    setState(next: Partial<typeof windState>) { windState = { ...windState, ...next }; },
+    setStatus(status: string) { windStatuses.push(status); },
+    setUnits() {},
+    destroy() {}
+  };
 } }));
 let timelineSelect: (index: number) => void;
-vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
+let timelineToggleTz: (() => void) | undefined;
+vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect; onToggleTimeZone?: () => void }) => {
   timelineSelect = options.onSelect;
-  return { update() {}, destroy() {} };
+  timelineToggleTz = options.onToggleTimeZone;
+  return { update() {}, setTimeZone() {}, destroy() {} };
 } }));
 
 const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
@@ -274,7 +284,7 @@ beforeEach(() => {
   vi.resetModules();
   maps.length = 0; protocols.clear(); initializationError = null; autoLoadRaster = true; setWorkerUrl.mockClear();
   windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
-  markBuildUnavailable = false; failOnceBudget = false;
+  markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true; timelineToggleTz = undefined;
   deferWindCancellation = false; windCancel = null;
   windSample = { status: 'valid', u: 3, v: 4 };
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
@@ -282,7 +292,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', '');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = fixtureManifestV5();
+  manifest = fixtureManifestV5({ mapData: MAP_DATA });
   vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
@@ -1675,10 +1685,17 @@ it('hides precip-rate in preview while keeping future non-lift layers and km/mi 
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
 });
 
-it('caches 409 non-numeric builds per buildId, supports pre-mapData builds, and retries uncovered pans on cache pressure', async () => {
-  markBuildUnavailable = true;
+it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries uncovered pans on cache pressure', async () => {
+  manifest = fixtureManifestV5();
   await start();
-  expect(windLoads).toHaveLength(1);
+  expect(ui('wind-controls').hidden).toBe(true);
+  expect(windLoads).toHaveLength(0);
+
+  manifest = fixtureManifestV5({ model: 'gfs', buildId: '20261030T060000Z-22222222-2222-4222-8222-222222222222', mapData: MAP_DATA });
+  markBuildUnavailable = true;
+  modelButton('gfs').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(windLoads).toHaveLength(1));
+  expect(ui('wind-controls').hidden).toBe(false);
   expect(windStatuses.at(-1)).toBe('unavailable');
   map().bounds = { west: -116, east: -115, south: 32, north: 33 };
   map().emit('moveend');
@@ -1686,7 +1703,7 @@ it('caches 409 non-numeric builds per buildId, supports pre-mapData builds, and 
   expect(windLoads).toHaveLength(1);
 
   markBuildUnavailable = false;
-  manifest = fixtureManifestV5({ model: 'icon-eu', buildId: '20261030T060000Z-11111111-1111-4111-8111-111111111111' });
+  manifest = fixtureManifestV5({ model: 'icon-eu', buildId: '20261030T060000Z-11111111-1111-4111-8111-111111111111', mapData: MAP_DATA });
   deferWind = true;
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(windLoads).toHaveLength(2));
@@ -1711,4 +1728,40 @@ it('caches 409 non-numeric builds per buildId, supports pre-mapData builds, and 
   windResolve!('ready');
   await Promise.resolve();
   expect(windStatuses.at(-1)).toBe('ready');
+});
+
+it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point-wind in Local timezone', async () => {
+  const dtf = Intl.DateTimeFormat;
+  const resolvedSpy = vi.spyOn(dtf.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Yerevan' } as Intl.ResolvedDateTimeFormatOptions);
+  try {
+    deferWind = true;
+    win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';
+    await start();
+    windResolve!('ready');
+    await Promise.resolve();
+    expect(new URL(win.href).searchParams.get('wind')).toBeNull();
+
+    fetchMock.mockImplementation(async input => sample(input));
+    map().emit('click', { lngLat: { lat: 40.18, lng: 44.51 } });
+    await vi.waitFor(() => expect(ui('point-wind').textContent).toContain('UTC'));
+    const frameIso = manifest.frames.find(f => f.id === windLoads[0]!.frame)!.validTime;
+    expect(ui('point-wind').textContent).toBe(`Map wind · ${frameIso.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
+
+    timelineToggleTz?.();
+    const yerevanParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Yerevan'
+    }).formatToParts(Date.parse(frameIso)).map(p => [p.type, p.value]));
+    expect(ui('point-wind').textContent).toBe(`Map wind · ${yerevanParts.year}-${yerevanParts.month}-${yerevanParts.day} ${yerevanParts.hour}:${yerevanParts.minute} Local · 18 km/h`);
+
+    windChange({ ...windState, visible: false });
+    expect(new URL(win.href).searchParams.get('wind')).toBe('0');
+    windChange({ ...windState, visible: true });
+    expect(new URL(win.href).searchParams.get('wind')).toBe('1');
+
+    preferredWindVisible = false;
+    win.href = 'http://localhost:5173/?model=gfs&lat=40.2&lon=44.6&z=9';
+    win.dispatchEvent(new Event('popstate'));
+    await Promise.resolve();
+    expect(windState.visible).toBe(false);
+  } finally { resolvedSpy.mockRestore(); }
 });

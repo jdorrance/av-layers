@@ -16,6 +16,7 @@ import { readLocalFile } from './local-file.js';
 import { readLocalProvenance } from './frame-provenance.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
 import { localWindData } from './wind-data.js';
+import { runConcurrent } from './concurrent.js';
 
 const decode = parseBoundedJson;
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
@@ -81,7 +82,13 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     const parallel = await import('./parallel.js'), plan = await parallel.readBuildPlan(localPath(root, 'plan.json'));
     if (!plan.numericWind) throw new Error('Forecast plan does not admit numeric wind');
     await parallel.verifyBuildReceipts(root, manifest, store, options.signal, undefined, receipts => { numericReceipts = receipts; });
-    const bytes = await readLocalFile(localPath(root, `builds/${manifest.model}/${manifest.buildId}/map-data.json`), WIND_ROOT_LIMIT);
+    const rootKey = `builds/${manifest.model}/${manifest.buildId}/map-data.json`;
+    const localRoot = await readLocalFile(localPath(root, rootKey), WIND_ROOT_LIMIT).catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === 'ENOENT') return null;
+      throw error;
+    });
+    const bytes = localRoot ?? (await store.get(rootKey, undefined, WIND_ROOT_LIMIT, options.signal))?.bytes;
+    if (!bytes) throw new Error('Numeric wind root missing');
     numeric = { reference: { bytes: bytes.length, sha256: sha256(bytes) }, objects: [] };
   }
   if (options.publishNumericWind && !numeric) throw new Error('Numeric wind publication requires verified artifacts');
@@ -282,6 +289,8 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   options.onPointerOutcome?.('confirmed');
 }
 
+const REMOTE_WIND_CONCURRENCY = 4;
+
 async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, reference: { bytes: number; sha256: string }, signal?: AbortSignal, receipts: readonly ObjectReceipt[] = []) {
   const byKey = new Map(receipts.map(receipt => [receipt.key, receipt]));
   if (byKey.size !== receipts.length) throw new Error('Duplicate wind object receipt');
@@ -291,23 +300,33 @@ async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, refe
   if (data.model !== manifest.model || data.buildId !== manifest.buildId || data.frames.length !== frames.length || data.frames.some((item, i) => item.id !== frames[i].id)) throw new Error('Remote wind root identity mismatch');
   const native = manifest.surfaces.find(surface => surface.kind === 'native'), fine = manifest.surfaces.find(surface => surface.kind === 'fine');
   if (!native || !fine) throw new Error('Remote wind surface missing');
-  for (const frame of data.frames) {
+  const descriptors = new Array<{ frame: typeof data.frames[number]; descriptor: ReturnType<typeof parseWindFrame> }>(data.frames.length);
+  await runConcurrent(data.frames.map((frame, index) => ({ frame, index })), REMOTE_WIND_CONCURRENCY, async ({ frame, index }) => {
     const object = await store.get(`${prefix}/map-data/${frame.id}.json`, undefined, frame.bytes, signal);
     if (!object || object.bytes.length !== frame.bytes || sha256(object.bytes) !== frame.sha256) throw new Error('Remote wind frame missing or corrupt');
     const descriptor = parseWindFrame(object.bytes);
     if (descriptor.frame !== frame.id) throw new Error('Remote wind frame identity mismatch');
     assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
+    descriptors[index] = { frame, descriptor };
+  });
+  const matchedReceipts: ObjectReceipt[] = [];
+  const unreceipted: Array<{ key: string; expectedHash: string; limit: number; bytes: number; metadata: boolean }> = [];
+  for (const { frame, descriptor } of descriptors) {
     for (const { kind, shards } of windFrameParts(descriptor)) for (const [page, shard] of shards.entries()) {
       const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
       for (const [key, expectedHash, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
         const receipt = byKey.get(key);
         if (receipt) {
           if (receipt.bytes !== bytes || receipt.sha256 !== expectedHash) throw new Error(`Remote wind receipt mismatch: ${key}`);
-          await verifyObjectReceipts(store, [receipt], signal);
-        } else await verifyRemoteHash(store, key, expectedHash, limit, bytes, signal, metadata);
+          matchedReceipts.push(receipt);
+        } else unreceipted.push({ key, expectedHash, limit, bytes, metadata });
       }
     }
   }
+  for (const receipt of matchedReceipts) await verifyObjectReceipts(store, [receipt], signal);
+  if (unreceipted.length) await runConcurrent(unreceipted, REMOTE_WIND_CONCURRENCY, item =>
+    verifyRemoteHash(store, item.key, item.expectedHash, item.limit, item.bytes, signal, item.metadata)
+  );
 }
 
 /** Verify large immutable objects with one bounded range live at a time. */

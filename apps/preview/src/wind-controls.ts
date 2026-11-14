@@ -20,6 +20,7 @@ export interface WindControlsOptions {
 
 export interface WindControls {
   readonly state: WindControlState;
+  preferredVisible?(): boolean;
   setStatus(status: WindStatus): void;
   setQuality?(overview: boolean): void;
   setState?(next: Partial<Pick<WindControlState, 'style' | 'visible' | 'height'>>): void;
@@ -237,6 +238,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   return {
     get state() { return snapshot(); },
+    preferredVisible() { return readStored()?.visible ?? true; },
     setStatus(next: WindStatus) { if (!destroyed && next in STATUS_LABELS) { status = next; renderStatus(); } },
     setQuality(next: boolean) { if (!destroyed && overview !== next) { overview = next; renderStatus(); } },
     setState(next) {

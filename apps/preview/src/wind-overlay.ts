@@ -1,13 +1,13 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
-import { displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
+import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import type { Map } from 'maplibre-gl';
-import { WIND_CANVAS_BYTES } from './raster-budget';
+import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS } from './raster-budget';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindOverlayOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
 interface Particle { lat: number; lon: number; age: number; wind?: ReturnType<WindField['sample']> }
 
-const MAX_PIXELS = Math.floor(WIND_CANVAS_BYTES / 4), MAX_RETINA_BARB_PIXELS = 8_388_608, MAX_PARTICLES = 600, EARTH_RADIUS = 6_371_000, MAX_LAT = 85.05112878, DEG = Math.PI / 180;
+const MAX_PARTICLES = 600, EARTH_RADIUS = 6_371_000, MAX_LAT = 85.05112878, DEG = Math.PI / 180;
 const valid = (s: ReturnType<WindField['sample']>): s is { u: number; v: number; status: number } =>
   (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null && Number.isFinite(s.u) && Number.isFinite(s.v);
 const worldY = (lat: number, size: number) => (1 - Math.asinh(Math.tan(Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * DEG)) / Math.PI) * size / 2;
@@ -69,14 +69,15 @@ export class WindOverlay {
     const w = Math.max(1, this.width), h = Math.max(1, this.height), dpr = window.devicePixelRatio || 1;
     this.lastDpr = dpr;
     const showBarbs = this.options.visible && this.options.style !== 'trails', showTrails = this.options.visible && this.options.style !== 'barbs';
-    const barbBudget = w * h <= MAX_PIXELS ? MAX_RETINA_BARB_PIXELS : (showTrails ? MAX_PIXELS * 0.8 : MAX_PIXELS - 1);
-    const bScale = Math.min(dpr, 2, Math.sqrt(barbBudget / (w * h)), 4096 / w, 4096 / h);
+    this.scale = showTrails ? Math.min(dpr, 1, Math.sqrt((WIND_TRAIL_PIXELS - 1) / (w * h)), 4096 / w, 4096 / h) : 1;
+    const trailW = showTrails ? Math.max(1, Math.floor(w * this.scale)) : 1, trailH = showTrails ? Math.max(1, Math.floor(h * this.scale)) : 1;
+    const barbBudget = Math.max(1, WIND_CANVAS_PIXELS - trailW * trailH);
+    const bScale = showBarbs ? Math.min(dpr, 2, Math.sqrt(barbBudget / (w * h)), 4096 / w, 4096 / h) : 1;
     this.barbScale = bScale >= 1 ? Math.floor(bScale) : bScale;
-    const trailBudget = w * h <= MAX_PIXELS ? MAX_PIXELS - 1 : MAX_PIXELS - (showBarbs ? Math.floor(w * this.barbScale) * Math.floor(h * this.barbScale) : 1);
-    this.scale = Math.min(dpr, 1, Math.sqrt(Math.max(1, trailBudget) / (w * h)), 4096 / w, 4096 / h);
+    const barbW = showBarbs ? Math.max(1, Math.floor(w * this.barbScale)) : 1, barbH = showBarbs ? Math.max(1, Math.floor(h * this.barbScale)) : 1;
     for (const c of [this.trails, this.barbs]) { c.width = 0; c.height = 0; }
-    for (const [c, vis, sc] of [[this.trails, showTrails, this.scale], [this.barbs, showBarbs, this.barbScale]] as const) {
-      c.width = vis ? Math.max(1, Math.floor(w * sc)) : 1; c.height = vis ? Math.max(1, Math.floor(h * sc)) : 1;
+    for (const [c, vis, cw, ch] of [[this.trails, showTrails, trailW, trailH], [this.barbs, showBarbs, barbW, barbH]] as const) {
+      c.width = cw; c.height = ch;
       c.style.width = `${this.width}px`; c.style.height = `${this.height}px`; c.style.display = vis ? '' : 'none';
     }
     this.resetTrails(); this.view = this.currentView(); this.drawBarbs(); this.schedule();
@@ -220,13 +221,14 @@ export class WindOverlay {
       if (!wind) { const s = this.field.sample(lat, lon); wind = { status: s.status, u: s.u, v: s.v }; }
       samples.set(key, wind);
       if (!valid(wind)) continue;
-      const dist = Math.hypot(wind.u, wind.v), knots = displayedWindSpeed(dist, 'knots'), speed = displayedWindSpeed(dist, this.options.units);
-      if (knots === null || speed === null) continue;
-      if (!knots) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); this.haloStroke(ctx); continue; }
+      const dist = Math.hypot(wind.u, wind.v), speedKt = dist * DISPLAY_KNOTS_PER_MPS, speed = displayedWindSpeed(dist, this.options.units);
+      if (!Number.isFinite(speedKt) || speed === null) continue;
+      const q = quantizedBarbSpeed(speedKt);
+      if (!q) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); this.haloStroke(ctx); continue; }
       const ahead = this.map.project([lon + wind.u / dist * 0.001 / Math.cos(lat * DEG), lat + wind.v / dist * 0.001]), hemi = lat < 0 ? 1 : -1;
       ctx.save(); ctx.translate(pt.x, pt.y); ctx.rotate(Math.atan2(ahead.y - pt.y, ahead.x - pt.x));
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-21, 0); this.haloStroke(ctx);
-      const q = quantizedBarbSpeed(knots), flags = Math.min(16, Math.floor(q / 50)), feathers = Math.floor((q % 50) / 10), half = q % 10 >= 5;
+      const flags = Math.min(16, Math.floor(q / 50)), feathers = Math.floor((q % 50) / 10), half = q % 10 >= 5;
       const spacing = Math.min(4, 20 / Math.max(1, flags * 2 + feathers + Number(half)));
       let d = -21;
       for (let i = 0; i < flags; i++) {

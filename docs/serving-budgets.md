@@ -32,8 +32,11 @@ combined work across all grids selected by a request.
   than 2 background reads are active; admitted reads finish after demotion. The
   compressed tile cache is 48 MiB including entry overhead. Preview retains up to
   four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
-  with 16 offscreen tiles per source. Preview's 96 MiB forecast envelope reserves
-  8 MiB for numeric wind, 8 MiB for wind canvases and 80 MiB for rasters.
+  with 16 offscreen tiles per source. Preview's 120 MiB forecast envelope reserves
+  8 MiB for numeric wind, 32 MiB for wind canvases (up to 8,388,608 combined RGBA
+  device pixels across 2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding
+  wind shrinks both canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping
+  any warm 8 MiB numeric cache charged until cleared.
   Numeric wind skips outside tiles via `windMask`/`fineMask` before admission,
   aligns multi-tile span requests to canonical 8-tile stripes (`<= 1 MiB`), and
   falls back to overview data if a detail chunk is unavailable.

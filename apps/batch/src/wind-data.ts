@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
 import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, windOverviewLayout, windFrameParts, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, encodeTileMask, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
-import { encodeBoundedJson, parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
+import { SAMPLE_BLOCK_SIZE, encodeBoundedJson, parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
 import { encodeWindColumns, normalizedWindColumn } from '@av/forecast/wind';
 import type { NormalizedFrame } from '@av/forecast/inputs';
 import type { GridField } from '@av/forecast/sampler';
@@ -38,10 +38,10 @@ function selectActiveTiles(grid: WholeDomainGrid['native'], size: number, kind: 
     }
   } else if (kind === 'fine' && sparsity?.fineCoverage) {
     populated = true;
-    const cov = sparsity.fineCoverage, blockCols = Math.ceil(cov.width / 16);
+    const cov = sparsity.fineCoverage, blockCols = Math.ceil(cov.width / SAMPLE_BLOCK_SIZE);
     for (let i = 0; i < cov.blockIds.length; i++) {
       const id = cov.blockIds[i]!, bx = id % blockCols, by = Math.floor(id / blockCols);
-      const t = Math.floor((by * 16) / size) * cols + Math.floor((bx * 16) / size);
+      const t = Math.floor((by * SAMPLE_BLOCK_SIZE) / size) * cols + Math.floor((bx * SAMPLE_BLOCK_SIZE) / size);
       if (t >= 0 && t < total) present[t >> 3] |= 1 << (t & 7);
     }
   }

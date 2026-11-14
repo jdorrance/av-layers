@@ -7,8 +7,10 @@ import type { ForecastProvider } from './provider.js';
 import { syntheticWholeDomain } from '../../../scripts/fixtures/whole-domain.js';
 import { fixtureProvider, mask, product, PublicationStore } from '../parallel-fixtures.js';
 import { workflowAuthority } from './authority.js';
-import { buildShard, createBuildPlan, finalizeBuild, parseForecastShardReceipt } from './parallel.js';
-import { publish } from './publication.js';
+import { buildShard, createBuildPlan, finalizeBuild, parseForecastShardReceipt, verifyBuildReceipts } from './parallel.js';
+import { publish, rollback } from './publication.js';
+import { buildObjects, forecastObjects } from './publication-objects.js';
+import { validateBuild } from './validate.js';
 
 const overrides = vi.hoisted(() => ({ product: undefined as ProductDefinition | undefined, provider: undefined as ForecastProvider | undefined, mask: undefined as CoverageMask | undefined, fine: undefined as Awaited<ReturnType<typeof syntheticWholeDomain>>['fine'] | undefined }));
 vi.mock('@av/contracts/models', async importOriginal => {
@@ -74,6 +76,28 @@ it('publishes opted-in sharded numeric data and serves its retained HTTP chunk',
         await publish(store, root, result.manifest, { authority, validated: result, receiptsOnly: true });
         expect(get.mock.calls.some(([name, range]) => name.includes('/map-data/') && name.endsWith('.bin') && range)).toBe(true);
         get.mockRestore();
+        // Verify buildObjects includes wind artifacts and validateBuild(..., remote) rejects missing wind receipts.
+        const allObjects = await buildObjects(root, result.manifest, { store });
+        expect(allObjects.length).toBeGreaterThan(forecastObjects(result.manifest).length);
+        const receipts = await verifyBuildReceipts(root, result.manifest, store);
+        await expect(validateBuild(root, result.manifest, mask, configured, {
+          store,
+          objects: receipts.filter(item => !item.key.endsWith('map-data.json'))
+        })).rejects.toThrow('Remote receipt artifact set mismatch');
+        // Verify rollback checks wind shards concurrently (bounded <= 4).
+        const rawGet = store.get.bind(store);
+        let activeRange = 0, peakRange = 0;
+        const rangeSpy = vi.spyOn(store, 'get').mockImplementation(async (name, range, ...rest) => {
+          if (!name.includes('/map-data/') || !range) return rawGet(name, range, ...rest);
+          activeRange++; peakRange = Math.max(peakRange, activeRange);
+          try { await new Promise(resolve => setTimeout(resolve, 15)); return await rawGet(name, range, ...rest); }
+          finally { activeRange--; }
+        });
+        try {
+          await rollback(store, 'gfs', result.manifest.buildId, authority);
+          expect(peakRange).toBeGreaterThan(1);
+          expect(peakRange).toBeLessThanOrEqual(4);
+        } finally { rangeSpy.mockRestore(); }
         const head = store.head.bind(store);
         let active = 0, peak = 0, activeBytes = 0, peakBytes = 0;
         const maxShard = Math.max(...[...store.objects].filter(([name]) => name.includes('/map-data/') && name.endsWith('.bin')).map(([, item]) => item.bytes.length));

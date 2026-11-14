@@ -10,7 +10,7 @@ import { checkPerformance, forecastPlanDeadline } from '../apps/batch/src/capaci
 import { workflowAuthority, workflowContext, type PublicationAuthority } from '../apps/batch/src/authority.js';
 import { failureReason } from '../apps/batch/src/failure.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
-import { forecastObjects } from '../apps/batch/src/publication-objects.js';
+import { buildObjects } from '../apps/batch/src/publication-objects.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
 import { isPrivateUpstreamKey, pinnedSourcePrefix } from '../apps/batch/src/source.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
@@ -403,10 +403,31 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     const deadlineSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
     const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
     let receiptsOnly = false;
-    if (grouped) for (const object of forecastObjects(manifest)) {
-      try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
-      catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
-      if (receiptsOnly) break;
+    if (grouped) {
+      try {
+        for (const object of await buildObjects(root, manifest)) {
+          try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
+          catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
+          if (receiptsOnly) break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+        receiptsOnly = true;
+      }
+    } else if (manifest.mapData) {
+      const objects = await buildObjects(root, manifest).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new Error('Resume artifact is incomplete: missing numeric wind descriptor; start a fresh forecast without resume-run-id', { cause: error });
+        }
+        throw error;
+      });
+      for (const object of objects) {
+        try { if (!(await stat(localPath(root, object.key))).isFile()) throw new Error(`Resume artifact is incomplete: missing ${object.key}`); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new Error(`Resume artifact is incomplete: missing ${object.key}; start a fresh forecast without resume-run-id`, { cause: error });
+          throw error;
+        }
+      }
     }
     await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
     deadlineSignal.throwIfAborted();

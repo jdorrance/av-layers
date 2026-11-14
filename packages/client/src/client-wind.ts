@@ -11,7 +11,7 @@ interface Overview { stride: number; width: number; height: number; tilesAcross:
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
 const MAX_CHUNKS = 64, DETAIL_MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, SINGLE_VIEW_MAX_BYTES = WIND_NUMERIC_BYTES - WIND_FRAME_LIMIT;
-const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8;
+const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8, UNAVAILABLE_BUILD_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
 const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
@@ -30,20 +30,40 @@ interface CachedBytes {
 /** Share immutable buffers and decoded views across viewports within a strict byte limit. */
 export class WindDataCache {
   private readonly entries = new Set<CachedBytes>();
-  private readonly unavailableBuilds = new Set<string>();
+  private readonly unavailableBuilds = new Map<string, number>();
   private bytes = 0;
-  spansUnsupported = false;
+  private spanFailures = 0;
 
-  isBuildUnavailable(buildId: string): boolean {
-    return this.unavailableBuilds.has(buildId);
+  get allocatedBytes(): number {
+    return this.bytes;
   }
 
-  markBuildUnavailable(buildId: string): void {
-    if (this.unavailableBuilds.size >= 64) {
-      const oldest = this.unavailableBuilds.values().next().value;
+  get spansUnsupported(): boolean {
+    return this.spanFailures >= 2;
+  }
+
+  set spansUnsupported(value: boolean) {
+    this.spanFailures = value ? 2 : 0;
+  }
+
+  recordSpanResult(supported: boolean): void {
+    this.spanFailures = supported ? 0 : Math.min(2, this.spanFailures + 1);
+  }
+
+  isBuildUnavailable(buildId: string, now = Date.now()): boolean {
+    const until = this.unavailableBuilds.get(buildId);
+    if (until === undefined) return false;
+    if (until <= now) { this.unavailableBuilds.delete(buildId); return false; }
+    return true;
+  }
+
+  markBuildUnavailable(buildId: string, now = Date.now()): void {
+    if (!this.unavailableBuilds.has(buildId) && this.unavailableBuilds.size >= 64) {
+      const oldest = this.unavailableBuilds.keys().next().value;
       if (oldest !== undefined) this.unavailableBuilds.delete(oldest);
     }
-    this.unavailableBuilds.add(buildId);
+    this.unavailableBuilds.delete(buildId);
+    this.unavailableBuilds.set(buildId, now + UNAVAILABLE_BUILD_TTL_MS);
   }
 
   hasReady(url: string, limit: number, now = Date.now()): boolean {
@@ -74,6 +94,7 @@ export class WindDataCache {
 
   clear(): void {
     this.unavailableBuilds.clear();
+    this.spanFailures = 0;
     for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
   }
 
@@ -300,7 +321,7 @@ export class WindDataSource {
     const baseSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     baseSignal.throwIfAborted();
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
-    const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span'> => {
+    const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
       attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
@@ -308,7 +329,8 @@ export class WindDataSource {
       try {
         reqSig.throwIfAborted();
         const res = await (this.options.fetchImpl ?? fetch)(url, { signal: reqSig, redirect: 'error' });
-        if (targets.length > 1 && (res.status === 400 || res.status === 404)) { await res.body?.cancel(); return 'unsupported-span'; }
+        if (targets.length > 1 && res.status === 400) { await res.body?.cancel(); return 'unsupported-span'; }
+        if (targets.length > 1 && res.status === 404) { await res.body?.cancel(); return 'retry-single'; }
         if (res.status === 409) { await res.body?.cancel(); return 'product-unavailable'; }
         if (res.status === 404) { await res.body?.cancel(); return null; }
         if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
@@ -339,7 +361,7 @@ export class WindDataSource {
     const descEntry = this.hold(this.cache.take(root, WIND_FRAME_LIMIT, build.expiresAtMs));
     const descUsed = descEntry.used ?? await readStream(root, 'application/json', [descEntry]);
     if (descUsed === 'product-unavailable') { this.cache.markBuildUnavailable(build.manifest.buildId); return 'unavailable'; }
-    if (descUsed === null || descUsed === 'unsupported-span') return 'unavailable';
+    if (typeof descUsed !== 'number') return 'unavailable';
     const descriptor = parseWindFrame(descEntry.bytes.subarray(0, descUsed));
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
     descEntry.used = descUsed;
@@ -387,7 +409,7 @@ export class WindDataSource {
         if (kind === 'wind') wind.set(tile, entry.decoded as PackedWindChunk);
         else (targetOverview ? targetOverview.data : fineData).set(tile, entry.decoded as DataView);
       };
-      const check = (used: number | null | 'product-unavailable' | 'unsupported-span', expected: number) => {
+      const check = (used: number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single', expected: number) => {
         if (typeof used !== 'number') throw new Error('Numeric chunk missing');
         if (used !== expected) throw new Error('Numeric chunk length mismatch');
       };
@@ -398,8 +420,13 @@ export class WindDataSource {
             const b = batches[next++]!, entries = b.tiles.map(t => this.hold(this.cache.take(`${root}/${b.kind}/${t}`, b.bytes, build.expiresAtMs)));
             if (entries.length > 1 && !this.cache.spansUnsupported && entries.every(e => e.used === null)) {
               const used = await readStream(`${root}/${b.kind}/${b.tiles[0]}-${b.tiles.at(-1)}`, 'application/octet-stream', entries, attemptSig);
-              if (used !== 'unsupported-span') { check(used, entries.length * b.bytes); entries.forEach((e, i) => commit(b.kind, b.tiles[i]!, e)); continue; }
-              this.cache.spansUnsupported = true;
+              if (used !== 'unsupported-span' && used !== 'retry-single') {
+                this.cache.recordSpanResult(true);
+                check(used, entries.length * b.bytes);
+                entries.forEach((e, i) => commit(b.kind, b.tiles[i]!, e));
+                continue;
+              }
+              if (used === 'unsupported-span') this.cache.recordSpanResult(false);
             }
             for (let i = 0; i < entries.length; i++) {
               const e = entries[i]!, t = b.tiles[i]!;

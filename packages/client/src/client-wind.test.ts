@@ -586,7 +586,8 @@ it('skips outside sparse wind/fine tiles during admission, aligns 8-tile spans, 
   source.dispose(); resilient.dispose();
 });
 
-it('caches 409 non-numeric builds per buildId, admits overview-less viewports up to the full budget, and invalidates field slots on reload', async () => {
+it('caches 409 builds with a bounded TTL, isolates single-span 404/400 fallbacks, admits overview-less viewports, and invalidates field slots on reload', async () => {
+  vi.useFakeTimers();
   const nonNumeric = build(), frame = nonNumeric.manifest.frames[0].id, cache = new WindDataCache();
   const unavailFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 409 }));
   const probe = new WindDataSource('https://api.test', { fetchImpl: unavailFetch, cache });
@@ -594,7 +595,39 @@ it('caches 409 non-numeric builds per buildId, admits overview-less viewports up
   expect(cache.isBuildUnavailable(nonNumeric.manifest.buildId)).toBe(true);
   expect(await probe.load({ build: nonNumeric, frame: nonNumeric.manifest.frames[1].id, bounds })).toBe('unavailable');
   expect(unavailFetch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(30_001);
+  expect(cache.isBuildUnavailable(nonNumeric.manifest.buildId)).toBe(false);
   probe.dispose();
+  vi.useRealTimers();
+
+  // Single 404 or single 400 on a multi-tile span falls back to single-tile requests without permanently flipping spansUnsupported.
+  const spanBuild = globalBuild(true), spanFrame = spanBuild.manifest.frames[0].id, spanCache = new WindDataCache();
+  spanBuild.manifest.descriptors.bounds = [-180, -90, 180, 90];
+  for (const surface of spanBuild.manifest.surfaces) Object.assign(surface.grid, { height: 721, lat0: -90, dy: 0.25 });
+  const spanMeta = JSON.parse(descriptor(spanFrame)), spanLayout = windOverviewLayout(spanBuild.manifest.surfaces[0].grid, 8);
+  spanMeta.overview = [{ stride: 8, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: spanLayout.count, bytes: spanLayout.count * spanLayout.chunkBytes }] }];
+  const spanTile = new Uint8Array(spanLayout.chunkBytes), stv = new DataView(spanTile.buffer);
+  for (let c = 0; c < 32 * 32; c++) for (let m = 0; m < WIND_OVERVIEW_VALUES; m++) { stv.setFloat32(c * WIND_OVERVIEW_CELL_BYTES + m * 9, 3, true); stv.setFloat32(c * WIND_OVERVIEW_CELL_BYTES + m * 9 + 4, 4, true); }
+  let spanCalls = 0;
+  const spanFetch = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.endsWith(`/data/${spanFrame}`)) return new Response(JSON.stringify(spanMeta), { headers: { 'content-type': 'application/json' } });
+    if (/\/\d+-\d+$/.test(path)) {
+      spanCalls++;
+      if (spanCalls === 1) return new Response(null, { status: 404 });
+      if (spanCalls === 2) return new Response(null, { status: 400 });
+      const [lo, hi] = path.split('/').at(-1)!.split('-').map(Number);
+      const count = hi! - lo! + 1, out = new Uint8Array(count * spanTile.length);
+      for (let i = 0; i < count; i++) out.set(spanTile, i * spanTile.length);
+      return reply(out);
+    }
+    return reply(spanTile);
+  });
+  const spanSource = new WindDataSource('https://api.test', { fetchImpl: spanFetch, cache: spanCache, coalesceSpans: true });
+  expect(await spanSource.load({ build: spanBuild, frame: spanFrame, bounds: [-180, -85, 180, 85] })).toBe('ready');
+  expect(spanCalls).toBeGreaterThanOrEqual(3);
+  expect(spanCache.spansUnsupported).toBe(false);
+  spanSource.dispose(); spanCache.clear();
 
   // Overview-less regional build (e.g. pre-overview av-wrf at z=8.02: 55 wind + 6 fine = 7.34 MiB > 4 MiB) uses SINGLE_VIEW_MAX_BYTES.
   const regional = build();

@@ -10,10 +10,11 @@ export interface WindBarbGeometry {
   points: readonly (readonly [number, number])[];
 }
 
-/** Wind-barb paths and vertices share the same geometry, speed quantization and hemisphere flip. */
-export function barbGeometry(speed: number, directionDeg: number, staffLength: number, southernHemisphere: boolean): WindBarbGeometry {
-  if (!Number.isFinite(speed) || speed < 0 || !Number.isFinite(directionDeg)) return { staff: '', flags: [], calm: false, points: [] };
-  if (speed === 0) return { staff: '', flags: [], calm: true, points: [] };
+/** Wind-barb paths and vertices share WMO/ICAO knot quantization, <2.5 kt calm threshold, and hemisphere flip. */
+export function barbGeometry(speedKt: number, directionDeg: number, staffLength: number, southernHemisphere: boolean): WindBarbGeometry {
+  if (!Number.isFinite(speedKt) || speedKt < 0 || !Number.isFinite(directionDeg)) return { staff: '', flags: [], calm: false, points: [] };
+  const rounded = quantizedBarbSpeed(speedKt);
+  if (rounded === 0) return { staff: '', flags: [], calm: true, points: [] };
   const rad = (directionDeg * Math.PI) / 180, ux = Math.sin(rad), uy = -Math.cos(rad);
   const side = southernHemisphere ? -1 : 1, px = -uy * side, py = ux * side;
   const points: (readonly [number, number])[] = [[0, 0]];
@@ -22,7 +23,6 @@ export function barbGeometry(speed: number, directionDeg: number, staffLength: n
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   };
   const staff = `M0,0L${vertex(ux * staffLength, uy * staffLength)}`, flags: string[] = [];
-  const rounded = quantizedBarbSpeed(speed);
   const pennants = Math.min(16, Math.floor(rounded / 50)), feathers = Math.floor((rounded % 50) / 10), half = rounded % 10 >= 5;
   const compression = Math.min(1, staffLength / Math.max(1, pennants * 8 + feathers * 4 + (half ? 4 : 0)));
   let d = staffLength;

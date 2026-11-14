@@ -1,5 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
+import { barbGeometry } from '../../../packages/windgram/src/wind-barb';
+import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS } from './raster-budget';
 import { WindOverlay, type WindField } from './wind-overlay';
 
 class Canvas extends EventTarget {
@@ -84,17 +86,29 @@ it('uses valid paired samples for barb labels and never renders missing wind as 
   f.overlay.destroy();
 });
 
-it.each(['metric', 'imperial'] as const)('uses shared 1-knot calm thresholds for %s map barbs', units => {
+it.each(['metric', 'imperial'] as const)('uses shared 2.5-knot calm thresholds and agrees with windgram barb geometry in %s', units => {
   const f = fixture();
   f.overlay.setOptions({ style: 'barbs', units });
   const ctx = f.canvases[1].context;
-  for (const [speed, label] of [[0.05, null], [0.5, null], [0.52, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
-    ctx.fillText.mockClear(); ctx.arc.mockClear();
-    f.overlay.setField({ sample: () => ({ status: 0, u: speed, v: 0 }) });
-    if (label === null) {
-      expect(ctx.arc).toHaveBeenCalled(); expect(ctx.fillText).not.toHaveBeenCalled();
+  const knotsPerMps = 1.9438444924, displayFactor = units === 'metric' ? 3.6 : 2.2369362921;
+  for (const kt of [0, 0.4, 1.5, 2.49, 2.5, 5, 10, 20, 48, 65]) {
+    const mps = kt / knotsPerMps;
+    const wg = barbGeometry(kt, 270, 21, false);
+    let sampled = false;
+    ctx.fillText.mockClear(); ctx.arc.mockClear(); ctx.fill.mockClear(); ctx.lineTo.mockClear();
+    f.overlay.setField({ sample: () => {
+      if (sampled) return { status: 2, u: null, v: null };
+      sampled = true; return { status: 0, u: mps, v: 0 };
+    } });
+    if (wg.calm) {
+      expect(ctx.arc).toHaveBeenCalled();
+      expect(ctx.fillText).not.toHaveBeenCalled();
     } else {
-      expect(ctx.fillText).toHaveBeenCalledWith(label, expect.any(Number), expect.any(Number)); expect(ctx.arc).not.toHaveBeenCalled();
+      expect(ctx.arc).not.toHaveBeenCalled();
+      expect(ctx.fillText).toHaveBeenCalledWith(String(Math.trunc(mps * displayFactor)), expect.any(Number), expect.any(Number));
+      const pennants = wg.flags.filter(flag => flag.endsWith('Z')).length;
+      expect(ctx.fill).toHaveBeenCalledTimes(pennants);
+      expect(ctx.lineTo).toHaveBeenCalledTimes(1 + pennants + wg.flags.length);
     }
   }
   f.overlay.destroy();
@@ -106,7 +120,7 @@ it.each(['metric', 'imperial'] as const)('draws WMO/ICAO knot pennants and feath
   const ctx = f.canvases[1].context;
   const knotsPerMps = 1.9438444924, displayFactor = units === 'metric' ? 3.6 : 2.2369362921;
   for (const [kt, flags, full, half] of [
-    [1, 0, 0, 1], [2, 0, 0, 1], [3, 0, 0, 1], [7, 0, 0, 1], [8, 0, 1, 0],
+    [2.5, 0, 0, 1], [3, 0, 0, 1], [7, 0, 0, 1], [8, 0, 1, 0], [20, 0, 2, 0],
     [47, 0, 4, 1], [48, 1, 0, 0], [52, 1, 0, 0], [53, 1, 0, 1],
     [57, 1, 0, 1], [58, 1, 1, 0], [98, 2, 0, 0], [100, 2, 0, 0], [145, 2, 4, 1]
   ]) {
@@ -129,7 +143,7 @@ it.each(['metric', 'imperial'] as const)('draws WMO/ICAO knot pennants and feath
 });
 
 it.each([
-  [1, 0, 0], [0, 1, -Math.PI / 2], [-1, 0, Math.PI], [0, -1, Math.PI / 2]
+  [5, 0, 0], [0, 5, -Math.PI / 2], [-5, 0, Math.PI], [0, -5, Math.PI / 2]
 ])('points the staff downwind for u=%s v=%s', (u, v, angle) => {
   const f = fixture();
   f.overlay.setOptions({ style: 'barbs' });
@@ -211,7 +225,7 @@ it.each([0, 6, 16])('keeps normal wind visible at zoom %s and checks gaps within
 });
 
 it('anchors sparse barbs to a subset of the full world lattice', () => {
-  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 1, v: 0 }));
+  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 5, v: 0 }));
   f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
   const full = new Set(sample.mock.calls.map(call => JSON.stringify(call)));
   const ctx = f.canvases[1].context;
@@ -240,7 +254,7 @@ it.each([2.9, 3, 3.1])('keeps 32 px world-anchored barb spacing at zoom %s while
     getSouth: () => lat(centerY + 128)
   });
   f.map.project = ([lon, latitude]: number[]) => ({ x: (lon + 180) / 360 * size - centerX + 128, y: worldY(latitude) - centerY + 128 });
-  const sample = vi.fn((_lat: number, _lon: number) => ({ status: 0, u: 1, v: 0 }));
+  const sample = vi.fn((_lat: number, _lon: number) => ({ status: 0, u: 5, v: 0 }));
   f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
   if (zoom === 3) expect(sample).toHaveBeenCalledTimes(64);
   const positions = (f.canvases[1].context.translate.mock.calls as unknown as number[][]);
@@ -282,9 +296,19 @@ it('translates trail history during pan and clears it on zoom', () => {
   f.overlay.destroy();
 });
 
-it('bounds canvas memory and suspends frames for pause, visibility, context loss and destruction', () => {
+it('bounds canvas memory within WIND_CANVAS_BYTES across styles and viewports and suspends frames appropriately', () => {
+  for (const [w, h] of [[1200, 800], [1920, 1000], [2027, 815], [6000, 4000]] as const) {
+    const check = fixture(w, h);
+    for (const style of ['trails', 'barbs', 'hybrid'] as const) {
+      check.overlay.setOptions({ style, visible: true });
+      const totalBytes = check.canvases.reduce((sum, c) => sum + c.width * c.height * 4, 0);
+      expect(totalBytes).toBeLessThanOrEqual(WIND_CANVAS_BYTES);
+      expect(check.canvases[0].width * check.canvases[0].height).toBeLessThanOrEqual(WIND_TRAIL_PIXELS);
+    }
+    check.overlay.destroy();
+  }
   const f = fixture(6000, 4000);
-  expect(f.canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0)).toBeLessThanOrEqual(2_097_152);
+  expect(f.canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0)).toBeLessThanOrEqual(WIND_TRAIL_PIXELS);
   f.overlay.setField({ sample: () => ({ status: 0, u: 1, v: 1 }) });
   expect(f.frames.size).toBe(1);
   f.overlay.setOptions({ paused: true }); expect(f.frames.size).toBe(0);
@@ -373,7 +397,7 @@ it('keeps desktop barbs at 2x Retina resolution, throttles 120 Hz fade quantizat
 });
 
 it('coalesces barb drawing during map motion into one display frame', () => {
-  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 1, v: 0 }));
+  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 5, v: 0 }));
   f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
   const ctx = f.canvases[1].context;
   ctx.clearRect.mockClear(); sample.mockClear();

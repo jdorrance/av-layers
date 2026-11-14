@@ -1,5 +1,5 @@
-import { barbGeometry, displayedBarbSpeed } from './wind-barb.ts';
-import { knotsToMps, type UnitSystem } from './windgram-format.ts';
+import { barbGeometry } from './wind-barb.ts';
+import type { UnitSystem } from './windgram-format.ts';
 import { WINDGRAM_PRESENTATION, type WindgramPresentation } from './windgram-presentation.ts';
 
 interface GlyphBox { x: number; y: number; width: number; height: number }
@@ -25,9 +25,9 @@ const positioned = (box: GlyphBox, x: number, y: number, scale = 1): GlyphBox =>
 export function windBarbGlyph(
   barb: { x: number; y: number; speedKt: number; directionDeg: number; southernHemisphere: boolean },
   presentation: WindgramPresentation,
-  system: UnitSystem,
+  _system?: UnitSystem,
 ) {
-  const geometry = barbGeometry(displayedBarbSpeed(knotsToMps(barb.speedKt), system) ?? NaN, barb.directionDeg, presentation.glyphs.barbStaff, barb.southernHemisphere);
+  const geometry = barbGeometry(barb.speedKt, barb.directionDeg, presentation.glyphs.barbStaff, barb.southernHemisphere);
   const local = geometry.calm
     ? bounds([[-CALM_RADIUS, -CALM_RADIUS], [CALM_RADIUS, CALM_RADIUS]], WINDGRAM_PRESENTATION.strokes.barbRim)
     : geometry.points.length ? bounds(geometry.points, WINDGRAM_PRESENTATION.strokes.barbRim) : { x: 0, y: 0, width: 0, height: 0 };

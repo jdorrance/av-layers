@@ -67,7 +67,7 @@ export function previewUrl(pathname: string, state: {
   });
   if (state.layer && state.layer !== 'usable-lift-agl' && state.layer !== 'usable-lift-msl') params.set('layer', state.layer);
   if (state.validTime) params.set('t', state.validTime);
-  if (state.windVisible === false) params.set('wind', '0');
+  if (state.windVisible !== undefined) params.set('wind', state.windVisible ? '1' : '0');
   if (state.windStyle && state.windStyle !== 'trails') params.set('wstyle', state.windStyle);
   if (state.windHeight && state.windHeight !== 'surface') params.set('wheight', String(state.windHeight));
   if (state.units && state.units !== 'metric') params.set('units', state.units);

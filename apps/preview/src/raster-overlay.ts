@@ -30,6 +30,7 @@ export class RasterOverlay {
   private generation = 0;
   private opacity: number;
   private windActive = true;
+  private windResident = true;
   private incomplete = false;
   private replacementFailed = false;
   private lastState: OverlayState | null = null;
@@ -230,9 +231,10 @@ export class RasterOverlay {
     if (visible) this.map.setPaintProperty(visible.id, 'raster-opacity', value);
   }
 
-  setWindActive(active: boolean): void {
-    if (this.windActive === active) return;
-    this.windActive = active; this.sourceLimits.clear(); this.enforceBudget(); this.prepareNext();
+  setWindActive(active: boolean, numericResident = active): void {
+    if (this.windActive === active && this.windResident === numericResident) return;
+    this.windActive = active; this.windResident = numericResident;
+    this.sourceLimits.clear(); this.enforceBudget(); this.prepareNext();
   }
 
   clear(dispose = false): void {
@@ -294,7 +296,7 @@ export class RasterOverlay {
 
   private prepareOverview(sel: Selection): void {
     if (!this.overview?.supported) return;
-    if (canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive)) {
+    if (canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) {
       this.limitSlots(sel, true); this.overview.select(sel.build, sel.layer, sel.frame);
     } else this.clearOverview();
   }
@@ -371,9 +373,9 @@ export class RasterOverlay {
     if (Number.isFinite(deadline)) this.expiryTimer = setTimeout(() => { this.expiryTimer = null; this.refresh(); }, Math.min(Math.max(0, deadline - Date.now()), 2_147_000_000));
   }
   private slotLimit(sel: Selection, overview = !!this.overview?.state.total): number {
-    const zoom = layerMaxZoom(sel.build.manifest, sel.layer), key = zoom * 4 + Number(overview) * 2 + Number(this.windActive);
+    const zoom = layerMaxZoom(sel.build.manifest, sel.layer), key = zoom * 8 + Number(overview) * 4 + Number(this.windActive) * 2 + Number(this.windResident);
     let limit = this.sourceLimits.get(key);
-    if (limit === undefined) { limit = rasterSourceLimit(this.map, zoom, overview, this.windActive); this.sourceLimits.set(key, limit); }
+    if (limit === undefined) { limit = rasterSourceLimit(this.map, zoom, overview, this.windActive, this.windResident); this.sourceLimits.set(key, limit); }
     return limit;
   }
   private limitSlots(sel: Selection, overview = !!this.overview?.state.total): number {
@@ -384,7 +386,7 @@ export class RasterOverlay {
   private enforceBudget(): void {
     const sel = this.requested ?? this.active;
     if (!sel) return;
-    if (this.overview?.state.total && !canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive)) this.clearOverview();
+    if (this.overview?.state.total && !canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) this.clearOverview();
     if (!this.limitSlots(sel)) { this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.incomplete = false; }
     this.armExpiry(); this.emit();
   }
