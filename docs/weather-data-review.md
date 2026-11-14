@@ -1,7 +1,6 @@
 # Weather data adversarial review
 
-The corrected design is ready for a measured spike; the new wind pipeline has
-no end-to-end performance result yet.
+The wind pipeline requires end-to-end performance measurements.
 
 ```sh
 pnpm exec node --import tsx scripts/weather-data-audit.ts > /tmp/weather-data-review.json
@@ -12,6 +11,38 @@ Reviewed against main `b49a3bd` on 2026-11-13, with independent client, serving
 and scientific reviews. The branch includes that baseline. The
 [plan](weather-data-plan.md) owns the resulting implementation requirements;
 [evidence](assets/wind-overlay/review-evidence.json) owns calculations and source hashes.
+
+## Runtime review, 2026-11-14
+
+Independent client, publication and sampling reviews covered the opt-in prototype.
+Regression tests now cover:
+
+- Float32 target heights preserving missing vertical brackets; integer rounding
+  previously made unsupported wind appear valid.
+- Partial-page shard admission for all six models, daylight-filtered completion,
+  bounded receipt arrays and matching descriptor limits across writer and readers.
+- Request slots remaining occupied through cancellation, and forecast resources
+  sharing the existing 96 MiB client envelope. Rapid viewport replacements wait
+  for the retired load to release its buffers.
+- Trails stopping at missing-data boundaries and remaining visible at high zoom.
+- Failed pans preserving availability warnings, hidden wind suppressing loading
+  indicators, and imperial legend labels matching their converted values.
+- Positive low-speed half feathers, literal calm, and bounded glyph work for
+  extreme finite inputs.
+- Numeric payload restoration on retry, missing receipt ETags, corrupt/expired
+  reads and cancellation during local artifact verification.
+
+The smoke harness now fails point-unit regressions and requires an actual raster
+readiness state. Its layout checks include vertical bounds; browser verification
+at 390 × 844 caught an empty status paragraph shifting the map and clipping the
+timeline. The corrected timeline ends at y=836. The plan distinguishes the implemented dense Float32/Canvas2D
+prototype from the sparse int16/GPU candidates used in its earlier estimates.
+The performance gates below remain open.
+
+Validation: `pnpm verify` passed 2,570 unit tests and 193 integration tests,
+lint, typechecks, generated-reference checks and application builds. The additional
+`AV_REAL_WIND_TEST=1` cached GFS encoder/API round-trip passed. Browser checks confirmed
+style-menu focus, point units, Top-of-lift selection and the phone layout.
 
 ## Findings resolved in the plan
 
@@ -55,9 +86,6 @@ and scientific reviews. The branch includes that baseline. The
     cold/warm, total-stack, accuracy and resource measurements. Passing existing
     raster tests alone cannot qualify the new numeric path.
 
-These corrections are design requirements. They do not claim that the proposed
-runtime behavior has been implemented or measured.
-
 ## Follow-up feedback
 
 The reviews of `1080054` exposed five further design gaps, now addressed:
@@ -99,13 +127,8 @@ arrives. Choose B if A misses any hard gate and B passes. If both pass, choose f
 measured interaction latency, transfer, memory and publication cost; if neither
 passes, revise the representation before production publication work.
 
-Use the current [build limits](../apps/batch/src/capacity.ts): **64 GiB logical
-numeric**, **180 minutes**, **2 GiB planned working set**, **4 GiB peak RSS**,
-and **5 million raster tiles**. Publication keeps **256 MiB artifacts**, **512 MiB
-upload reservations** and **four storage operations**, with
-[two serving upload lanes](../apps/batch/src/serving-groups.ts). Planned temporary
-inputs plus outputs must fit measured available disk. Account for overlapping
-scheduled runs; the configured 40-job group limit is not a deployment-wide limit.
+Apply the [build limits](../apps/batch/src/capacity.ts). Planned temporary inputs
+and outputs must fit available disk; account for overlapping scheduled runs.
 
 The stage report must provide compressed GiB/run, compressed GiB/day and seven-day
 retention, complete publication wall time, peak disk and overlapping-run headroom.
@@ -189,12 +212,12 @@ model/build/frame, active layers and all quality settings with each result.
 ## Evidence available now
 
 The audit script recomputes all configured native coverage layouts and raw column
-costs, models aligned viewport grouping, and checks two existing scalar-sampler
+costs for the sparse int16 candidate, models aligned viewport grouping, and checks two existing scalar-sampler
 cases, the no-lift island and resampling/discontinuity counterexamples. It performs
 no network or GPU timing.
 
 The [existing timeline results](preview-performance.md) establish current painted
 raster performance under their documented synthetic network/device conditions.
-They are the regression baseline for this feature. The new encoder, numeric
-server route, GPU height pass and integrated mobile viewer still need the release
-measurements above.
+They are the regression baseline for this feature. The current Float32 encoder,
+numeric routes and Canvas2D viewer require separate complete-build and real-device
+measurements. GPU selection and the grouped-field comparison remain planned.

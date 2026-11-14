@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from '@av/contracts/format';
+export { createForecastRequestScheduler } from './client-request-scheduler.ts';
 
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }
@@ -179,7 +180,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   }
   async function run(task: TileTask): Promise<void> {
     try {
-      const { until: responseExpiry, ...result } = await request(task.url, task.controller.signal);
+      const { until: responseExpiry, ...result } = await request(task.url, task.controller.signal, interactive(task));
       task.controller.signal.throwIfAborted();
       if ((buildExpiry.get(task.build) ?? Infinity) <= Date.now()) throw abortError();
       const until = Math.min(responseExpiry, buildExpiry.get(task.build) ?? Infinity);
@@ -228,11 +229,11 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); reader.releaseLock();
     }
   }
-  async function request(url: string, signal: AbortSignal): Promise<RasterTileResponse & { until: number }> {
+  async function request(url: string, signal: AbortSignal, interactive: boolean): Promise<RasterTileResponse & { until: number }> {
     for (let attempt = 0; ; attempt++) {
       signal.throwIfAborted();
       let response: Response | undefined;
-      try { response = await fetchImpl(url, { signal, redirect: 'error', headers: { accept: 'image/webp' } }); }
+      try { response = await fetchImpl(url, { signal, redirect: 'error', headers: { accept: 'image/webp' }, priority: interactive ? 'high' : 'low' } as RequestInit); }
       catch (error) {
         signal.throwIfAborted();
         if (!(error instanceof TypeError) || attempt === 2) throw error;

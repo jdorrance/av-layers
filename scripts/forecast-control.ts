@@ -42,8 +42,9 @@ export async function uploadForecastControlPlan(store: ObjectStorage, root: stri
 }
 
 async function restoreShardPayload(store: ObjectStorage, root: string, plan: BuildPlan, shard: number, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
-  const { objects } = parseForecastShardReceipt(bytes, plan, shard);
-  if (!objects) throw new Error('Forecast shard receipt has no stored payload');
+  const receipt = parseForecastShardReceipt(bytes, plan, shard);
+  if (!receipt.objects || receipt.numeric?.objects.some(object => !object.etag)) throw new Error('Forecast shard receipt has no stored payload');
+  const objects = [...receipt.objects, ...(receipt.numeric?.objects.map(object => ({ ...object, etag: object.etag! })) ?? [])];
   const buildPrefix = `builds/${plan.model}/${plan.buildId}/`, keys = new Set<string>();
   let requiredBytes = 0;
   for (const object of objects) {

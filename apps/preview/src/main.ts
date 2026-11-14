@@ -2,11 +2,13 @@ import { renderBuildDiagnostics } from '@av/client/dom';
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
+import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, STATUS_VALID, type LayerId } from '@av/contracts/layers';
+import { normalizeLon } from '@av/contracts/geometry';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import {
   ApiClient,
+  createForecastRequestScheduler,
   AUTO_MODEL_ID,
   activePalettes,
   assertNotExpired,
@@ -31,6 +33,12 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
 import { clockLabel, dayKey, dayLabel, frameIndexFor } from './timeline';
+import { WindOverlay } from './wind-overlay';
+import { createWindControls, type WindStatus } from './wind-controls';
+import { createCompactTimeline } from './compact-timeline';
+import { WindDataSource } from '@av/client/wind';
+import { displayedWindSpeed } from './wind-speed';
+import { googleTerrainStyle, type TerrainBasemap } from './basemap';
 
 type PointWindgram = typeof import('@av/windgram');
 
@@ -41,6 +49,13 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const modelBar = element<HTMLDivElement>('models');
+const modelPicker = element<HTMLDetailsElement>('model-picker');
+const modelSelected = element<HTMLElement>('model-selected');
+const metricButton = element<HTMLButtonElement>('units-metric');
+const imperialButton = element<HTMLButtonElement>('units-imperial');
+const locateButton = element<HTMLButtonElement>('locate');
+const locationStatus = element<HTMLParagraphElement>('location-status');
+const distanceScale = element<HTMLParagraphElement>('distance-scale');
 const refAgl = element<HTMLButtonElement>('ref-agl');
 const refMsl = element<HTMLButtonElement>('ref-msl');
 const opacityInput = element<HTMLInputElement>('opacity');
@@ -62,6 +77,7 @@ const pointClose = element<HTMLButtonElement>('point-close');
 const pointSettings = element<HTMLDetailsElement>('point-settings');
 const pointBuildDetails = element<HTMLDetailsElement>('point-build-details');
 const pointLocation = element<HTMLParagraphElement>('point-location');
+const pointWind = element<HTMLParagraphElement>('point-wind');
 const pointStatus = element<HTMLParagraphElement>('point-status');
 const pointBody = element<HTMLDivElement>('point-body');
 const pointUnits = element<HTMLSelectElement>('point-units');
@@ -77,8 +93,18 @@ const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
 const api = new ApiClient({ baseUrl: apiBaseUrl });
 
 const startup = previewQuery(window.location.search, offlineFixture);
-const initialModel = startup.model ?? import.meta.env.VITE_MODEL ?? 'icon-eu';
-const initialOpacity = startup.opacity ?? 0.7;
+function stored(key: string): string | null {
+  try { return window.localStorage.getItem(key); } catch { return null; }
+}
+
+function store(key: string, value: string): void {
+  try { window.localStorage.setItem(key, value); } catch { /* Storage can be unavailable. */ }
+}
+
+const initialModel = startup.model ?? (offlineFixture ? import.meta.env.VITE_MODEL ?? 'gfs' : AUTO_MODEL_ID);
+const savedOpacity = stored('preview-lift-opacity');
+const savedOpacityNumber = savedOpacity === null || savedOpacity.trim() === '' ? NaN : Number(savedOpacity);
+const initialOpacity = startup.opacity ?? (Number.isFinite(savedOpacityNumber) && savedOpacityNumber >= 0 && savedOpacityNumber <= 1 ? savedOpacityNumber : 0.5);
 
 if (offlineFixture) {
   const warning = document.createElement('p');
@@ -109,7 +135,14 @@ function basemapStyle(): maplibregl.StyleSpecification {
   };
 }
 
-function startPreview(): void {
+interface InitialDiscovery {
+  controller: AbortController;
+  model?: ModelId;
+  build?: Promise<PinnedBuild>;
+  auto?: Promise<AutoForecastSelection | null>;
+}
+
+function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null, initialDiscovery: InitialDiscovery | null): void {
   modelBar.replaceChildren();
   modelButtons.length = 0;
   const choices = offlineFixture
@@ -132,10 +165,9 @@ function startPreview(): void {
     maxTileCacheSize: RASTER_CACHE_TILES,
     style: offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : basemapStyle()
+      : terrain?.style ?? basemapStyle()
   });
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
-  const lifecycle = new AbortController();
+  terrain?.attach(map);
   const globalListener = { signal: lifecycle.signal };
 
   let build: PinnedBuild | null = null;
@@ -149,10 +181,12 @@ function startPreview(): void {
   let mapReady = false;
   let selectingOverlay = false;
   let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
+  const scheduler = createForecastRequestScheduler();
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
+    reconcileWind();
     updateOverlayStatus();
-  });
+  }, scheduler.fetch);
   let timelineDays: { build: PinnedBuild; offset: number; buttons: HTMLButtonElement[] } | null = null;
   let ribbon: { build: PinnedBuild; layer: LayerId } | null = null;
   let pendingModel: ModelId | null = null;
@@ -160,7 +194,7 @@ function startPreview(): void {
   let loadAbort: AbortController | null = null;
   let autoAbort: AbortController | null = null;
   const pointSeries = new PointSeriesController(api);
-  let pointUnitSystem: UnitSystem = 'metric';
+  let pointUnitSystem: UnitSystem = stored('preview-units') === 'imperial' ? 'imperial' : 'metric';
   let pointHorizon: PointHorizon = 'day';
   let windgram: PointWindgram | null = null;
   let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
@@ -172,6 +206,204 @@ function startPreview(): void {
   let applyingHistory: number | null = null;
   let opacityCommitted = false;
   let legendOpen = true;
+  let windAbort: AbortController | null = null;
+  let windKey = '';
+  let windReady = false;
+  let windLoadStatus: WindStatus = 'unavailable';
+  let windDisplayed = false;
+  let windIdentity: { build: PinnedBuild; frame: string; bounds: [number, number, number, number] } | null = null;
+  let windHeight: 'surface' | number | 'lift' = 'surface';
+  let locationRevision = 0;
+  let windSource = new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch });
+  let pendingWindSource: WindDataSource | null = null;
+  let windLoading = false;
+  let queuedWindLoad: (() => void) | null = null;
+  const windOverlay = new WindOverlay(map);
+  const windControls = createWindControls(element('wind-controls'), {
+    onChange(state) {
+      windOverlay.setOptions({ ...state, units: pointUnitSystem });
+      if (windDisplayed && windHeight !== state.height) setWindField();
+      updateWind();
+      updatePointWind();
+    }
+  });
+  const compactTimeline = createCompactTimeline(element('compact-timeline'), {
+    timeZone: 'UTC',
+    onSelect(index) { selectIndex(index, 'push'); }
+  });
+  windControls.setUnits(pointUnitSystem);
+  windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
+
+  function setWindField(): void {
+    const height = windControls.state.height;
+    windHeight = height;
+    windOverlay.setField({ sample(lat, lon) {
+      const sample = windSource.sample(lat, normalizeLon(lon), height);
+      return { ...sample, status: sample.status === 'valid' ? STATUS_VALID : 1 };
+    } });
+  }
+
+  function reconcileWind(): void {
+    const displayed = overlayState.displayed;
+    const matches = windReady && windLoadStatus !== 'unavailable' && windLoadStatus !== 'zoom-in'
+      && windIdentity && displayed?.build === windIdentity.build && displayed.frame === windIdentity.frame;
+    if (matches && !windDisplayed) {
+      setWindField();
+      windDisplayed = true;
+    } else if (!matches && windDisplayed) {
+      windOverlay.clear();
+      windDisplayed = false;
+    }
+    if (windLoadStatus === 'ready') windControls.setStatus(matches ? 'ready' : overlayState.replacementFailed ? 'unavailable' : 'loading');
+    updatePointWind();
+  }
+
+  function setWindStatus(status: WindStatus): void {
+    windLoadStatus = status;
+    windControls.setStatus(status);
+  }
+
+  function clearWind(): void {
+    windAbort?.abort();
+    windAbort = null;
+    pendingWindSource?.dispose();
+    pendingWindSource = null;
+    queuedWindLoad = null;
+    windKey = '';
+    windReady = false;
+    windDisplayed = false;
+    windIdentity = null;
+    windOverlay.clear();
+    setWindStatus('unavailable');
+    updatePointWind();
+  }
+
+  function updatePointWind(): void {
+    const context = pointSeries.current, identity = windIdentity;
+    if (!context || !windDisplayed || !identity || context.build !== identity.build || pointSeries.frameId !== identity.frame) {
+      pointWind.textContent = '';
+      return;
+    }
+    const point = context.point;
+    const validTime = identity.build.manifest.frames.find(frame => frame.id === identity.frame)?.validTime;
+    if (!validTime) { pointWind.textContent = ''; return; }
+    const sample = windSource.sample(point.lat, point.lon, windControls.state.height);
+    const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(sample.u, sample.v, pointUnitSystem) : null;
+    const value = speed !== null
+      ? `${speed} ${pointUnitSystem === 'metric' ? 'km/h' : 'mph'}`
+      : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
+    pointWind.textContent = `Map wind · ${validTime.slice(0, 16).replace('T', ' ')} UTC · ${value}`;
+  }
+
+  function updateWind(): void {
+    if (!windControls.state.visible) {
+      windAbort?.abort();
+      windAbort = null;
+      pendingWindSource?.dispose();
+      pendingWindSource = null;
+      queuedWindLoad = null;
+      windKey = '';
+      return;
+    }
+    if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
+    const bounds = map.getBounds();
+    const west = bounds.getWest(), east = bounds.getEast();
+    const wrap = (lon: number) => ((lon + 180) % 360 + 360) % 360 - 180;
+    const view: [number, number, number, number] = [east - west >= 360 ? -180 : wrap(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : wrap(east), Math.min(90, bounds.getNorth())];
+    const identity = windIdentity;
+    const span = (west: number, east: number) => (east - west + 360) % 360 || (east === west ? 0 : 360);
+    const covered = identity && windReady && identity.build === build && identity.frame === selectedFrame
+      && view[1] >= identity.bounds[1] && view[3] <= identity.bounds[3]
+      && span(identity.bounds[0], view[0]) + span(view[0], view[2]) <= span(identity.bounds[0], identity.bounds[2]);
+    if (covered) {
+      windAbort?.abort(); windAbort = null;
+      pendingWindSource?.dispose(); pendingWindSource = null;
+      windKey = '';
+      setWindStatus('ready');
+      reconcileWind();
+      return;
+    }
+    const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view]);
+    if (key === windKey) return;
+    windAbort?.abort();
+    pendingWindSource?.dispose();
+    if (!identity || identity.build !== build || identity.frame !== selectedFrame) clearWind();
+    windKey = key;
+    setWindStatus('loading');
+    const request = new AbortController();
+    windAbort = request;
+    const source = new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch });
+    pendingWindSource = source;
+    const requestedBuild = build, requestedFrame = selectedFrame;
+    const start = (): void => {
+      queuedWindLoad = null;
+      if (request.signal.aborted) return;
+      windLoading = true;
+      let finished = false;
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        windLoading = false;
+        queuedWindLoad?.();
+      };
+      void source.load({ build: requestedBuild, frame: requestedFrame, bounds: view, signal: request.signal }).then(status => {
+        finish();
+        if (request.signal.aborted || windAbort !== request || !ensureLive()) return;
+        windAbort = null;
+        pendingWindSource = null;
+        if (status === 'ready') {
+          windSource.dispose();
+          windSource = source;
+          windIdentity = { build: requestedBuild, frame: requestedFrame, bounds: view };
+          windReady = true;
+          if (windDisplayed) setWindField();
+        } else {
+          source.dispose();
+          windKey = '';
+        }
+        setWindStatus(status);
+        reconcileWind();
+      }).catch(() => {
+        finish();
+        if (request.signal.aborted || windAbort !== request) return;
+        windAbort = null;
+        pendingWindSource = null;
+        source.dispose();
+        windKey = '';
+        setWindStatus('unavailable');
+        reconcileWind();
+      });
+    };
+    // A retired load releases its decoded maps before the latest viewport can allocate.
+    if (windLoading) queuedWindLoad = start;
+    else start();
+  }
+
+  function updateScale(): void {
+    const metres = 80 * 2 * Math.PI * 6371000 * Math.cos(Math.min(85, Math.abs(map.getCenter().lat)) * Math.PI / 180) / (512 * 2 ** map.getZoom());
+    const distance = metres / (pointUnitSystem === 'metric' ? 1000 : 1609.344);
+    const magnitude = 10 ** Math.floor(Math.log10(distance));
+    const rounded = [10, 5, 2, 1].find(value => value * magnitude <= distance) ?? 1;
+    const value = rounded * magnitude;
+    distanceScale.style.width = `${Math.max(1, 80 * value / distance)}px`;
+    distanceScale.textContent = `${Number(value.toPrecision(2))} ${pointUnitSystem === 'metric' ? 'km' : 'mi'}`;
+  }
+
+  function setUnits(units: UnitSystem): void {
+    pointUnitSystem = units;
+    store('preview-units', units);
+    metricButton.ariaPressed = String(units === 'metric');
+    imperialButton.ariaPressed = String(units === 'imperial');
+    pointUnits.value = units;
+    element<HTMLElement>('lift-units').textContent = units === 'metric' ? 'Lift m' : 'Lift ft';
+    windControls.setUnits(units);
+    windOverlay.setOptions({ units });
+    ribbon = null;
+    if (overlayState.displayed) renderRibbon(overlayState.displayed.layer, overlayState.displayed.build);
+    updateScale();
+    updatePointSelection();
+    updatePointWind();
+  }
 
   function mapLon(): number {
     return map.getCenter().lng;
@@ -197,6 +429,7 @@ function startPreview(): void {
 
   function syncModels(): void {
     for (const button of modelButtons) button.className = button.value === currentModel ? 'model-button is-selected' : 'model-button';
+    modelSelected.textContent = modelButtons.find(button => button.value === currentModel)?.textContent ?? currentModel;
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
@@ -236,6 +469,7 @@ function startPreview(): void {
     pointBody.replaceChildren();
     updatePointSeries = null;
     pointSelection = null;
+    pointWind.textContent = '';
     pointBody.tabIndex = -1;
     meta.replaceChildren();
   }
@@ -247,6 +481,7 @@ function startPreview(): void {
     refMsl.disabled = !enabled;
     opacityInput.disabled = !enabled;
     timeInput.disabled = !enabled;
+    compactTimeline.update(build ? renderedFrames(build.manifest) : [], selectedFrame, !enabled);
   }
 
   function updateFreshness(): void {
@@ -277,22 +512,24 @@ function startPreview(): void {
     const title = document.createElement('p');
     title.className = 'ribbon-title';
     const descriptor = displayedBuild.manifest.descriptors.layers[layer];
-    title.textContent = layer === 'usable-lift-agl' ? 'Lift above ground (m AGL)' : 'Top of usable lift (m MSL)';
+    const altitudeUnit = pointUnitSystem === 'imperial' ? 'ft' : 'm';
+    title.textContent = layer === 'usable-lift-agl' ? `Lift above ground (${altitudeUnit} AGL)` : `Top of usable lift (${altitudeUnit} MSL)`;
     const scale = document.createElement('div');
     scale.className = 'ribbon-scale';
     const colorCount = palette.colors.length;
-    const colors = [...palette.colors].reverse();
+    const colors = [...palette.colors];
     const labels = palette.colors.map((_, index) => {
       const edge = index === colorCount - 1 && palette.edges.length > colorCount ? palette.edges[colorCount] : palette.edges[index];
-      return String(edge ?? '');
-    }).reverse();
+      const value = edge === undefined ? null : Math.round(edge * (pointUnitSystem === 'imperial' ? 3.280839895 : 1));
+      return value === null ? '' : value >= 1000 ? `${Number((value / 1000).toFixed(1))}k` : String(value);
+    });
     colors.forEach((color, index) => {
       const row = document.createElement('div');
       row.className = 'ribbon-stop';
       const swatch = document.createElement('span');
       swatch.style.background = color;
       const tick = document.createElement('span');
-      tick.textContent = labels[index] ?? '';
+      tick.textContent = index === 0 || index === colorCount - 1 || index === Math.floor(colorCount / 3) || index === Math.floor(colorCount * 2 / 3) ? labels[index] ?? '' : '';
       row.append(swatch, tick);
       scale.append(row);
     });
@@ -316,6 +553,7 @@ function startPreview(): void {
   }
 
   function updateTimeUi(): void {
+    compactTimeline.update(build ? renderedFrames(build.manifest) : [], selectedFrame, !build || expired || mapFailed);
     if (!build || !selectedFrame) {
       timelineDays = null;
       dayBar.replaceChildren();
@@ -355,10 +593,6 @@ function startPreview(): void {
     timestamp.textContent = selected ? `Selected · ${clockLabel(Date.parse(selected.validTime), offset)}` : 'No frame selected';
   }
 
-  function removeOverlay(dispose = false): void {
-    overlay.clear(dispose);
-  }
-
   function resetTileErrors(): void {
     tileErrorBox.hidden = true;
     tileErrorBox.textContent = '';
@@ -372,8 +606,8 @@ function startPreview(): void {
     const displayedTime = displayed?.build.manifest.frames.find(frame => frame.id === displayed.frame)?.validTime;
     const displayedLabel = displayedTime ? `${displayedClock.format(Date.parse(displayedTime))} UTC` : '';
     frameStatus.dataset.quality = quality ?? 'none';
-    const status = !displayed ? requested ? 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
-      : pending ? `Showing ${displayedLabel} · Loading selected time…`
+    const status = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
+      : pending ? `Showing ${displayedLabel} · ${replacementFailed ? 'Selected time unavailable' : 'Loading selected time…'}`
       : quality === 'overview' ? `${displayedLabel} · Overview · ${replacementFailed ? 'Detail unavailable' : 'Loading detail…'}`
       : viewLoading ? `${displayedLabel} · Loading this view…`
       : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
@@ -397,6 +631,7 @@ function startPreview(): void {
   }
 
   function updatePointSelection(): void {
+    updatePointWind();
     if (!updatePointSeries) return;
     const frame = pointSeries.frameId, mapFrame = displayedPointFrame();
     if (pointSelection?.update === updatePointSeries && pointSelection.frame === frame && pointSelection.units === pointUnitSystem && pointSelection.mapFrame === mapFrame) return;
@@ -415,9 +650,10 @@ function startPreview(): void {
       expiryTimer = null;
     }
     loadAbort?.abort();
+    clearWind();
     closePoint();
     disposeExpiry();
-    removeOverlay();
+    overlay.clear();
     setControlsEnabled(false);
     for (const button of modelButtons) button.disabled = mapFailed || pendingModel !== null;
     timestamp.textContent = 'Build expired — overlay removed';
@@ -440,6 +676,7 @@ function startPreview(): void {
   function updateOverlay(): void {
     const layer = activeLayer();
     if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
+    updateWind();
     clearError();
     selectingOverlay = true;
     try {
@@ -455,6 +692,7 @@ function startPreview(): void {
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
     const frame = build ? renderedFrames(build.manifest)[index] : undefined;
     if (!frame) return;
+    if (selectedFrame !== frame.id && windControls.state.visible) clearWind();
     if (currentModel === AUTO_MODEL_ID && requestedTime !== frame.validTime) autoAbort?.abort();
     selectedFrame = frame.id;
     requestedTime = frame.validTime;
@@ -491,8 +729,13 @@ function startPreview(): void {
     const layers = reference === 'agl' ? LIFT : [...LIFT].reverse();
     if (!build) freshness.textContent = 'Finding a forecast for this location…';
     try {
-      const next = await resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal,
-        ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
+      const pending = initialDiscovery?.auto;
+      if (pending) {
+        initialDiscovery!.auto = undefined;
+        request.signal.addEventListener('abort', () => initialDiscovery?.controller.abort(), { once: true });
+      }
+      const next = await (pending ?? resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal,
+        ...(Number.isFinite(time) ? { validTimeMs: time } : {}) }));
       if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
@@ -511,8 +754,9 @@ function startPreview(): void {
       expiryTimer = null;
       build = null;
       selectedFrame = null;
+      clearWind();
       closePoint();
-      removeOverlay();
+      overlay.clear();
       updateTimeUi();
       setControlsEnabled(false);
       showError('No forecast covers this location and time.');
@@ -528,6 +772,7 @@ function startPreview(): void {
 
   async function loadModel(model: ModelId, resolved?: AutoForecastSelection): Promise<void> {
     if (mapFailed) return;
+    clearWind();
     if (model === AUTO_MODEL_ID && !resolved) {
       loadAbort?.abort();
       loadAbort = null;
@@ -569,7 +814,12 @@ function startPreview(): void {
     timestamp.textContent = 'No frame selected';
     updateOverlayStatus();
     try {
-      const next = resolved?.build ?? await api.latest(model, { signal: requestAbort.signal });
+      const pending = initialDiscovery?.model === model ? initialDiscovery.build : undefined;
+      if (pending) {
+        initialDiscovery!.build = undefined;
+        requestAbort.signal.addEventListener('abort', () => initialDiscovery?.controller.abort(), { once: true });
+      }
+      const next = resolved?.build ?? await (pending ?? api.latest(model, { signal: requestAbort.signal }));
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
@@ -631,6 +881,7 @@ function startPreview(): void {
     pointCard.hidden = false;
     pointSettings.open = pointBuildDetails.open = false;
     pointLocation.textContent = `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°`;
+    updatePointWind();
     meta.replaceChildren();
     windgram?.disposePointWindgram(pointBody);
     pointBody.replaceChildren(); updatePointSeries = null; pointSelection = null; pointBody.tabIndex = -1;
@@ -646,6 +897,7 @@ function startPreview(): void {
       onLoading() {
         pointCard.ariaBusy = 'true';
         setPointStatus('Loading forecast…');
+        updatePointWind();
       },
       onProgress(payload, totalFrames, loading) { showPoint(context, payload, totalFrames, loading); },
       onError(detail) {
@@ -694,6 +946,7 @@ function startPreview(): void {
       if (button.disabled || mapFailed) return;
       if (currentModel === AUTO_MODEL_ID) applyingHistory = null;
       const model = button.value as ModelId;
+      modelPicker.open = false;
       void loadModel(model);
       focusRegion(model);
     });
@@ -719,6 +972,7 @@ function startPreview(): void {
   opacityInput.addEventListener('pointerdown', () => { opacityCommitted = false; });
   opacityInput.addEventListener('input', () => {
     opacity = Math.min(1, Math.max(0, Number(opacityInput.value)));
+    store('preview-lift-opacity', String(opacity));
     opacityReadout.textContent = `${Math.round(opacity * 100)}%`;
     overlay.setOpacity(opacity);
     writeUrl(opacityCommitted ? 'replace' : 'push');
@@ -730,10 +984,31 @@ function startPreview(): void {
     writeUrl('replace');
     if (currentModel === AUTO_MODEL_ID) void loadAuto();
   });
-  pointUnits.value = pointUnitSystem;
+  setUnits(pointUnitSystem);
+  metricButton.addEventListener('click', () => setUnits('metric'));
+  imperialButton.addEventListener('click', () => setUnits('imperial'));
   pointUnits.addEventListener('change', () => {
-    pointUnitSystem = pointUnits.value === 'imperial' ? 'imperial' : 'metric';
-    updatePointSelection();
+    setUnits(pointUnits.value === 'imperial' ? 'imperial' : 'metric');
+  });
+  locateButton.addEventListener('click', () => {
+    if (locateButton.disabled || mapFailed) return;
+    const revision = ++locationRevision;
+    if (!navigator.geolocation) { locationStatus.textContent = 'Location unavailable'; return; }
+    locateButton.disabled = true;
+    locateButton.ariaBusy = 'true';
+    locationStatus.textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(position => {
+      if (revision !== locationRevision || lifecycle.signal.aborted) return;
+      locateButton.disabled = false;
+      locateButton.ariaBusy = 'false';
+      locationStatus.textContent = 'Location found';
+      map.jumpTo({ center: [position.coords.longitude, position.coords.latitude], zoom: Math.max(map.getZoom(), 10) });
+    }, error => {
+      if (revision !== locationRevision || lifecycle.signal.aborted) return;
+      locateButton.disabled = false;
+      locateButton.ariaBusy = 'false';
+      locationStatus.textContent = error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable';
+    }, { timeout: 10_000 });
   });
   pointHorizonSelect.value = pointHorizon;
   pointHorizonSelect.addEventListener('change', () => {
@@ -760,7 +1035,7 @@ function startPreview(): void {
     legendToggle.ariaLabel = legendOpen ? 'Collapse lift scale' : 'Show lift scale';
     legendToggle.textContent = legendOpen ? '⌃' : '⌄';
   });
-  const pointControls = [pointCard, refAgl, refMsl, timeInput, dayBar];
+  const pointControls = [pointCard, refAgl, refMsl, timeInput, dayBar, element('wind-controls'), element('compact-timeline'), element('display-units')];
   document.addEventListener('pointerdown', event => {
     if (!pointSeries.current) return;
     const target = event.target;
@@ -777,6 +1052,8 @@ function startPreview(): void {
     autoAbort?.abort();
   });
   map.on('moveend', () => {
+    updateScale();
+    if (currentModel !== AUTO_MODEL_ID) updateWind();
     if (build && !expired) updateTimeUi();
     if (currentModel === AUTO_MODEL_ID && !applyingHistory) void loadAuto();
     if (!urlReady || applyingHistory) return;
@@ -790,13 +1067,19 @@ function startPreview(): void {
     autoAbort?.abort();
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
+    clearWind(); locationRevision++;
+    windOverlay.destroy(); windSource.dispose(); windControls.destroy(); compactTimeline.destroy();
+    terrain?.dispose();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
     expiryTimer = null;
-    overlay.destroy(); map.remove(); showMapFailure(event.error);
+    overlay.destroy(); scheduler.dispose(); map.remove(); showMapFailure(event.error);
   });
 
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
+    clearWind(); locationRevision++;
+    locateButton.disabled = false;
+    locateButton.ariaBusy = 'false';
     resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
     loadAbort?.abort();
     autoAbort?.abort();
@@ -814,14 +1097,16 @@ function startPreview(): void {
       window.clearInterval(expiryTimer);
       expiryTimer = null;
     }
-    removeOverlay(true);
+    overlay.clear(true);
     if (event.persisted) return;
     lifecycle.abort();
     windgram?.disposePointWindgram(pointBody);
     updatePointSeries = null;
     pointSelection = null;
     disposeExpiry();
-    overlay.destroy(); map.remove();
+    windOverlay.destroy(); windSource.dispose(); windControls.destroy(); compactTimeline.destroy();
+    terrain?.dispose();
+    overlay.destroy(); scheduler.dispose(); map.remove();
   }, globalListener);
   window.addEventListener('pageshow', (event: PageTransitionEvent) => {
     if (!event.persisted) return;
@@ -864,4 +1149,50 @@ function showMapFailure(error: unknown): void {
   freshness.textContent = '';
 }
 
-try { startPreview(); } catch (error) { showMapFailure(error); }
+function bootstrap(): void {
+  const lifecycle = new AbortController();
+  const key = offlineFixture ? '' : import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim() ?? '';
+  if (!key) {
+    try { startPreview(lifecycle, null, null); } catch (error) { lifecycle.abort(); showMapFailure(error); }
+    return;
+  }
+  const controller = new AbortController();
+  lifecycle.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  const discovery: InitialDiscovery = { controller };
+  if (initialModel === AUTO_MODEL_ID) {
+    const [lng, lat] = startup.camera?.center ?? [0, 20];
+    const time = Date.parse(startup.validTime ?? '');
+    discovery.auto = resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers: startup.reference === 'agl' ? LIFT : [...LIFT].reverse(),
+      signal: controller.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
+    void discovery.auto.catch(() => {});
+  } else {
+    discovery.model = initialModel;
+    discovery.build = api.latest(initialModel, { signal: controller.signal });
+    void discovery.build.catch(() => {});
+  }
+  const onPagehide = (event: PageTransitionEvent): void => {
+    lifecycle.abort();
+    if (event.persisted) window.addEventListener('pageshow', bootstrap, { once: true });
+  };
+  window.addEventListener('pagehide', onPagehide);
+  const session = new AbortController();
+  lifecycle.signal.addEventListener('abort', () => session.abort(), { once: true });
+  const timeout = setTimeout(() => session.abort(), 10_000);
+  void googleTerrainStyle(key, session.signal).catch(() => {
+    if (!lifecycle.signal.aborted) {
+      const warning = document.createElement('p');
+      warning.className = 'toast basemap-warning';
+      warning.setAttribute('role', 'status');
+      warning.textContent = 'Google terrain unavailable. Using OpenStreetMap.';
+      document.getElementById('app')?.append(warning);
+    }
+    return null;
+  }).finally(() => clearTimeout(timeout)).then(terrain => {
+    window.removeEventListener('pagehide', onPagehide);
+    if (lifecycle.signal.aborted) { terrain?.dispose(); return; }
+    try { startPreview(lifecycle, terrain, discovery); }
+    catch (error) { terrain?.dispose(); lifecycle.abort(); showMapFailure(error); }
+  });
+}
+
+bootstrap();

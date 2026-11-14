@@ -17,7 +17,7 @@ export default defineConfig({
     minify: 'esbuild',
     sourcemap: true
   },
-  plugins: [browserBundleBudget(98_000), {
+  plugins: [browserBundleBudget(98_250), {
     name: 'windy-metadata',
     generateBundle() {
       for (const [fileName, data] of Object.entries({

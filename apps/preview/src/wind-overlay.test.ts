@@ -1,0 +1,330 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import type { Map } from 'maplibre-gl';
+import { WindOverlay, type WindField } from './wind-overlay';
+
+class Canvas extends EventTarget {
+  style: Record<string, string> = {};
+  private backingWidth = 0;
+  private backingHeight = 0;
+  onSize = (): void => {};
+  get width(): number { return this.backingWidth; }
+  set width(value: number) { this.backingWidth = value; this.onSize(); }
+  get height(): number { return this.backingHeight; }
+  set height(value: number) { this.backingHeight = value; this.onSize(); }
+  removed = false;
+  context = {
+    setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), drawImage: vi.fn(), beginPath: vi.fn(), stroke: vi.fn(),
+    moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(), fillText: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn()
+  };
+  getContext(): typeof this.context { return this.context; }
+  setAttribute(): void {}
+  remove(): void { this.removed = true; }
+}
+
+function fixture(width = 256, height = 256, containerHeight = height) {
+  const canvases: Canvas[] = [], frames = new globalThis.Map<number, FrameRequestCallback>();
+  const handlers = new globalThis.Map<string, Set<() => void>>();
+  const doc = Object.assign(new EventTarget(), { hidden: false, createElement: () => { const canvas = new Canvas(); canvases.push(canvas); return canvas; } });
+  const container = { clientWidth: width, clientHeight: containerHeight, appendChild: vi.fn() };
+  const map = {
+    getCanvasContainer: () => container,
+    getCanvas: () => ({ clientWidth: width, clientHeight: height }),
+    on: (name: string, listener: () => void) => { const listeners = handlers.get(name) ?? new Set(); listeners.add(listener); handlers.set(name, listeners); },
+    off: (name: string, listener: () => void) => handlers.get(name)?.delete(listener),
+    getBounds: () => ({ getWest: () => -45, getEast: () => 45, getNorth: () => 45, getSouth: () => -45 }),
+    getZoom: () => 0,
+    getBearing: () => 0,
+    getPitch: () => 0,
+    project: ([lon, lat]: number[]) => ({ x: (lon + 45) * width / 90, y: (45 - lat) * height / 90 }),
+    unproject: ([x, y]: number[]) => ({ lng: x * 90 / width - 45, lat: 45 - y * 90 / height })
+  };
+  let next = 0;
+  vi.stubGlobal('document', doc);
+  vi.stubGlobal('window', { devicePixelRatio: 3 });
+  vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { const id = ++next; frames.set(id, fn); return id; });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+  const overlay = new WindOverlay(map as unknown as Map);
+  const tick = (time: number) => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
+  const emit = (name: string) => handlers.get(name)?.forEach(handler => handler());
+  return { overlay, canvases, frames, tick, emit, handlers, doc, map };
+}
+
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it('sizes and renders against the map canvas when its append container has zero height', () => {
+  const f = fixture(1200, 800, 0);
+  f.overlay.setOptions({ style: 'hybrid' });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  for (const canvas of f.canvases) {
+    expect(canvas.height).toBeGreaterThan(1);
+    expect(canvas.style.width).toBe('1200px');
+    expect(canvas.style.height).toBe('800px');
+  }
+  expect(f.canvases[1].context.fillText).toHaveBeenCalled();
+  expect(f.frames.size).toBe(1);
+  f.overlay.destroy();
+});
+
+it('uses valid paired samples for barb labels and never renders missing wind as calm', () => {
+  const f = fixture();
+  const field: WindField = { sample: () => ({ status: 2, u: 0, v: 0 }) };
+  f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField(field);
+  const context = f.canvases[1].context;
+  expect(context.fillText).not.toHaveBeenCalled();
+  f.overlay.setField({ sample: () => ({ status: 0, u: 0, v: 0 }) });
+  expect(context.fillText).toHaveBeenCalledWith('O', expect.any(Number), expect.any(Number));
+  context.fillText.mockClear();
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  expect(context.fillText).toHaveBeenCalledWith('36', expect.any(Number), expect.any(Number));
+  expect(context.rotate).toHaveBeenCalledWith(0);
+  f.overlay.setOptions({ units: 'imperial' });
+  expect(context.fillText).toHaveBeenCalledWith('22', expect.any(Number), expect.any(Number));
+  expect(f.frames.size).toBe(0);
+  f.overlay.destroy();
+});
+
+it.each(['metric', 'imperial'] as const)('uses shared calm thresholds for %s map barbs', units => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'barbs', units });
+  const ctx = f.canvases[1].context;
+  for (const [speed, label] of [[0.05, 'O'], [0.1, 'O'], [0.49, '1'], [0.5, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
+    ctx.fillText.mockClear();
+    f.overlay.setField({ sample: () => ({ status: 0, u: speed, v: 0 }) });
+    expect(ctx.fillText).toHaveBeenCalledWith(label, expect.any(Number), expect.any(Number));
+  }
+  f.overlay.destroy();
+});
+
+it.each(['metric', 'imperial'] as const)('draws distinct pennants, full and half feathers at %s thresholds', units => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'barbs', units });
+  const ctx = f.canvases[1].context;
+  const conversion = units === 'metric' ? 3.6 : 2.2369362921;
+  for (const [speed, flags, full, half] of [
+    [1, 0, 0, 1], [2, 0, 0, 1], [3, 0, 0, 1], [7, 0, 0, 1], [8, 0, 1, 0],
+    [47, 0, 4, 1], [48, 1, 0, 0], [52, 1, 0, 0], [53, 1, 0, 1],
+    [57, 1, 0, 1], [58, 1, 1, 0], [98, 2, 0, 0], [100, 2, 0, 0], [145, 2, 4, 1]
+  ]) {
+    let sampled = false;
+    ctx.fill.mockClear(); ctx.lineTo.mockClear(); ctx.fillText.mockClear();
+    f.overlay.setField({ sample: () => {
+      if (sampled) return { status: 2, u: null, v: null };
+      sampled = true; return { status: 0, u: (speed + 0.001) / conversion, v: 0 };
+    } });
+    expect(ctx.fillText).toHaveBeenCalledWith(String(speed), expect.any(Number), expect.any(Number));
+    expect(ctx.fill).toHaveBeenCalledTimes(flags);
+    expect(ctx.lineTo).toHaveBeenCalledTimes(1 + 2 * flags + full + half);
+    if (half) {
+      const halfEnd = ctx.lineTo.mock.calls.at(-1) as unknown as number[];
+      expect(halfEnd[1]).toBe(-3);
+    }
+  }
+  f.overlay.destroy();
+});
+
+it.each([
+  [1, 0, 0], [0, 1, -Math.PI / 2], [-1, 0, Math.PI], [0, -1, Math.PI / 2]
+])('points the staff downwind for u=%s v=%s', (u, v, angle) => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'barbs' });
+  f.overlay.setField({ sample: () => ({ status: 0, u, v }) });
+  expect(f.canvases[1].context.rotate).toHaveBeenCalled();
+  for (const call of f.canvases[1].context.rotate.mock.calls) expect((call as unknown as number[])[0]).toBeCloseTo(angle);
+  f.overlay.destroy();
+});
+
+it('advects connected trails downwind and clears them on replacement', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture(), field: WindField = { sample: () => ({ status: 0, u: 10, v: 0 }) };
+  f.overlay.setField(field); f.tick(1000); f.tick(1100);
+  const context = f.canvases[0].context;
+  expect(context.moveTo).toHaveBeenCalled();
+  const start = context.moveTo.mock.calls[0] as unknown as number[], end = context.lineTo.mock.calls[0] as unknown as number[];
+  expect(end[0]).toBeGreaterThan(start[0]); expect(end[1]).toBeCloseTo(start[1]);
+  context.clearRect.mockClear();
+  f.overlay.setField({ sample: () => ({ status: 2, u: null, v: null }) });
+  expect(context.clearRect).toHaveBeenCalled();
+  context.lineTo.mockClear(); f.tick(1200); f.tick(1300);
+  expect(context.lineTo).not.toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('advances trails on successive display frames without a 30 Hz cap', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture();
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  f.tick(1000); f.tick(1016.7); f.tick(1033.4);
+  expect(f.canvases[0].context.stroke).toHaveBeenCalledTimes(2);
+  f.overlay.destroy();
+});
+
+it('reuses each validated destination on the next animation step', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 10, v: 0 }));
+  f.overlay.setField({ sample }); f.tick(1000); f.tick(1100);
+  const count = Math.ceil(256 * 256 / 3000);
+  expect(sample).toHaveBeenCalledTimes(count * 2);
+  expect(f.canvases[0].context.moveTo).toHaveBeenCalledTimes(count);
+  sample.mockClear(); f.tick(1200);
+  expect(sample).toHaveBeenCalledTimes(count);
+  f.overlay.destroy();
+});
+
+it.each([2, 1, 3])('stops a trail before entering a cell with status %s', status => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture();
+  f.overlay.setField({ sample: (_lat, lon) => lon > 0 ? { status, u: null, v: null } : { status: 0, u: 10, v: 0 } });
+  f.tick(1000); f.tick(1100);
+  expect(f.canvases[0].context.lineTo).not.toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('keeps normal wind visible at street zoom and checks gaps within its path', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture();
+  f.map.getZoom = () => 16;
+  const pixelsPerDegree = 512 * 2 ** 16 / 360;
+  f.map.project = ([lon, lat]) => ({ x: 128 + lon * pixelsPerDegree, y: 128 - lat * pixelsPerDegree });
+  f.map.unproject = ([x, y]) => ({ lng: (x - 128) / pixelsPerDegree, lat: (128 - y) / pixelsPerDegree });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 20, v: 0 }) });
+  f.tick(1000); f.tick(1100);
+  const ctx = f.canvases[0].context;
+  expect(ctx.lineTo).toHaveBeenCalled();
+  const endpoint = (ctx.lineTo.mock.calls[0] as unknown as number[])[0];
+  expect(endpoint).toBeGreaterThan(130);
+  expect(endpoint).toBeLessThan(158);
+  ctx.lineTo.mockClear();
+  f.overlay.setField({ sample: (_lat, lon) => {
+    const x = lon * pixelsPerDegree;
+    return x > 2 && x < 4 ? { status: 2, u: null, v: null } : { status: 0, u: 20, v: 0 };
+  } });
+  f.tick(1200); f.tick(1300);
+  expect(ctx.lineTo).not.toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('anchors sparse barbs to a subset of the full world lattice', () => {
+  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 1, v: 0 }));
+  f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
+  const full = new Set(sample.mock.calls.map(call => JSON.stringify(call)));
+  const ctx = f.canvases[1].context;
+  const positions = new Set(ctx.translate.mock.calls.map(call => JSON.stringify(call)));
+  expect(full.size).toBeGreaterThan(0);
+  sample.mockClear(); ctx.translate.mockClear(); f.overlay.setOptions({ style: 'hybrid', paused: true });
+  expect(sample).not.toHaveBeenCalled();
+  const sparse = ctx.translate.mock.calls.map(call => JSON.stringify(call));
+  expect(sparse.length).toBeGreaterThan(0);
+  expect(sparse.length).toBeLessThan(positions.size);
+  expect(sparse.every(point => positions.has(point))).toBe(true);
+  f.overlay.destroy();
+});
+
+it.each([2.9, 3, 3.1])('keeps 32 px world-anchored barb spacing at zoom %s while panning', zoom => {
+  const f = fixture(), size = 512 * 2 ** zoom;
+  let centerX = size / 2;
+  const centerY = size / 2;
+  const lat = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / size))) * 180 / Math.PI;
+  const worldY = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) * size / 2;
+  f.map.getZoom = () => zoom;
+  f.map.getBounds = () => ({
+    getWest: () => (centerX - 128) / size * 360 - 180,
+    getEast: () => (centerX + 128) / size * 360 - 180,
+    getNorth: () => lat(centerY - 128),
+    getSouth: () => lat(centerY + 128)
+  });
+  f.map.project = ([lon, latitude]: number[]) => ({ x: (lon + 180) / 360 * size - centerX + 128, y: worldY(latitude) - centerY + 128 });
+  const sample = vi.fn((_lat: number, _lon: number) => ({ status: 0, u: 1, v: 0 }));
+  f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
+  if (zoom === 3) expect(sample).toHaveBeenCalledTimes(64);
+  const positions = (f.canvases[1].context.translate.mock.calls as unknown as number[][]);
+  const xs = [...new Set(positions.map(([x]) => Number(x.toFixed(6))))].sort((a, b) => a - b);
+  const ys = [...new Set(positions.map(([, y]) => Number(y.toFixed(6))))].sort((a, b) => a - b);
+  expect(xs.length).toBeGreaterThan(1); expect(ys.length).toBeGreaterThan(1);
+  for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeCloseTo(32, 5);
+  for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1]).toBeCloseTo(32, 5);
+  const original = new Set(sample.mock.calls.map(call => JSON.stringify(call)));
+  sample.mockClear(); centerX += 7; f.emit('move');
+  const moved = sample.mock.calls.map(call => JSON.stringify(call));
+  expect(moved.every(point => !original.has(point))).toBe(true);
+  expect(moved.length).toBeLessThan(original.size / 2);
+  sample.mockClear(); f.emit('move'); expect(sample).not.toHaveBeenCalled();
+  if (zoom === 3) {
+    centerX -= 7; f.overlay.setField({ sample });
+    expect(sample).toHaveBeenCalledTimes(64);
+    sample.mockClear(); centerX += 32; f.emit('move');
+    expect(sample).toHaveBeenCalledTimes(8);
+    sample.mockClear(); f.overlay.setField({ sample });
+    expect(sample).toHaveBeenCalledTimes(64);
+    sample.mockClear();
+  }
+  f.map.getZoom = () => zoom + 0.1; f.emit('move'); expect(sample).toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('translates trail history during pan and clears it on zoom', () => {
+  const f = fixture();
+  let offset = 0, zoom = 0;
+  f.map.project = ([lon, lat]: number[]) => ({ x: lon + offset, y: -lat });
+  f.map.getZoom = () => zoom;
+  f.emit('resize');
+  const ctx = f.canvases[0].context;
+  ctx.clearRect.mockClear(); offset = 10; f.emit('move');
+  expect(ctx.drawImage).toHaveBeenCalled();
+  expect(ctx.clearRect).not.toHaveBeenCalled();
+  zoom = 1; f.emit('move'); expect(ctx.clearRect).toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('bounds canvas memory and suspends frames for pause, visibility, context loss and destruction', () => {
+  const f = fixture(6000, 4000);
+  for (const canvas of f.canvases) expect(canvas.width * canvas.height).toBeLessThanOrEqual(1_048_576);
+  f.overlay.setField({ sample: () => ({ status: 0, u: 1, v: 1 }) });
+  expect(f.frames.size).toBe(1);
+  f.overlay.setOptions({ paused: true }); expect(f.frames.size).toBe(0);
+  f.overlay.setOptions({ paused: false }); expect(f.frames.size).toBe(1);
+  f.doc.hidden = true; f.doc.dispatchEvent(new Event('visibilitychange')); expect(f.frames.size).toBe(0);
+  f.doc.hidden = false; f.doc.dispatchEvent(new Event('visibilitychange')); expect(f.frames.size).toBe(1);
+  f.emit('webglcontextlost'); expect(f.frames.size).toBe(0);
+  f.canvases[0].dispatchEvent(new Event('contextlost'));
+  f.emit('webglcontextrestored'); expect(f.frames.size).toBe(0);
+  f.canvases[0].dispatchEvent(new Event('contextrestored')); expect(f.frames.size).toBe(1);
+  f.overlay.setOptions({ visible: false }); expect(f.frames.size).toBe(0);
+  f.overlay.setOptions({ visible: true }); expect(f.frames.size).toBe(1);
+  f.overlay.destroy(); expect(f.frames.size).toBe(0);
+  expect(f.canvases.every(canvas => canvas.removed)).toBe(true);
+  expect([...f.handlers.values()].every(handlers => handlers.size === 0)).toBe(true);
+});
+
+it('releases both backing stores before allocating resized canvases', () => {
+  const f = fixture(6000, 4000);
+  const sizes: number[] = [];
+  for (const canvas of f.canvases) canvas.onSize = () => sizes.push(f.canvases.reduce((sum, item) => sum + item.width * item.height, 0));
+  f.map.getCanvas = () => ({ clientWidth: 4000, clientHeight: 6000 });
+  f.emit('resize');
+  expect(sizes).toContain(0);
+  expect(Math.max(...sizes)).toBeLessThanOrEqual(2_097_152);
+  expect(f.canvases.every(canvas => canvas.width > 0 && canvas.height > 0)).toBe(true);
+  f.overlay.destroy();
+});
+
+it.each(['map', 'trails', 'barbs'] as const)('clears both canvases and redraws only after %s context restoration', source => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'hybrid' });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  const [trails, barbs] = f.canvases;
+  expect(barbs.context.fillText).toHaveBeenCalled();
+  trails.context.clearRect.mockClear(); barbs.context.clearRect.mockClear(); barbs.context.fillText.mockClear();
+  if (source === 'map') f.emit('webglcontextlost');
+  else (source === 'trails' ? trails : barbs).dispatchEvent(new Event('contextlost'));
+  expect(trails.context.setTransform).toHaveBeenLastCalledWith(1, 0, 0, 1, 0, 0);
+  expect(trails.context.clearRect).toHaveBeenCalledWith(0, 0, trails.width, trails.height);
+  expect(barbs.context.clearRect).toHaveBeenCalledWith(0, 0, barbs.width, barbs.height);
+  expect(f.frames.size).toBe(0);
+  f.emit('move'); f.overlay.setOptions({ units: 'imperial' });
+  expect(barbs.context.fillText).not.toHaveBeenCalled();
+  if (source === 'map') f.emit('webglcontextrestored');
+  else (source === 'trails' ? trails : barbs).dispatchEvent(new Event('contextrestored'));
+  expect(barbs.context.fillText).toHaveBeenCalled();
+  expect(f.frames.size).toBe(1);
+  f.overlay.destroy();
+});

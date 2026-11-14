@@ -107,6 +107,32 @@ it('restores complete payload files from a reusable receipt only for full-artifa
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it.each(['valid', 'missing-etag', 'oversize'] as const)('restores numeric payloads with %s receipt metadata', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'av-forecast-wind-retry-'));
+  const { store, plan, receipt, signal, seed } = await payloadFixture();
+  const prefix = `builds/${plan.model}/${plan.buildId}/map-data`;
+  const numeric = await Promise.all(['f001.json', 'f001/wind/0.idx', 'f001/wind/0.bin'].map((path, i) =>
+    putImmutableReceipt(store, `${prefix}/${path}`, Uint8Array.of(i + 1), 'application/octet-stream', signal)));
+  const objects = numeric.map(object => mode === 'missing-etag' ? { ...object, etag: undefined }
+    : mode === 'oversize' ? { ...object, bytes: MAX_V5_SHARD_BYTES + 1 } : object);
+  const destination = join(root, 'receipt.json');
+  try {
+    const retryReceipt = { ...receipt, numeric: { frames: [{ id: 'f001', bytes: numeric[0]!.bytes, sha256: numeric[0]!.sha256 }], objects } };
+    await seed(retryReceipt);
+    const build = vi.fn<() => Promise<string>>(), get = vi.spyOn(store, 'get');
+    const restore = completeForecastControlShard(store, plan, 0, destination, build, signal, root);
+    if (mode === 'valid') {
+      await restore;
+      for (const object of numeric) expect(await readFile(join(root, object.key))).toEqual(Buffer.from(store.objects.get(object.key)!));
+    } else {
+      await expect(restore).rejects.toThrow(mode === 'missing-etag' ? 'no stored payload' : 'Too big');
+      expect(get).toHaveBeenCalledOnce();
+      await expect(readFile(destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(build).not.toHaveBeenCalled();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it.each([
   ['plan', 'receipt identity mismatch', 1],
   ['other-build', 'payload key is invalid', 1],

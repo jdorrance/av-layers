@@ -4,10 +4,26 @@ Publish bounded numeric weather chunks through the existing batch → R2 → API
 pipeline, and render them in the current MapLibre viewer.
 
 Proposal dated 2026-11-13, adversarially reviewed against `b49a3bd`. The
-[approved wind UI](wind-overlay-ui.md) is the build target. This PR records the
-design; production contracts and forecast calculations remain unchanged.
+[approved wind UI](wind-overlay-ui.md) is the build target.
 The [review and executable evidence](weather-data-review.md) track corrected
 failure cases and the performance gates required before release.
+
+## Current prototype
+
+The branch implements opt-in wind publication, bounded numeric API routes,
+resident height selection and the three approved styles. The
+[writer](../apps/batch/src/wind-data.ts) emits dense rectangular Float32
+columns and Float32 terrain/lift targets in uncompressed binary chunks;
+[contracts](../packages/contracts/src/wind-data.ts) own their layout and limits.
+The [viewer](../apps/preview/src/wind-overlay.ts) draws Canvas2D trails and barbs
+using direct column samples on the main thread. The GPU selection pass, worker
+decoding, compressed/sparse delivery and A/B performance experiment remain
+planned work below. Numeric publication defaults off.
+
+The capacity audit below models the earlier sparse int16 candidate. Size this
+prototype with the writer's admission calculation, including dense target
+surfaces repeated per frame. The real-device and complete-build
+[release gates](weather-data-review.md#release-gates) remain open.
 
 ## Recommendation
 
@@ -367,8 +383,9 @@ owns the quantity mappings and default/URL precedence.
 [Original capacity evidence](assets/wind-overlay/capacity.json) records the four-model
 baseline and pinned RRFS build. The [current audit](assets/wind-overlay/review-evidence.json)
 recomputes all six configured models, cadence, retention and viewport costs.
-These are raw logical payload calculations; compressed sizes and incremental
-runtime need measurement. Fair grouped-chunk A/B all-frame wind costs are
+These are raw logical payload calculations for sparse int16 candidates; the
+Float32 prototype uses the writer's capacity admission above. Compressed sizes
+and incremental runtime need measurement. Grouped-chunk A/B all-frame wind costs are
 **1.66/39.71 GiB GFS**, **4.23/26.11 GiB ICON-EU**, **10.72/14.02 GiB RRFS**,
 and **0.489/0.103 GiB av-wrf**. The two Armenia WRF products are **0.069/0.015 GiB**
 and **0.127/0.027 GiB**. A includes columns; B includes all twelve fine-grid choices.

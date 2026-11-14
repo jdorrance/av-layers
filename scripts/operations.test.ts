@@ -202,13 +202,13 @@ it('checks API destinations and account identity before invoking Cloudflare', ()
 it('allows 10,000 sample requests per second in every Wrangler environment', () => {
   const wrangler = JSON.parse(readFileSync(new URL('../apps/api/wrangler.json', import.meta.url), 'utf8'));
   for (const environment of [wrangler, wrangler.env.staging, wrangler.env.production]) {
-    expect(environment.ratelimits).toEqual([{
-      name: 'SAMPLE_RATE_LIMITER',
-      namespace_id: expect.stringMatching(/^\d+$/),
-      simple: { limit: 100000, period: 10 }
-    }]);
+    expect(environment.ratelimits).toEqual([
+      { name: 'SAMPLE_RATE_LIMITER', namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 100000, period: 10 } },
+      { name: 'NUMERIC_RATE_LIMITER', namespace_id: expect.stringMatching(/^\d+$/), simple: { limit: 200000, period: 10 } }
+    ]);
   }
-  expect(new Set([wrangler, wrangler.env.staging, wrangler.env.production].map(environment => environment.ratelimits[0].namespace_id)).size).toBe(3);
+  const ids = [wrangler, wrangler.env.staging, wrangler.env.production].flatMap(environment => environment.ratelimits.map((limiter: { namespace_id: string }) => limiter.namespace_id));
+  expect(new Set(ids).size).toBe(6);
 });
 
 it('reads the named BUCKET binding rather than the first binding', () => {

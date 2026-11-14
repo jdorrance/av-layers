@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import z from 'zod';
-import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, parseBoundedJson, planWholeDomainGrid, sampleResponseV5Schema, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, wholeDomainDonorSupport, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
+import { LAYER_IDS, LIFT_METHOD, MAX_METADATA_JSON_TOKENS, PRECIPITATION_ALL_HOURS_METHOD, RETENTION_DAYS, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_METHOD, canonicalGridJson, coverageIndices, createProductDescriptors, createProductMethodId, getBit, manifestV5Schema, modelPointerSchema, storedModelPointerSchema, parseBoundedJson, planWholeDomainGrid, sampleResponseV5Schema, setBit, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_MASK, surfaceFrameCount, wholeDomainDonorSupport, type CoverageMask, type ProductDefinition, type RegularLatLonGrid, type SparseCoverageMask } from '@av/contracts';
 import { deriveTerrainM } from '@av/client';
 import { deriveFrame, profileRecordBytes, readProfileRecord, prepareShardedSamplePackLayout } from '@av/forecast';
 import { preparePackedTerrainColumns, prepareTerrainColumns } from '@av/forecast/refinement';
@@ -336,6 +336,35 @@ describe('whole-domain v5 production', () => {
     ]) await expect(loadBundledFineCoverage(changed, plan)).rejects.toThrow('Fine coverage does not match');
     expect(vi.mocked(readLocalFile).mock.calls).toHaveLength(3);
     expect(vi.mocked(readLocalFile).mock.calls.every(([path]) => path.endsWith('/manifest.json'))).toBe(true);
+  }, 60_000);
+
+  it('publishes, retains, verifies, rolls back and cleans numeric wind with its build', async () => {
+    const setup = await fixture(), out = await root('wd-numeric-publication'), store = new PublicationStore();
+    const configured = { ...product, modelId: 'gfs', frameHours: [12, 24] };
+    const mask = { ...nativeMask, maxZoom: 1, tiles: Uint8Array.of(31) }, fine = { ...setup.fine.mask, maxZoom: 1, tiles: Uint8Array.of(31) };
+    setup.fine = { mask: fine, ...describeSparseCoverage(fine, configured) };
+    const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
+    const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
+    const path = await buildForecast({ out, cycle, product: configured, mask, provider: fixtureProvider().provider, wholeDomain: setup, numericWind: true,
+      onValidated: result => publish(store, out, result.manifest, { authority, validated: result, publishNumericWind: true }) });
+    const manifest = await readV5(path), key = 'catalog/gfs/latest.json';
+    const pointer = storedModelPointerSchema.parse(JSON.parse(Buffer.from(store.objects.get(key)!.bytes).toString()));
+    const rootKey = `builds/gfs/${manifest.buildId}/map-data.json`, bytes = await readFile(join(out, rootKey));
+    expect(pointer.retained[0].mapData).toEqual({ sha256: sha256(bytes), bytes: bytes.length });
+    expect(modelPointerSchema.parse(pointer).retained[0]).not.toHaveProperty('mapData');
+    expect(JSON.parse(Buffer.from(store.objects.get(`builds/gfs/${manifest.buildId}/manifest.json`)!.bytes).toString())).toEqual(manifest);
+    await rollback(store, 'gfs', manifest.buildId, authority);
+    expect(storedModelPointerSchema.parse(JSON.parse(Buffer.from(store.objects.get(key)!.bytes).toString())).retained[0].mapData).toEqual(pointer.retained[0].mapData);
+    const shardKey = `builds/gfs/${manifest.buildId}/map-data/${manifest.frames[0].id}/wind-0.bin`, saved = store.objects.get(shardKey)!;
+    store.objects.set(shardKey, { ...saved, bytes: Uint8Array.from(saved.bytes, (value, i) => i === 0 ? value ^ 1 : value) });
+    await expect(rollback(store, 'gfs', manifest.buildId, authority)).rejects.toThrow();
+    store.objects.set(shardKey, saved);
+    const orphan = 'builds/gfs/20200102T000000Z-12345678-1234-4234-8234-123456789abc/map-data/f001/wind-0.bin';
+    await store.put(orphan, Uint8Array.of(1), { ifNoneMatch: '*' });
+    await cleanup(store, 'gfs', authority);
+    expect(store.objects.has(orphan)).toBe(false);
+    expect(store.objects.has(shardKey)).toBe(true);
+    expect(store.objects.has(rootKey)).toBe(true);
   }, 60_000);
 
   it('publishes a sealed build and refuses rollback to corrupted dependencies', async () => {
@@ -1049,6 +1078,29 @@ describe('whole-domain v5 production', () => {
       expect(columns.deriveAsync).toHaveBeenCalledTimes(1);
       expect(source.close).toHaveBeenCalledTimes(1);
     } finally { clearTimeout(timer); }
+  }, 60_000);
+
+  it('passes the frame-loop signal to the active numeric write when prefetch fails', async () => {
+    const setup = await fixture(), out = await root('wd-prefetch-numeric'), source = fixtureProvider();
+    const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
+    const failure = new Error('next frame unavailable');
+    let fail!: (error: Error) => void;
+    const next = new Promise<never>((_resolve, reject) => { fail = reject; });
+    const originalOpen = source.provider.open;
+    const provider: ForecastProvider = { ...source.provider, async open(options) {
+      const session = await originalOpen(options);
+      return { ...session, async acquire(hour, target) { return hour === 2 ? session.acquire(hour, target) : next; } };
+    } };
+    const onNumericFrame = vi.fn<NonNullable<Parameters<typeof buildWholeDomainFrames>[0]['onNumericFrame']>>(async (_frame, _id, _fine, _prepared, _terrain, signal) => {
+      const aborted = new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+      fail(failure);
+      await aborted;
+      signal.throwIfAborted();
+    });
+    await expect(buildWholeDomainFrames({ out, cycle: CYCLE, product, mask: nativeMask, provider, prepared,
+      buildId: 'prefetch-numeric', createdAt: new Date().toISOString(), journalPrefix: 'prefetch-numeric-journal', hours: [2, 4], onNumericFrame })).rejects.toBe(failure);
+    expect(onNumericFrame).toHaveBeenCalledOnce();
+    expect(source.close).toHaveBeenCalledOnce();
   }, 60_000);
 
   it.each(['abort', 'deadline'] as const)('cleans up after %s during an asynchronous fine chunk', async mode => {

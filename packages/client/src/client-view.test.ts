@@ -169,7 +169,7 @@ it('formats point altitude, wind vectors and regime without inventing missing te
   } };
   const view = pointFrameView(frame, build, 'imperial');
   expect(view.terrainM).toBeNull(); expect(view.summary).toContain('Surface elevation unknown');
-  expect(view.summary).toContain('10 m 9.7 kt 0°'); expect(view.summary).toContain('Cu');
+  expect(view.summary).toContain('10 m 11.2 mph 0°'); expect(view.summary).toContain('Cu');
   expect(view.summary).toContain('w* 197 ft/min');
   expect(pointFrameView(frame, build, 'metric').summary).toContain('w* 1.0 m/s');
   expect(view.summary).not.toContain('Blue');

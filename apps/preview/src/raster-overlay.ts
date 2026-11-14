@@ -107,11 +107,16 @@ export class RasterOverlay {
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.armExpiry(); this.emit();
   };
+  private readonly viewChanged = (): void => {
+    this.sourceLimits.clear();
+    this.enforceBudget();
+  };
   private readonly resized = (): void => {
     this.cancelPaint();
     this.cancelRefinement(); this.clearOverview();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
+    this.enforceBudget();
     if (this.requested && !this.moving) {
       this.prepareOverview(this.requested);
       try { this.loadDetail(this.requested); } catch { /* loadDetail reports replacement failure. */ }
@@ -121,6 +126,7 @@ export class RasterOverlay {
   private readonly settled = (): boolean => {
     if (!this.moving || this.map.isMoving?.()) return false;
     this.moving = false; this.sourceLimits.clear();
+    this.enforceBudget();
     const selection = this.requested, pending = this.slots.find(slot => slot !== this.active && matches(slot, selection));
     if (selection) this.prepareOverview(selection);
     if ((!pending && !this.retryEmpty && matches(this.active, selection)) || !selection || selection.build.expiresAtMs <= Date.now()) {
@@ -138,11 +144,11 @@ export class RasterOverlay {
     this.prepareNext(); this.emit();
   };
 
-  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void) {
+  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch) {
     this.opacity = opacity;
     map.on('sourcedata', this.data); map.on('sourcedataloading', this.loading);
     map.on('sourcedataabort', this.abort); map.on('error', this.failed);
-    map.on('render', this.render); map.on('movestart', this.move);
+    map.on('render', this.render); map.on('movestart', this.move); map.on('move', this.viewChanged);
     map.on('moveend', this.settled); map.on('idle', this.idle); map.on('resize', this.resized);
   }
 
@@ -167,6 +173,7 @@ export class RasterOverlay {
     if (this.pendingPaint && !matches(this.pendingPaint, this.requested)) this.cancelPaint();
     if (this.pendingOverview && !matches(this.pendingOverview, this.requested)) this.cancelPaint();
     if (this.coarse && (this.coarse.build !== build || this.coarse.layer !== layer)) this.clearOverview();
+    this.enforceBudget();
     if (!this.moving) this.prepareOverview(this.requested);
     this.replacementFailed = false; this.incomplete = this.problem(this.active);
     if (matches(this.active, this.requested)) {
@@ -205,11 +212,14 @@ export class RasterOverlay {
 
   private loadDetail(selection: Selection): void {
     if (!matches(selection, this.requested) || this.slots.some(slot => matches(slot, selection))) return;
-    const limit = Math.max(this.overview?.supported ? 1 : 2, this.slotLimit(selection));
-    // Large viewports reserve their overview memory before admitting another fine source.
+    const limit = this.slotLimit(selection);
+    if (!limit) {
+      this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.armExpiry(); this.emit(); return;
+    }
     while (this.slots.length >= limit) this.drop(this.slots.findLast(slot => slot !== this.active) ?? this.active!);
     try {
       this.addSlot(selection, true);
+      this.replacementFailed = false;
       this.cancelPrefetch(selection); this.armExpiry(); this.emit();
     } catch (error) {
       const failed = this.slots.find(slot => matches(slot, this.requested));
@@ -263,7 +273,7 @@ export class RasterOverlay {
     this.disposed = true; this.clear(true);
     this.map.off('sourcedata', this.data); this.map.off('sourcedataloading', this.loading);
     this.map.off('sourcedataabort', this.abort); this.map.off('error', this.failed);
-    this.map.off('render', this.render); this.map.off('movestart', this.move);
+    this.map.off('render', this.render); this.map.off('movestart', this.move); this.map.off('move', this.viewChanged);
     this.map.off('moveend', this.settled); this.map.off('idle', this.idle); this.map.off('resize', this.resized);
   }
 
@@ -313,6 +323,7 @@ export class RasterOverlay {
   private prepareOverview(selection: Selection): void {
     if (!this.overview?.supported) return;
     if (canRetainRasterOverview(this.map, layerMaxZoom(selection.build.manifest, selection.layer))) {
+      this.limitSlots(selection, true);
       this.overview.select(selection.build, selection.layer, selection.frame);
     } else this.clearOverview();
   }
@@ -322,7 +333,7 @@ export class RasterOverlay {
   }
   private ensureProtocol(): void {
     if (this.protocol) return;
-    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES });
+    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl });
     addProtocol(this.protocol.scheme, this.protocol.load);
     this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); });
   }
@@ -392,11 +403,26 @@ export class RasterOverlay {
     if (!Number.isFinite(deadline)) return;
     this.expiryTimer = setTimeout(() => { this.expiryTimer = null; this.refresh(); }, Math.min(Math.max(0, deadline - Date.now()), 2_147_000_000));
   }
-  private slotLimit(selection: Selection): number {
+  private slotLimit(selection: Selection, overview = !!this.overview?.state.total): number {
     const zoom = layerMaxZoom(selection.build.manifest, selection.layer);
-    let limit = this.sourceLimits.get(zoom);
-    if (limit === undefined) { limit = rasterSourceLimit(this.map, zoom, this.overview?.supported); this.sourceLimits.set(zoom, limit); }
+    const key = zoom * 2 + Number(overview);
+    let limit = this.sourceLimits.get(key);
+    if (limit === undefined) { limit = rasterSourceLimit(this.map, zoom, overview); this.sourceLimits.set(key, limit); }
     return limit;
+  }
+  private limitSlots(selection: Selection, overview = !!this.overview?.state.total): number {
+    const limit = Math.min(this.slotLimit(selection, overview), ...this.slots.map(slot => this.slotLimit(slot, overview)));
+    while (this.slots.length > limit) this.drop(this.slots.findLast(slot => slot !== this.active) ?? this.active!);
+    return limit;
+  }
+  private enforceBudget(): void {
+    const selection = this.requested ?? this.active;
+    if (!selection) return;
+    if (this.overview?.state.total && !canRetainRasterOverview(this.map, layerMaxZoom(selection.build.manifest, selection.layer))) this.clearOverview();
+    if (!this.limitSlots(selection)) {
+      this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.incomplete = false;
+    }
+    this.armExpiry(); this.emit();
   }
   private predicted(slot: Selection | null = this.active): Selection[] {
     if (!slot) return [];
@@ -419,6 +445,7 @@ export class RasterOverlay {
     if (this.disposed || this.pendingPaint || this.pendingOverview || this.moving || this.map.isMoving?.() || !this.active || !matches(this.active, this.requested) || this.active.build.expiresAtMs <= Date.now()) return;
     if (this.overview?.supported && this.overview.state.ready + this.overview.state.failed < this.overview.state.total) return;
     const candidates = this.predicted(), limit = Math.min(this.slotLimit(this.active), ...candidates.map(value => this.slotLimit(value)));
+    if (!limit) { this.enforceBudget(); return; }
     const desired = candidates.slice(0, limit - 1);
     for (const slot of [...this.slots]) {
       if (slot !== this.active && !desired.some(value => matches(slot, value))) this.drop(slot);

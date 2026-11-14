@@ -2,7 +2,7 @@
   "basis": "b49a3bd configuration; raw arithmetic and existing sampler checks; no network/GPU/compression timing",
   "sources": {
     "packages/contracts/config/models.json": "23d5a85d462a48de21cfa0f6b5df03ab6cf8438b53d71e6df981592f1a3f34e0",
-    "packages/forecast/src/sampler.ts": "c169ce72021da7c63ff22abab04b48215d2a589bcafc36e05ad7c51a9172a720",
+    "packages/forecast/src/sampler.ts": "7c95f0ca9a3e41eabe092426cac1f460dcc49c55d78f31529b055be6be322cda",
     "packages/contracts/coverage/manifest.json": "2b4add75bb5c7503f481d0cff03466016a16b3be9ce4438574657a914cc7273e",
     "packages/contracts/coverage/output.bin": "68b4299e250ad0526b97a7aaa1d0e9f0e81237ae71839f25d480769c72726f59",
     "packages/contracts/coverage/halo.bin": "1e4704935d6df919e705c582856807692eb7bf3c642f4f56570519ecc3ff6168",

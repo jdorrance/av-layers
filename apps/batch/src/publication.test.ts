@@ -249,6 +249,19 @@ describe('immutable publication', () => {
     expect(peak).toBeLessThanOrEqual(20);
     expect(active).toBe(0);
   });
+  it('bounds numeric uploads to one shard so buffer plus transport stay within the reservation', async () => {
+    const largest = 100, reservation = 2 * largest;
+    let active = 0, peak = 0, concurrent = 0, maxConcurrent = 0;
+    await uploadBounded(Array.from({ length: 8 }, () => ({ size: largest })), 8 * largest, async item => {
+      active += item.size * 2; peak = Math.max(peak, active);
+      concurrent++; maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise(resolve => setImmediate(resolve));
+      active -= item.size * 2; concurrent--;
+    }, 1);
+    expect(maxConcurrent).toBe(1);
+    expect(peak).toBeLessThanOrEqual(reservation);
+    expect(active).toBe(0);
+  });
   it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before writes', async defect => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     if (defect === 'old cycle') manifest.cycle = '2026-10-29T00:00:00.000Z';

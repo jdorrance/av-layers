@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { modelPointerSchema, type ManifestV5, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { storedModelPointerSchema, type ManifestV5, type StoredModelPointer, type ProductDefinition } from '@av/contracts';
 import { readSparseCoverage } from '../apps/batch/src/coverage.js';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { readLocalProvenance } from '../apps/batch/src/frame-provenance.js';
@@ -14,6 +14,7 @@ import { PREPARED_DESCRIPTOR_MAX_BYTES } from '../apps/batch/src/terrain/prepare
 import { fileSha256 } from '../apps/batch/src/validate.js';
 import { validateLocalBuild } from '../apps/batch/src/local-build.js';
 import { forecastObjects, provenanceObjects } from '../apps/batch/src/publication-objects.js';
+import { localWindData } from '../apps/batch/src/wind-data.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const apiDir = join(root, 'apps', 'api');
@@ -21,8 +22,8 @@ const wranglerJs = join(root, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 function invariant(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
 
-function buildLocalPointer(manifest: ManifestV5, manifestKey: string): ModelPointer {
-  return modelPointerSchema.parse({ version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt }] });
+function buildLocalPointer(manifest: ManifestV5, manifestKey: string, mapData?: { bytes: number; sha256: string }): StoredModelPointer {
+  return storedModelPointerSchema.parse({ version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained: [{ buildId: manifest.buildId, manifestKey, cycle: manifest.cycle, expiresAt: manifest.expiresAt, ...(mapData ? { mapData } : {}) }] });
 }
 
 export interface LocalPreviewStore {
@@ -94,6 +95,8 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
   const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
   invariant(join(outputRoot, manifestKey) === manifestPath, 'Manifest path must match output/builds/{model}/{buildId}/manifest.json');
   const manifestSha = sha256(manifestBytes), dependencies = await previewDependencies(outputRoot, manifest);
+  const numeric = await localWindData(outputRoot, manifest);
+  if (numeric) dependencies.push(...numeric.objects);
   const { reference, value: index } = await readLocalProvenance(outputRoot, manifest);
   dependencies.push({ ...reference, contentType: 'application/json' }, ...provenanceObjects(index), ...forecastObjects(manifest));
   const objects = [];
@@ -122,7 +125,7 @@ export async function seedLocalBuild(options: PreviewOptions, openStore = openLo
     const existingManifest = force ? null : await store.head(manifestKey);
     if (existingManifest?.size === manifestBytes.length && existingManifest.customMetadata?.sha256 === manifestSha) reusedObjects++;
     else await put(manifestKey, manifestBytes, 'application/json', manifestSha);
-    const pointerBytes = Buffer.from(JSON.stringify(buildLocalPointer(manifest, manifestKey)));
+    const pointerBytes = Buffer.from(JSON.stringify(buildLocalPointer(manifest, manifestKey, numeric?.reference)));
     await put(`catalog/${manifest.model}/latest.json`, pointerBytes, 'application/json', sha256(pointerBytes));
     await mkdir(markerDir, { recursive: true });
     await writeFile(marker, JSON.stringify({ buildId: manifest.buildId, manifestSha, objects: objects.length }));

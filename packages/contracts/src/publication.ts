@@ -58,6 +58,11 @@ export const provenanceSchema = z.discriminatedUnion('version', [
 ]);
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
+export const mapDataReferenceSchema = z.strictObject({ sha256, bytes: z.number().int().positive().max(1024 * 1024) });
+export const storedModelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key,
+  retained: z.array(retainedBuildSchema.extend({ mapData: mapDataReferenceSchema.optional() })).min(1).max(MAX_RETAINED_BUILDS)
+}).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
+export type StoredModelPointer = z.infer<typeof storedModelPointerSchema>;
 export const freshnessSchema = z.object({
   ageSeconds: z.number(),
   expiresAt: z.string(),

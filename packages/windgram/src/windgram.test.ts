@@ -9,7 +9,10 @@ import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
 
-import { barbGeometry } from './wind-barb.ts';
+import { barbGeometry, displayedBarbSpeed, quantizedBarbSpeed } from './wind-barb.ts';
+import { windBarbGlyph } from './windgram-glyphs.ts';
+import { resolveWindgramPresentation } from './windgram-presentation.ts';
+import { mpsToKnots } from './windgram-format.ts';
 import { hourSampling, sampleHeight } from './windgram-sampling.ts';
 
 it('mirrors the pennant and feathers south of the equator without reversing the staff', () => {
@@ -22,6 +25,48 @@ it('mirrors the pennant and feathers south of the equator without reversing the 
       expect(side(north.points[vertex]!)).toBe(1);
       expect(side(south.points[vertex]!)).toBe(-1);
     }
+  }
+});
+
+it.each(['metric', 'imperial'] as const)('uses the same calm and label thresholds in %s', system => {
+  const presentation = resolveWindgramPresentation({ compact: true });
+  for (const [speed, expected] of [[0.05, 0], [0.1, 0], [0.49, 1], [0.5, 1], [0.6, system === 'metric' ? 2 : 1]]) {
+    const display = displayedBarbSpeed(speed, system);
+    const glyph = windBarbGlyph({ x: 0, y: 0, speedKt: mpsToKnots(speed), directionDeg: 0, southernHemisphere: false }, presentation, system);
+    expect(display).toBe(expected);
+    expect(glyph.calm).toBe(expected === 0);
+  }
+});
+
+it('keeps a half feather for every positive displayed speed below the first full feather', () => {
+  expect(quantizedBarbSpeed(0)).toBe(0);
+  expect(barbGeometry(0, 0, 21, false).calm).toBe(true);
+  for (const speed of [1, 2, 3, 4, 5, 6, 7]) {
+    expect(quantizedBarbSpeed(speed)).toBe(5);
+    const geometry = barbGeometry(speed, 0, 21, false);
+    expect(geometry.calm).toBe(false);
+    expect(geometry.flags).toHaveLength(1);
+    expect(geometry.points.some(([x]) => x === 5)).toBe(true);
+  }
+  for (const speed of [8, 9, 10, 11, 12]) expect(quantizedBarbSpeed(speed)).toBe(10);
+});
+
+it('bounds geometry work for extreme finite source winds', () => {
+  const geometry = barbGeometry(Math.fround(1e30), 45, 21, false);
+  expect(geometry.flags.length).toBeGreaterThanOrEqual(16);
+  expect(geometry.flags.length).toBeLessThanOrEqual(21);
+  expect(geometry.points.every(point => point.every(Number.isFinite))).toBe(true);
+});
+
+it.each(['metric', 'imperial'] as const)('compresses extreme %s pennants inside a mobile staff', system => {
+  const presentation = resolveWindgramPresentation({ compact: true });
+  for (const speed of [195, 200, 205, 245, 250, 255, 400]) {
+    const mps = speed / (system === 'metric' ? 3.6 : 2.2369362921);
+    const glyph = windBarbGlyph({ x: 0, y: 0, speedKt: mpsToKnots(mps + 0.00001), directionDeg: 0, southernHemisphere: false }, presentation, system);
+    const quantized = Math.round(speed / 5) * 5;
+    expect(glyph.flags).toHaveLength(Math.floor(quantized / 50) + Math.floor(quantized % 50 / 10) + Number(quantized % 10 >= 5));
+    for (const [, y] of glyph.points) expect(y).toBeGreaterThanOrEqual(-22);
+    for (const [, y] of glyph.points) expect(y).toBeLessThanOrEqual(0);
   }
 });
 
@@ -223,6 +268,14 @@ describe('Windgram data', () => {
     build.manifest.descriptors.layers['wind-gust-10m']!.timeSupport = 'interval-maximum';
     expect(forecast(profile.frames).semantics.gust).toBe('hourMax');
     expect(renderWindgramKey('imperial')).toContain('Map usable lift');
+  });
+
+  it('formats horizontal wind thresholds in displayed units', () => {
+    const metric = renderWindgramKey('metric'), imperial = renderWindgramKey('imperial');
+    expect(metric).toContain('Wind · half 5 / full 10 / flag 50 km/h');
+    expect(metric).toContain('Green wind is below 16.7 km/h');
+    expect(imperial).toContain('Wind · half 5 / full 10 / flag 50 mph');
+    expect(imperial).toContain('Green wind is below 10.4 mph');
   });
 
   it('uses pinned CAPE and gust semantics for an older build of the same model', () => {

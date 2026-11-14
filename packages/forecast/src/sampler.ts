@@ -13,6 +13,10 @@ export interface Contributor { index: number; row: number; column: number; weigh
 export interface SamplePlan { contributors: Contributor[]; byteRange: { offset: number; length: number } }
 export interface Sample { value: number | null; status: number; support: number; interpolated: boolean }
 
+export function nearerContributor(weight: number, row: number, column: number, bestWeight: number, bestRow: number, bestColumn: number): boolean {
+  return weight > bestWeight || (weight === bestWeight && (row < bestRow || (row === bestRow && column < bestColumn)));
+}
+
 export function validateSamplingField(grid: Grid, field: GridField, mask?: SamplingMask): void {
   if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array)) throw new RangeError('Invalid field arrays');
   const coverage = 'coverage' in field ? (field as PackedGridField).coverage : undefined;
@@ -137,7 +141,7 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   if (missing) {
     let nearest = 0;
     for (let i = 1; i < count; i++) {
-      const better = weights[i] > weights[nearest] || (weights[i] === weights[nearest] && (rows[i] < rows[nearest] || (rows[i] === rows[nearest] && columns[i] < columns[nearest])));
+      const better = nearerContributor(weights[i], rows[i], columns[i], weights[nearest], rows[nearest], columns[nearest]);
       if (better) nearest = i;
     }
     const flag = flags[nearest], status = flag & STATUS_MASK;

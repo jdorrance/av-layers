@@ -1,11 +1,12 @@
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
+import { KPH_PER_MPS, MPH_PER_MPS } from '@av/contracts/units';
 import { normalizeLon, type Grid } from '@av/contracts/geometry';
 import { renderedLayers, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS,
   SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, type LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ManifestV5 } from '@av/contracts/publication';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
-import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
+import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
 import { AUTO_MODEL_ID } from './client-auto.js';
 
 export type UnitSystem = 'metric' | 'imperial';
@@ -67,7 +68,7 @@ export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: Un
   const read = (layer: LayerId) => frame.layers[layer]?.status === 'valid' ? frame.layers[layer].value : null;
   const lift = pointMapLift(frame, build), lclM = read('surface-lcl-msl'), thermalTopM = read('thermal-top-msl');
   const wind = deriveSoaringViews({ wind10mU: read('wind-10m-u'), wind10mV: read('wind-10m-v'), blMeanWindU: read('bl-mean-wind-u'), blMeanWindV: read('bl-mean-wind-v') });
-  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(units === 'imperial' ? speed * KNOTS_PER_MPS : speed).toFixed(1)} ${units === 'imperial' ? 'kt' : 'm/s'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
+  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(speed * (units === 'imperial' ? MPH_PER_MPS : KPH_PER_MPS)).toFixed(1)} ${units === 'imperial' ? 'mph' : 'km/h'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
   const thermal = read('thermal-velocity'), cloud = read('cloud-cover-total');
   const nativeSupport = liftSupport(frame.layers['thermal-velocity']) | liftSupport(frame.layers['thermal-top-msl']);
   const regime = cloudRegime(nativeSupport);

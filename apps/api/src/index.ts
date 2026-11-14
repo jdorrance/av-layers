@@ -30,6 +30,7 @@ import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, r2WaitDuration, ResourceLimitError, waitFor, type WaitContext } from './resources';
+import { windChunk, windFrame } from './wind-data';
 import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, canceledRequest, handleError } from './http';
 import { apiDocs } from './api-docs';
@@ -38,6 +39,7 @@ type Env = {
   Bindings: {
     BUCKET: R2Bucket;
     SAMPLE_RATE_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> };
+    NUMERIC_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
     AV_LOCAL_DEVELOPMENT?: string;
     AV_DEPLOYMENT_ID?: string;
     AV_REQUEST_METRICS?: string;
@@ -87,26 +89,28 @@ app.use('*', (c, next) => {
   return next();
 });
 
-const pointRateLimit: MiddlewareHandler<Env> = async (c, next) => {
+const rateLimit = (kind: 'Sample' | 'Numeric'): MiddlewareHandler<Env> => async (c, next) => {
   const { signal } = c.req.raw;
   signal.throwIfAborted();
   const ip = c.req.header('CF-Connecting-IP');
   const key = ip === undefined && c.env.AV_LOCAL_DEVELOPMENT === 'true' ? 'localhost' : ip;
-  if (!key || (ip !== undefined && !validIp(ip)) || !c.env.SAMPLE_RATE_LIMITER) {
-    fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
+  const limiter = kind === 'Sample' ? c.env.SAMPLE_RATE_LIMITER : c.env.NUMERIC_RATE_LIMITER;
+  if (!key || (ip !== undefined && !validIp(ip)) || !limiter) {
+    fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
   }
   let allowed: { success: boolean };
   try {
-    allowed = await waitFor(c.env.SAMPLE_RATE_LIMITER.limit({ key }), signal);
+    allowed = await waitFor(limiter.limit({ key }), signal);
   } catch {
     signal.throwIfAborted();
-    return fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
+    return fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
   }
-  if (typeof allowed?.success !== 'boolean') fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
-  if (!allowed.success) fail(429, 'rate-limit-exceeded', 'Sample request rate exceeded');
+  if (typeof allowed?.success !== 'boolean') fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
+  if (!allowed.success) fail(429, 'rate-limit-exceeded', `${kind} request rate exceeded`);
   await next();
 };
-for (const path of ['sample', 'samples', 'profile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, pointRateLimit);
+for (const path of ['sample', 'samples', 'profile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, rateLimit('Sample'));
+for (const path of ['data/:frame', 'data/:frame/:kind/:tile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, rateLimit('Numeric'));
 
 const problemSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string() });
 const problemResponses = {
@@ -225,7 +229,7 @@ registerJsonRoute(
     if (metrics) metrics.buildId = m.buildId;
     const servedManifest = { ...m, source: servedSource(m, url.origin) };
     return discovery(c, () => ({
-      pointer: ptr,
+      pointer: modelPointerSchema.parse(ptr),
       ...(url.searchParams.has('expand') ? {
         manifest: servedManifest,
         templates: Object.fromEntries(renderedLayers(m.layers, m.descriptors.layers).map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
@@ -244,7 +248,7 @@ registerJsonRoute(
     const model = modelId(c);
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx, c.req.raw.signal);
     const retained = ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now());
-    return discovery(c, () => ({ model, retained: ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now()) }), [ptr], retained.map(item => item.expiresAt));
+    return discovery(c, () => ({ model, retained: modelPointerSchema.parse(ptr).retained.filter(item => Date.parse(item.expiresAt) > Date.now()) }), [ptr], retained.map(item => item.expiresAt));
   }
 );
 
@@ -325,6 +329,23 @@ async function pinnedManifest(c: Context<Env>) {
     return await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal);
   } finally { if (metrics) metrics.admitMs = performance.now() - started; }
 }
+
+app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
+  query(new URL(c.req.url), []);
+  const m = await pinnedManifest(c), entry = await admit(c.env.BUCKET, m.model, m.buildId, c.executionCtx, undefined, c.req.raw.signal);
+  const result = await windFrame(c.env.BUCKET, m, entry, requiredParam(c, 'frame'), c.executionCtx, c.req.raw.signal);
+  return response(result.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt);
+});
+
+app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
+  query(new URL(c.req.url), []);
+  const m = await pinnedManifest(c), entry = await admit(c.env.BUCKET, m.model, m.buildId, c.executionCtx, undefined, c.req.raw.signal);
+  const frame = requiredParam(c, 'frame'), kind = requiredParam(c, 'kind'), raw = requiredParam(c, 'tile');
+  if ((kind !== 'wind' && kind !== 'fine') || !/^(0|[1-9][0-9]{0,9})$/.test(raw) || !Number.isSafeInteger(Number(raw))) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => response(await windChunk(c.env.BUCKET, m, entry, frame, kind, Number(raw), c.executionCtx, c.req.raw.signal) as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt));
+  result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
+  return result;
+});
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/sample',

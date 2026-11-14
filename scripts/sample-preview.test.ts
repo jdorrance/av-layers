@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { readFile, readdir, rm, truncate, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { getProduct } from '@av/contracts/models';
@@ -7,6 +7,7 @@ import { parseProvenance } from '@av/contracts';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { offlinePreviewFixture } from './fixtures/offline-preview.js';
 import { seedLocalBuild, type LocalPreviewStore } from './sample-preview.js';
+import { localWindData } from '../apps/batch/src/wind-data.js';
 
 type Fixture = Awaited<ReturnType<typeof offlinePreviewFixture>>;
 type Local = Awaited<ReturnType<Fixture['copy']>>;
@@ -64,12 +65,36 @@ describe('offline fixture and local seeding', () => {
       ...[native, fine].flatMap(surface => surface.samples.shards.map(shard => shard.key)),
       ...native.profiles!.groups.flatMap(group => group.shards.map(shard => shard.key))
     ];
+    const numeric = await localWindData(local.root, manifest);
+    expect(numeric).not.toBeNull();
+    dependencies.push(...numeric!.objects.map(object => object.key));
     expect(result.uploadedObjects).toBe(dependencies.length + 2);
     expect(memory.writes.slice(0, -2).sort()).toEqual(dependencies.sort());
     expect(memory.writes.at(-2)).toBe(relative(local.root, local.manifestPath));
     expect(memory.writes.at(-1)).toBe(local.pointerKey);
     expect(JSON.parse(Buffer.from(memory.objects.get(local.pointerKey)!.bytes).toString()).latestBuildId).toBe(manifest.buildId);
+    expect(JSON.parse(Buffer.from(memory.objects.get(local.pointerKey)!.bytes).toString()).retained[0].mapData).toEqual(numeric!.reference);
+    expect(memory.objects.get(`builds/${manifest.model}/${manifest.buildId}/map-data.json`)!.customMetadata.sha256).toBe(numeric!.reference.sha256);
     for (const object of memory.objects.values()) expect(object.customMetadata.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('rejects corrupted numeric shards before exposing a pointer', async () => {
+    const local = await fixture(), memory = memoryStore(), numeric = await localWindData(local.root, local.manifest);
+    const shard = numeric!.objects.find(object => object.key.endsWith('/wind-0.bin'))!;
+    const path = join(local.root, shard.key), bytes = await readFile(path);
+    bytes[bytes.length - 1] ^= 1;
+    await writeFile(path, bytes);
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow('Wind chunk digest mismatch');
+    expect(memory.open).not.toHaveBeenCalled();
+  });
+
+  it.each(['root', 'frame', 'index'] as const)('rejects an oversized numeric %s before seeding', async kind => {
+    const local = await fixture(), memory = memoryStore(), numeric = await localWindData(local.root, local.manifest);
+    const root = `builds/${local.manifest.model}/${local.manifest.buildId}/map-data.json`;
+    const key = kind === 'root' ? root : kind === 'frame' ? `builds/${local.manifest.model}/${local.manifest.buildId}/map-data/${local.manifest.frames[0].id}.json` : numeric!.objects.find(object => object.key.endsWith('/wind-0.idx'))!.key;
+    await truncate(join(local.root, key), kind === 'index' ? 32 * 1024 + 1 : 1024 * 1024 + 1);
+    await expect(seedLocalBuild(local, memory.open)).rejects.toThrow('Local file exceeds byte budget or changed length');
+    expect(memory.open).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown recipe before opening the store', async () => {

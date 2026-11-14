@@ -95,8 +95,13 @@ its peaks include objects awaiting GC. Driver overhead, worker allocations,
 decoder internals and the default framebuffer are outside these logical counts.
 Mobile hardware, real basemap work and constrained bandwidth need separate profiles.
 
-Startup JavaScript gzip grew from approximately **352.46 kB to 355,969 bytes**
-(~1.0%). The [build gate](../apps/preview/vite.config.ts) allows 357,000 bytes.
+With the wind UI, numeric sampler, Google Terrain and the shared numeric/raster
+request scheduler, startup JavaScript measured **370,034 bytes** and the lazy
+chunk **28,928 bytes** gzip on Node 22.23.4 on 14 November 2026. The
+[build gate](../apps/preview/vite.config.ts) allows 371,000 startup and 31,000
+lazy bytes. The numeric source stays in startup. The separate MapLibre worker
+measured **150,556 bytes** gzip. These are build measurements; the timeline
+latencies above predate numeric wind.
 
 ## Reproduction fingerprints
 

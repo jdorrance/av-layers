@@ -1,7 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { getProduct } from '@av/contracts/models';
-import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, renderedFrames, getProvenanceReference, manifestV5Schema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, modelPointerSchema, parseProvenance, parseFrameProvenance, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type ManifestV5, type ModelId, type ModelPointer } from '@av/contracts';
+import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, renderedFrames, getProvenanceReference, manifestV5Schema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type ManifestV5, type ModelId, type StoredModelPointer } from '@av/contracts';
+import { WIND_CHUNK_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, windDataSchema, parseWindFrame, windLayout } from '@av/contracts/wind-data';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -10,10 +11,11 @@ import { loadCoverage, readSparseCoverage } from './coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
-import { putImmutable, uploadBounded } from './immutable-upload.js';
+import { putImmutable, putImmutableReceipt, uploadBounded, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
 import { readLocalProvenance } from './frame-provenance.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
+import { localWindData } from './wind-data.js';
 
 const decode = parseBoundedJson;
 const pointerKey = (model: ModelId): string => `catalog/${model}/latest.json`;
@@ -38,16 +40,16 @@ function assertLifetime(manifest: ManifestV5, now: number): void {
   }
 }
 
-export async function readPointer(store: ObjectStorage, model: ModelId, signal?: AbortSignal): Promise<{ pointer: ModelPointer | null; etag?: string }> {
+export async function readPointer(store: ObjectStorage, model: ModelId, signal?: AbortSignal): Promise<{ pointer: StoredModelPointer | null; etag?: string }> {
   const object = await store.get(pointerKey(model), undefined, MAX_POINTER_BYTES, signal);
   if (!object) return { pointer: null };
-  const pointer = modelPointerSchema.parse(decode(object.bytes));
+  const pointer = storedModelPointerSchema.parse(decode(object.bytes));
   if (pointer.model !== model) throw new Error('Pointer model mismatch');
   return { pointer, etag: object.etag };
 }
 
-async function casPointer(store: ObjectStorage, model: ModelId, pointer: ModelPointer, etag?: string): Promise<void> {
-  modelPointerSchema.parse(pointer);
+async function casPointer(store: ObjectStorage, model: ModelId, pointer: StoredModelPointer, etag?: string): Promise<void> {
+  storedModelPointerSchema.parse(pointer);
   await store.put(pointerKey(model), encodeBoundedJson(pointer, MAX_POINTER_BYTES), etag ? { ifMatch: etag } : { ifNoneMatch: '*' }, 'application/json');
 }
 
@@ -63,13 +65,24 @@ export function assertUsefulHorizon(manifest: Pick<ManifestV5, 'model' | 'cycle'
   }
 }
 
-export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
+export async function publish(store: ObjectStorage, root: string, raw: unknown, options: { authority: PublicationAuthority; allowSameCycle?: boolean; now?: () => number; signal?: AbortSignal; validated?: ValidatedBuild; receiptsOnly?: boolean; deadlineAt?: string; committedOnly?: boolean; publishNumericWind?: boolean; timings?: { r2UploadWallMs?: number; casCommitWallMs?: number } }): Promise<void> {
   const now = options.now ?? Date.now, manifest = manifestV5Schema.parse(raw);
   if (options.validated) assertValidatedBuild(root, manifest, options.validated, options.receiptsOnly ? store : undefined);
   assertAuthority(options.authority, manifest.model);
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   const captured = await readPointer(store, manifest.model, options.signal);
   const existing = captured.pointer?.retained.find(item => item.buildId === manifest.buildId);
+  let numeric = options.publishNumericWind && !options.receiptsOnly ? await localWindData(root, manifest, options.signal) : null;
+  let numericReceipts: ObjectReceipt[] = [];
+  if (options.publishNumericWind && options.receiptsOnly) {
+    const parallel = await import('./parallel.js'), plan = await parallel.readBuildPlan(localPath(root, 'plan.json'));
+    if (!plan.numericWind) throw new Error('Forecast plan does not admit numeric wind');
+    await parallel.verifyBuildReceipts(root, manifest, store, options.signal, undefined, receipts => { numericReceipts = receipts; });
+    const bytes = await readLocalFile(localPath(root, `builds/${manifest.model}/${manifest.buildId}/map-data.json`), WIND_ROOT_LIMIT);
+    numeric = { reference: { bytes: bytes.length, sha256: sha256(bytes) }, objects: [] };
+  }
+  if (options.publishNumericWind && !numeric) throw new Error('Numeric wind publication requires verified artifacts');
+  if (existing && numeric && (existing.mapData?.sha256 !== numeric.reference.sha256 || existing.mapData.bytes !== numeric.reference.bytes)) throw new Error('Retained numeric wind identity mismatch');
   if (options.committedOnly && (!existing || captured.pointer?.latestBuildId !== manifest.buildId)) throw new Error('Recovery requires the committed latest build');
   const alreadyRetained = !!existing;
   if (existing && (existing.manifestKey !== key || existing.cycle !== manifest.cycle || existing.expiresAt !== manifest.expiresAt)) throw new Error('Retained build identity mismatch');
@@ -106,6 +119,14 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     if (sha256(bytes) !== file.sha256) throw new Error(`Local hash mismatch: ${file.key}`);
     check(); await putImmutable(store, file.key, bytes, file.contentType, options.signal, file.contentType === 'application/octet-stream');
   });
+  if (numeric) await uploadBounded(numeric.objects.map(file => ({ ...file, size: file.bytes })), MAX_UPLOAD_RESERVED_BYTES, async file => {
+    check();
+    const bytes = await readLocalFile(localPath(root, file.key), MAX_UPLOAD_ARTIFACT_BYTES, file.size);
+    if (sha256(bytes) !== file.sha256) throw new Error(`Local wind hash mismatch: ${file.key}`);
+    numericReceipts.push(await putImmutableReceipt(store, file.key, bytes, file.contentType, options.signal, file.sha256));
+  }, 1);
+  if (existing?.mapData) await verifyRemoteWind(store, manifest, existing.mapData, options.signal, numericReceipts);
+  if (numeric && !existing) await verifyRemoteWind(store, manifest, numeric.reference, options.signal, numericReceipts);
   const provenanceBytes = localProvenance.bytes;
   check(); await putImmutable(store, provenance.key, provenanceBytes, 'application/json', options.signal);
   const uploadedProvenance = await store.get(provenance.key, undefined, MAX_PROVENANCE_BYTES, options.signal);
@@ -117,7 +138,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   if (alreadyRetained) {
     const current = (await readPointer(store, manifest.model, options.signal)).pointer;
     const retained = current?.retained.find(item => item.buildId === manifest.buildId);
-    if (current?.latestBuildId !== manifest.buildId || retained?.manifestKey !== key || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt) throw new Error('Committed latest build changed during validation');
+    if (current?.latestBuildId !== manifest.buildId || retained?.manifestKey !== key || retained.cycle !== manifest.cycle || retained.expiresAt !== manifest.expiresAt || retained.mapData?.sha256 !== existing.mapData?.sha256 || retained.mapData?.bytes !== existing.mapData?.bytes) throw new Error('Committed latest build changed during validation');
     if (options.timings) options.timings.casCommitWallMs = 0;
     return;
   }
@@ -125,13 +146,13 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   const deadline = options.deadlineAt === undefined ? Date.parse(manifest.createdAt) + BUILD_BUDGETS.elapsedMs : Date.parse(options.deadlineAt);
   if (!isForecastPlanDeadline(manifest.createdAt, deadline)) throw new Error('Invalid publication deadline');
   if (now() > deadline - SMOKE_VERIFY_RESERVE_MS) throw new Error('Build exceeds pre-publication deadline');
-  retained.unshift({ buildId: manifest.buildId, manifestKey: key, cycle: manifest.cycle, expiresAt: manifest.expiresAt });
+  retained.unshift({ buildId: manifest.buildId, manifestKey: key, cycle: manifest.cycle, expiresAt: manifest.expiresAt, ...(numeric ? { mapData: numeric.reference } : {}) });
   const casStarted = Date.now();
   try { await casPointer(store, manifest.model, { version: 1, model: manifest.model, latestBuildId: manifest.buildId, retained }, captured.etag); }
   catch (error) {
     // Cancellation/network failure after CAS is ambiguous. Read the authority before reporting failure.
     const reconciled = await readPointer(store, manifest.model);
-    if (!reconciled.pointer?.retained.some(item => item.buildId === manifest.buildId && item.manifestKey === key && item.cycle === manifest.cycle && item.expiresAt === manifest.expiresAt)) throw error;
+    if (!reconciled.pointer?.retained.some(item => item.buildId === manifest.buildId && item.manifestKey === key && item.cycle === manifest.cycle && item.expiresAt === manifest.expiresAt && item.mapData?.sha256 === numeric?.reference.sha256 && item.mapData?.bytes === numeric?.reference.bytes)) throw error;
     const committed = await store.get(key, undefined, MAX_MANIFEST_BYTES);
     if (!committed || !Buffer.from(committed.bytes).equals(content)) throw error;
   } finally { if (options.timings) options.timings.casCommitWallMs = Date.now() - casStarted; }
@@ -242,6 +263,7 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
     if (value.hour !== reference.hour) throw new Error('Rollback provenance hour mismatch');
   }
   await verifyV5Dependencies(store, manifest, options.signal);
+  if (retained.mapData) await verifyRemoteWind(store, manifest, retained.mapData, options.signal);
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   check();
   options.onPointerOutcome?.('unconfirmed'); // Persist intent before a request whose response may be lost.
@@ -249,9 +271,42 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
   catch (error) {
     // Never let cancellation suppress authoritative reconciliation after a possible commit.
     const reconciled = await readPointer(store, model);
-    if (reconciled.pointer?.latestBuildId !== target || !reconciled.pointer.retained.some(item => item.buildId === target && item.manifestKey === retained.manifestKey && item.cycle === retained.cycle && item.expiresAt === retained.expiresAt)) throw error;
+    if (reconciled.pointer?.latestBuildId !== target || !reconciled.pointer.retained.some(item => item.buildId === target && item.manifestKey === retained.manifestKey && item.cycle === retained.cycle && item.expiresAt === retained.expiresAt && item.mapData?.sha256 === retained.mapData?.sha256 && item.mapData?.bytes === retained.mapData?.bytes)) throw error;
   }
   options.onPointerOutcome?.('confirmed');
+}
+
+async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, reference: { bytes: number; sha256: string }, signal?: AbortSignal, receipts: readonly ObjectReceipt[] = []) {
+  const byKey = new Map(receipts.map(receipt => [receipt.key, receipt]));
+  if (byKey.size !== receipts.length) throw new Error('Duplicate wind object receipt');
+  const prefix = `builds/${manifest.model}/${manifest.buildId}`, root = await store.get(`${prefix}/map-data.json`, undefined, WIND_ROOT_LIMIT, signal);
+  if (!root || root.bytes.length !== reference.bytes || sha256(root.bytes) !== reference.sha256) throw new Error('Remote wind root missing or corrupt');
+  const data = windDataSchema.parse(decode(root.bytes)), frames = renderedFrames(manifest);
+  if (data.model !== manifest.model || data.buildId !== manifest.buildId || data.frames.length !== frames.length || data.frames.some((item, i) => item.id !== frames[i].id)) throw new Error('Remote wind root identity mismatch');
+  for (const frame of data.frames) {
+    const object = await store.get(`${prefix}/map-data/${frame.id}.json`, undefined, frame.bytes, signal);
+    if (!object || object.bytes.length !== frame.bytes || sha256(object.bytes) !== frame.sha256) throw new Error('Remote wind frame missing or corrupt');
+    const descriptor = parseWindFrame(object.bytes);
+    if (descriptor.frame !== frame.id) throw new Error('Remote wind frame identity mismatch');
+    for (const kind of ['wind', 'fine'] as const) {
+      const surface = manifest.surfaces.find(item => item.kind === (kind === 'wind' ? 'native' : 'fine'));
+      if (!surface) throw new Error('Remote wind surface missing');
+      const size = kind === 'wind' ? descriptor.tileSize : descriptor.fineTileSize;
+      const { chunkBytes, pages, pageCount } = windLayout(surface.grid.width, surface.grid.height, size, kind === 'wind' ? descriptor.levels : undefined);
+      if (chunkBytes > WIND_CHUNK_LIMIT || descriptor[kind].length !== pages) throw new Error('Remote wind layout mismatch');
+      for (const [page, shard] of descriptor[kind].entries()) {
+        const expected = pageCount(page), base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
+        if (shard.count !== expected || shard.bytes !== expected * chunkBytes) throw new Error('Remote wind shard layout mismatch');
+        for (const [key, sha256, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
+          const receipt = byKey.get(key);
+          if (receipt) {
+            if (receipt.bytes !== bytes || receipt.sha256 !== sha256) throw new Error(`Remote wind receipt mismatch: ${key}`);
+            await verifyObjectReceipts(store, [receipt], signal);
+          } else await verifyRemoteHash(store, key, sha256, limit, bytes, signal, metadata);
+        }
+      }
+    }
+  }
 }
 
 /** Verify large immutable objects with one bounded range live at a time. */

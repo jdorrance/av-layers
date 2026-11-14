@@ -69,7 +69,7 @@ function logForecastEvent(authority: PublicationAuthority, started: number, deta
 export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'finalize' | 'resume', work: (run: {
   root: string; signal: AbortSignal; store: ObjectStorage; model: string;
   identifyBuild(buildId: string): void;
-  commit(manifest: ManifestV5, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean }): Promise<void>;
+  commit(manifest: ManifestV5, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean; publishNumericWind?: boolean }): Promise<void>;
 }) => Promise<T>, store?: ObjectStorage): Promise<T> {
   const { revision } = workflowContext();
   const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
@@ -226,7 +226,7 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
     const wholeDomain = configuredWholeDomain(model, process.env, store);
-    const plan = await createForecastPlan(model, { out: root, cycle, signal, store,
+    const plan = await createForecastPlan(model, { out: root, cycle, signal, store, ...(process.env.AV_NUMERIC_WIND === 'true' ? { numericWind: true } : {}),
       ...(pinned ? { sourcePin: pinned.sourcePin } : {}), wholeDomain: { ...wholeDomain, cacheOnly: true } });
     identifyBuild(plan.buildId);
     await writeFile(join(root, 'plan-metrics.json'), JSON.stringify({ planWallMs: Date.now() - Date.parse(plan.createdAt), rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
@@ -294,7 +294,7 @@ export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
     const plan = await readBuildPlan(join(root, 'plan.json'));
     identifyBuild(plan.buildId);
     await downloadForecastControlReceipts(store, root, plan, forecastPlanSignal(plan, signal));
-    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: new Date(forecastPlanDeadline(plan)).toISOString(), receiptsOnly: true }) });
+    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: new Date(forecastPlanDeadline(plan)).toISOString(), receiptsOnly: true, publishNumericWind: plan.numericWind }) });
   }, store);
 }
 
@@ -410,7 +410,7 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     }
     await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
     deadlineSignal.throwIfAborted();
-    await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
+    await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly, publishNumericWind: plan.numericWind });
   }, store);
 }
 

@@ -31,6 +31,34 @@ beforeAll(async () => { receiptFixture = await buildReceiptFixture(); }, 60_000)
 afterEach(cleanupTemporaryRoots);
 afterAll(async () => { if (sealedRoot) await rm(sealedRoot, { recursive: true, force: true }); });
 
+it('uses persisted upload receipts and hashes when the record is missing', async () => {
+  const { inputs, plan, manifest } = receiptFixture, out = await temporaryRoot(), store = new PublicationStore();
+  await cp(inputs.out, out, { recursive: true });
+  store.objects = new Map(inputs.store.objects);
+  const keys = new Set(manifest.surfaces.flatMap(surface => surface.samples.shards.map(shard => shard.key)));
+  const get = vi.spyOn(store, 'get');
+  await verifyBuildReceipts(out, manifest, store, undefined, inputs);
+  expect(get.mock.calls.filter(([key]) => keys.has(key))).toHaveLength(0);
+  await rm(join(out, `builds/${plan.model}/${plan.buildId}/serving-receipts.json`));
+  get.mockClear();
+  await verifyBuildReceipts(out, manifest, store, undefined, inputs);
+  expect(get.mock.calls.filter(([key]) => keys.has(key))).toHaveLength(keys.size);
+  const key = [...keys][0]!, original = store.objects.get(key)!;
+  const bytes = original.bytes.slice(); bytes[0] ^= 1;
+  store.objects.set(key, { ...original, bytes, etag: 'tampered' });
+  await expect(verifyBuildReceipts(out, manifest, store, undefined, inputs)).rejects.toThrow('Remote object hash mismatch');
+  get.mockRestore();
+}, 60_000);
+
+it('rejects changed serving object identity against a persisted receipt', async () => {
+  const { inputs, manifest } = receiptFixture, store = new PublicationStore();
+  store.objects = new Map(inputs.store.objects);
+  const key = manifest.surfaces[0].samples.shards[0].key, original = store.objects.get(key)!;
+  const bytes = original.bytes.slice(); bytes[0] ^= 1;
+  store.objects.set(key, { ...original, bytes, etag: 'tampered' });
+  await expect(verifyBuildReceipts(inputs.out, manifest, store, undefined, inputs)).rejects.toThrow('Remote object receipt mismatch');
+}, 60_000);
+
 it.each(['complete', 'failure', 'abort'] as const)('bounds serving receipt HEADs and drains admitted work: %s', async mode => {
   const controller = new AbortController(), pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
   let running: ReturnType<typeof verifyBuildReceipts> | undefined;

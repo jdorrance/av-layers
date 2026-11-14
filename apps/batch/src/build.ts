@@ -6,12 +6,16 @@ import { loadCoverage } from './coverage.js';
 import { assertForecastInputs, BUILD_BUDGETS } from './capacity.js';
 import type { BuildStamp, ForecastInputs, FrameBuildOptions } from './frame-build.js';
 import { prepareWholeDomain, type WholeDomainOptions } from './whole-domain/prepare.js';
-import { buildWholeDomainFrames } from './whole-domain/frames.js';
+import { buildWholeDomainFrames, type WholeDomainFrameOptions } from './whole-domain/frames.js';
 import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
+import { planWholeDomainCapacity, wholeDomainCapacityInput } from './whole-domain/capacity.js';
+import { createWindDataWriter } from './wind-data.js';
 
 export interface BuildOptions extends FrameBuildOptions {
   onValidated?: FinishWholeDomainOptions['onValidated'];
   wholeDomain?: WholeDomainOptions;
+  onNumericFrame?: WholeDomainFrameOptions['onNumericFrame'];
+  numericWind?: boolean;
 }
 
 export function createBuildStamp(): BuildStamp {
@@ -37,6 +41,10 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
     nativeCoverageHash: prepared.native.hash, terrain: prepared.terrain } });
   const preparation = { elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 };
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
-  const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix });
+  const capacity = options.numericWind ? planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, prepared, [options.product.frameHours])).capacity : undefined;
+  const writer = capacity ? createWindDataWriter(options.out, options.product.modelId, stamp.buildId, options.provider.maxLevels, prepared.plan, capacity, options.signal) : undefined;
+  const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix,
+    onNumericFrame: writer ? async (...args) => { await writer.writeFrame(...args); await options.onNumericFrame?.(...args); } : options.onNumericFrame });
+  if (writer) await writer.finish(result.capacity.mapFrames);
   return finishWholeDomain({ ...options, ...stamp, prepared, result, identity, preparation });
 }

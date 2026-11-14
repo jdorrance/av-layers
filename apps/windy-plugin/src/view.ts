@@ -114,7 +114,7 @@ export class PluginPanel {
     opacityLabel.htmlFor = this.opacityInput.id;
     controls.append(modelLabel, this.modelSelect, node('span'), opacityLabel, this.opacityInput, this.opacityReadout);
     this.units.id = 'av-units';
-    this.units.add(new Option('m · m/s', 'metric')); this.units.add(new Option('ft · kt', 'imperial'));
+    this.units.add(new Option('m · km/h', 'metric')); this.units.add(new Option('ft · mph', 'imperial'));
     this.units.value = this.unitSystem;
     const unitsLabel = node('label', undefined, 'Units'); unitsLabel.htmlFor = this.units.id;
     this.units.addEventListener('change', () => {

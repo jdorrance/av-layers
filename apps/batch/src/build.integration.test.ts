@@ -95,3 +95,29 @@ it('journals a failed prefetch against its own frame and phase', async () => {
   });
   expect(close).toHaveBeenCalledOnce();
 });
+
+it('cancels non-sharded numeric generation before registering a frame', async () => {
+  const { out, options, close } = await fixture(), controller = new AbortController();
+  const original = AbortSignal.prototype.throwIfAborted;
+  let checks = 0;
+  vi.spyOn(AbortSignal.prototype, 'throwIfAborted').mockImplementation(function (this: AbortSignal) {
+    if (new Error().stack?.includes('/wind-data.ts') && ++checks === 4) controller.abort(new Error('numeric cancelled'));
+    original.call(this);
+  });
+  await expect(buildForecast({ ...options, numericWind: true, signal: controller.signal })).rejects.toThrow('numeric cancelled');
+  const builds = join(out, 'builds', product.modelId), [buildId] = await readdir(builds);
+  expect((await stat(join(builds, buildId!, 'map-data', 'f001', 'wind-0.bin'))).size).toBeGreaterThan(0);
+  await expect(stat(join(builds, buildId!, 'map-data', 'f001.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(close).toHaveBeenCalledOnce();
+});
+
+it('finishes numeric output after regional daylight removes configured frames', async () => {
+  const { out, options, acquire } = await fixture();
+  const configured = { ...product, frameHours: [5, 18], mapEndHour: 18,
+    capabilities: { ...product.capabilities, daylightFrames: 'regional-daylight' as const } };
+  const path = await buildForecast({ ...options, product: configured, deriveOptions: {}, numericWind: true });
+  const manifest = manifestV5Schema.parse(JSON.parse(await readFile(path, 'utf8')));
+  expect(acquire.mock.calls.map(([hour]) => hour)).toEqual([18]);
+  const root = JSON.parse(await readFile(join(out, `builds/${configured.modelId}/${manifest.buildId}/map-data.json`), 'utf8'));
+  expect(root.frames.map((frame: { id: string }) => frame.id)).toEqual(['f018']);
+});

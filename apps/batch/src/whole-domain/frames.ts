@@ -54,6 +54,7 @@ export interface WholeDomainFrameOptions extends FrameBuildOptions, ForecastInpu
   journalPrefix: string;
   surfaceTarget?: (surface: 'native' | 'fine') => string;
   sampleGroup?: number;
+  onNumericFrame?: (frame: NormalizedFrame, id: string, fine: GridField, prepared: WholeDomainPrepared, terrain: { elevationM: Float32Array; valid: Uint8Array }, signal: AbortSignal) => Promise<void>;
 }
 
 export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): Promise<WholeDomainFrameResult> {
@@ -177,6 +178,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
         ? await derivePool.derive({ generation: completedFrames, frame, time: descriptor, daylightOnly: deriveOptions.daylightOnly, nativeClearance, deadlineAt })
         : await prepared.columns.deriveAsync(frame, terrainData!, descriptor, { daylightOnly: deriveOptions.daylightOnly,
           nativeClearance, signal, output: fineOutput, deadlineAt, yieldControl: () => new Promise<void>(resolve => setImmediate(resolve)) })).fields : undefined;
+      if (options.onNumericFrame && fineFields) await options.onNumericFrame(frame, id, fineFields['usable-lift-msl'], prepared, terrainData!, signal);
       const deriveFineWallMs = Date.now() - tFine;
       summaries[id] = summarizeFields(nativeFields, mask, outputIndices, frameLayers);
       deriveMs += Date.now() - tDerive;

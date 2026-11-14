@@ -21,17 +21,23 @@ combined work across all grids selected by a request.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
-- **Client tile transport:** preview and Windy share the
+- **Client forecast transport:** preview routes numeric wind and raster fetches
+  through one [scheduler](../packages/client/src/client-request-scheduler.ts),
+  with six active requests including body consumption and cancellation, plus
+  64 queued requests. Selected work takes priority over queued speculation.
+  Preview and Windy share the
   [raster scheduler](../packages/client/src/client-raster.ts).
   It keeps 16 requests active and queues 64. Background work starts while fewer
   than 2 background reads are active; admitted reads finish after demotion. The
   compressed tile cache is 48 MiB including entry overhead. Preview retains up to
   four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
-  with 16 offscreen tiles per source. The 96 MiB admission estimate charges visible
+  with 16 offscreen tiles per source. Preview's 96 MiB forecast envelope reserves
+  8 MiB for numeric wind, 8 MiB for wind canvases and 80 MiB for rasters.
+  Raster admission charges visible
   and cached tiles at twice RGBA storage; large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
   With viewport overviews, one transport handle loads up to two coarse tiles at once.
-  Up to 40 decoded 256² images share a 24 MiB reservation within the 96 MiB estimate;
+  Up to 40 decoded 256² images share a 24 MiB reservation within the raster allowance;
   one image source uploads the selected overview. Fine-source admission can shrink to one.
   Overview retention stops when one fine source and that reservation cannot fit.
   A complete overview remains visible if detailed tiles fail. Time changes with an
@@ -49,6 +55,12 @@ combined work across all grids selected by a request.
   Build expiry drops
   that build's cache. Palette responses stay revalidatable. Build-specific tile,
   manifest, provenance, and TileJSON responses stay immutable until `expiresAt`.
+- **Numeric wind metadata:** verified root/frame descriptors and digest indexes
+  share a 128-entry, 4 MiB cache in
+  [wind-data.ts](../apps/api/src/wind-data.ts). Cold metadata and chunk reads use
+  the existing binary-read queue and allocation pools. The
+  [wind contract](../packages/contracts/src/wind-data.ts) bounds descriptors,
+  pages and chunks; serving hashes the selected range against its verified index.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
   concurrent cold loads. Validated manifest bytes also use the Cache API through
   build expiry. Shared storage entries are scoped to the API origin; each read
@@ -109,10 +121,10 @@ estimate. See [point-products.ts](../packages/contracts/src/point-products.ts).
 ## Memory envelope
 
 For 20 concurrent requests, the conservative modeled Worker footprint is
-**111 MiB**. The previous 96 MiB local test gate predates the larger coverage
+**115 MiB**. The previous 96 MiB local test gate predates the larger coverage
 cache; full Worker memory measurements for this configuration remain pending.
 
-- 33 MiB caches (pointer, manifest, coverage, PMTiles directories)
+- 37 MiB caches (pointer, manifest, coverage, PMTiles directories, wind metadata)
 - 32 MiB active stream and verification buffers
 - 16 MiB outgoing response reservations
 - 8 MiB transient parsed metadata and directory structures
