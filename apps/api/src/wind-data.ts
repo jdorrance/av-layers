@@ -1,4 +1,4 @@
-import { WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
+import { WIND_FRAME_LIMIT, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 import type { ManifestV5, StoredModelPointer } from '@av/contracts';
 import { sha256 } from './coverage';
 import { ensureLive, fail } from './http';
@@ -57,9 +57,9 @@ export async function windFrame(bucket: R2Bucket, m: ManifestV5, entry: Entry, f
   return { ...result, bytes: result.bytes.slice() };
 }
 
-export async function windChunk(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: string, kind: 'wind' | 'fine', tile: number, ctx: WaitContext, signal: AbortSignal) {
+export async function windChunk(bucket: R2Bucket, m: ManifestV5, entry: Entry, frame: string, kind: string, tile: number, ctx: WaitContext, signal: AbortSignal) {
   const { descriptor, prefix } = await loadFrame(bucket, m, entry, frame, ctx, signal);
-  const page = Math.floor(tile / WIND_INDEX_ENTRIES), index = tile % WIND_INDEX_ENTRIES, shard = descriptor[kind][page];
+  const page = Math.floor(tile / WIND_INDEX_ENTRIES), index = tile % WIND_INDEX_ENTRIES, shard = windFrameParts(descriptor).find(part => part.kind === kind)?.shards[page];
   if (!shard || index >= shard.count) return fail(404, 'unknown-resource', 'Unknown wind chunk');
   const indexes = await verified(bucket, `${prefix}/map-data/${frame}/${kind}-${page}.idx`, { bytes: shard.count * 32, sha256: shard.indexSha256 }, WIND_INDEX_ENTRIES * 32, entry.expiresAt, ctx, signal);
   const length = shard.bytes / shard.count, offset = index * length;

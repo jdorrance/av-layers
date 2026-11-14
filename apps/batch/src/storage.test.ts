@@ -1,7 +1,7 @@
 import { createCipheriv, createHash, createHmac } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { DeleteObjectsCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
 import { assertBuildBucketLock, r2ClientOptions, r2ShardStorage, r2Storage, sealShardCredentials } from './storage';
 import { putImmutable } from './immutable-upload';
@@ -264,6 +264,74 @@ describe('R2 S3 client configuration', () => {
     try {
       await expect(r2Storage({ ...env, R2_BUCKET: 'test' }).list('builds/gfs/')).rejects.toThrow('page budget');
       expect(pages).toBe(1000);
+    } finally { send.mockRestore(); }
+  });
+
+  it('lists more than 100,000 objects through lazy bounded build inventories', async () => {
+    const prefix = 'builds/gfs/', lastModified = new Date('2026-11-01T00:00:00Z');
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async command => {
+      const input = (command as ListObjectsV2Command).input;
+      if (input.Delimiter) return { CommonPrefixes: [{ Prefix: `${prefix}first/` }, { Prefix: `${prefix}second/` }] } as never;
+      const page = Number(input.ContinuationToken ?? 0);
+      return { Contents: Array.from({ length: 1000 }, (_, i) => ({ Key: `${input.Prefix}${page * 1000 + i}`, LastModified: lastModified, Size: 1 })),
+        IsTruncated: page < 59, NextContinuationToken: String(page + 1) } as never;
+    });
+    try {
+      let count = 0, batches = 0;
+      for await (const objects of r2Storage({ ...env, R2_BUCKET: 'test' }).listBuilds!(prefix)) {
+        expect(objects).toHaveLength(60_000);
+        expect(send).toHaveBeenCalledTimes(++batches * 60 + 1);
+        expect(objects.every(object => object.key.startsWith(`${prefix}${batches === 1 ? 'first' : 'second'}/`))).toBe(true);
+        count += objects.length;
+      }
+      expect(count).toBe(120_000);
+    } finally { send.mockRestore(); }
+  });
+
+  it('shares the existing page limit across build prefixes and their objects', async () => {
+    const prefix = 'builds/gfs/';
+    let firstPages = 0;
+    const send = vi.spyOn(S3Client.prototype, 'send').mockImplementation(async command => {
+      const input = (command as ListObjectsV2Command).input;
+      if (input.Delimiter) return { CommonPrefixes: [{ Prefix: `${prefix}first/` }, { Prefix: `${prefix}second/` }] } as never;
+      if (input.Prefix === `${prefix}first/`) return { IsTruncated: ++firstPages < 998, NextContinuationToken: `first-${firstPages}` } as never;
+      return { IsTruncated: true, NextContinuationToken: 'second-page' } as never;
+    });
+    try {
+      const read = async () => { for await (const objects of r2Storage({ ...env, R2_BUCKET: 'test' }).listBuilds!(prefix)) expect(objects).toHaveLength(0); };
+      await expect(read()).rejects.toThrow('page budget');
+      expect(send).toHaveBeenCalledTimes(1000);
+    } finally { send.mockRestore(); }
+  });
+
+  it('rejects foreign or repeated build prefixes before collecting their payloads', async () => {
+    const prefix = 'builds/gfs/';
+    const send = vi.spyOn(S3Client.prototype, 'send');
+    try {
+      for (const child of ['builds/rrfs/other/', `${prefix}nested/build/`]) {
+        send.mockResolvedValue({ CommonPrefixes: [{ Prefix: child }] } as never);
+        const read = async () => { for await (const _objects of r2Storage({ ...env, R2_BUCKET: 'test' }).listBuilds!(prefix)) { /* consume */ } };
+        await expect(read()).rejects.toThrow('build prefix');
+      }
+      send.mockImplementation(async command => (command as ListObjectsV2Command).input.Delimiter
+        ? { CommonPrefixes: [{ Prefix: `${prefix}first/` }, { Prefix: `${prefix}first/` }] } as never : { Contents: [] } as never);
+      const read = async () => { for await (const _objects of r2Storage({ ...env, R2_BUCKET: 'test' }).listBuilds!(prefix)) { /* consume */ } };
+      await expect(read()).rejects.toThrow('repeated build prefix');
+    } finally { send.mockRestore(); }
+  });
+
+  it('rejects nested delimiter contents before yielding a partial build inventory', async () => {
+    const prefix = 'builds/gfs/', child = `${prefix}build/`;
+    const send = vi.spyOn(S3Client.prototype, 'send').mockResolvedValue({
+      Contents: [{ Key: `${child}old`, LastModified: new Date('2026-11-01T00:00:00Z'), Size: 1 }],
+      CommonPrefixes: [{ Prefix: child }]
+    } as never);
+    let yielded = 0;
+    try {
+      const read = async () => { for await (const _objects of r2Storage({ ...env, R2_BUCKET: 'test' }).listBuilds!(prefix)) yielded++; };
+      await expect(read()).rejects.toThrow('Nested object');
+      expect(yielded).toBe(0);
+      expect(send).toHaveBeenCalledOnce();
     } finally { send.mockRestore(); }
   });
 

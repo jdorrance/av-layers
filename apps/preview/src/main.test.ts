@@ -18,6 +18,8 @@ class Element extends EventTarget {
   className = '';
   href = '';
   hidden = false;
+  removed = false;
+  remove(): void { this.removed = true; }
   ariaBusy = '';
   ariaPressed = '';
   open = false;
@@ -110,6 +112,7 @@ class MapMock {
   addControl(): void {}
   getCenter(): { lng: number; lat: number } { return this.center; }
   getZoom(): number { return this.zoom; }
+  project(): { x: number; y: number } { return { x: 320, y: 240 }; }
   coveringTiles(): object[] { return Array.from({ length: 64 }, () => ({})); }
   getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
   fitBounds(bounds: [[number, number], [number, number]]): void {
@@ -156,7 +159,7 @@ const windFetches: (typeof fetch | undefined)[] = [];
 const disposalOrder: string[] = [];
 let windChange: (state: { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; height: 'surface' | number | 'lift' }) => void;
 let windState: { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; height: 'surface' | number | 'lift' };
-let windResolve: ((status: 'ready' | 'unavailable' | 'zoom-in') => void) | null = null;
+let windResolve: ((status: 'ready' | 'unavailable') => void) | null = null;
 let deferWind = false;
 let deferWindCancellation = false;
 let windCancel: (() => void) | null = null;
@@ -522,7 +525,24 @@ it('retains wind during a pan and while loading uncovered bounds', async () => {
   expect(windFields.at(-1)).toBe(field);
 });
 
-it.each(['unavailable', 'zoom-in'] as const)('preserves %s after an uncovered pan and restores resident wind on return', async status => {
+it('reloads wind detail after zooming into an already covered viewport', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const count = windLoads.length;
+  map().bounds = { west: -117.9, east: -117.1, south: 32.1, north: 32.9 };
+  map().zoom += 1;
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+  windResolve!('ready');
+  await Promise.resolve();
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+});
+
+it('preserves unavailability after an uncovered pan and restores resident wind on return', async () => {
+  const status = 'unavailable';
   deferWind = true;
   await start();
   windResolve!('ready');
@@ -631,6 +651,24 @@ it('reports an unavailable forecast when the viewport exceeds raster memory admi
   map().emit('resize');
   await vi.waitFor(() => expect(ui('tile-error').hidden).toBe(true));
   expect(map().sources.size).toBeGreaterThan(0);
+});
+
+it('briefly marks the located position without a success message', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  vi.useFakeTimers();
+  ui('locate').dispatchEvent(new Event('click'));
+  locate({ coords: { latitude: 40.45, longitude: 44.3 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 40.45, lng: 44.3 });
+  expect(ui('location-status').textContent).toBe('');
+  const dot = ui('map').children.at(-1)!;
+  expect(dot.className).toBe('location-pulse');
+  expect(dot.style).toMatchObject({ left: '320px', top: '240px' });
+  expect(dot.removed).toBe(false);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(dot.removed).toBe(true);
+  vi.useRealTimers();
 });
 
 it('leaves the map unchanged when location is denied', async () => {

@@ -54,12 +54,15 @@ async function readBody(body: Readable, maximum: number, key: string, signal?: A
 }
 
 interface ObjectReadIdentity { etag: string; bytes: number }
+type ListedObject = { key: string; lastModified: Date; size?: number };
 
 export interface ObjectStorage {
   get(key: string, range?: { offset: number; length: number }, maxBytes?: number, signal?: AbortSignal, onRetry?: () => void, identity?: ObjectReadIdentity): Promise<{ bytes: Uint8Array; etag: string } | null>;
   head(key: string, signal?: AbortSignal): Promise<{ size: number; etag: string; metadata?: Record<string, string>; computedSha256?: string } | null>;
   put(key: string, bytes: Uint8Array, condition: { ifMatch?: string; ifNoneMatch?: '*' }, contentType?: string, contentMd5?: string, metadata?: Record<string, string>): Promise<void>;
-  list(prefix: string, signal?: AbortSignal): Promise<Array<{ key: string; lastModified: Date; size?: number }>>;
+  list(prefix: string, signal?: AbortSignal): Promise<ListedObject[]>;
+  /** Each build prefix must be complete within one batch. */
+  listBuilds?(prefix: string, signal?: AbortSignal): AsyncIterable<ListedObject[]>;
   delete(keys: string[], signal?: AbortSignal): Promise<void>;
 }
 
@@ -208,6 +211,35 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   if (!R2_BUCKET) throw new Error('R2_BUCKET is required');
   const config = r2ClientOptions(env), client = new S3Client(config);
   let getClient: S3Client | undefined;
+  async function* listing(prefix: string, signal: AbortSignal | undefined, budget: { pages: number }, delimiter?: string) {
+    let token: string | undefined;
+    const seen = new Set<string>();
+    do {
+      signal?.throwIfAborted();
+      if (++budget.pages > 1000) throw new Error('Object listing exceeds page budget');
+      const page = await client.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token, Delimiter: delimiter }), { abortSignal: signal });
+      signal?.throwIfAborted();
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      if (page.IsTruncated && (!token || seen.has(token))) throw new Error('Invalid or repeated listing continuation token');
+      if (token) seen.add(token);
+      yield page;
+    } while (token);
+  }
+  function listed(contents: Array<{ Key?: string; LastModified?: Date; Size?: number }>, prefix: string): ListedObject[] {
+    return contents.map(object => {
+      if (!object.Key || !object.Key.startsWith(prefix) || !object.LastModified || !Number.isFinite(object.LastModified.getTime())) throw new Error('Incomplete object listing');
+      if (object.Size !== undefined && (!Number.isSafeInteger(object.Size) || object.Size < 0)) throw new Error('Invalid object listing size');
+      return { key: object.Key, lastModified: object.LastModified, ...(object.Size === undefined ? {} : { size: object.Size }) };
+    });
+  }
+  async function collect(prefix: string, signal: AbortSignal | undefined, budget: { pages: number }): Promise<ListedObject[]> {
+    const objects: ListedObject[] = [];
+    for await (const page of listing(prefix, signal, budget)) {
+      if (objects.length + (page.Contents?.length ?? 0) > 100_000) throw new Error('Object listing exceeds maintenance budget');
+      objects.push(...listed(page.Contents ?? [], prefix));
+    }
+    return objects;
+  }
   return {
     async get(key, range, maxBytes = 256 * 1024 * 1024, signal, onRetry, identity) {
       signal?.throwIfAborted();
@@ -305,27 +337,24 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
     async put(key, bytes, condition, contentType, contentMd5, metadata) {
       await client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: bytes, IfMatch: condition.ifMatch, IfNoneMatch: condition.ifNoneMatch, ContentType: contentType, ContentMD5: contentMd5, Metadata: metadata }));
     },
-    async list(prefix, signal) {
-      const objects: Array<{ key: string; lastModified: Date; size?: number }> = [];
-      let token: string | undefined;
-      const seen = new Set<string>();
-      let pages = 0;
-      do {
-        signal?.throwIfAborted();
-        if (++pages > 1000) throw new Error('Object listing exceeds page budget');
-        const page = await client.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token }), { abortSignal: signal });
-        signal?.throwIfAborted();
-        if (objects.length + (page.Contents?.length ?? 0) > 100_000) throw new Error('Object listing exceeds maintenance budget');
-        for (const object of page.Contents ?? []) {
-          if (!object.Key || !object.LastModified) throw new Error('Incomplete object listing');
-          if (object.Size !== undefined && (!Number.isSafeInteger(object.Size) || object.Size < 0)) throw new Error('Invalid object listing size');
-          objects.push({ key: object.Key, lastModified: object.LastModified, ...(object.Size === undefined ? {} : { size: object.Size }) });
+    list: (prefix, signal) => collect(prefix, signal, { pages: 0 }),
+    async *listBuilds(prefix, signal) {
+      const budget = { pages: 0 }, seen = new Set<string>();
+      for await (const page of listing(prefix, signal, budget, '/')) {
+        if ((page.Contents?.length ?? 0) + (page.CommonPrefixes?.length ?? 0) > 1000) throw new Error('Object listing exceeds page size');
+        if (page.Contents?.length) {
+          const direct = listed(page.Contents, prefix);
+          if (direct.some(object => object.key.slice(prefix.length).includes('/'))) throw new Error('Nested object in build prefix listing');
+          yield direct;
         }
-        token = page.IsTruncated ? page.NextContinuationToken : undefined;
-        if (page.IsTruncated && (!token || seen.has(token))) throw new Error('Invalid or repeated listing continuation token');
-        if (token) seen.add(token);
-      } while (token);
-      return objects;
+        for (const item of page.CommonPrefixes ?? []) {
+          const child = item.Prefix;
+          if (!child?.startsWith(prefix) || !child.endsWith('/') || !child.slice(prefix.length, -1) || child.slice(prefix.length, -1).includes('/') || seen.has(child)) throw new Error('Invalid or repeated build prefix');
+          if (seen.size >= 100_000) throw new Error('Build listing exceeds maintenance budget');
+          seen.add(child);
+          yield await collect(child, signal, budget);
+        }
+      }
     },
     async delete(keys, signal) {
       for (let i = 0; i < keys.length; i += 1000) {

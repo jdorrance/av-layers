@@ -1,12 +1,13 @@
 import { prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, parseWindFrame, windLayout } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, parseWindFrame, windLayout, WIND_HEIGHTS, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_VALUES, windOverviewLayout } from '@av/contracts/wind-data';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
 
 type WindStatus = 'valid' | 'unavailable' | 'outside' | 'no-lift';
 export interface WindSample { status: WindStatus; u: number | null; v: number | null }
+interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
 const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2;
@@ -68,24 +69,31 @@ function targetHeight(plan: SamplePlan, height: number | 'lift', useStoredMslNoL
   return { value: height === 'lift' ? value : value + height, status: STATUS_VALID };
 }
 
-function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number): number[] | null {
+function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padding = 2): number[] | null {
   const geometry = prepareGridGeometry(grid), [west, south, east, north] = bounds;
   const span = west <= east ? east - west : east + 360 - west;
-  if (span > 180) return null;
+  if (span > 180) {
+    const count = Math.ceil(grid.width / size) * Math.ceil(grid.height / size);
+    return count <= MAX_CHUNKS ? Array.from({ length: count }, (_, i) => i) : null;
+  }
   const points: Array<{ x: number; y: number }> = [];
   for (let y = 0; y <= 32; y++) for (let x = 0; x <= 32; x++) {
     const lon = ((west + span * x / 32 + 180) % 360 + 360) % 360 - 180;
     const point = geometry.geographicToGrid(south + (north - south) * y / 32, lon);
     if (point) points.push(point);
   }
+  for (const x of [0, (grid.width - 1) / 2, grid.width - 1]) for (const y of [0, (grid.height - 1) / 2, grid.height - 1]) {
+    const point = geometry.gridToGeographic(x, y);
+    if (point && withinGeographicBounds(point.lat, point.lon, bounds)) points.push({ x, y });
+  }
   if (!points.length) return [];
   const w = Math.ceil(grid.width / size), h = Math.ceil(grid.height / size);
-  const y0 = Math.max(0, Math.floor((Math.min(...points.map(p => p.y)) - 2) / size));
-  const y1 = Math.min(h - 1, Math.floor((Math.max(...points.map(p => p.y)) + 2) / size));
+  const y0 = Math.max(0, Math.floor((Math.min(...points.map(p => p.y)) - padding) / size));
+  const y1 = Math.min(h - 1, Math.floor((Math.max(...points.map(p => p.y)) + padding) / size));
   const xs = points.map(point => point.x), minX = Math.min(...xs), maxX = Math.max(...xs);
   const intervals = grid.wrapLongitude && maxX - minX > grid.width / 2
-    ? [[0, Math.max(...xs.filter(x => x < grid.width / 2)) + 2], [Math.min(...xs.filter(x => x >= grid.width / 2)) - 2, grid.width - 1]]
-    : [[minX - 2, maxX + 2]];
+    ? [[0, Math.max(...xs.filter(x => x < grid.width / 2)) + padding], [Math.min(...xs.filter(x => x >= grid.width / 2)) - padding, grid.width - 1]]
+    : [[minX - padding, maxX + padding]];
   if (grid.wrapLongitude) {
     for (const [start, end] of [...intervals]) {
       if (start < 0) intervals.push([grid.width + start, grid.width - 1]);
@@ -103,14 +111,24 @@ function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number): num
   return [...result];
 }
 
+function overviewCoordinate(point: number, length: number, stride: number, wrap = false): number {
+  const last = Math.ceil(length / stride) - 1, center = (stride - 1) / 2, tail = length - last * stride;
+  if (!last) return 0;
+  if (tail < stride) {
+    if (point > (last - 1) * stride + center) return last - 1 + (point - (last - 1) * stride - center) / ((stride + tail) / 2);
+    if (wrap && point < center) return (point - center) / ((stride + tail) / 2);
+  }
+  return (point - center) / stride;
+}
+
 export class WindDataSource {
   private controller?: AbortController;
-  private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView> };
+  private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; overview?: Overview };
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
   constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch } = {}) {}
 
-  async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable' | 'zoom-in'> {
+  async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
     this.controller?.abort(); this.current = undefined;
     if (this.disposed) throw new Error('Wind source is disposed');
     const controller = new AbortController(); this.controller = controller;
@@ -132,7 +150,7 @@ export class WindDataSource {
     } finally { release(); }
   }
 
-  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal): Promise<'ready' | 'unavailable' | 'zoom-in'> {
+  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal): Promise<'ready' | 'unavailable'> {
     if (build.expiresAtMs <= Date.now() || Date.parse(build.manifest.expiresAt) !== build.expiresAtMs) return 'unavailable';
     if (!build.manifest.frames.slice(0, build.manifest.mapFrameCount ?? build.manifest.frames.length).some(item => item.id === frame)) return 'unavailable';
     if (!bounds.every(Number.isFinite) || bounds[1] < -90 || bounds[3] > 90 || bounds[1] > bounds[3] || bounds[0] < -180 || bounds[0] > 180 || bounds[2] < -180 || bounds[2] > 180) throw new RangeError('Invalid wind bounds');
@@ -174,23 +192,43 @@ export class WindDataSource {
     const descriptor = parseWindFrame(descriptorBytes);
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
     const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize), fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize);
-    if (!winds || !fines || winds.length + fines.length > MAX_CHUNKS) return 'zoom-in';
     const windBytes = windLayout(native.grid.width, native.grid.height, descriptor.tileSize, descriptor.levels).chunkBytes, fineBytes = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize).chunkBytes;
-    if (windBytes > WIND_CHUNK_LIMIT || winds.length * windBytes + fines.length * fineBytes > MAX_BYTES) return 'zoom-in';
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
-    const tasks = [...winds.map(tile => ({ kind: 'wind' as const, tile })), ...fines.map(tile => ({ kind: 'fine' as const, tile }))];
+    let overview: Overview | undefined;
+    let tasks: Array<{ kind: string; tile: number; bytes: number }>;
+    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= MAX_BYTES) {
+      tasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
+    } else {
+      let selected: typeof tasks | undefined;
+      for (const level of descriptor.overview ?? []) {
+        const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, bounds, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
+        if (!tiles || tiles.length * layout.chunkBytes > MAX_BYTES) continue;
+        overview = { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map() };
+        selected = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
+        break;
+      }
+      if (!selected) return 'unavailable';
+      tasks = selected;
+    }
     combined = AbortSignal.any([combined, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(tasks.length / 4) * REQUEST_TIMEOUT_MS)))]);
     let next = 0;
     const jobs = Array.from({ length: Math.min(4, tasks.length) }, async () => {
       try {
         while (next < tasks.length) {
-          const task = tasks[next++], bytes = await fetchBytes(`${root}/${task.kind}/${task.tile}`, 'application/octet-stream', task.kind === 'wind' ? windBytes : fineBytes);
+          const task = tasks[next++], bytes = await fetchBytes(`${root}/${task.kind}/${task.tile}`, 'application/octet-stream', task.bytes);
           if (!bytes) throw new Error('Numeric chunk missing');
-          if (bytes.length !== (task.kind === 'wind' ? windBytes : fineBytes)) throw new Error('Numeric chunk length mismatch');
+          if (bytes.length !== (task.bytes)) throw new Error('Numeric chunk length mismatch');
           if (task.kind === 'wind') {
             const columns = decodePackedWindChunk(bytes);
             if (columns.count !== descriptor.tileSize ** 2 || columns.levels !== descriptor.levels) throw new Error('Numeric chunk dimensions mismatch');
             wind.set(task.tile, columns);
+          } else if (overview) {
+            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            for (let i = 0; i < bytes.length; i += 9) {
+              const u = view.getFloat32(i, true), v = view.getFloat32(i + 4, true), status = view.getUint8(i + 8);
+              if (status > STATUS_OUTSIDE || !Number.isFinite(u) || !Number.isFinite(v) || (status !== STATUS_VALID && (u !== 0 || v !== 0))) throw new Error('Invalid numeric overview');
+            }
+            overview.data.set(task.tile, view);
           } else {
             const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
             for (let i = 0; i < bytes.length; i += WIND_FINE_CELL_BYTES) {
@@ -208,7 +246,7 @@ export class WindDataSource {
     if (failed?.status === 'rejected') throw failed.reason;
     combined.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
-    this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData };
+    this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, overview };
     return 'ready';
   }
 
@@ -216,6 +254,7 @@ export class WindDataSource {
     const current = this.current;
     if (!current || current.build.expiresAtMs <= Date.now()) { this.current = undefined; return empty('unavailable'); }
     if (!withinGeographicBounds(lat, lon, current.bounds) || !withinGeographicBounds(lat, lon, current.build.manifest.descriptors.bounds)) return empty('outside');
+    if (current.overview) return this.sampleOverview(current, lat, lon, height);
     const windPlan = samplingPlan(current.native, current.nativeGeometry, lat, lon, 0), finePlan = samplingPlan(current.fineGrid, current.fineGeometry, lat, lon, 1);
     if (!windPlan || !finePlan) return empty('outside');
     let nearest = 0, nearestOutput = 0;
@@ -249,6 +288,29 @@ export class WindDataSource {
     const result = samplePackedWindColumns(windPlan, chunks, offsets, target);
     chunks.length = 0;
     return { u: result.u, v: result.v, status: result.status === STATUS_VALID ? 'valid' : result.status === STATUS_OUTSIDE ? 'outside' : 'unavailable' };
+  }
+  private sampleOverview(current: NonNullable<WindDataSource['current']>, lat: number, lon: number, height: 'surface' | number | 'lift'): WindSample {
+    const { stride, data, width, height: rows, tilesAcross } = current.overview!, point = current.nativeGeometry.geographicToGrid(lat, lon);
+    if (!point || point.x < 0 || point.y < 0 || (!current.native.wrapLongitude && point.x > current.native.width - 1) || point.y > current.native.height - 1) return empty('outside');
+    const mode = height === 'surface' ? 0 : height === 'lift' ? WIND_OVERVIEW_VALUES - 1 : WIND_HEIGHTS.indexOf(height as typeof WIND_HEIGHTS[number]) + 1;
+    if (typeof height === 'number' && mode === 0) return empty('unavailable');
+    const size = WIND_OVERVIEW_TILE_SIZE, ox = current.native.wrapLongitude ? Math.floor((point.x + 0.5) / stride) % width : Math.min(width - 1, Math.floor((point.x + 0.5) / stride)), oy = Math.min(rows - 1, Math.floor((point.y + 0.5) / stride));
+    const owner = data.get(Math.floor(oy / size) * tilesAcross + Math.floor(ox / size));
+    if (!owner) return empty('unavailable');
+    const offset = ((oy % size) * size + ox % size) * WIND_OVERVIEW_CELL_BYTES + mode * 9, status = owner.getUint8(offset + 8);
+    if (status !== STATUS_VALID) return empty(status === STATUS_NO_LIFT ? 'no-lift' : status === STATUS_OUTSIDE ? 'outside' : 'unavailable');
+    const x = overviewCoordinate(point.x, current.native.width, stride, current.native.wrapLongitude), y = overviewCoordinate(point.y, current.native.height, stride), x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+    let u = 0, v = 0;
+    for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) {
+      const weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+      if (!weight) continue;
+      const column = current.native.wrapLongitude ? ((x0 + dx) % width + width) % width : Math.max(0, Math.min(width - 1, x0 + dx)), row = Math.max(0, Math.min(rows - 1, y0 + dy));
+      const donor = data.get(Math.floor(row / size) * tilesAcross + Math.floor(column / size));
+      const pos = ((row % size) * size + column % size) * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+      if (!donor || donor.getUint8(pos + 8) !== STATUS_VALID) return { status: 'valid', u: owner.getFloat32(offset, true), v: owner.getFloat32(offset + 4, true) };
+      u += donor.getFloat32(pos, true) * weight; v += donor.getFloat32(pos + 4, true) * weight;
+    }
+    return { status: 'valid', u, v };
   }
   dispose(): void { this.disposed = true; this.controller?.abort(); this.current = undefined; }
 }

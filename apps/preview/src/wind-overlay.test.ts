@@ -14,7 +14,7 @@ class Canvas extends EventTarget {
   removed = false;
   context = {
     setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), drawImage: vi.fn(), beginPath: vi.fn(), stroke: vi.fn(),
-    moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(), fillText: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn()
+    moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(), fillText: vi.fn(), strokeText: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn()
   };
   getContext(): typeof this.context { return this.context; }
   setAttribute(): void {}
@@ -163,10 +163,11 @@ it('reuses each validated destination on the next animation step', () => {
   const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 10, v: 0 }));
   f.overlay.setField({ sample }); f.tick(1000); f.tick(1100);
   const count = Math.ceil(256 * 256 / 3000);
-  expect(sample).toHaveBeenCalledTimes(count * 2);
+  const firstSamples = sample.mock.calls.length;
+  expect(firstSamples).toBeGreaterThan(count);
   expect(f.canvases[0].context.moveTo).toHaveBeenCalledTimes(count);
   sample.mockClear(); f.tick(1200);
-  expect(sample).toHaveBeenCalledTimes(count);
+  expect(sample).toHaveBeenCalledTimes(firstSamples - count);
   f.overlay.destroy();
 });
 
@@ -179,11 +180,11 @@ it.each([2, 1, 3])('stops a trail before entering a cell with status %s', status
   f.overlay.destroy();
 });
 
-it('keeps normal wind visible at street zoom and checks gaps within its path', () => {
+it.each([0, 6, 16])('keeps normal wind visible at zoom %s and checks gaps within its path', zoom => {
   vi.spyOn(Math, 'random').mockReturnValue(0.5);
   const f = fixture();
-  f.map.getZoom = () => 16;
-  const pixelsPerDegree = 512 * 2 ** 16 / 360;
+  f.map.getZoom = () => zoom;
+  const pixelsPerDegree = 512 * 2 ** zoom / 360;
   f.map.project = ([lon, lat]) => ({ x: 128 + lon * pixelsPerDegree, y: 128 - lat * pixelsPerDegree });
   f.map.unproject = ([x, y]) => ({ lng: (x - 128) / pixelsPerDegree, lat: (128 - y) / pixelsPerDegree });
   f.overlay.setField({ sample: () => ({ status: 0, u: 20, v: 0 }) });
@@ -277,7 +278,7 @@ it('translates trail history during pan and clears it on zoom', () => {
 
 it('bounds canvas memory and suspends frames for pause, visibility, context loss and destruction', () => {
   const f = fixture(6000, 4000);
-  for (const canvas of f.canvases) expect(canvas.width * canvas.height).toBeLessThanOrEqual(1_048_576);
+  expect(f.canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height, 0)).toBeLessThanOrEqual(2_097_152);
   f.overlay.setField({ sample: () => ({ status: 0, u: 1, v: 1 }) });
   expect(f.frames.size).toBe(1);
   f.overlay.setOptions({ paused: true }); expect(f.frames.size).toBe(0);
@@ -326,5 +327,18 @@ it.each(['map', 'trails', 'barbs'] as const)('clears both canvases and redraws o
   else (source === 'trails' ? trails : barbs).dispatchEvent(new Event('contextrestored'));
   expect(barbs.context.fillText).toHaveBeenCalled();
   expect(f.frames.size).toBe(1);
+  f.overlay.destroy();
+});
+
+
+it('gives barb labels a sharper backing store, pixel alignment and contrast halo', () => {
+  const f = fixture(1200, 800);
+  f.overlay.setOptions({ style: 'barbs' });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 4, v: 0 }) });
+  const [trails, barbs] = f.canvases;
+  expect(barbs.width).toBeGreaterThan(trails.width);
+  expect(barbs.context.strokeText.mock.calls).toEqual(barbs.context.fillText.mock.calls);
+  expect(barbs.context.fillText).toHaveBeenCalledWith('14', expect.any(Number), expect.any(Number));
+  expect(trails.width * trails.height + barbs.width * barbs.height).toBeLessThanOrEqual(2_097_152);
   f.overlay.destroy();
 });

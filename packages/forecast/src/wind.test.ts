@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import { windLayout } from '@av/contracts/wind-data';
 import { planSample, sampleCells } from './sampler.ts';
-import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight, type WindVector } from './wind.ts';
+import { decodePackedWindChunk, encodeWindColumns, normalizedWindColumn, samplePackedWindColumns, windTargetHeight, type WindVector } from './wind.ts';
+
+import type { ModelLevelFrame } from './inputs.ts';
 
 type WindColumn = { surface: WindVector | null; levels: ({ height: number; wind: WindVector } | null)[] };
 const column: WindColumn = { surface: { u: 0, v: 0 }, levels: [{ height: 100, wind: { u: 1, v: -1 } }, null, { height: 300, wind: { u: 3, v: -3 } }, { height: 400, wind: { u: 4, v: -4 } }] };
@@ -28,7 +30,77 @@ function sampleWindColumns(columns: readonly (WindColumn | null)[], height: numb
   return { u: u.value, v: v.value, status: u.status, interpolated: u.interpolated };
 }
 
+function nearSurfaceFrame(): ModelLevelFrame {
+  const values = (value: number) => Float32Array.of(value), missing = () => Uint8Array.of(0);
+  const field = (value: number) => ({ values: values(value), missing: missing() });
+  const time = '2026-11-13T09:00:00Z', window = { start: time, end: time };
+  return {
+    cycle: time, hour: 0, validAt: time, capturedAt: time,
+    grid: { kind: 'regular-latlon', width: 1, height: 1, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false },
+    activeIndices: Uint32Array.of(0), terrainM: values(1000), surfacePressurePa: values(100000),
+    temp2mK: values(290), specificHumidity2mKgKg: values(0.01), sensibleHeatFluxWm2: values(100), latentHeatFluxWm2: values(100),
+    hgtM: [1024, 1100, 1300].map(values), pressurePa: [99000, 97000, 94000].map(values), tempK: [289, 288, 286].map(values),
+    auxSurface: { u10mMps: field(2), v10mMps: field(4) },
+    auxLevels: { uWindMps: [16, 30, 50].map(field), vWindMps: [18, 32, 52].map(field) },
+    missing: { terrain: missing(), surfacePressure: missing(), temp2m: missing(), humidity2m: missing(), sensibleHeatFlux: missing(), latentHeatFlux: missing(),
+      hgt: Array.from({ length: 3 }, missing), pressure: Array.from({ length: 3 }, missing), temp: Array.from({ length: 3 }, missing) },
+    intervals: { profileTime: time, fluxWindow: window, fluxSourceWindow: window, usedCompanion: false }, receipt: {}
+  };
+}
+
 describe('wind columns', () => {
+  it('brackets 20 m AGL between paired 10 m wind and the first model level', () => {
+    const frame = nearSurfaceFrame(), normalized = normalizedWindColumn(frame, 0);
+    expect(normalized.levels).toHaveLength(frame.hgtM.length + 1);
+    expect(normalized.levels[0]).toEqual({ height: 1010, wind: { u: 2, v: 4 } });
+    const chunk = decodePackedWindChunk(encodeWindColumns([normalized]));
+    const single = { ...plan, contributors: [{ ...plan.contributors[0], weight: 1 }] };
+    expect(samplePackedWindColumns(single, [chunk], [0], 1020)).toMatchObject({ u: 12, v: 14, status: STATUS_VALID });
+    expect(samplePackedWindColumns(single, [chunk], [0], 1009)).toMatchObject({ u: null, v: null, status: STATUS_UNAVAILABLE });
+    expect(samplePackedWindColumns(single, [chunk], [0], 'surface')).toMatchObject({ u: 2, v: 4, status: STATUS_VALID });
+  });
+
+  it.each(['pressure', 'height'] as const)('places the anchor after native levels proved below ground by %s', proof => {
+    const frame = nearSurfaceFrame();
+    frame.hgtM[0][0] = proof === 'height' ? 990 : NaN;
+    frame.missing.hgt[0][0] = proof === 'height' ? 0 : 1;
+    frame.pressurePa[0][0] = proof === 'pressure' ? 101000 : NaN;
+    frame.missing.pressure[0][0] = proof === 'pressure' ? 0 : 1;
+    const normalized = normalizedWindColumn(frame, 0);
+    expect(normalized.levels[0]).toBeNull();
+    expect(normalized.levels[1]).toEqual({ height: 1010, wind: { u: 2, v: 4 } });
+    expect(normalized.levels[2]?.height).toBe(1100);
+  });
+
+  it.each(['surface-u', 'surface-v', 'terrain', 'ground-pressure', 'first-u', 'first-v', 'first-height', 'first-pressure'] as const)('keeps the near-surface interval unavailable with missing %s', field => {
+    const frame = nearSurfaceFrame();
+    if (field === 'surface-u') frame.auxSurface!.u10mMps!.missing[0] = 1;
+    if (field === 'surface-v') frame.auxSurface!.v10mMps!.missing[0] = 1;
+    if (field === 'terrain') frame.missing.terrain[0] = 1;
+    if (field === 'ground-pressure') frame.missing.surfacePressure[0] = 1;
+    if (field === 'first-u') frame.auxLevels!.uWindMps![0].missing[0] = 1;
+    if (field === 'first-v') frame.auxLevels!.vWindMps![0].missing[0] = 1;
+    if (field === 'first-height') frame.missing.hgt[0][0] = 1;
+    if (field === 'first-pressure') frame.missing.pressure[0][0] = 1;
+    const normalized = normalizedWindColumn(frame, 0);
+    expect(normalized.levels[0]).toBeNull();
+    expect(windAtHeight(normalized, 1020)).toBeNull();
+  });
+
+  it('preserves missing interior intervals and native levels below 10 m', () => {
+    const frame = nearSurfaceFrame();
+    frame.auxLevels!.uWindMps![1].missing[0] = 1;
+    const normalized = normalizedWindColumn(frame, 0);
+    expect(normalized.levels[0]?.height).toBe(1010);
+    expect(normalized.levels[2]).toBeNull();
+    expect(windAtHeight(normalized, 1200)).toBeNull();
+    frame.hgtM[0][0] = 1005;
+    const low = normalizedWindColumn(frame, 0);
+    expect(low.levels[0]).toBeNull();
+    expect(low.levels[1]?.height).toBe(1005);
+    expect(() => encodeWindColumns([low])).not.toThrow();
+  });
+
   it('round trips paired values, missing levels and outside cells', () => {
     const chunk = decodePackedWindChunk(encodeWindColumns([column, null]));
     const single = { ...plan, contributors: [{ ...plan.contributors[0], weight: 1 }] };

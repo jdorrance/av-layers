@@ -40,7 +40,7 @@ function numericFrameRoot(raw: string): boolean {
 function numericChunk(raw: string): boolean {
   let url: URL;
   try { url = new URL(raw); } catch { return false; }
-  return /\/v1\/models\/[^/]+\/runs\/[^/]+\/data\/[^/]+\/(?:wind|fine)\/\d+$/.test(url.pathname);
+  return /\/v1\/models\/[^/]+\/runs\/[^/]+\/data\/[^/]+\/(?:wind|fine|overview-[1-9][0-9]*)\/\d+$/.test(url.pathname);
 }
 
 function numericRequest(raw: string): boolean {
@@ -72,7 +72,7 @@ async function waitForNumericSchema(page: Page, requests: string[], timeoutMs: n
   const deadline = Date.now() + timeoutMs;
   while ((!requests.some(numericFrameRoot) || !requests.some(numericChunk)) && Date.now() < deadline) await page.waitForTimeout(100);
   assert(requests.some(numericFrameRoot), 'No numeric frame root request observed');
-  assert(requests.some(numericChunk), 'No numeric wind/fine chunk request observed');
+  assert(requests.some(numericChunk), 'No numeric wind chunk request observed');
 }
 
 async function waitForMatchingRaster(page: Page, timeoutMs: number): Promise<void> {
@@ -257,16 +257,16 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(await scale.getAttribute('data-height') === 'surface', 'Surface height did not select');
       await range.evaluate(element => {
         const input = element as HTMLInputElement;
-        input.value = '3000';
+        input.value = '8';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
       });
       assert(await scale.getAttribute('data-height') === 'fixed', 'AGL height did not select');
-      assert(await range.inputValue() === '3000', 'AGL range did not retain 3000 m');
+      assert(await range.inputValue() === '8', 'AGL range did not retain 3000 m');
       assert((await range.getAttribute('aria-valuetext'))?.includes('AGL') === true, 'AGL value text is missing');
       await page.getByRole('button', { name: /^Top of lift/ }).click();
       assert(await scale.getAttribute('data-height') === 'lift', 'Top of lift height did not select');
-      assert(await range.inputValue() === '3000', 'Top of lift did not retain the fixed height');
+      assert(await range.inputValue() === '8', 'Top of lift did not retain the fixed height');
       await page.getByRole('button', { name: 'Surface', exact: true }).click();
       assert(await root.getAttribute('data-visible') === 'true', 'Wind visibility changed with height selection');
       await page.waitForTimeout(400);

@@ -1,9 +1,10 @@
+import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import './wind-controls.css';
 
 export type WindStyle = 'trails' | 'barbs' | 'hybrid';
 export type WindHeight = 'surface' | number | 'lift';
 export type WindUnits = 'metric' | 'imperial';
-export type WindStatus = 'ready' | 'loading' | 'unavailable' | 'zoom-in';
+export type WindStatus = 'ready' | 'loading' | 'unavailable';
 
 export interface WindControlState {
   readonly style: WindStyle;
@@ -24,10 +25,8 @@ export interface WindControls {
 }
 
 const STYLES: readonly WindStyle[] = ['trails', 'barbs', 'hybrid'];
-const STOPS = [600, 1200, 1800, 2400, 3000, 3600, 4200, 4800, 5400, 6000] as const;
-const MIN_STOP = STOPS[0];
-const MAX_STOP = STOPS[STOPS.length - 1];
-const DEFAULT_FIXED_HEIGHT = 2400;
+const STOPS: readonly number[] = WIND_HEIGHTS;
+const DEFAULT_FIXED_HEIGHT = STOPS[0];
 const STORAGE_KEY = 'av.wind-controls.v1';
 const METRES_PER_FOOT = 0.3048;
 
@@ -40,8 +39,7 @@ const STYLE_LABELS: Record<WindStyle, string> = {
 const STATUS_LABELS: Record<WindStatus, string> = {
   ready: '',
   loading: 'Loading wind',
-  unavailable: 'Wind unavailable',
-  'zoom-in': 'Zoom in for wind'
+  unavailable: 'Wind unavailable'
 };
 
 type IconName = WindStyle | 'eye' | 'eye-off' | 'pause' | 'play' | 'chevron';
@@ -88,12 +86,9 @@ function isStyle(value: unknown): value is WindStyle {
   return STYLES.includes(value as WindStyle);
 }
 
-function isStop(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && (STOPS as readonly number[]).includes(value);
-}
-
-function isHeight(value: unknown): value is WindHeight {
-  return value === 'surface' || value === 'lift' || isStop(value);
+function storedStop(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return;
+  return STOPS.reduce((nearest, stop) => Math.abs(stop - value) < Math.abs(nearest - value) ? stop : nearest);
 }
 
 function grouped(value: number): string {
@@ -122,8 +117,8 @@ function readStored(): StoredState | null {
     const stored: StoredState = {};
     if (isStyle(value.style)) stored.style = value.style;
     if (typeof value.visible === 'boolean') stored.visible = value.visible;
-    if (isHeight(value.height)) stored.height = value.height;
-    if (isStop(value.fixedHeight)) stored.fixedHeight = value.fixedHeight;
+    stored.height = value.height === 'surface' || value.height === 'lift' ? value.height : storedStop(value.height);
+    stored.fixedHeight = storedStop(value.fixedHeight);
     return stored;
   } catch {
     return null;
@@ -152,7 +147,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
     paused: false,
     height: stored?.height ?? 'surface'
   };
-  let fixedHeight = stored?.fixedHeight ?? (typeof state.height === 'number' ? state.height : DEFAULT_FIXED_HEIGHT);
+  let fixedHeight = typeof state.height === 'number' ? state.height : stored?.fixedHeight ?? DEFAULT_FIXED_HEIGHT;
   let units: WindUnits = 'metric';
   let status: WindStatus = 'ready';
   let destroyed = false;
@@ -226,16 +221,24 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   const scale = element('div', 'wind-controls-scale');
   const unitLine = element('span', 'wind-controls-unit');
-  const maxLine = element('span', 'wind-controls-max');
+  const axis = element('div', 'wind-controls-axis');
+  const ticks = STOPS.map((height, index) => {
+    const tick = element('span', 'wind-controls-tick');
+    tick.setAttribute('aria-hidden', 'true');
+    tick.style.setProperty('--wind-controls-position', String(index / (STOPS.length - 1)));
+    axis.append(tick);
+    return { tick, height, labelled: [0, 2, 5, 9].includes(index) };
+  });
   const range = element('input', 'wind-controls-range');
   range.type = 'range';
-  range.min = String(MIN_STOP);
-  range.max = String(MAX_STOP);
-  range.step = '600';
-  range.value = String(fixedHeight);
+  range.min = '0';
+  range.max = String(STOPS.length - 1);
+  range.step = '1';
+  range.value = String(STOPS.indexOf(fixedHeight));
   range.setAttribute('aria-label', 'Wind height');
   const readout = element('output', 'wind-controls-value');
-  scale.append(unitLine, maxLine, range, readout);
+  axis.append(range, readout);
+  scale.append(unitLine, axis);
 
   const surface = button('wind-controls-surface');
   surface.textContent = 'Surface';
@@ -255,13 +258,17 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   function renderHeight(): void {
     const numeric = typeof state.height === 'number';
-    range.value = String(fixedHeight);
+    const index = STOPS.indexOf(fixedHeight);
+    range.value = String(index);
     range.setAttribute('aria-valuetext', valueText(fixedHeight, units));
     unitLine.textContent = units === 'imperial' ? 'ft AGL' : 'm AGL';
-    maxLine.textContent = stopLabel(MAX_STOP, units);
+    for (const { tick, height, labelled } of ticks) {
+      const value = stopValue(height, units);
+      tick.textContent = labelled ? value >= 1000 ? `${Number((value / 1000).toFixed(1))}k` : String(value) : '';
+    }
     readout.textContent = stopLabel(fixedHeight, units);
     readout.hidden = !numeric;
-    readout.style.setProperty('--wind-controls-position', String((fixedHeight - MIN_STOP) / (MAX_STOP - MIN_STOP)));
+    readout.style.setProperty('--wind-controls-position', String(index / (STOPS.length - 1)));
     scale.setAttribute('data-height', numeric ? 'fixed' : String(state.height));
     lift.setAttribute('aria-pressed', String(state.height === 'lift'));
     lift.className = state.height === 'lift' ? 'wind-controls-lift is-selected' : 'wind-controls-lift';
@@ -375,10 +382,10 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   surface.addEventListener('click', () => selectHeight('surface'));
 
   range.addEventListener('input', () => {
-    const value = Number(range.value);
-    if (!isStop(value)) return;
-    fixedHeight = value;
-    state = { ...state, height: value };
+    const index = Number(range.value);
+    if (!Number.isInteger(index) || index < 0 || index >= STOPS.length) return;
+    fixedHeight = STOPS[index];
+    state = { ...state, height: fixedHeight };
     renderHeight();
     notify(false);
   });

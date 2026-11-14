@@ -4,16 +4,13 @@
 }
 
 .compact-timeline {
-  --ct-height: 40px;
   display: flex;
   align-items: stretch;
   width: 100%;
-  max-width: 540px;
-  height: var(--ct-height);
+  height: 100%;
   overflow: hidden;
   border-radius: 6px;
   background: #fffffff2;
-  box-shadow: 0 8px 24px #0b1b2830;
   color: #1c2430;
   font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
@@ -162,10 +159,6 @@
 }
 
 @media (max-width: 540px) {
-  .compact-timeline {
-    --ct-height: 44px;
-  }
-
   .ct-hour {
     flex-basis: 38px;
   }

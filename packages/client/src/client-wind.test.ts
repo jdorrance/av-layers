@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { WIND_FINE_CELL_BYTES } from '@av/contracts/wind-data';
+import { WIND_FINE_CELL_BYTES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_VALUES, windOverviewLayout } from '@av/contracts/wind-data';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/layers';
 import { planSample } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight } from '@av/forecast/wind';
@@ -287,5 +287,81 @@ it('matches the reference sampler for mixed fine statuses and contributor counts
       expect(source.sample(lat, lon, height)).toEqual(expected);
     }
   }
+  source.dispose();
+});
+
+it('renders a bounded whole-world overview and retains wrapped seam samples', async () => {
+  const pinned = globalBuild(true), frame = pinned.manifest.frames[0].id;
+  pinned.manifest.descriptors.bounds = [-180, -90, 180, 90];
+  for (const surface of pinned.manifest.surfaces) Object.assign(surface.grid, { height: 721, lat0: -90, dy: 0.25 });
+  const metadata = JSON.parse(descriptor(frame));
+  metadata.overview = [2, 4, 8, 16].map(stride => {
+    const layout = windOverviewLayout(pinned.manifest.surfaces[0].grid, stride);
+    return { stride, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] };
+  });
+  const bytes = new Uint8Array(32 * 32 * WIND_OVERVIEW_CELL_BYTES), view = new DataView(bytes.buffer);
+  for (let cell = 0; cell < 32 * 32; cell++) for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+    const offset = cell * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+    view.setFloat32(offset, mode + 1, true); view.setFloat32(offset + 4, (mode + 1) * 2, true);
+  }
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } }) : reply(bytes));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  expect(await source.load({ build: pinned, frame, bounds: [-180, -85, 180, 85] })).toBe('ready');
+  const requests = fetcher.mock.calls.slice(1).map(([url]) => String(url));
+  expect(requests).toHaveLength(18);
+  expect(requests.every(url => url.includes('/overview-8/'))).toBe(true);
+  expect(requests.length * bytes.length).toBeLessThan(4 * 1024 * 1024);
+  expect(source.sample(0, 179.95, 'surface')).toEqual({ status: 'valid', u: 1, v: 2 });
+  expect(source.sample(0, -179.95, 20)).toEqual({ status: 'valid', u: 2, v: 4 });
+  expect(source.sample(0, 0, 'lift')).toEqual({ status: 'valid', u: 12, v: 24 });
+  source.dispose();
+});
+
+it('preserves per-mode missing overview cells without inventing calm or bridging masks', async () => {
+  const pinned = globalBuild(true), frame = pinned.manifest.frames[0].id, metadata = JSON.parse(descriptor(frame));
+  const layout = windOverviewLayout(pinned.manifest.surfaces[0].grid, 2);
+  metadata.overview = [{ stride: 2, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] }];
+  const bytes = new Uint8Array(layout.chunkBytes), view = new DataView(bytes.buffer);
+  for (let cell = 0; cell < 32 * 32; cell++) for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+    const offset = cell * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+    if (mode === 0) { view.setFloat32(offset, 3, true); view.setFloat32(offset + 4, 4, true); }
+    else view.setUint8(offset + 8, mode === WIND_OVERVIEW_VALUES - 1 ? STATUS_NO_LIFT : 2);
+  }
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } }) : reply(bytes));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  expect(await source.load({ build: pinned, frame, bounds: [-180, -1, 180, 2] })).toBe('ready');
+  expect(source.sample(0.5, 0, 'surface')).toEqual({ status: 'valid', u: 3, v: 4 });
+  expect(source.sample(0.5, 0, 20)).toEqual({ status: 'unavailable', u: null, v: null });
+  expect(source.sample(0.5, 0, 'lift')).toEqual({ status: 'no-lift', u: null, v: null });
+  expect(source.sample(3, 0, 'surface')).toEqual({ status: 'outside', u: null, v: null });
+  source.dispose();
+});
+
+it('registers averaged overview centers and partial edge cells to the source grid', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  pinned.manifest.descriptors.bounds = [-129, -1, 129, 1];
+  for (const surface of pinned.manifest.surfaces) Object.assign(surface.grid, { width: 259, height: 1, lon0: -129 });
+  const metadata = JSON.parse(descriptor(frame)), layout = windOverviewLayout(pinned.manifest.surfaces[0].grid, 2);
+  metadata.levels = 77;
+  metadata.wind[0].count = 17; metadata.wind[0].bytes = 17 * (12 + 256 * (9 + 13 * 77));
+  metadata.fine[0].count = 5; metadata.fine[0].bytes = 5 * fine.length;
+  metadata.overview = [{ stride: 2, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] }];
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    if (String(url).endsWith(`/data/${frame}`)) return new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } });
+    const tile = Number(String(url).split('/').at(-1)), bytes = new Uint8Array(layout.chunkBytes), view = new DataView(bytes.buffer);
+    for (let i = 0; i < 32 * 32; i++) for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+      const x = (tile * 32 + i % 32) * 2, offset = i * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+      if (x >= 259 || i >= 32) view.setUint8(offset + 8, STATUS_OUTSIDE);
+      else view.setFloat32(offset, (x + Math.min(x + 1, 258)) / 2, true);
+    }
+    return reply(bytes);
+  });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  expect(await source.load({ build: pinned, frame, bounds: [-129, -1, 129, 1] })).toBe('ready');
+  for (const x of [1, 29, 64.5, 255, 256, 257, 258]) expect(source.sample(0, x - 129, 'surface').u).toBeCloseTo(x);
+  expect(source.sample(0, -129, 'surface').u).toBe(0.5);
+  expect(fetcher.mock.calls.slice(1).every(([url]) => String(url).includes('/overview-2/'))).toBe(true);
   source.dispose();
 });

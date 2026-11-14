@@ -84,12 +84,6 @@ pnpm sample-preview --manifest output/wrf-preview/builds/av-wrf/BUILD_ID/manifes
 ```
 
 Set `AV_NUMERIC_WIND=true` on the forecast command to include wind-height data.
-The encoder/API regression can read the same pinned local WRF store:
-
-```sh
-AV_REAL_WRF_STORE=../av-wrf/output/forecast-20261113/store \
-  pnpm test:integration apps/batch/src/wind-real.integration.test.ts
-```
 
 Preview opens on the configured extent and serves native weather profiles plus
 terrain-derived lift. The [adapter](../apps/batch/src/wrf-zarr/README.md)

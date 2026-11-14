@@ -55,8 +55,6 @@ PMTiles, and the Windy bundle. Run `pnpm verify` for both suites and app builds.
 - [Development](docs/development.md): working on the code.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
 - [Deployments](docs/status.md): live applications and build history.
-- [Wind overlay target](docs/wind-overlay-ui.md): approved controls and visual references.
-- [Numeric weather plan](docs/weather-data-plan.md): wind, cloud and precipitation delivery proposal.
 
 Source data and third-party license notices are in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

@@ -341,7 +341,7 @@ app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
   query(new URL(c.req.url), []);
   const m = await pinnedManifest(c), entry = await admit(c.env.BUCKET, m.model, m.buildId, c.executionCtx, undefined, c.req.raw.signal);
   const frame = requiredParam(c, 'frame'), kind = requiredParam(c, 'kind'), raw = requiredParam(c, 'tile');
-  if ((kind !== 'wind' && kind !== 'fine') || !/^(0|[1-9][0-9]{0,9})$/.test(raw) || !Number.isSafeInteger(Number(raw))) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || !/^(0|[1-9][0-9]{0,9})$/.test(raw) || !Number.isSafeInteger(Number(raw))) fail(400, 'invalid-parameter', 'Invalid wind chunk');
   const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => response(await windChunk(c.env.BUCKET, m, entry, frame, kind, Number(raw), c.executionCtx, c.req.raw.signal) as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt));
   result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
   return result;

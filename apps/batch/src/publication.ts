@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { getProduct } from '@av/contracts/models';
 import { assertSparseCoverageHalo, CELL_BYTES, canonicalGridJson, sparseCoverageDescriptorSchema, decodeSparseCoverage, sameGrid, coveragePrefix, encodeBoundedJson, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_POINTER_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, renderedFrames, getProvenanceReference, manifestV5Schema, MAX_RETAINED_BUILDS, RETENTION_DAYS, modelIdSchema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, assertSampleLayoutBindingV5, assertProfileLayoutBindingV5, type ManifestV5, type ModelId, type StoredModelPointer } from '@av/contracts';
-import { WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
+import { WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 import { prepareShardedSamplePackLayout } from '@av/forecast';
 import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
@@ -291,8 +291,8 @@ async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, refe
     const descriptor = parseWindFrame(object.bytes);
     if (descriptor.frame !== frame.id) throw new Error('Remote wind frame identity mismatch');
     assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
-    for (const kind of ['wind', 'fine'] as const) {
-      for (const [page, shard] of descriptor[kind].entries()) {
+    for (const { kind, shards } of windFrameParts(descriptor)) {
+      for (const [page, shard] of shards.entries()) {
         const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
         for (const [key, sha256, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
           const receipt = byKey.get(key);
@@ -350,39 +350,45 @@ export async function cleanup(store: ObjectStorage, model: ModelId, authority: P
     const live = captured.pointer.retained.filter(item => Date.parse(item.expiresAt) > now || item.buildId === captured.pointer!.latestBuildId);
     if (live.length !== captured.pointer.retained.length) await casPointer(store, model, { ...captured.pointer, retained: live }, captured.etag);
     signal?.throwIfAborted();
-    const objects = await store.list(prefix, signal);
-    signal?.throwIfAborted();
-    if (objects.length > 100_000) throw new Error('Object listing exceeds maintenance budget');
-    summary.listed = emptyCleanupObjects();
-    for (const object of objects) countCleanupObject(summary.listed, object);
-    const current = await readPointer(store, model, signal);
-    signal?.throwIfAborted();
-    if (!current.pointer) throw new Error('Pointer disappeared during cleanup');
-    const protectedIds = new Set(current.pointer.retained.map(item => item.buildId));
-    const groups = new Map<string, typeof objects>();
-    summary.protected = emptyCleanupObjects(); summary.unreferenced = emptyCleanupObjects();
-    for (const object of objects) {
-      const id = object.key.slice(prefix.length).split('/')[0];
-      countCleanupObject(protectedIds.has(id) ? summary.protected : summary.unreferenced, object);
-      if (!safeId(id)) continue;
-      const group = groups.get(id) ?? []; group.push(object); groups.set(id, group);
-    }
-    const deletes: string[] = [], eligible = emptyCleanupObjects(), cutoff = now - RETENTION_DAYS * 86400000;
-    for (const [id, group] of groups) {
-      const retained = current.pointer.retained.find(item => item.buildId === id);
-      if (!retained && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
-        for (const object of group) { deletes.push(object.key); countCleanupObject(eligible, object); }
-        continue;
+    const batches = store.listBuilds ? store.listBuilds(prefix, signal) : (async function* () { yield await store.list(prefix, signal); })();
+    let deleted = 0;
+    const cutoff = now - RETENTION_DAYS * 86400000;
+    for await (const objects of batches) {
+      signal?.throwIfAborted();
+      if (objects.length > 100_000) throw new Error('Object listing exceeds maintenance budget');
+      summary.listed ??= emptyCleanupObjects();
+      for (const object of objects) countCleanupObject(summary.listed, object);
+      const current = await readPointer(store, model, signal);
+      signal?.throwIfAborted();
+      if (!current.pointer) throw new Error('Pointer disappeared during cleanup');
+      const protectedIds = new Set(current.pointer.retained.map(item => item.buildId));
+      const groups = new Map<string, typeof objects>();
+      summary.protected ??= emptyCleanupObjects(); summary.unreferenced ??= emptyCleanupObjects();
+      for (const object of objects) {
+        if (!object.key.startsWith(prefix)) throw new Error('Object listing outside build prefix');
+        const path = object.key.slice(prefix.length), id = path.split('/')[0];
+        countCleanupObject(protectedIds.has(id) ? summary.protected : summary.unreferenced, object);
+        if (!path.includes('/') || !safeId(id)) continue;
+        const group = groups.get(id) ?? []; group.push(object); groups.set(id, group);
+      }
+      const deletes: string[] = [];
+      summary.eligible ??= emptyCleanupObjects();
+      for (const [id, group] of groups) {
+        if (!protectedIds.has(id) && buildIdTime(id) <= cutoff && group.every(object => object.lastModified.getTime() <= cutoff)) {
+          for (const object of group) { deletes.push(object.key); countCleanupObject(summary.eligible, object); }
+        }
+      }
+      signal?.throwIfAborted();
+      if (deletes.length) {
+        summary.deleted = null; // The provider may partially delete before reporting an error.
+        await store.delete(deletes, signal);
+        deleted += deletes.length;
+        summary.deleted = { ...summary.eligible };
       }
     }
-    summary.eligible = eligible;
-    signal?.throwIfAborted();
-    if (deletes.length) {
-      summary.deleted = null; // The provider may partially delete before reporting an error.
-      await store.delete(deletes, signal);
-      summary.deleted = { ...eligible };
-    }
+    summary.listed ??= emptyCleanupObjects(); summary.protected ??= emptyCleanupObjects();
+    summary.unreferenced ??= emptyCleanupObjects(); summary.eligible ??= emptyCleanupObjects();
     summary.status = 'complete';
-    return deletes.length;
+    return deleted;
   } finally { onReport?.(summary); }
 }

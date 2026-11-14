@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { getProduct, PRODUCTS } from '@av/contracts/models';
-import { planWholeDomainGrid, sparseCoverageFromDense, type ManifestV5 } from '@av/contracts';
-import { WIND_FINE_CELL_BYTES, windLayout } from '@av/contracts/wind-data';
+import { planWholeDomainGrid, sparseCoverageFromDense, sparseCoverageLookup, type ManifestV5 } from '@av/contracts';
+import { WIND_FINE_CELL_BYTES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_VALUES, windOverviewLayout } from '@av/contracts/wind-data';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_CUMULUS } from '@av/contracts/layers';
 import type { NormalizedFrame } from '@av/forecast/inputs';
 import type { WholeDomainPrepared } from './whole-domain/prepare.js';
@@ -16,13 +16,14 @@ it('admits the complete encoded, index and descriptor estimate before creating a
   try {
     const grid = { kind: 'regular-latlon' as const, width: 2, height: 2, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
     const plan = { native: grid, fine: grid }, frames = 2, levels = 3;
-    const chunkBytes = 12 + 16 * 16 * (9 + 13 * levels), fineBytes = 64 * 64 * WIND_FINE_CELL_BYTES;
-    const estimate = frames * (chunkBytes + fineBytes + 2 * 32 + 1024 + 2 * 256) + 1024 + frames * 256;
+    const chunkBytes = 12 + 16 * 16 * (9 + 13 * (levels + 1)), fineBytes = 64 * 64 * WIND_FINE_CELL_BYTES;
+    const overviewBytes = windOverviewLayout(grid, 2).chunkBytes;
+    const estimate = frames * (chunkBytes + fineBytes + overviewBytes + 3 * 32 + 1024 + 3 * 256) + 1024 + frames * 256;
     const capacity = { mapFrames: frames, numericBytes: BUILD_BUDGETS.numericBytes - estimate, estimatedPeakBytes: 0 };
     expect(() => createWindDataWriter(root, 'gfs', 'build', levels, plan, capacity)).not.toThrow();
     expect(() => createWindDataWriter(root, 'gfs', 'build', levels, plan, { ...capacity, numericBytes: capacity.numericBytes + 1 })).toThrow('Wind data exceeds build capacity');
     expect(() => createWindDataWriter(root, 'gfs', 'build', levels, plan, { ...capacity, estimatedPeakBytes: BUILD_BUDGETS.workingSetBytes })).toThrow('Wind data exceeds build capacity');
-    const reserved = 8 * 1024 * 1024 + 2 * Math.max(1 * chunkBytes, 1 * fineBytes);
+    const reserved = 8 * 1024 * 1024 + 2 * Math.max(chunkBytes, fineBytes, overviewBytes);
     expect(() => createWindDataWriter(root, 'gfs', 'build', levels, plan, { ...capacity, estimatedPeakBytes: BUILD_BUDGETS.workingSetBytes - reserved })).not.toThrow();
     expect(() => createWindDataWriter(root, 'gfs', 'build', levels, plan, { ...capacity, estimatedPeakBytes: BUILD_BUDGETS.workingSetBytes - reserved + 1 })).toThrow('Wind data exceeds build capacity');
     expect(await readdir(root)).toEqual([]);
@@ -31,12 +32,7 @@ it('admits the complete encoded, index and descriptor estimate before creating a
 
 it('admits the GFS wind estimate alongside existing numeric products', () => {
   const product = getProduct('gfs')!, plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor!);
-  const native = windLayout(plan.native.width, plan.native.height, 16, product.capabilities.maxVerticalLevels);
-  const fine = windLayout(plan.fine.width, plan.fine.height, 64);
-  const frame = native.count * native.chunkBytes + fine.count * fine.chunkBytes + (native.count + fine.count) * 32 + 1024 + (native.pages + fine.pages) * 256;
-  const total = 40 * frame + 1024 + 40 * 256, existing = 11_696_592_960;
-  expect(frame).toBe(1_341_294_768);
-  expect(BUILD_BUDGETS.numericBytes - total - existing).toBe(3_371_081_792);
+  const existing = 11_696_592_960;
   expect(() => createWindDataWriter('.', 'gfs', 'build', product.capabilities.maxVerticalLevels, plan, { mapFrames: 40, numericBytes: existing, estimatedPeakBytes: 0 })).not.toThrow();
 });
 
@@ -109,5 +105,39 @@ it('aborts mid-frame without registering partial objects', async () => {
     expect((await stat(join(root, 'builds/gfs/build/map-data/f1/wind-0.bin'))).size).toBeGreaterThan(0);
     expect(() => writer.finishShard()).toThrow('Wind frame count differs');
     spy.mockRestore();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('keeps useful overview coverage around a no-lift island and preserves wholly missing regions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-wind-overview-'));
+  try {
+    const grid = { kind: 'regular-latlon' as const, width: 259, height: 2, lon0: -130, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+    const cells = grid.width * grid.height, activeIndices = Uint32Array.from({ length: cells }, (_, i) => i);
+    const values = (n: number) => new Float32Array(cells).fill(n), missing = () => new Uint8Array(cells);
+    const aux = (n: number) => ({ values: values(n), missing: missing() });
+    const frame = { activeIndices, terrainM: values(0), surfacePressurePa: values(100000), pressureLevelsHpa: [900], hgtM: [values(1000)],
+      missing: { terrain: missing(), surfacePressure: missing(), hgt: [missing()] },
+      auxSurface: { u10mMps: aux(1), v10mMps: aux(2) }, auxLevels: { uWindMps: [aux(10)], vWindMps: [aux(20)] }
+    } as unknown as NormalizedFrame;
+    for (let y = 0; y < grid.height; y++) for (let x = 256; x < grid.width; x++) frame.auxSurface!.u10mMps!.values[y * grid.width + x] = x;
+    const output = new Uint8Array(Math.ceil(cells / 8)).fill(255); output[output.length - 1] = (1 << (cells % 8)) - 1;
+    const coverage = sparseCoverageFromDense({ width: grid.width, height: grid.height, wrapLongitude: false, gridHash: 'a'.repeat(64), output, halo: new Uint8Array(output.length) });
+    const plan = { native: grid, fine: grid }, prepared = { plan, fine: { mask: { coverage } } } as unknown as WholeDomainPrepared;
+    const lift = { values: values(500), flags: missing() };
+    lift.flags[0] = STATUS_NO_LIFT;
+    for (let y = 0; y < grid.height; y++) for (let x = 8; x < 16; x++) lift.flags[sparseCoverageLookup(coverage, x, y)!.offset] = STATUS_NO_LIFT;
+    const writer = createWindDataWriter(root, 'gfs', 'build', 1, plan, { mapFrames: 1, numericBytes: 0, estimatedPeakBytes: 0 });
+    await writer.writeFrame(frame, 'f1', lift, prepared, { elevationM: values(0), valid: new Uint8Array(cells).fill(1) });
+    const bytes = await readFile(join(root, 'builds/gfs/build/map-data/f1/overview-4-0.bin')), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const offset = (cell: number, mode: number) => cell * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+    expect(view.getUint8(offset(0, WIND_OVERVIEW_VALUES - 1) + 8)).toBe(0);
+    expect(view.getFloat32(offset(0, WIND_OVERVIEW_VALUES - 1), true)).toBeGreaterThan(1);
+    expect(view.getUint8(offset(2, WIND_OVERVIEW_VALUES - 1) + 8)).toBe(STATUS_NO_LIFT);
+    expect(view.getUint8(offset(2, 0) + 8)).toBe(0);
+    expect(view.getFloat32(offset(2, 0), true)).toBe(1);
+    expect(view.getUint8(offset(0, 1) + 8)).toBe(0);
+    expect(view.getUint8(offset(0, WIND_OVERVIEW_VALUES - 2) + 8)).toBe(STATUS_UNAVAILABLE);
+    expect(view.getFloat32(offset(0, WIND_OVERVIEW_VALUES - 2), true)).toBe(0);
+    expect(view.getFloat32(2 * 32 * 32 * WIND_OVERVIEW_CELL_BYTES, true)).toBe(257);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

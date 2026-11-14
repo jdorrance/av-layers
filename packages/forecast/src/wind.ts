@@ -16,13 +16,24 @@ export function normalizedWindColumn(frame: NormalizedFrame, slot: number): Wind
   const pair = (u: number | null, v: number | null): WindVector | null => u === null || v === null ? null : { u, v };
   const terrain = frame.missing.terrain[slot] ? NaN : frame.terrainM[slot];
   const groundPressure = frame.missing.surfacePressure[slot] ? NaN : frame.surfacePressurePa[slot];
-  const levels = frame.hgtM.map((heights, i) => {
-    const height = frame.missing.hgt[i][slot] ? NaN : heights[slot];
+  const surface = pair(read(frame.auxSurface?.u10mMps), read(frame.auxSurface?.v10mMps));
+  const groundValid = Number.isFinite(terrain) && Number.isFinite(groundPressure) && groundPressure > 0;
+  const surfaceHeight = Math.fround(terrain + 10);
+  let canAnchor = groundValid && surface !== null && surfaceHeight > terrain;
+  // A spare slot retains every missing native interval when adding the 10 m anchor.
+  const levels: WindLevel[] = [null];
+  for (let i = 0; i < frame.hgtM.length; i++) {
+    const height = frame.missing.hgt[i][slot] ? NaN : frame.hgtM[i][slot];
     const pressure = frame.pressurePa ? (frame.missing.pressure![i][slot] ? NaN : frame.pressurePa[i][slot]) : frame.pressureLevelsHpa![i] * 100;
     const wind = pair(read(frame.auxLevels?.uWindMps?.[i]), read(frame.auxLevels?.vWindMps?.[i]));
-    return Number.isFinite(terrain) && Number.isFinite(groundPressure) && groundPressure > 0 && Number.isFinite(pressure) && pressure > 0 && pressure < groundPressure && Number.isFinite(height) && height > terrain && wind ? { height, wind } : null;
-  });
-  return { surface: pair(read(frame.auxSurface?.u10mMps), read(frame.auxSurface?.v10mMps)), levels };
+    const level = groundValid && Number.isFinite(pressure) && pressure > 0 && pressure < groundPressure && Number.isFinite(height) && height > terrain && wind ? { height, wind } : null;
+    levels.push(level);
+    if (canAnchor && !((Number.isFinite(pressure) && pressure >= groundPressure) || (Number.isFinite(height) && height <= terrain))) {
+      if (level && surfaceHeight < height) levels[i] = { height: surfaceHeight, wind: surface! };
+      canAnchor = false;
+    }
+  }
+  return { surface, levels };
 }
 
 export function encodeWindColumns(columns: readonly (WindColumn | null)[], levelCount?: number): Uint8Array {

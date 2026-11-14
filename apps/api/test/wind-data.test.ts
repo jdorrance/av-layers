@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { modelPointerSchema, storedModelPointerSchema, type ManifestV5 } from '@av/contracts';
-import { WIND_FINE_CELL_BYTES } from '@av/contracts/wind-data';
+import { WIND_FINE_CELL_BYTES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE } from '@av/contracts/wind-data';
 import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { createApp } from '../src/index';
 import * as windData from '../src/wind-data';
@@ -58,6 +58,23 @@ it('serves authenticated bounded chunks and rejects absent references and bad di
   await expect(windChunk(bucket('wind-0.bin').bucket, local.manifest, entry(), frame, 'wind', 0, ctx, signal)).rejects.toMatchObject({ status: 503 });
   await expect(windChunk(bucket('wind-0.idx').bucket, local.manifest, entry(), frame, 'wind', 0, ctx, signal)).rejects.toMatchObject({ status: 503 });
   await expect(windFrame(bucket('map-data.json').bucket, local.manifest, entry(), frame, ctx, signal)).rejects.toMatchObject({ status: 503 });
+});
+
+it('serves verified overview ranges and rejects unknown levels without reading payloads', async () => {
+  const frame = local.manifest.frames[0].id, store = bucket();
+  const result = await windFrame(store.bucket, local.manifest, entry(), frame, ctx, signal);
+  expect(result.descriptor.overview?.[0].stride).toBe(2);
+  const chunk = await windChunk(store.bucket, local.manifest, entry(), frame, 'overview-2', 0, ctx, signal);
+  expect(chunk.length).toBe(WIND_OVERVIEW_TILE_SIZE ** 2 * WIND_OVERVIEW_CELL_BYTES);
+  expect(store.reads.filter(read => read.length)).toEqual([expect.objectContaining({ key: expect.stringMatching(/overview-2-0\.bin$/), length: chunk.length })]);
+  const reads = store.reads.length;
+  for (const [kind, tile] of [['overview-3', 0], ['overview-2', 1_000_000], ['unknown', 0]] as const) {
+    await expect(windChunk(store.bucket, local.manifest, entry(), frame, kind, tile, ctx, signal)).rejects.toMatchObject({ status: 404, code: 'unknown-resource' });
+  }
+  expect(store.reads).toHaveLength(reads);
+  for (const suffix of ['overview-2-0.bin', 'overview-2-0.idx']) {
+    await expect(windChunk(bucket(suffix).bucket, local.manifest, entry(), frame, 'overview-2', 0, ctx, signal)).rejects.toMatchObject({ status: 503, code: 'publication-invalid' });
+  }
 });
 
 it('does not return a chunk after retained expiry', async () => {
@@ -256,14 +273,14 @@ it('limits distinct numeric requests after a normal viewport load', async () => 
   const env = { BUCKET: { get } as unknown as R2Bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, NUMERIC_RATE_LIMITER: numericLimiter, AV_RESPONSE_CACHE: 'off' };
   const path = `/v1/models/${model}/runs/${local.manifest.buildId}/data/${frame}`;
   const call = (suffix: string, ip = '192.0.2.1') => app.fetch(new Request(`https://api.test${path}${suffix}`, { headers: { 'cf-connecting-ip': ip } }), env, ctx);
-  for (const suffix of ['', '/wind/0', '/fine/0']) {
+  for (const suffix of ['', '/wind/0', '/fine/0', '/overview-2/0']) {
     const result = await call(suffix);
     expect(result.status, await result.clone().text()).toBe(200);
     await result.arrayBuffer();
   }
   const chunk = vi.spyOn(windData, 'windChunk').mockResolvedValue(Uint8Array.of(1));
   try {
-    for (let tile = 1; tile <= 127; tile++) {
+    for (let tile = 1; tile <= 126; tile++) {
       const result = await call(`/wind/${tile}`);
       expect(result.status).toBe(200);
       await result.arrayBuffer();
@@ -274,7 +291,7 @@ it('limits distinct numeric requests after a normal viewport load', async () => 
     expect(await denied.json()).toEqual({ type: 'urn:windy-av:rate-limit-exceeded', title: 'rate-limit-exceeded', status: 429, detail: 'Numeric request rate exceeded' });
     expect(denied.headers.get('cache-control')).toBe('no-store');
     expect(get).toHaveBeenCalledTimes(reads);
-    expect(chunk).toHaveBeenCalledTimes(127);
+    expect(chunk).toHaveBeenCalledTimes(126);
     expect((await call('', '192.0.2.2')).status).toBe(200);
     expect(numericLimiter.limit.mock.calls.every(([options]) => /^192\.0\.2\.[12]$/.test(options.key))).toBe(true);
   } finally { chunk.mockRestore(); }

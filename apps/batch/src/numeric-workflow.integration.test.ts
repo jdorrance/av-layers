@@ -49,6 +49,13 @@ it('publishes opted-in sharded numeric data and serves its retained HTTP chunk',
     await writeFile(receiptPath, JSON.stringify(receipt));
     await expect(finalizeBuild({ out: root, plan, product: configured, mask, provider, store })).rejects.toThrow('numeric frame mismatch');
     await writeFile(receiptPath, original);
+    const invalidOverview = JSON.parse(original.toString());
+    const overviewObject = invalidOverview.numeric.objects.find((object: { key: string }) => object.key.includes('/overview-'));
+    expect(overviewObject).toBeDefined();
+    overviewObject.key = overviewObject.key.replace('/overview-2-', '/overview-invalid-');
+    await writeFile(receiptPath, JSON.stringify(invalidOverview));
+    await expect(finalizeBuild({ out: root, plan, product: configured, mask, provider, store })).rejects.toThrow('numeric object mismatch');
+    await writeFile(receiptPath, original);
     const authority = workflowAuthority({ GITHUB_ACTIONS: 'true', GITHUB_REPOSITORY: 'owner/repo', GITHUB_SHA: 'a'.repeat(40), GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'owner/repo/.github/workflows/forecast.yml@refs/heads/main', GITHUB_RUN_ID: '123', TARGET_ENV: 'staging', MODEL: 'gfs' });
     const manifestPath = await finalizeBuild({ out: root, plan, product: configured, mask, provider, store,
       onValidated: async result => {
@@ -103,5 +110,10 @@ it('publishes opted-in sharded numeric data and serves its retained HTTP chunk',
     const chunk = await app.fetch(new Request(`${base}/wind/0`), env, ctx);
     expect(chunk.status).toBe(200);
     expect((await chunk.arrayBuffer()).byteLength).toBeLessThanOrEqual(256 * 1024);
+    const overview = await app.fetch(new Request(`${base}/overview-2/0`), env, ctx);
+    expect(overview.status).toBe(200);
+    const overviewBytes = (await overview.arrayBuffer()).byteLength;
+    expect(overviewBytes).toBeGreaterThan(0);
+    expect(overviewBytes).toBeLessThanOrEqual(256 * 1024);
   } finally { overrides.product = undefined; overrides.provider = undefined; overrides.mask = undefined; overrides.fine = undefined; await rm(root, { recursive: true, force: true }); }
 }, 120_000);

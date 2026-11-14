@@ -66,7 +66,6 @@ const frameStatus = element<HTMLParagraphElement>('frame-status');
 const timelineStatus = element<HTMLParagraphElement>('timeline-status');
 const legend = element<HTMLElement>('legend');
 const legendBody = element<HTMLDivElement>('legend-body');
-const legendToggle = element<HTMLButtonElement>('legend-toggle');
 const horizonNotice = element<HTMLParagraphElement>('horizon-notice');
 const tileErrorBox = element<HTMLParagraphElement>('tile-error');
 const errorBox = element<HTMLParagraphElement>('error');
@@ -142,6 +141,7 @@ interface InitialDiscovery {
 }
 
 interface WindView {
+  zoom: number;
   build: PinnedBuild;
   frame: string;
   bounds: [number, number, number, number];
@@ -215,13 +215,15 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   let historyRevision = 0;
   let applyingHistory: number | null = null;
   let opacityCommitted = false;
-  let legendOpen = true;
   let windView: WindView | null = null;
   let windRequest: WindRequest | null = null;
   let windLoadStatus: WindStatus = 'unavailable';
   let windDisplayed = false;
   let windHeight: 'surface' | number | 'lift' = 'surface';
   let locationRevision = 0;
+  let locationMarker: HTMLElement | null = null;
+  let locationPoint: [number, number] | null = null;
+  let locationTimer: ReturnType<typeof setTimeout> | null = null;
   let windLoading = false;
   let queuedWindLoad: (() => void) | null = null;
   const windOverlay = new WindOverlay(map);
@@ -253,7 +255,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   function reconcileWind(): void {
     const displayed = overlayState.displayed;
-    const matches = windView && windLoadStatus !== 'unavailable' && windLoadStatus !== 'zoom-in'
+    const matches = windView && windLoadStatus !== 'unavailable'
       && displayed?.build === windView.build && displayed.frame === windView.frame;
     if (matches && !windDisplayed) {
       setWindField();
@@ -317,7 +319,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     const view: [number, number, number, number] = [east - west >= 360 ? -180 : wrap(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : wrap(east), Math.min(90, bounds.getNorth())];
     const identity = windView;
     const span = (west: number, east: number) => (east - west + 360) % 360 || (east === west ? 0 : 360);
-    const covered = identity && identity.build === build && identity.frame === selectedFrame
+    const covered = identity && identity.build === build && identity.frame === selectedFrame && identity.zoom === map.getZoom()
       && view[1] >= identity.bounds[1] && view[3] <= identity.bounds[3]
       && span(identity.bounds[0], view[0]) + span(view[0], view[2]) <= span(identity.bounds[0], identity.bounds[2]);
     if (covered) {
@@ -326,12 +328,12 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
       reconcileWind();
       return;
     }
-    const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view]);
+    const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view, map.getZoom()]);
     if (key === windRequest?.key) return;
     if (!identity || identity.build !== build || identity.frame !== selectedFrame) clearWind();
     else cancelWindRequest();
     setWindStatus('loading');
-    const request: WindRequest = { build, frame: selectedFrame, bounds: view, key,
+    const request: WindRequest = { zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, key,
       controller: new AbortController(), source: new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch }) };
     windRequest = request;
     // A retired load releases its decoded maps before the latest viewport can allocate.
@@ -416,7 +418,9 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   function syncModels(): void {
     for (const button of modelButtons) button.className = button.value === currentModel ? 'model-button is-selected' : 'model-button';
-    modelSelected.textContent = modelButtons.find(button => button.value === currentModel)?.textContent ?? currentModel;
+    const label = modelButtons.find(button => button.value === currentModel)?.textContent ?? currentModel;
+    element('model-name').textContent = currentModel === AUTO_MODEL_ID && build ? `${label} · ${build.manifest.model}` : label;
+    modelSelected.dataset.model = currentModel === AUTO_MODEL_ID ? build?.manifest.model ?? 'auto' : currentModel;
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
@@ -713,6 +717,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
       if (expiryTimer !== null) window.clearInterval(expiryTimer);
       expiryTimer = null;
       build = null;
+      syncModels();
       selectedFrame = null;
       clearWind();
       closePoint();
@@ -782,6 +787,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
       const next = resolved?.build ?? await (pending ?? api.latest(model, { signal: requestAbort.signal }));
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next;
+      syncModels();
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
       pointHorizonSelect.children[0].textContent = next.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours';
       if (resolved) selectedFrame = resolved.frame.id;
@@ -949,6 +955,22 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   pointUnits.addEventListener('change', () => {
     setUnits(pointUnits.value === 'imperial' ? 'imperial' : 'metric');
   });
+  function positionLocationMarker(): void {
+    if (!locationMarker || !locationPoint) return;
+    const point = map.project(locationPoint);
+    locationMarker.style.left = `${point.x}px`;
+    locationMarker.style.top = `${point.y}px`;
+  }
+
+  function clearLocationMarker(): void {
+    if (locationTimer !== null) clearTimeout(locationTimer);
+    locationTimer = null;
+    map.off('move', positionLocationMarker);
+    locationMarker?.remove();
+    locationMarker = null;
+    locationPoint = null;
+  }
+
   locateButton.addEventListener('click', () => {
     if (locateButton.disabled || mapFailed) return;
     const revision = ++locationRevision;
@@ -960,8 +982,19 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
       if (revision !== locationRevision || lifecycle.signal.aborted) return;
       locateButton.disabled = false;
       locateButton.ariaBusy = 'false';
-      locationStatus.textContent = 'Location found';
-      map.jumpTo({ center: [position.coords.longitude, position.coords.latitude], zoom: Math.max(map.getZoom(), 10) });
+      locationStatus.textContent = '';
+      clearLocationMarker();
+      const point: [number, number] = [position.coords.longitude, position.coords.latitude];
+      map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
+      const dot = document.createElement('div');
+      dot.className = 'location-pulse';
+      dot.setAttribute('aria-hidden', 'true');
+      locationMarker = dot;
+      locationPoint = point;
+      element('map').append(dot);
+      positionLocationMarker();
+      map.on('move', positionLocationMarker);
+      locationTimer = setTimeout(clearLocationMarker, 2000);
     }, error => {
       if (revision !== locationRevision || lifecycle.signal.aborted) return;
       locateButton.disabled = false;
@@ -987,13 +1020,6 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     const index = frames.findIndex(frame => frame.id === selectedFrame);
     selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
   }, globalListener);
-  legendToggle.addEventListener('click', () => {
-    legendOpen = !legendOpen;
-    legend.className = legendOpen ? 'ribbon' : 'ribbon is-collapsed';
-    legendToggle.ariaExpanded = String(legendOpen);
-    legendToggle.ariaLabel = legendOpen ? 'Collapse lift scale' : 'Show lift scale';
-    legendToggle.textContent = legendOpen ? '⌃' : '⌄';
-  });
   const pointControls = [pointCard, refAgl, refMsl, timeInput, element('wind-controls'), element('compact-timeline'), element('display-units')];
   document.addEventListener('pointerdown', event => {
     if (!pointSeries.current) return;
@@ -1026,7 +1052,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     autoAbort?.abort();
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
-    clearWind(); locationRevision++;
+    clearWind(); locationRevision++; clearLocationMarker();
     windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
     terrain?.dispose();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
@@ -1036,7 +1062,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
-    clearWind(); locationRevision++;
+    clearWind(); locationRevision++; clearLocationMarker();
     locateButton.disabled = false;
     locateButton.ariaBusy = 'false';
     resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;

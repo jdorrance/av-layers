@@ -831,3 +831,57 @@ it('cancels cleanup after listing without deleting objects', async () => {
   await expect(cleanup(store, 'gfs', authority, now, value => { summary = value; }, controller.signal)).rejects.toThrow('cancel listing');
   expect(deleted).not.toHaveBeenCalled(); expect(summary).toMatchObject({ status: 'failed', deleted: { objects: 0 } });
 });
+
+it('cleans bounded build inventories beyond 100,000 total objects while protecting refreshed retention', async () => {
+  const { root, manifest } = await fixture(), store = new MemoryStore();
+  await publish(store, root, manifest, { authority, now: () => now });
+  const paged: ObjectStorage = store, prefix = 'builds/gfs/', stale = new Date(now - (RETENTION_DAYS + 1) * 86400000);
+  const oldIds = [20, 21, 22].map(day => `202610${day}T000000Z-12345678-1234-4234-8234-123456789abc`);
+  paged.listBuilds = async function* () {
+    for (const buildId of [manifest.buildId, ...oldIds]) {
+      if (buildId === oldIds[1]) {
+        const pointer = JSON.parse(Buffer.from(store.objects.get('catalog/gfs/latest.json')!.bytes).toString());
+        pointer.retained.push({ ...pointer.retained[0], buildId, manifestKey: `${prefix}${buildId}/manifest.json` });
+        await store.put('catalog/gfs/latest.json', Buffer.from(JSON.stringify(pointer)), {});
+      }
+      yield Array.from({ length: 60_000 }, (_, i) => ({ key: `${prefix}${buildId}/map-data/${i}.bin`, size: 1,
+        lastModified: buildId === oldIds[0] && i === 59_999 ? new Date(now - 1) : stale }));
+    }
+  };
+  const list = vi.spyOn(store, 'list'), remove = vi.spyOn(store, 'delete');
+  let summary: CleanupSummary | undefined;
+  expect(await cleanup(paged, 'gfs', authority, now, value => { summary = value; })).toBe(60_000);
+  expect(list).not.toHaveBeenCalled();
+  expect(remove).toHaveBeenCalledOnce();
+  expect(remove.mock.calls[0][0]).toHaveLength(60_000);
+  expect(remove.mock.calls[0][0].every(key => key.startsWith(`${prefix}${oldIds[2]}/`))).toBe(true);
+  expect(summary).toMatchObject({ status: 'complete', listed: { objects: 240_000, knownBytes: 240_000 },
+    protected: { objects: 120_000 }, unreferenced: { objects: 120_000 }, eligible: { objects: 60_000 }, deleted: { objects: 60_000 } });
+});
+
+it('retains completed deletion progress when a later build listing fails', async () => {
+  const { root, manifest } = await fixture(), store = new MemoryStore();
+  await publish(store, root, manifest, { authority, now: () => now });
+  const paged: ObjectStorage = store;
+  paged.listBuilds = async function* () {
+    yield [{ key: 'builds/gfs/20261020T000000Z-12345678-1234-4234-8234-123456789abc/data', size: 3,
+      lastModified: new Date(now - (RETENTION_DAYS + 1) * 86400000) }];
+    throw new Error('later listing failed');
+  };
+  let summary: CleanupSummary | undefined;
+  await expect(cleanup(paged, 'gfs', authority, now, value => { summary = value; })).rejects.toThrow('later listing failed');
+  expect(summary).toMatchObject({ status: 'failed', listed: { objects: 1 }, eligible: { objects: 1 }, deleted: { objects: 1, knownBytes: 3 } });
+});
+
+it('keeps bare build-name objects outside streamed build-prefix deletion', async () => {
+  const { root, manifest } = await fixture(), store = new MemoryStore();
+  await publish(store, root, manifest, { authority, now: () => now });
+  const paged: ObjectStorage = store, key = 'builds/gfs/20261020T000000Z-12345678-1234-4234-8234-123456789abc';
+  paged.listBuilds = async function* () {
+    yield [{ key, lastModified: new Date(now - (RETENTION_DAYS + 1) * 86400000) }];
+    yield [{ key: `${key}/recent`, lastModified: new Date(now - 1) }];
+  };
+  const remove = vi.spyOn(store, 'delete');
+  expect(await cleanup(paged, 'gfs', authority, now)).toBe(0);
+  expect(remove).not.toHaveBeenCalled();
+});

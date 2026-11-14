@@ -29,7 +29,7 @@ import { writeServingGroups } from './serving-groups.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import { hourSampleParts, verifyPublicationReceipts } from './build-receipts.js';
 import { createWindDataWriter, localWindData } from './wind-data.js';
-import { WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, assertWindFrameLayout, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
+import { WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 
 export { MAX_FORECAST_SHARDS } from '@av/contracts';
 const digestSchema = artifactSchema.shape.tilesSha256;
@@ -113,7 +113,7 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
     const keys = new Set<string>(), base = `${prefix}/map-data/`;
     for (const object of receipt.numeric.objects) {
       const path = object.key.slice(base.length), [frame, file, extra] = path.split('/');
-      const valid = numericFrames.includes(frame.replace(/\.json$/, '')) && (file === undefined ? frame.endsWith('.json') : extra === undefined && /^(wind|fine)-(0|[1-9][0-9]*)\.(bin|idx)$/.test(file));
+      const valid = numericFrames.includes(frame.replace(/\.json$/, '')) && (file === undefined ? frame.endsWith('.json') : extra === undefined && /^(wind|fine|overview-[1-9][0-9]{0,4})-(0|[1-9][0-9]*)\.(bin|idx)$/.test(file));
       if (!object.key.startsWith(base) || !valid || keys.has(object.key)) throw new Error('Forecast shard numeric object mismatch');
       keys.add(object.key);
     }
@@ -389,8 +389,8 @@ async function assembleWindData(root: string, plan: BuildPlan, whole: WholeDomai
       if (descriptor.frame !== frame.id) throw new Error('Numeric wind frame identity mismatch');
       assertWindFrameLayout(descriptor, whole.plan);
       expected.set(key, frame);
-      for (const kind of ['wind', 'fine'] as const) {
-        for (const [page, shard] of descriptor[kind].entries()) {
+      for (const { kind, shards } of windFrameParts(descriptor)) {
+        for (const [page, shard] of shards.entries()) {
           const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
           expected.set(`${base}.idx`, { bytes: shard.count * 32, sha256: shard.indexSha256 });
           expected.set(`${base}.bin`, { bytes: shard.bytes, sha256: shard.sha256 });

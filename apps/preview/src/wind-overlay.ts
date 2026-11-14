@@ -46,6 +46,7 @@ export class WindOverlay {
   private width = 0;
   private height = 0;
   private scale = 1;
+  private barbScale = 1;
   private mapLost = false;
   private readonly lostCanvases = new Set<HTMLCanvasElement>();
   private destroyed = false;
@@ -73,14 +74,17 @@ export class WindOverlay {
     this.width = canvas.clientWidth;
     this.height = canvas.clientHeight;
     const width = Math.max(1, this.width), height = Math.max(1, this.height);
-    this.scale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS / (width * height)), 4096 / width, 4096 / height);
+    this.scale = Math.min(window.devicePixelRatio || 1, 1, Math.sqrt(MAX_PIXELS / 2 / (width * height)), 4096 / width, 4096 / height);
+    const barbScale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS * 1.5 / (width * height)), 4096 / width, 4096 / height);
+    this.barbScale = barbScale >= 1 ? Math.floor(barbScale) : barbScale;
     for (const canvas of [this.trails, this.barbs]) {
       canvas.width = 0;
       canvas.height = 0;
     }
     for (const canvas of [this.trails, this.barbs]) {
-      canvas.width = Math.max(1, Math.floor(width * this.scale));
-      canvas.height = Math.max(1, Math.floor(height * this.scale));
+      const scale = canvas === this.barbs ? this.barbScale : this.scale;
+      canvas.width = Math.max(1, Math.floor(width * scale));
+      canvas.height = Math.max(1, Math.floor(height * scale));
       canvas.style.width = `${this.width}px`;
       canvas.style.height = `${this.height}px`;
     }
@@ -191,7 +195,7 @@ export class WindOverlay {
       if (!valid(wind) || particle.age <= 0 || Math.abs(particle.lat) >= MAX_LAT) { particle.age = 0; continue; }
       const start = this.map.project([particle.lon, particle.lat]);
       // Keep illustrative advection readable as Mercator magnification changes.
-      const seconds = elapsed * 600 * Math.min(1, 2 ** (9 - this.map.getZoom())) * Math.cos(particle.lat * Math.PI / 180);
+      const seconds = elapsed * 600 * 2 ** (9 - this.map.getZoom()) * Math.cos(particle.lat * Math.PI / 180);
       const lat = particle.lat + wind.v * seconds / EARTH_RADIUS * 180 / Math.PI;
       const lon = particle.lon + wind.u * seconds / (EARTH_RADIUS * Math.cos(particle.lat * Math.PI / 180)) * 180 / Math.PI;
       if (Math.abs(lat) >= MAX_LAT) { particle.age = 0; continue; }
@@ -225,9 +229,9 @@ export class WindOverlay {
     const x0 = Math.ceil((west - 16) / step), x1 = Math.floor((east - 16) / step);
     const y0 = Math.max(0, Math.ceil((north - 16) / step)), y1 = Math.min(Math.floor(size / step), Math.floor((south - 16) / step));
     const stride = Math.max(1, Math.ceil(Math.sqrt(Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1) / 5000)));
-    ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
+    ctx.setTransform(this.barbScale, 0, 0, this.barbScale, 0, 0);
     ctx.strokeStyle = '#000'; ctx.fillStyle = '#000'; ctx.lineWidth = 1; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
-    ctx.font = '9.6px "Helvetica Neue", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '600 10px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (let y = Math.ceil(y0 / stride) * stride; y <= y1; y += stride) for (let x = Math.ceil(x0 / stride) * stride; x <= x1; x += stride) {
       const lon = (x * step + 16) / size * 360 - 180, lat = latitude(y * step + 16, size);
       const point = this.map.project([lon, lat]);
@@ -238,7 +242,7 @@ export class WindOverlay {
       if (!valid(wind)) continue;
       const speed = displayedBarbSpeed(Math.hypot(wind.u, wind.v), this.options.units);
       if (speed === null) continue;
-      if (!speed) { ctx.font = '10px Arial, sans-serif'; ctx.fillText('O', point.x, point.y); ctx.font = '9.6px "Helvetica Neue", Arial, sans-serif'; continue; }
+      if (!speed) { this.label('O', point.x, point.y); continue; }
       const distance = Math.hypot(wind.u, wind.v);
       const ahead = this.map.project([lon + wind.u / distance * 0.001 / Math.cos(lat * Math.PI / 180), lat + wind.v / distance * 0.001]);
       const angle = Math.atan2(ahead.y - point.y, ahead.x - point.x);
@@ -257,8 +261,16 @@ export class WindOverlay {
       for (let i = 0; i < feathers; i++) { ctx.moveTo(d, 0); ctx.lineTo(d - 3, -6); d += spacing; }
       if (half) { ctx.moveTo(d, 0); ctx.lineTo(d - 1.5, -3); }
       ctx.stroke(); ctx.restore();
-      ctx.fillText(String(speed), point.x, point.y + 8);
+      this.label(String(speed), point.x, point.y + 8);
     }
     this.barbSamples = samples;
+  }
+
+  private label(text: string, x: number, y: number): void {
+    const ctx = this.barbContext;
+    x = Math.round(x * this.barbScale) / this.barbScale;
+    y = Math.round(y * this.barbScale) / this.barbScale;
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.strokeText(text, x, y); ctx.restore(); ctx.fillText(text, x, y);
   }
 }

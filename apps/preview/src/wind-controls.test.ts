@@ -150,9 +150,45 @@ describe('wind controls', () => {
     expect(one(root, 'wind-controls-surface').textContent).toBe('Surface');
     const range = one(root, 'wind-controls-range') as FakeElement & { type: string };
     expect(range.type).toBe('range');
-    expect([range.min, range.max, range.step, range.value]).toEqual(['600', '6000', '600', '2400']);
+    expect([range.min, range.max, range.step, range.value]).toEqual(['0', '9', '1', '0']);
     expect(range.getAttribute('aria-label')).toBe('Wind height');
-    expect(range.getAttribute('aria-valuetext')).toBe('2,400 m AGL');
+    expect(range.getAttribute('aria-valuetext')).toBe('20 m AGL');
+    controls.destroy();
+  });
+
+  it('maps equal slider steps to increasing physical heights with nonlinear tick labels', () => {
+    const { controls, root, onChange } = create();
+    const range = one(root, 'wind-controls-range');
+    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['20', '250', '1k', '4k']);
+    const heights = [20, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000];
+    for (const [index, height] of heights.entries()) {
+      range.value = String(index);
+      fire(range, 'input');
+      expect(controls.state.height).toBe(height);
+      expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ height }));
+      expect(range.getAttribute('aria-valuetext')).toBe(`${height.toLocaleString('en-US')} m AGL`);
+    }
+    controls.setUnits('imperial');
+    expect(controls.state.height).toBe(4000);
+    expect(range.value).toBe('9');
+    expect(range.getAttribute('aria-valuetext')).toBe('13,123 ft AGL');
+    controls.destroy();
+  });
+
+  it.each([[600, 500], [2400, 2000], [6000, 4000]])('migrates a remembered %i m height to %i m', (before, after) => {
+    storage.set('av.wind-controls.v1', JSON.stringify({ height: before, fixedHeight: before }));
+    const { controls, root } = create();
+    expect(controls.state.height).toBe(after);
+    expect(one(root, 'wind-controls-value').textContent).toBe(after.toLocaleString('en-US'));
+    controls.destroy();
+  });
+
+  it('keeps a restored numeric selection and rail readout on the same height', () => {
+    storage.set('av.wind-controls.v1', JSON.stringify({ height: 100, fixedHeight: 6000 }));
+    const { controls, root } = create();
+    expect(controls.state.height).toBe(100);
+    expect(one(root, 'wind-controls-range').value).toBe('1');
+    expect(one(root, 'wind-controls-value').textContent).toBe('100');
     controls.destroy();
   });
 
@@ -223,7 +259,7 @@ describe('wind controls', () => {
   it('retains the fixed height for Top of lift and returns on rail movement', () => {
     const { controls, root } = create();
     const range = one(root, 'wind-controls-range');
-    range.value = '3000';
+    range.value = '8';
     fire(range, 'input');
     fire(range, 'change');
     expect(controls.state.height).toBe(3000);
@@ -231,11 +267,11 @@ describe('wind controls', () => {
     fire(one(root, 'wind-controls-lift'), 'click');
     expect(controls.state.height).toBe('lift');
     expect(one(root, 'wind-controls-scale').getAttribute('data-height')).toBe('lift');
-    expect(range.value).toBe('3000');
+    expect(range.value).toBe('8');
 
-    range.value = '1200';
+    range.value = '2';
     fire(range, 'input');
-    expect(controls.state.height).toBe(1200);
+    expect(controls.state.height).toBe(250);
     expect(one(root, 'wind-controls-scale').getAttribute('data-height')).toBe('fixed');
 
     fire(one(root, 'wind-controls-surface'), 'click');
@@ -248,7 +284,7 @@ describe('wind controls', () => {
     const { controls, root } = create();
     fire(one(root, 'wind-controls-lift'), 'click');
     fire(one(root, 'wind-controls-range'), 'pointerup');
-    expect(controls.state.height).toBe(2400);
+    expect(controls.state.height).toBe(20);
     controls.destroy();
   });
 
@@ -256,14 +292,14 @@ describe('wind controls', () => {
     const { controls, root } = create();
     controls.setUnits('imperial');
     expect(one(root, 'wind-controls-unit').textContent).toBe('ft AGL');
-    expect(one(root, 'wind-controls-max').textContent).toBe('19,685');
-    expect(one(root, 'wind-controls-value').textContent).toBe('7,874');
-    expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('7,874 ft AGL');
+    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['66', '820', '3.3k', '13.1k']);
+    expect(one(root, 'wind-controls-value').textContent).toBe('66');
+    expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('66 ft AGL');
     expect(controls.state.height).toBe('surface');
     controls.destroy();
   });
 
-  it('shows compact ready/loading/unavailable/zoom-in states', () => {
+  it('shows compact ready/loading/unavailable states', () => {
     const { controls, root } = create();
     const status = one(root, 'wind-controls-status');
     expect(status.hidden).toBe(true);
@@ -276,8 +312,6 @@ describe('wind controls', () => {
     expect(one(root, 'wind-controls-trigger').getAttribute('aria-busy')).toBe('false');
     fire(byClass(root, 'wind-controls-action')[0], 'click');
     expect(status.hidden).toBe(false);
-    controls.setStatus('zoom-in');
-    expect(status.textContent).toBe('Zoom in for wind');
     controls.setStatus('unavailable');
     expect(status.textContent).toBe('Wind unavailable');
     controls.setStatus('ready');
@@ -332,14 +366,14 @@ describe('wind controls', () => {
     fire(byClass(first.root, 'wind-controls-style')[2]!, 'click', { detail: 1 });
     first.controls.setStatus('ready');
     const range = one(first.root, 'wind-controls-range');
-    range.value = '4800';
+    range.value = '9';
     fire(range, 'input');
     fire(range, 'change');
     fire(byClass(first.root, 'wind-controls-action')[0]!, 'click');
     first.controls.destroy();
 
     const second = create();
-    expect(second.controls.state).toEqual({ style: 'hybrid', visible: false, paused: false, height: 4800 });
+    expect(second.controls.state).toEqual({ style: 'hybrid', visible: false, paused: false, height: 4000 });
     second.controls.destroy();
 
     storage.set('av.wind-controls.v1', '{not json');

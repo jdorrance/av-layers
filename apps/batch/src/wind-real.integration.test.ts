@@ -9,6 +9,7 @@ import { STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/layers';
 import { decodePackedWindChunk, encodeWindColumns, normalizedWindColumn, samplePackedWindColumns } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.js';
 import { getForecastProvider } from './providers.js';
+import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { localForecastSource } from './local-source.js';
 import { sourceModelId } from './source.js';
 import { createWindDataWriter, localWindData } from './wind-data.js';
@@ -60,7 +61,7 @@ for (const testCase of realCases) it.skipIf(!testCase.enabled)(`round-trips real
     expect(decoded).toEqual(original);
     expect(decoded.filter(column => column?.surface)).not.toHaveLength(0);
     for (let i = 0; i < original.length; i++) {
-      for (const agl of [600, 1200, 3000, 6000]) {
+      for (const agl of WIND_HEIGHTS) {
         const height = frame.terrainM[i] + agl;
         expect(windAtHeight(decoded[i]!, height)).toEqual(windAtHeight(original[i], height));
         const result = samplePackedWindColumns({ contributors: [{ index: i, row: 0, column: i, weight: 1 }], byteRange: { offset: 0, length: 0 } }, [chunk], [i], height);

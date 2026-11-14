@@ -33,7 +33,7 @@ when available and the first 24 hours otherwise.
 [`PointSeriesController`](src/point-series-controller.ts) owns the open point,
 selected hour and current request for each map. Close it to dispose the loader.
 The [browser bundle check](../../tests/browser-client-bundle.integration.test.ts) measures `ApiClient`
-with runtime response validation. The initial Vite build measured 40.43 kB gzip.
+with runtime response validation.
 The health probe uses `ApiClient.onMetric` to count retries and time JSON reads.
 
 ```sh
