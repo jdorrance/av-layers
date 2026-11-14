@@ -30,14 +30,17 @@ import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, r2WaitDuration, ResourceLimitError, waitFor, type WaitContext } from './resources';
-import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
-import { Problem, fail, query, response, json, finish, cached, validIp, canceledRequest, handleError } from './http';
+import { WIND_INDEX_ENTRIES, windFrameSchema } from '@av/contracts/wind-data';
+import { windChunk, windFrame } from './wind-data';
+import { pointer, pointerCacheState, admit, manifest, provenanceReference, publicManifest, artifact, readProvenance, readProvenanceFrame } from './publication';
+import { Problem, fail, query, response, json, finish, cached, validIp, validateId, canceledRequest, handleError } from './http';
 import { apiDocs } from './api-docs';
 
 type Env = {
   Bindings: {
     BUCKET: R2Bucket;
     SAMPLE_RATE_LIMITER: { limit(options: { key: string }): Promise<{ success: boolean }> };
+    NUMERIC_RATE_LIMITER?: { limit(options: { key: string }): Promise<{ success: boolean }> };
     AV_LOCAL_DEVELOPMENT?: string;
     AV_DEPLOYMENT_ID?: string;
     AV_REQUEST_METRICS?: string;
@@ -55,7 +58,7 @@ function layerId(value: string): LayerId {
 
 export function createApp({ products = Object.fromEntries(PRODUCTS.map(product => [product.modelId, product])) }: { products?: Record<string, ProductDefinition> } = {}) {
 let discoveryConfig: Promise<string> | undefined;
-async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string): Promise<Response> {
+async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string, representationSuffix = ''): Promise<Response> {
   const states = observed.map(pointerCacheState), now = Date.now();
   const deadlines = states.map(state => state?.until ?? now);
   for (const expiry of expiries) {
@@ -64,7 +67,7 @@ async function discovery(c: Context<Env>, build: () => unknown, observed: readon
   }
   const until = deadlines.length ? Math.min(...deadlines) : now;
   const config = await (discoveryConfig ??= sha256(new TextEncoder().encode(JSON.stringify(products))));
-  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
+  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}${representationSuffix}`;
   return cached(c.req.raw, expiresAt, c.executionCtx, async () => json(build()), representation, until);
 }
 const modelId = (c: Context<Env>): ModelId => {
@@ -87,26 +90,28 @@ app.use('*', (c, next) => {
   return next();
 });
 
-const pointRateLimit: MiddlewareHandler<Env> = async (c, next) => {
+const rateLimit = (kind: 'Sample' | 'Numeric'): MiddlewareHandler<Env> => async (c, next) => {
   const { signal } = c.req.raw;
   signal.throwIfAborted();
   const ip = c.req.header('CF-Connecting-IP');
   const key = ip === undefined && c.env.AV_LOCAL_DEVELOPMENT === 'true' ? 'localhost' : ip;
-  if (!key || (ip !== undefined && !validIp(ip)) || !c.env.SAMPLE_RATE_LIMITER) {
-    fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
+  const limiter = kind === 'Sample' ? c.env.SAMPLE_RATE_LIMITER : c.env.NUMERIC_RATE_LIMITER;
+  if (!key || (ip !== undefined && !validIp(ip)) || !limiter) {
+    fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
   }
   let allowed: { success: boolean };
   try {
-    allowed = await waitFor(c.env.SAMPLE_RATE_LIMITER.limit({ key }), signal);
+    allowed = await waitFor(limiter.limit({ key }), signal);
   } catch {
     signal.throwIfAborted();
-    return fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
+    return fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
   }
-  if (typeof allowed?.success !== 'boolean') fail(503, 'rate-limit-unavailable', 'Sample rate limit unavailable');
-  if (!allowed.success) fail(429, 'rate-limit-exceeded', 'Sample request rate exceeded');
+  if (typeof allowed?.success !== 'boolean') fail(503, 'rate-limit-unavailable', `${kind} rate limit unavailable`);
+  if (!allowed.success) fail(429, 'rate-limit-exceeded', `${kind} request rate exceeded`);
   await next();
 };
-for (const path of ['sample', 'samples', 'profile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, pointRateLimit);
+for (const path of ['sample', 'samples', 'profile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, rateLimit('Sample'));
+for (const path of ['data/:frame', 'data/:frame/:kind/:tile']) app.use(`/v1/models/:model/runs/:buildId/${path}`, rateLimit('Numeric'));
 
 const problemSchema = z.object({ type: z.string(), title: z.string(), status: z.number(), detail: z.string() });
 const problemResponses = {
@@ -223,15 +228,15 @@ registerJsonRoute(
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model], signal);
     const metrics = (c.executionCtx as WaitContext).metrics;
     if (metrics) metrics.buildId = m.buildId;
-    const servedManifest = { ...m, source: servedSource(m, url.origin) };
+    const servedManifest = publicManifest(m, entry, url.origin);
     return discovery(c, () => ({
-      pointer: ptr,
+      pointer: modelPointerSchema.parse(ptr),
       ...(url.searchParams.has('expand') ? {
         manifest: servedManifest,
         templates: Object.fromEntries(renderedLayers(m.layers, m.descriptors.layers).map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
       } : {}),
       freshness: computeFreshness(m)
-    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt);
+    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt, !m.mapData && entry.mapData ? `:wind:${entry.mapData.sha256}` : '');
   }
 );
 
@@ -244,7 +249,7 @@ registerJsonRoute(
     const model = modelId(c);
     const ptr = await pointer(c.env.BUCKET, model, false, c.executionCtx, c.req.raw.signal);
     const retained = ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now());
-    return discovery(c, () => ({ model, retained: ptr.retained.filter(item => Date.parse(item.expiresAt) > Date.now()) }), [ptr], retained.map(item => item.expiresAt));
+    return discovery(c, () => ({ model, retained: modelPointerSchema.parse(ptr).retained.filter(item => Date.parse(item.expiresAt) > Date.now()) }), [ptr], retained.map(item => item.expiresAt));
   }
 );
 
@@ -254,9 +259,10 @@ registerJsonRoute(
   {},
   manifestResponseSchema,
   async (c, url) => {
-    const m = await pinnedManifest(c);
-    const served = { ...m, source: servedSource(m, url.origin) };
-    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-v2`), 'source-v2');
+    const { entry, manifest: m } = await pinnedBuild(c);
+    const served = publicManifest(m, entry, url.origin);
+    const revision = !m.mapData && entry.mapData ? 'v3' : 'v2';
+    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-${revision}`), `source-${revision}`);
   }
 );
 
@@ -314,17 +320,64 @@ registerJsonRoute(
   }
 );
 
-async function pinnedManifest(c: Context<Env>) {
-  const model = modelId(c), buildId = requiredParam(c, 'buildId');
-  const signal = c.req.raw.signal;
-  const metrics = (c.executionCtx as WaitContext).metrics;
-  const started = performance.now();
+async function pinnedBuild(c: Context<Env>) {
+  const model = modelId(c), buildId = requiredParam(c, 'buildId'), signal = c.req.raw.signal;
+  const metrics = (c.executionCtx as WaitContext).metrics, started = performance.now();
   try {
     const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx, undefined, signal);
     if (metrics) metrics.buildId = buildId;
-    return await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal);
+    return { entry, manifest: await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal) };
   } finally { if (metrics) metrics.admitMs = performance.now() - started; }
 }
+const pinnedManifest = async (c: Context<Env>) => (await pinnedBuild(c)).manifest;
+
+app.openAPIRegistry.registerPath(
+  createRoute({
+    method: 'get',
+    path: '/v1/models/{model}/runs/{buildId}/data/{frame}',
+    request: { params: z.object({ model: param, buildId: param, frame: param }), query: z.object({}) },
+    responses: {
+      200: { description: 'Numeric wind frame descriptor', content: { 'application/json': { schema: windFrameSchema.meta({ id: 'WindFrameDescriptor' }) } } },
+      ...problemResponses
+    }
+  })
+);
+app.openAPIRegistry.registerPath(
+  createRoute({
+    method: 'get',
+    path: '/v1/models/{model}/runs/{buildId}/data/{frame}/{kind}/{tile}',
+    request: { params: z.object({ model: param, buildId: param, frame: param, kind: param, tile: param }), query: z.object({}) },
+    responses: {
+      200: { description: 'Verified numeric wind, fine companion, or overview chunk (single tile or start-end span)', content: { 'application/octet-stream': { schema: z.string().openapi({ type: 'string', format: 'binary' }) } } },
+      ...problemResponses
+    }
+  })
+);
+app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
+  query(new URL(c.req.url), []);
+  const frame = validateId(requiredParam(c, 'frame'));
+  const { entry, manifest: m } = await pinnedBuild(c);
+  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
+    const loaded = await windFrame(c.env.BUCKET, m, entry, frame, c.executionCtx, c.req.raw.signal);
+    return response(loaded.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, loaded.sha256);
+  });
+  result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
+  return result;
+});
+
+app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
+  query(new URL(c.req.url), []);
+  const frame = validateId(requiredParam(c, 'frame')), kind = requiredParam(c, 'kind'), span = /^(0|[1-9][0-9]{0,9})(?:-(0|[1-9][0-9]{0,9}))?$/.exec(requiredParam(c, 'tile'));
+  const start = span ? Number(span[1]) : -1, end = span ? Number(span[2] ?? span[1]) : -1;
+  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || start < 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start >= 64 || Math.floor(start / WIND_INDEX_ENTRIES) !== Math.floor(end / WIND_INDEX_ENTRIES)) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  const { entry, manifest: m } = await pinnedBuild(c);
+  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
+    const chunk = await windChunk(c.env.BUCKET, m, entry, frame, kind, start, c.executionCtx, c.req.raw.signal, end - start + 1);
+    return response(chunk as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt, chunk.etag);
+  });
+  result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
+  return result;
+});
 
 registerJsonRoute(
   '/v1/models/{model}/runs/{buildId}/sample',

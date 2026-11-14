@@ -20,6 +20,8 @@ descriptors. [`@av/windgram`](../windgram/README.md) owns point presentation.
 - [`@av/client`](src/index.ts) provides the API client, raster transport, frame
   matching, tile URLs, and sample formatting.
 - [`@av/client/dom`](src/dom.ts) renders legends and build diagnostics.
+- [`@av/client/wind`](src/client-wind.ts) loads one bounded wind viewport and
+  samples Surface, AGL or Top-of-lift vectors. Dispose it when its view closes.
 
 Point requests default to the first published frame. Select frame pages for complete
 timelines within the [serving budgets](../../docs/serving-budgets.md).
@@ -31,7 +33,7 @@ when available and the first 24 hours otherwise.
 [`PointSeriesController`](src/point-series-controller.ts) owns the open point,
 selected hour and current request for each map. Close it to dispose the loader.
 The [browser bundle check](../../tests/browser-client-bundle.integration.test.ts) measures `ApiClient`
-with runtime response validation. The initial Vite build measured 40.43 kB gzip.
+with runtime response validation.
 The health probe uses `ApiClient.onMetric` to count retries and time JSON reads.
 
 ```sh

@@ -11,37 +11,55 @@
     <div id="app">
       <div id="map"></div>
       <header id="topbar">
-        <div id="models" role="toolbar" aria-label="Forecast model"></div>
-        <div id="reference" role="group" aria-label="Lift reference">
-          <button id="ref-agl" type="button" class="ref">AGL</button>
-          <button id="ref-msl" type="button" class="ref">MSL</button>
+        <div class="topbar-row">
+          <details id="model-picker">
+            <summary id="model-selected" data-model="auto"><svg class="model-emblem" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 24 11 8l5 8 5-12 9 20M8 24l5-8 6 8M2 29h28"/></svg><span id="model-name">Auto</span></summary>
+            <div id="models" role="toolbar" aria-label="Forecast model"></div>
+          </details>
+          <div id="layer-picker" role="group" aria-label="Forecast layer" hidden></div>
         </div>
-        <label id="opacity-label">
-          Opacity
-          <input id="opacity" type="range" min="0" max="1" step="0.01" value="0.7" />
-          <span id="opacity-readout">70%</span>
-        </label>
+        <div id="display-units" role="group" aria-label="Display units">
+          <button id="units-metric" type="button" aria-pressed="true">km</button>
+          <button id="units-imperial" type="button" aria-pressed="false">mi</button>
+        </div>
       </header>
-      <aside id="legend" class="ribbon" hidden>
-        <div id="legend-body"></div>
-        <details id="legend-key" class="ribbon-key">
-          <summary id="legend-key-toggle">Map key</summary>
-          <div class="ribbon-key-body">
-            <p id="legend-reference"></p>
-            <p id="legend-no-lift"></p>
-            <p id="legend-cutoff"></p>
-            <p>Missing data and areas outside coverage are clear. Select a point to check its status.</p>
+      <button id="locate" type="button" aria-label="Go to current location" title="Go to current location">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/><path d="M12 1v4m0 14v4M1 12h4m14 0h4"/></svg>
+      </button>
+      <p id="location-status" class="sr-only" role="status"></p>
+      <div id="wind-controls"></div>
+      <p id="distance-scale" aria-label="Map scale"></p>
+      <div id="map-controls">
+        <aside id="legend" class="ribbon" hidden>
+          <div id="lift-controls"><span id="lift-units">Lift m</span>
+          <div id="reference" role="group" aria-label="Lift reference">
+            <button id="ref-agl" type="button" class="ref">AGL</button>
+            <button id="ref-msl" type="button" class="ref">MSL</button>
           </div>
-        </details>
-        <button id="legend-toggle" type="button" aria-expanded="true" aria-label="Collapse lift scale">⌃</button>
-      </aside>
-      <footer id="timebar">
-        <div id="days" role="toolbar" aria-label="Forecast day"></div>
-        <input id="time" type="range" min="0" max="0" step="1" value="0" aria-label="Forecast time" />
-        <p id="timestamp">No frame selected</p>
-        <p id="frame-status" role="status" aria-live="polite">Loading forecast…</p>
-        <p id="timeline-status" hidden></p>
-      </footer>
+          <label id="opacity-label" aria-label="Layer opacity">
+            <input id="opacity" aria-label="Layer opacity" type="range" min="0" max="1" step="0.05" value="0.5" />
+            <span id="opacity-readout">50%</span>
+          </label>
+          <details id="legend-key" class="ribbon-key">
+            <summary id="legend-key-toggle" aria-label="Map layer key" title="Map layer key">ⓘ</summary>
+            <div class="ribbon-key-body">
+              <p id="legend-reference"></p>
+              <p id="legend-no-lift"></p>
+              <p id="legend-cutoff"></p>
+              <p>Missing data and areas outside coverage are clear. Select a point to check its status.</p>
+            </div>
+          </details>
+          </div>
+          <div id="legend-body"></div>
+        </aside>
+        <footer id="timebar">
+          <div id="compact-timeline"></div>
+          <input id="time" class="sr-only" type="range" min="0" max="0" step="1" value="0" aria-label="Forecast time" tabindex="-1" />
+          <p id="timestamp" class="sr-only">No frame selected</p>
+          <p id="frame-status" role="status" aria-live="polite">Loading forecast…</p>
+          <p id="timeline-status" class="sr-only" hidden></p>
+        </footer>
+      </div>
       <p id="horizon-notice" class="toast" role="status" hidden></p>
       <p id="tile-error" class="toast error" role="alert" hidden></p>
       <p id="error" class="toast error" role="alert" hidden></p>
@@ -52,7 +70,7 @@
             <summary aria-label="Forecast settings" title="Forecast settings">⚙︎</summary>
             <div class="point-settings-body">
               <p id="point-location"></p>
-              <label class="point-units">Units <select id="point-units"><option value="metric">m · m/s</option><option value="imperial">ft · kt</option></select></label>
+              <label class="point-units">Units <select id="point-units"><option value="metric">m · km/h</option><option value="imperial">ft · mph</option></select></label>
               <label id="point-horizon-label" class="point-units">Horizon <select id="point-horizon"><option value="day">Map forecast</option><option value="forecast">Full forecast</option></select></label>
               <details id="point-build-details"><summary>Build details</summary><dl id="meta"></dl></details>
             </div>
@@ -60,6 +78,7 @@
           <button id="point-close" type="button" aria-label="Close point forecast">×</button>
         </div>
         <div id="point-body" tabindex="-1"></div>
+        <p id="point-wind" role="status"></p>
         <p id="point-status" role="status" hidden></p>
       </section>
     </div>

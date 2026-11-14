@@ -83,6 +83,11 @@ pnpm forecast --model av-wrf --cycle 2026-11-13T00:00:00Z \
 pnpm sample-preview --manifest output/wrf-preview/builds/av-wrf/BUILD_ID/manifest.json
 ```
 
+Set `AV_NUMERIC_WIND=true` on the forecast command (or pass `wind-data: true`
+when manually dispatching `.github/workflows/forecast.yml`) to emit sparse
+numeric wind chunks. Scheduled workflow runs leave numeric wind off by default
+until per-model steady-state retention storage is verified.
+
 Preview opens on the configured extent and serves native weather profiles plus
 terrain-derived lift. The [adapter](../apps/batch/src/wrf-zarr/README.md)
 verifies producer receipts and preserves model-level pressures and Earth-relative
@@ -103,17 +108,22 @@ before weather acquisition starts.
 ```sh
 pnpm test
 pnpm test:integration
+pnpm smoke:wind --fixture
 pnpm verify
 ```
 
 `pnpm test` runs the unit project. `pnpm test:integration` runs tests that
 start local workerd, package PMTiles, or build the Windy plugin. Either
-command accepts a path filter. To run the optional retained DWD
+command accepts a path filter. `pnpm smoke:wind --fixture` generates an offline
+numeric-wind build, boots local API and preview servers, and runs the headless
+Chromium smoke suite across trails, barbs, heights, units, time changes, and
+mobile/desktop viewports (`pnpm smoke:wind --url http://127.0.0.1:5173` targets
+an already-running preview). To run the optional retained DWD
 probe check for ICON-EU, set `ICON_DWD_PROBE_DIR` as shown in the
 [ICON adapter guide](../apps/batch/src/split-grib/README.md).
 
 `pnpm verify` checks the PMTiles version before lint, typecheck, both test projects,
-`docs:check`, and app builds. After changing API schemas, product configs, or
+`docs:check`, and app builds; CI also runs `pnpm smoke:wind --fixture`. After changing API schemas, product configs, or
 CLI flags, regenerate the reference docs:
 
 ```sh

@@ -32,7 +32,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const sourceStore = localSource ? (await import('./local-source.js')).localForecastSource(localSource, sourceModelId(product)) : privateSource ? remote : undefined;
     const storage = directory ? (await import('./terrain/local-store.js')).localTerrainStorage(directory) : remote!;
     console.log(await buildProduct(product.modelId, { out: values.out ?? 'output', cycle: values.cycle,
-      cacheDir: values['cache-dir'], ...(privateSource ? { sourceStore } : {}), wholeDomain: { catalogRef, storage } }));
+      cacheDir: values['cache-dir'], numericWind: process.env.AV_NUMERIC_WIND === 'true', ...(privateSource ? { sourceStore } : {}), wholeDomain: { catalogRef, storage } }));
   } else if (command === 'capacity') {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');

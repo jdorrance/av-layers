@@ -23,6 +23,9 @@ on:
       retain-full-artifacts:
         type: boolean
         default: false
+      wind-data:
+        type: boolean
+        default: false
       terrain-catalog-ref:
         type: string
         default: ''
@@ -37,6 +40,7 @@ env:
   ALLOW_SAME_CYCLE: ${{ inputs['allow-same-cycle'] || false }}
   RESUME_RUN_ID: ${{ inputs['resume-run-id'] || '' }}
   RETAIN_FULL_ARTIFACTS: ${{ inputs['retain-full-artifacts'] || false }}
+  AV_NUMERIC_WIND: ${{ inputs['wind-data'] }}
 jobs:
   terrain:
     name: Terrain ${{ inputs.model }}

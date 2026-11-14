@@ -35,10 +35,10 @@ export function parseBoundedJson(bytes: Uint8Array, maxTokens = MAX_METADATA_JSO
 }
 
 /** Validate serialized bytes, including object-graph limits, before committing metadata. */
-export function encodeBoundedJson(value: unknown, limit: number, maxTokens = MAX_METADATA_JSON_TOKENS): Uint8Array {
+export function encodeBoundedJson(value: unknown, limit: number, maxTokens = MAX_METADATA_JSON_TOKENS, maxContainerEntries = MAX_JSON_CONTAINER_ENTRIES): Uint8Array {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   if (bytes.byteLength > limit) throw new ResourceLimitError('JSON exceeds byte budget');
-  parseBoundedJson(bytes, maxTokens);
+  parseBoundedJson(bytes, maxTokens, maxContainerEntries);
   return bytes;
 }
 

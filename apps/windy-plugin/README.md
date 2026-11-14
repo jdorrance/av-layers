@@ -22,8 +22,7 @@ and Windy's selected time.
 For a standalone map, use [`@av/preview`](../preview/README.md).
 
 The [build check](vite.config.ts) bounds compressed plugin JavaScript and
-rejects server modules in the browser output. On Node 22.23.4, the production
-plugin measured 95.4 kB gzip.
+rejects server modules in the browser output.
 
 ## Source layout
 

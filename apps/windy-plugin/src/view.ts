@@ -89,24 +89,15 @@ export class PluginPanel {
     populateModelOptions(this.modelSelect);
     this.modelSelect.id = 'av-model';
     this.modelSelect.addEventListener('change', () => callbacks.onModel(this.modelSelect.value));
-    this.opacityInput.id = 'av-opacity';
-    this.opacityInput.type = 'range';
-    this.opacityInput.min = '0';
-    this.opacityInput.max = '1';
-    this.opacityInput.step = '0.01';
-    this.opacityInput.value = String(DEFAULT_OPACITY);
+    Object.assign(this.opacityInput, { id: 'av-opacity', type: 'range', min: '0', max: '1', step: '0.01', value: String(DEFAULT_OPACITY) });
     this.opacityInput.addEventListener('input', () => {
       const opacity = Number(this.opacityInput.value);
       this.opacityReadout.textContent = percent(opacity);
       callbacks.onOpacity(opacity);
     });
-    this.mapTime.hidden = true;
-    this.notice.hidden = true;
-    this.notice.role = 'status';
-    this.error.hidden = true;
+    this.mapTime.hidden = this.error.hidden = true;
     this.error.role = 'alert';
-    this.horizonNotice.hidden = true;
-    this.horizonNotice.role = 'status';
+    for (const el of [this.notice, this.horizonNotice]) { el.hidden = true; el.role = 'status'; }
     const controls = node('div', 'av-controls');
     const modelLabel = node('label', undefined, 'Model');
     modelLabel.htmlFor = this.modelSelect.id;
@@ -114,7 +105,7 @@ export class PluginPanel {
     opacityLabel.htmlFor = this.opacityInput.id;
     controls.append(modelLabel, this.modelSelect, node('span'), opacityLabel, this.opacityInput, this.opacityReadout);
     this.units.id = 'av-units';
-    this.units.add(new Option('m · m/s', 'metric')); this.units.add(new Option('ft · kt', 'imperial'));
+    this.units.add(new Option('m · km/h', 'metric')); this.units.add(new Option('ft · mph', 'imperial'));
     this.units.value = this.unitSystem;
     const unitsLabel = node('label', undefined, 'Units'); unitsLabel.htmlFor = this.units.id;
     this.units.addEventListener('change', () => {

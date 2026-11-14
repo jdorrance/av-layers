@@ -3,6 +3,7 @@
 export type { UnitSystem } from '@av/client';
 import type { UnitSystem } from '@av/client';
 import { FEET_PER_MINUTE_TO_MPS, KNOTS_PER_MPS } from '@av/soaring';
+import { KPH_PER_MPS, MPH_PER_MPS } from '@av/contracts/units';
 import type { SiteForecast } from './internal-meteo.ts';
 
 const METRES_PER_FOOT = 0.3048;
@@ -27,7 +28,7 @@ const quantityDefinitions = {
   // and the source windgram lapse gradient in Celsius per 1,000 feet.
   elevation: { imperial: [FEET_PER_METRE, 0, 'ft', 0], metric: [1, 0, 'm', 0] },
   temperature: { imperial: [1.8, 32, '°F', 0], metric: [1, 0, '°C', 0] },
-  wind: { imperial: [KNOTS_PER_MPS, 0, 'kt', 1], metric: [1, 0, 'm/s', 1] },
+  wind: { imperial: [MPH_PER_MPS, 0, 'mph', 1], metric: [KPH_PER_MPS, 0, 'km/h', 1] },
   lift: { imperial: [FPM_PER_MPS, 0, 'ft/min', 0], metric: [1, 0, 'm/s', 2] },
   rainRate: { imperial: [1 / 25.4, 0, 'in/h', 2], metric: [1, 0, 'mm/h', 1] },
   pressure: { imperial: [1 / 33.8638866667, 0, 'inHg', 2], metric: [1, 0, 'hPa', 0] },
@@ -36,7 +37,6 @@ const quantityDefinitions = {
 
 type QuantityKind = keyof typeof quantityDefinitions;
 export const unitLabel = (kind: QuantityKind, system: UnitSystem): string => quantityDefinitions[kind][system][2];
-const defaultQuantityDigits = (kind: QuantityKind, system: UnitSystem): number => quantityDefinitions[kind][system][3];
 
 export function convertQuantity(value: number | null | undefined, kind: QuantityKind, system: UnitSystem): number | null {
   if (value == null || !Number.isFinite(value)) return null;
@@ -47,9 +47,8 @@ export function convertQuantity(value: number | null | undefined, kind: Quantity
 export function formatQuantity(value: number | null | undefined, kind: QuantityKind, digits: number | undefined, system: UnitSystem): string {
   const converted = convertQuantity(value, kind, system);
   if (converted === null) return '—';
-  const precision = digits ?? defaultQuantityDigits(kind, system);
-  const label = converted.toLocaleString('en-US', { maximumFractionDigits: precision, minimumFractionDigits: precision });
-  return `${label} ${unitLabel(kind, system)}`;
+  const precision = digits ?? quantityDefinitions[kind][system][3];
+  return `${converted.toLocaleString('en-US', { maximumFractionDigits: precision, minimumFractionDigits: precision })} ${unitLabel(kind, system)}`;
 }
 
 /** Noun for a surface gust reading from the document's declaration; defaults to "gust". */

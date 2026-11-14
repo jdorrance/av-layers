@@ -57,7 +57,13 @@ export const provenanceSchema = z.discriminatedUnion('version', [
   z.strictObject({ version: z.literal(2), ...provenanceDescription, frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })
 ]);
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
-export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(p => p.retained.some(b => b.buildId === p.latestBuildId), { message: 'latest build must be retained' });
+const hasLatest = (p: { latestBuildId: string; retained: { buildId: string }[] }) => p.retained.some(b => b.buildId === p.latestBuildId);
+export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(hasLatest, { message: 'latest build must be retained' });
+export const mapDataReferenceSchema = z.strictObject({ sha256, bytes: z.number().int().positive().max(1024 * 1024) });
+export const storedModelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key,
+  retained: z.array(retainedBuildSchema.extend({ mapData: mapDataReferenceSchema.optional() })).min(1).max(MAX_RETAINED_BUILDS)
+}).refine(hasLatest, { message: 'latest build must be retained' });
+export type StoredModelPointer = z.infer<typeof storedModelPointerSchema>;
 export const freshnessSchema = z.object({
   ageSeconds: z.number(),
   expiresAt: z.string(),
@@ -109,7 +115,7 @@ export type ForecastSurfaceV5 = z.infer<typeof surfaceV5Schema>;
 const { source, tool, palettes, metrics, ...publicationIdentity } = publicationShape;
 const manifestV5BaseSchema = z.strictObject({
   version: z.literal(5), ...publicationIdentity, surfaces: z.array(surfaceV5Schema).min(1).max(2),
-  source, tool, palettes, metrics, mapFrameCount: safePositive.optional()
+  source, tool, palettes, metrics, mapFrameCount: safePositive.optional(), mapData: mapDataReferenceSchema.optional()
 });
 export const manifestV5Schema = manifestV5BaseSchema.superRefine((manifest, ctx) => {
   try { validateV5Records(manifest); }
@@ -229,6 +235,7 @@ function validateV5Records(manifest: ManifestV5): void {
     }
   }
   if (owned.size !== layers.size || manifest.layers.some(layer => !owned.has(layer))) throw new Error('Incomplete layer ownership');
+  if (manifest.mapData && (!kinds.has('native') || !kinds.has('fine'))) throw new Error('Missing wind surface');
   if (manifest.artifacts.length !== mapFrames.size * renderedLayers(manifest.layers, manifest.descriptors.layers).length) throw new Error('Invalid artifact count');
   const combinations = new Set<string>();
   for (const artifact of manifest.artifacts) {

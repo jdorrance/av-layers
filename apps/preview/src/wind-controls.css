@@ -1,0 +1,205 @@
+.wind-controls {
+  --wind-controls-ink: #16324f;
+  --wind-controls-muted: #526170;
+  position: absolute;
+  z-index: 3;
+  top: var(--wind-controls-top, 88px);
+  right: max(8px, env(safe-area-inset-right));
+  width: 52px;
+  color: #1c2430;
+  font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.wind-controls, .wind-controls * { box-sizing: border-box; }
+.wind-controls-menu { position: relative; width: 52px; height: 36px; margin-bottom: 6px; }
+
+.wind-controls-trigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px #0b1b2830;
+  color: var(--wind-controls-ink);
+  cursor: pointer;
+}
+.wind-controls-trigger-glyph { display: grid; place-items: center; }
+.wind-controls[data-visible="false"] .wind-controls-trigger-glyph { opacity: 0.45; }
+.wind-controls-chevron { position: absolute; right: 4px; bottom: 4px; opacity: 0.7; }
+.wind-controls-trigger-state {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: grid;
+  place-items: center;
+  min-width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: var(--wind-controls-ink);
+  color: #fff;
+}
+.wind-controls-trigger-state[hidden] { display: none; }
+.wind-controls-trigger-state svg { width: 9px; height: 9px; }
+
+.wind-controls-popup {
+  position: absolute;
+  right: calc(100% + 6px);
+  bottom: 0;
+  display: grid;
+  grid-template-rows: 36px 34px;
+  gap: 3px;
+  width: 138px;
+  height: 79px;
+  padding: 3px;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 8px 24px #0b1b2830;
+}
+.wind-controls-popup[hidden] { display: none; }
+
+.wind-controls-styles, .wind-controls-actions { display: flex; min-width: 0; gap: 2px; }
+.wind-controls-style, .wind-controls-action {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #405060;
+  cursor: pointer;
+}
+.wind-controls-style.is-selected { background: var(--wind-controls-ink); color: #fff; }
+.wind-controls-style-icon, .wind-controls-action-icon { display: grid; place-items: center; }
+.wind-controls-action { gap: 4px; font-family: inherit; font-size: 11px; line-height: 1; }
+.wind-controls-action:not(:disabled):hover, .wind-controls-style:not(.is-selected):hover { background: #eef3f6; }
+.wind-controls-action:disabled { opacity: 0.38; cursor: default; }
+.wind-controls-action-label { white-space: nowrap; }
+
+.wind-controls-status {
+  position: absolute;
+  top: 6px;
+  right: 58px;
+  margin: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: #fffffff2;
+  box-shadow: 0 4px 16px #0b1b2826;
+  color: var(--wind-controls-muted);
+  font-size: 10px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.wind-controls-status[hidden] { display: none; }
+
+.wind-controls-rail {
+  display: flex;
+  flex-direction: column;
+  width: 52px;
+  height: 204px;
+  padding: 2px;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px #0b1b2830;
+}
+.wind-controls-lift {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  padding: 2px;
+  border: 0;
+  border-bottom: 1px solid #e4e9ee;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: #243140;
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1.1;
+  cursor: pointer;
+}
+.wind-controls-lift-title { display: block; }
+.wind-controls-lift-auto { display: block; margin-top: 1px; color: #71808e; font-size: 8px; }
+.wind-controls-lift.is-selected, .wind-controls-surface.is-selected { background: var(--wind-controls-ink); color: #fff; }
+.wind-controls-lift.is-selected .wind-controls-lift-auto { color: #d5e0e9; }
+
+.wind-controls-scale { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; align-items: center; min-height: 0; padding-top: 2px; }
+.wind-controls-unit { flex: none; font-size: 8px; line-height: 1.2; color: #71808e; text-align: center; }
+.wind-controls-axis { position: relative; flex: 1 1 auto; width: 100%; min-height: 0; margin: 6px 0; }
+.wind-controls-tick {
+  position: absolute;
+  left: 2px;
+  right: 12px;
+  bottom: calc(6px + var(--wind-controls-position) * (100% - 12px));
+  transform: translateY(50%);
+  padding-right: 5px;
+  color: #6f7c89;
+  font-size: 8px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+.wind-controls-tick::after { content: ""; position: absolute; right: 0; top: 50%; width: 3px; height: 1px; background: #b7c3ce; }
+
+.wind-controls-range {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 0 0 24px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  accent-color: var(--wind-controls-ink);
+  cursor: pointer;
+}
+.wind-controls-scale[data-height="surface"] .wind-controls-range::-webkit-slider-thumb,
+.wind-controls-scale[data-height="lift"] .wind-controls-range::-webkit-slider-thumb { opacity: 0.36; }
+.wind-controls-scale[data-height="surface"] .wind-controls-range::-moz-range-thumb,
+.wind-controls-scale[data-height="lift"] .wind-controls-range::-moz-range-thumb { opacity: 0.36; }
+
+.wind-controls-value {
+  position: absolute;
+  left: -4px;
+  bottom: calc(6px + var(--wind-controls-position) * (100% - 12px));
+  min-width: 34px;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: var(--wind-controls-ink);
+  color: #fff;
+  font-size: 8px;
+  line-height: 1.1;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  transform: translateY(50%);
+  pointer-events: none;
+}
+.wind-controls-value[hidden] { display: none; }
+
+.wind-controls-surface {
+  flex: none;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-top: 1px solid #e4e9ee;
+  border-radius: 0 0 6px 6px;
+  background: transparent;
+  color: #243140;
+  font-family: inherit;
+  font-size: 9.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.wind-controls-trigger:focus-visible, .wind-controls-style:focus-visible, .wind-controls-action:focus-visible,
+.wind-controls-lift:focus-visible, .wind-controls-surface:focus-visible, .wind-controls-range:focus-visible { outline: 2px solid #1c6b8a; outline-offset: 1px; }
+
+@media (min-width: 721px) { .wind-controls-rail { height: 242px; } }

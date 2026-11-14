@@ -18,6 +18,14 @@
         "limit": 100000,
         "period": 10
       }
+    },
+    {
+      "name": "NUMERIC_RATE_LIMITER",
+      "namespace_id": "78190304",
+      "simple": {
+        "limit": 200000,
+        "period": 10
+      }
     }
   ],
   "env": {
@@ -35,6 +43,14 @@
           "namespace_id": "78190302",
           "simple": {
             "limit": 100000,
+            "period": 10
+          }
+        },
+        {
+          "name": "NUMERIC_RATE_LIMITER",
+          "namespace_id": "78190305",
+          "simple": {
+            "limit": 200000,
             "period": 10
           }
         }
@@ -63,6 +79,14 @@
           "namespace_id": "78190303",
           "simple": {
             "limit": 100000,
+            "period": 10
+          }
+        },
+        {
+          "name": "NUMERIC_RATE_LIMITER",
+          "namespace_id": "78190306",
+          "simple": {
+            "limit": 200000,
             "period": 10
           }
         }

@@ -271,7 +271,7 @@ it.each(['clear', 'expire', 'build', 'layer'] as const)('invalidates an unpainte
 });
 
 it('disables overview residency when one visible fine source consumes its reserved budget', async () => {
-  const f = fixture(160);
+  const f = fixture(128);
   try {
     const b = await f.initial(), [, second] = b.manifest.frames;
     expect(f.state()).toMatchObject({ overviewReady: 0, overviewTotal: 0 });

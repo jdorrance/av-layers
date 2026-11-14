@@ -27,6 +27,7 @@ describe('contracts', () => {
     expect(paletteBinLabel([0.1, 0.5], 2, 1)).toBe('≥ 0.5');
     expect(isPaletteId('lift')).toBe(true);
     expect(isPaletteId('rain')).toBe(true);
+    expect(isPaletteId('cloud')).toBe(true);
     expect(isPaletteId('constructor')).toBe(false);
     expect(isPaletteId('toString')).toBe(false);
   });

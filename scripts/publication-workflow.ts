@@ -10,7 +10,7 @@ import { checkPerformance, forecastPlanDeadline } from '../apps/batch/src/capaci
 import { workflowAuthority, workflowContext, type PublicationAuthority } from '../apps/batch/src/authority.js';
 import { failureReason } from '../apps/batch/src/failure.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
-import { forecastObjects } from '../apps/batch/src/publication-objects.js';
+import { buildObjects } from '../apps/batch/src/publication-objects.js';
 import { getForecastProvider } from '../apps/batch/src/providers.js';
 import { isPrivateUpstreamKey, pinnedSourcePrefix } from '../apps/batch/src/source.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
@@ -69,7 +69,7 @@ function logForecastEvent(authority: PublicationAuthority, started: number, deta
 export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'finalize' | 'resume', work: (run: {
   root: string; signal: AbortSignal; store: ObjectStorage; model: string;
   identifyBuild(buildId: string): void;
-  commit(manifest: ManifestV5, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean }): Promise<void>;
+  commit(manifest: ManifestV5, path: string, resumedFromRun?: string, validated?: ValidatedBuild, options?: { deadlineAt?: string; receiptsOnly?: boolean; committedOnly?: boolean; publishNumericWind?: boolean }): Promise<void>;
 }) => Promise<T>, store?: ObjectStorage): Promise<T> {
   const { revision } = workflowContext();
   const authority = workflowAuthority(), root = 'output', controller = new AbortController(), storage = store ?? r2Storage();
@@ -226,7 +226,7 @@ export async function planForecast(store?: ObjectStorage): Promise<BuildPlan | n
     }
     const { createForecastPlan } = await import('../apps/batch/src/parallel.js');
     const wholeDomain = configuredWholeDomain(model, process.env, store);
-    const plan = await createForecastPlan(model, { out: root, cycle, signal, store,
+    const plan = await createForecastPlan(model, { out: root, cycle, signal, store, ...(process.env.AV_NUMERIC_WIND === 'true' ? { numericWind: true } : {}),
       ...(pinned ? { sourcePin: pinned.sourcePin } : {}), wholeDomain: { ...wholeDomain, cacheOnly: true } });
     identifyBuild(plan.buildId);
     await writeFile(join(root, 'plan-metrics.json'), JSON.stringify({ planWallMs: Date.now() - Date.parse(plan.createdAt), rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
@@ -294,7 +294,7 @@ export async function finalizeAndPublish(store?: ObjectStorage): Promise<void> {
     const plan = await readBuildPlan(join(root, 'plan.json'));
     identifyBuild(plan.buildId);
     await downloadForecastControlReceipts(store, root, plan, forecastPlanSignal(plan, signal));
-    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: new Date(forecastPlanDeadline(plan)).toISOString(), receiptsOnly: true }) });
+    await finalizeForecastBuild(join(root, 'plan.json'), { out: root, signal, store, onValidated: (validated, path) => commit(validated.manifest, path, undefined, validated, { deadlineAt: new Date(forecastPlanDeadline(plan)).toISOString(), receiptsOnly: true, publishNumericWind: plan.numericWind }) });
   }, store);
 }
 
@@ -403,14 +403,35 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     const deadlineSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
     const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
     let receiptsOnly = false;
-    if (grouped) for (const object of forecastObjects(manifest)) {
-      try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
-      catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
-      if (receiptsOnly) break;
+    if (grouped) {
+      try {
+        for (const object of await buildObjects(root, manifest)) {
+          try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
+          catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
+          if (receiptsOnly) break;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+        receiptsOnly = true;
+      }
+    } else if (manifest.mapData) {
+      const objects = await buildObjects(root, manifest).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          throw new Error('Resume artifact is incomplete: missing numeric wind descriptor; start a fresh forecast without resume-run-id', { cause: error });
+        }
+        throw error;
+      });
+      for (const object of objects) {
+        try { if (!(await stat(localPath(root, object.key))).isFile()) throw new Error(`Resume artifact is incomplete: missing ${object.key}`); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new Error(`Resume artifact is incomplete: missing ${object.key}; start a fresh forecast without resume-run-id`, { cause: error });
+          throw error;
+        }
+      }
     }
     await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
     deadlineSignal.throwIfAborted();
-    await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly });
+    await commit(manifest, path, runId, undefined, { deadlineAt, receiptsOnly, committedOnly, publishNumericWind: plan.numericWind });
   }, store);
 }
 

@@ -4,6 +4,12 @@ Viewport overviews showed all 39 requested times during both cold desktop sweeps
 at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.
 
+[Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
+bundle (MapLibre GL, Google/OSM basemap session loader, raster overviews, and
+numeric wind overlay) at **388,000 B gzip** (~372.2 kB measured) and each lazy
+chunk (the on-demand `@av/windgram` renderer) at **32,000 B gzip** (~29.1 kB
+measured).
+
 ```sh
 pnpm bench:preview --baseline 2f34b65 --channel chrome --frames 40 --delay-ms 40 --out output/timeline-40.json
 pnpm bench:preview --baseline 2f34b65 --channel chrome --frames 40 --scenario cold --delay-ms 250 --out output/timeline-250.json
@@ -94,9 +100,6 @@ counts unclosed ImageBitmaps, canvas backing dimensions and pending decode pixel
 its peaks include objects awaiting GC. Driver overhead, worker allocations,
 decoder internals and the default framebuffer are outside these logical counts.
 Mobile hardware, real basemap work and constrained bandwidth need separate profiles.
-
-Startup JavaScript gzip grew from approximately **352.46 kB to 355,969 bytes**
-(~1.0%). The [build gate](../apps/preview/vite.config.ts) allows 357,000 bytes.
 
 ## Reproduction fingerprints
 

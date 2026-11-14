@@ -1,5 +1,5 @@
 /** Dry-column validation and Lenschow defaults shared with method descriptors. */
-export const DEFAULT_SOARING_PARAMETERS = Object.freeze({
+export const DEFAULT_SOARING_PARAMETERS = /* @__PURE__ */ Object.freeze({
   sinkRateMps: 1.2,
   minimumThermalVelocityMps: 0,
   lenschowScale: 4,
@@ -19,7 +19,7 @@ export const DEFAULT_SOARING_PARAMETERS = Object.freeze({
 } as const);
 
 /** Native Windgrams V2 closures; source moments belong to one normalized frame. */
-export const NATIVE_DIAGNOSTIC_PARAMETERS = Object.freeze({
+export const NATIVE_DIAGNOSTIC_PARAMETERS = /* @__PURE__ */ Object.freeze({
   minimumLevelAglM: 20,
   minimumThermalLevels: 3,
   shallowLatentHeatCoefficient: 245268e-9,

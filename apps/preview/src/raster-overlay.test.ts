@@ -6,7 +6,7 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 const build = () => fixtureBuild();
-function fixture(coveringCount?: number) {
+function fixture(coveringCount = 64) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
@@ -27,7 +27,7 @@ function fixture(coveringCount?: number) {
     isMoving: () => moving,
     getZoom: () => 0,
     getCenter: () => ({ lng: -117, lat: 32 }),
-    coveringTiles: coveringCount === undefined ? undefined : () => Array.from({ length: coveringCount! }),
+    coveringTiles: () => Array.from({ length: coveringCount }),
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   };
   const states: OverlayState[] = [];
@@ -525,7 +525,7 @@ async function completeWindow(f: ReturnType<typeof fixture>): Promise<void> {
 }
 
 it('prepares the most likely viewport before filling a four-source window', async () => {
-  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  const f = fixture(24), b = build(), frame = b.manifest.frames[2].id;
   try {
     f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
     expect(f.sources.size).toBe(2);
@@ -544,7 +544,7 @@ it('prepares the most likely viewport before filling a four-source window', asyn
 });
 
 it('takes two ready forward steps while retaining overlapping in-flight preparation', async () => {
-  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
@@ -569,7 +569,7 @@ it('takes two ready forward steps while retaining overlapping in-flight preparat
 });
 
 it('makes explicit layer intent ready before later timeline frames without changing the display', async () => {
-  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
@@ -588,7 +588,7 @@ it('makes explicit layer intent ready before later timeline frames without chang
 });
 
 it('releases unfinished background sources before a cold timeline selection', async () => {
-  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     const displayed = f.displayed();
@@ -606,25 +606,56 @@ it('releases unfinished background sources before a cold timeline selection', as
 });
 
 it('shrinks the prepared window on resize and admits no speculative sources over budget', async () => {
-  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  const f = fixture(24), b = build(), frame = b.manifest.frames[2].id;
   try {
     f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
     expect(f.sources.size).toBe(4);
     f.setCoveringCount(64); f.emit('resize'); await completeWindow(f);
     expect(f.sources.size).toBe(2);
-    f.setCoveringCount(256); f.emit('resize');
+    f.setCoveringCount(140); f.emit('resize');
     expect(f.sources.size).toBe(1);
     expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
     f.overlay.select(b, 'usable-lift-msl', frame);
-    expect(f.sources.size).toBe(2);
+    expect(f.sources.size).toBe(1);
     await f.complete();
     expect(f.sources.size).toBe(1);
     expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
   } finally { f.overlay.destroy(); }
 });
 
+it('does not admit a raster when even one source exceeds the viewport budget', () => {
+  const f = fixture(256), b = build();
+  try {
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(f.sources.size).toBe(0);
+    expect(f.states.at(-1)).toMatchObject({ displayed: null, replacementFailed: true });
+    f.emit('render'); f.emit('idle');
+    expect(f.sources.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { f.overlay.destroy(); }
+});
+
+it.each(['resize', 'move'] as const)('prunes sources as the viewport grows on %s and recovers later', async event => {
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
+  try {
+    f.overlay.select(b, 'usable-lift-agl', frames[0].id); await completeWindow(f);
+    expect(f.sources.size).toBe(4);
+    if (event === 'move') f.emit('movestart');
+    f.setCoveringCount(256); f.emit(event);
+    expect(f.sources.size).toBe(0);
+    expect(f.states.at(-1)).toMatchObject({ displayed: null, replacementFailed: true });
+    f.emit('render'); f.emit('idle');
+    expect(f.sources.size).toBe(0);
+    f.setCoveringCount(64);
+    if (event === 'move') f.emit('moveend'); else f.emit('resize');
+    expect(f.sources.size).toBe(1);
+    await f.complete();
+    expect(f.states.at(-1)).toMatchObject({ displayed: { frame: frames[0].id }, replacementFailed: false });
+  } finally { f.overlay.destroy(); }
+});
+
 it('rejects readiness for moving, damaged, expired, and disposed prepared sources', async () => {
-  const f = fixture(32), b = build(), frame = b.manifest.frames[2].id;
+  const f = fixture(24), b = build(), frame = b.manifest.frames[2].id;
   f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
   expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
   f.setMoving(true);
@@ -640,7 +671,7 @@ it('rejects readiness for moving, damaged, expired, and disposed prepared source
 });
 
 it('recomputes memory admission after selection during camera movement', async () => {
-  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.emit('movestart');
@@ -654,7 +685,7 @@ it('recomputes memory admission after selection during camera movement', async (
 
 
 it('warms remaining same-day bytes after the ready forward window', async () => {
-  const f = fixture(32), b = build(), frames = b.manifest.frames;
+  const f = fixture(24), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.overlay.select(b, 'usable-lift-agl', frames[2].id); await completeWindow(f);

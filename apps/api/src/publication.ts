@@ -1,5 +1,5 @@
 import { getProduct } from '@av/contracts/models';
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, modelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type StoredModelPointer as ModelPointer, type ProductDefinition } from '@av/contracts';
 import { sha256 } from './coverage';
 import { matchStorageBytes, storeStorageBytes } from './storage-cache';
 import { Problem, fail, validateId, ensureLive } from './http';
@@ -49,7 +49,7 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
     const shared = !refresh && ctx?.cacheOrigin ? await matchStorageBytes(key, MAX_POINTER_BYTES, ctx, signal) : undefined;
     if (shared && shared.until <= Date.now() + POINTER_TTL_MS) {
       try {
-        const parsed = modelPointerSchema.parse(parseBoundedJson(shared.bytes));
+        const parsed = storedModelPointerSchema.parse(parseBoundedJson(shared.bytes));
         if (parsed.model === model && shared.until > Date.now()) {
           const identity = await sha256(new TextEncoder().encode(JSON.stringify(parsed)));
           signal.throwIfAborted();
@@ -78,7 +78,7 @@ export async function pointer(bucket: R2Bucket, model: ModelId, refresh = false,
       if (isOperationalReadFailure(error, signal)) throw error;
       return fail(503, 'publication-invalid', 'Invalid or oversized model pointer');
     }
-    const result = modelPointerSchema.safeParse(value);
+    const result = storedModelPointerSchema.safeParse(value);
     if (!result.success || result.data.model !== model) fail(503, 'publication-invalid', 'Invalid model pointer');
     const fetchedAt = Date.now(), until = fetchedAt + POINTER_TTL_MS;
     const identity = await sha256(new TextEncoder().encode(JSON.stringify(result.data)));
@@ -237,6 +237,11 @@ export function provenanceReference(m: ManifestV5) {
 export function servedSource(m: ManifestV5, origin: string): ManifestV5['source'] {
   provenanceReference(m);
   return { ...m.source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` };
+}
+
+/** Copy a retained wind reference onto a manifest published before that field was written. */
+export function publicManifest(m: ManifestV5, entry: { mapData?: ManifestV5['mapData'] }, origin: string): ManifestV5 {
+  return { ...m, ...(m.mapData || !entry.mapData ? {} : { mapData: entry.mapData }), source: servedSource(m, origin) };
 }
 
 export function artifact(m: ManifestV5, layer: LayerId, frame: string) {

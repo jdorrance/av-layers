@@ -1,4 +1,8 @@
-interface WindBarbGeometry {
+import { displayedWindSpeed, quantizedBarbSpeed } from '@av/contracts/units';
+
+export { displayedWindSpeed as displayedBarbSpeed, quantizedBarbSpeed };
+
+export interface WindBarbGeometry {
   staff: string;
   flags: string[];
   calm: boolean;
@@ -6,45 +10,36 @@ interface WindBarbGeometry {
   points: readonly (readonly [number, number])[];
 }
 
-/** Wind-barb paths and vertices share the same geometry and speed quantization. */
+/** Wind-barb paths and vertices share WMO/ICAO knot quantization, <2.5 kt calm threshold, and hemisphere flip. */
 export function barbGeometry(speedKt: number, directionDeg: number, staffLength: number, southernHemisphere: boolean): WindBarbGeometry {
   if (!Number.isFinite(speedKt) || speedKt < 0 || !Number.isFinite(directionDeg)) return { staff: '', flags: [], calm: false, points: [] };
-  if (speedKt < 2.5) return { staff: '', flags: [], calm: true, points: [] };
-  const len = staffLength;
-  const rad = (directionDeg * Math.PI) / 180;
-  const ux = Math.sin(rad);
-  const uy = -Math.cos(rad);
-  const side = southernHemisphere ? -1 : 1;
-  const px = -uy * side;
-  const py = ux * side;
-  const at = (d: number) => [ux * d, uy * d] as const;
+  const rounded = quantizedBarbSpeed(speedKt);
+  if (rounded === 0) return { staff: '', flags: [], calm: true, points: [] };
+  const rad = (directionDeg * Math.PI) / 180, ux = Math.sin(rad), uy = -Math.cos(rad);
+  const side = southernHemisphere ? -1 : 1, px = -uy * side, py = ux * side;
   const points: (readonly [number, number])[] = [[0, 0]];
   const vertex = (x: number, y: number) => {
-    points.push([Number(x.toFixed(1)), Number(y.toFixed(1))]);
+    points.push([+x.toFixed(1), +y.toFixed(1)]);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   };
-  const [ex, ey] = at(len);
-  const staff = `M0,0L${vertex(ex, ey)}`;
-  const flags: string[] = [];
-  let remaining = Math.round(speedKt / 5) * 5;
-  let d = len;
-  while (remaining >= 50) {
-    const [ax, ay] = at(d);
-    const [bx, by] = at(d - 6);
-    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 9, ay + py * 9)}L${vertex(bx, by)}Z`);
-    remaining -= 50;
-    d -= 8;
+  const staff = `M0,0L${vertex(ux * staffLength, uy * staffLength)}`, flags: string[] = [];
+  const pennants = Math.min(16, Math.floor(rounded / 50)), feathers = Math.floor((rounded % 50) / 10), half = rounded % 10 >= 5;
+  const compression = Math.min(1, staffLength / Math.max(1, pennants * 8 + feathers * 4 + (half ? 4 : 0)));
+  let d = staffLength;
+  for (let i = 0; i < pennants; i++) {
+    const ax = ux * d, ay = uy * d;
+    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 9, ay + py * 9)}L${vertex(ux * (d - 6 * compression), uy * (d - 6 * compression))}Z`);
+    d -= 8 * compression;
   }
-  while (remaining >= 10) {
-    const [ax, ay] = at(d);
-    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 9 + ux * 3, ay + py * 9 + uy * 3)}`);
-    remaining -= 10;
-    d -= 4;
+  for (let i = 0; i < feathers; i++) {
+    const ax = ux * d, ay = uy * d, lean = Math.min(3 * compression, staffLength - d);
+    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 9 + ux * lean, ay + py * 9 + uy * lean)}`);
+    d -= 4 * compression;
   }
-  if (remaining >= 5) {
-    if (d === len) d -= 4;
-    const [ax, ay] = at(d);
-    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 5 + ux * 1.5, ay + py * 5 + uy * 1.5)}`);
+  if (half) {
+    if (d === staffLength) d -= 4 * compression;
+    const ax = ux * d, ay = uy * d, lean = Math.min(1.5 * compression, staffLength - d);
+    flags.push(`M${vertex(ax, ay)}L${vertex(ax + px * 5 + ux * lean, ay + py * 5 + uy * lean)}`);
   }
   return { staff, flags, calm: false, points };
 }

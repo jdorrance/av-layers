@@ -6,13 +6,12 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
-    "./dom": "./src/dom.ts"
+    "./dom": "./src/dom.ts",
+    "./wind": "./src/client-wind.ts"
   },
   "dependencies": {
     "@av/contracts": "workspace:*",
-    "@av/soaring": "workspace:*"
-  },
-  "devDependencies": {
+    "@av/soaring": "workspace:*",
     "@av/forecast": "workspace:*"
   }
 }

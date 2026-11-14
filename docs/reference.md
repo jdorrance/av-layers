@@ -1122,6 +1122,8 @@ The checked-in [OpenAPI document](reference/openapi.json) is generated from the 
 - `GET /v1/models/{model}/latest`.
 - `GET /v1/models/{model}/runs`.
 - `GET /v1/models/{model}/runs/{buildId}`.
+- `GET /v1/models/{model}/runs/{buildId}/data/{frame}`.
+- `GET /v1/models/{model}/runs/{buildId}/data/{frame}/{kind}/{tile}`.
 - `GET /v1/models/{model}/runs/{buildId}/layers/{layer}/{frame}/tilejson.json`.
 - `GET /v1/models/{model}/runs/{buildId}/profile`.
 - `GET /v1/models/{model}/runs/{buildId}/provenance`.

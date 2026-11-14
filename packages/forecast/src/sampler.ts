@@ -1,5 +1,6 @@
 import { CELL_BYTES } from '@av/contracts/format';
 import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type LayerId, type LayerSpec } from '@av/contracts/layers';
+type ReductionSpec = Pick<LayerSpec, 'supportsNoLift' | 'supportsLiftFlags' | 'noLiftSampleValue' | 'zeroOnNoLiftInterpolation'>;
 import { isValidGridGeometry, LAMBERT_GRID_FIELDS, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
 import { getBit, isCovered, type CoverageMask } from '@av/contracts/coverage-query';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
@@ -12,6 +13,10 @@ export interface Cell { value: number; flags: number }
 export interface Contributor { index: number; row: number; column: number; weight: number }
 export interface SamplePlan { contributors: Contributor[]; byteRange: { offset: number; length: number } }
 export interface Sample { value: number | null; status: number; support: number; interpolated: boolean }
+
+export function nearerContributor(weight: number, row: number, column: number, bestWeight: number, bestRow: number, bestColumn: number): boolean {
+  return weight > bestWeight || (weight === bestWeight && (row < bestRow || (row === bestRow && column < bestColumn)));
+}
 
 export function validateSamplingField(grid: Grid, field: GridField, mask?: SamplingMask): void {
   if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array)) throw new RangeError('Invalid field arrays');
@@ -77,7 +82,7 @@ function quadOffsets(field: GridField, width: number) {
  * Keep both the weight products and the accumulation order identical to reduceCells.
  * Missing contributors, invalid flags and non-finite values use that reference path.
  */
-function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): boolean {
+function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: ReductionSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): boolean {
   const { flags, values } = field;
   const fa = flags[a], fb = flags[b], fc = flags[c], fd = flags[d], combined = fa | fb | fc | fd;
   if ((combined & STATUS_MASK) >= STATUS_UNAVAILABLE || (!spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0)
@@ -120,7 +125,7 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
   return true;
 }
 
-function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: LayerSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): void {
+function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: ReductionSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): void {
   const { values, flags, weights, rows, columns } = cells;
   let missing = false, finite = true, allNoLift = true, support = 0, noLiftWeight = 0;
   for (let i = 0; i < count; i++) {
@@ -137,7 +142,7 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   if (missing) {
     let nearest = 0;
     for (let i = 1; i < count; i++) {
-      const better = weights[i] > weights[nearest] || (weights[i] === weights[nearest] && (rows[i] < rows[nearest] || (rows[i] === rows[nearest] && columns[i] < columns[nearest])));
+      const better = nearerContributor(weights[i], rows[i], columns[i], weights[nearest], rows[nearest], columns[nearest]);
       if (better) nearest = i;
     }
     const flag = flags[nearest], status = flag & STATUS_MASK;
@@ -191,7 +196,7 @@ function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: num
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
-const lambertGeometries = new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
+const lambertGeometries = /* @__PURE__ */ new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
 function lambertGeometry(grid: Grid): GridGeometry | null {
   if (grid.kind !== 'lambert-conformal') return null;
   const cached = lambertGeometries.get(grid);
@@ -245,7 +250,7 @@ export function cellsFromRange(plan: SamplePlan, bytes: Uint8Array): Cell[] {
 }
 
 /** The build's sampling marker selects the no-lift interpolation used by its tiles. */
-export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | LayerSpec, useStoredMslNoLift: boolean): Sample {
+export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | ReductionSpec, useStoredMslNoLift: boolean): Sample {
   if (!plan.contributors.length || cells.length !== plan.contributors.length) throw new RangeError('cell count does not match sample plan');
   const scratch = reductionBuffer(cells.length);
   for (let i = 0; i < cells.length; i++) {
@@ -271,7 +276,7 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
 }
 
-export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | LayerSpec, mask: SamplingMask | undefined, useStoredMslNoLift: boolean): Sample {
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | ReductionSpec, mask: SamplingMask | undefined, useStoredMslNoLift: boolean): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
   if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
@@ -287,7 +292,7 @@ export interface PreparedGridSampling {
   readonly height: number;
   readonly contributors: Uint32Array;
   /** Retain stored no-lift MSL heights for rendering; public samples keep their descriptor value. */
-  bind(field: GridField, layer: LayerId | LayerSpec, useStoredMslNoLift: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
+  bind(field: GridField, layer: LayerId | ReductionSpec, useStoredMslNoLift: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
 }
 
 export interface PreparedGridAxis {

@@ -8,6 +8,7 @@ import {
   type UnitSystem,
 } from './windgram-format.ts';
 import { CALM_RADIUS, CLOUD_PATH, SNOWFLAKE_PATH, windBarbGlyph, windgramCloudScale } from './windgram-glyphs.ts';
+import { displayedBarbSpeed } from './wind-barb.ts';
 import { displayedBarbs, layoutWindgramMarks, type PlacedTemperatureLabel } from './windgram-label-layout.ts';
 import { WINDGRAM_STABILITY, WINDGRAM_STABLE_COLOR, stabilityRange } from './windgram-stability.ts';
 import { heightToY, visibleHeightAnchors } from './windgram-scale.ts';
@@ -23,7 +24,7 @@ const text = (x: number, y: number, value: string, attrs = '') =>
   `<text x="${fmt(x)}" y="${fmt(y)}" ${attrs}>${escape(value)}</text>`;
 const altitude = (m: number, system: UnitSystem) => Math.round(convertQuantity(m, 'elevation', system)!).toLocaleString('en-US');
 const temperature = (f: number, system: UnitSystem) => convertQuantity(fahrenheitToCelsius(f), 'temperature', system)!;
-const barbSpeed = (knots: number, system: UnitSystem) => formatQuantity(knotsToMps(knots), 'wind', undefined, system);
+const barbSpeed = (knots: number, system: UnitSystem) => `${displayedBarbSpeed(knotsToMps(knots), system)} ${unitLabel('wind', system)}`;
 const degrees = (direction: number) =>
   `${['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(direction / 22.5) % 16]} ${Math.round(direction) % 360}°`;
 
@@ -219,7 +220,7 @@ export function renderWindgramSvg(
   );
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
   const coverage = uncovered.length && firstData && lastData ? ` Forecast available ${firstData.label}–${lastData.label}; hatched hours unavailable.` : !view.hours.length ? ' Daylight forecast unavailable in this run.' : '';
-  const description = `Windgram${first ? ` ${first.label}–${last.label}` : ''} · ${view.timeZone}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers ${unitLabel('wind', system)}. Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
+  const description = `Windgram${first ? ` ${first.label}–${last.label}` : ''} · ${view.timeZone}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
   return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-labelledby="${id}-title ${id}-description" class="windgram${view.compact ? ' windgram-compact' : ''}"><title id="${id}-title">Wind, temperature and clouds by hour and altitude</title><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
 }
 
@@ -234,7 +235,7 @@ export function renderWindgramKey(system: UnitSystem, usesDsm = false): string {
     `<path d="M1 12H34" stroke="#237d92" stroke-width="1.5" stroke-dasharray="5 3"/><path d="${SNOWFLAKE_PATH}" transform="translate(17 12)" fill="none" stroke="#237d92"/>`,
   );
   const lift = icon('<path d="M1 12H34" stroke="#134ac4" stroke-width="1.5"/><circle cx="17" cy="12" r="2" fill="#134ac4"/>');
-  const feathers = system === 'metric' ? 'half 2.5 / full 5 / flag 25 m/s' : 'half 5 / full 10 / flag 50 kt';
-  const greenLimit = formatQuantity(knotsToMps(9), 'wind', system === 'metric' ? 2 : 0, system);
+  const feathers = 'half 5 / full 10 / flag 50 kt';
+  const greenLimit = formatQuantity(knotsToMps(9), 'wind', undefined, system);
   return `<div class="windgram-legend"><div class="windgram-legend-ramp"><strong>Lapse rate · ${unitLabel('lapseRate', system)}</strong>${WINDGRAM_STABILITY.map(({ color }, i) => `<span class="windgram-legend-chip" style="--chip:${color}">${stabilityRange(i, system)}</span>`).join('')}</div><div class="windgram-legend-symbols"><span>${wind}Wind · ${feathers}</span><span>${humidity}RH ≥${CLOUD_RH_THRESHOLD_PERCENT}%</span><span>${potential}Native surface LCL</span><span>${freezing}${formatQuantity(0, 'temperature', undefined, system)} freezing level</span><span>${lift}Map usable lift</span></div><details class="windgram-legend-note"><summary>Chart key</summary><p>Lapse scale from WxToFly. Red and orange mark rapid cooling. Gray marks inversions. Dark hatching marks unavailable atmosphere. Green wind is below ${greenLimit}. Faint barbs are interpolated. Dashed amber is the native parcel top. Dashed teal is the native effective cloud limit. Dashed gray marks fine surface elevation.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p></details></div>`;
 }

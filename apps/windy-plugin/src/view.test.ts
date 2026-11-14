@@ -346,15 +346,15 @@ it('re-renders the windgram SVG and key when units change while keeping same-day
   const weather = nodes.find(n => n.className === 'windgram-readout')!;
   const keyHost = nodes.find(n => n.className === 'av-windgram-key')!;
   expect(readout.textContent).toContain('MSL 2000 m · AGL 500 m');
-  expect(weather.textContent).toContain('Model surface wind 5.0 m/s');
-  expect(keyHost.innerHTML).toContain('m/s');
+  expect(weather.textContent).toContain('Model surface wind 18.0 km/h');
+  expect(keyHost.innerHTML).toContain('km/h');
   update('f004');
   update('f007', 'metric', 'f002');
   expect(readout.textContent).toContain('MSL 2000 m · AGL 500 m');
   update('f007', 'imperial');
   expect(readout.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
-  expect(weather.textContent).toContain('Model surface wind 9.7 kt');
-  expect(keyHost.innerHTML).toContain('kt');
+  expect(weather.textContent).toContain('Model surface wind 11.2 mph');
+  expect(keyHost.innerHTML).toContain('mph');
 });
 
 it('keeps missing pages recorded in the incomplete notice independently of loading', async () => {

@@ -16,12 +16,18 @@ export async function generateOfflineFixture(out: string, now = Date.now()): Pro
     id: 'synthetic-offline', provider: 'SYNTHETIC offline fixture; not weather data', maxLevels: 3,
     async open({ activeIndices }) {
       return { cycle, stats: { fixture: true, networkRequests: 0 },
-        async acquire(hour) { return normalizedFixtureFrame(product.grid, activeIndices, cycle, hour, product.intervalHours); },
+        async acquire(hour) {
+          const frame = normalizedFixtureFrame(product.grid, activeIndices, cycle, hour, product.intervalHours);
+          const field = (base: number) => ({ values: Float32Array.from(activeIndices, index => base + hour * 0.5 + (index % product.grid.width) * 0.2), missing: new Uint8Array(activeIndices.length) });
+          frame.auxSurface = { u10mMps: field(4), v10mMps: field(2) };
+          frame.auxLevels = { uWindMps: [field(6), field(9), field(12)], vWindMps: [field(3), field(5), field(7)] };
+          return frame;
+        },
         async close() {}
       };
     }
   };
-  return buildForecast({ out, product, mask, provider, wholeDomain: await syntheticWholeDomain(out, product), deriveOptions: { daylightOnly: false } });
+  return buildForecast({ out, product, mask, provider, wholeDomain: await syntheticWholeDomain(out, product), deriveOptions: { daylightOnly: false }, numericWind: true });
 }
 
 async function main(): Promise<void> {
@@ -30,7 +36,8 @@ async function main(): Promise<void> {
   console.log(`SYNTHETIC fixture: ${manifestPath}`);
   console.log('No model downloads. Test sample: latitude 40, longitude -100; first-frame rain = 2.75 mm/h.');
   if (values['generate-only']) return;
-  await previewBuild({ manifestPath, persistTo: resolve(values['persist-to'] ?? '.wrangler/fixture-state'), port: Number(values.port ?? 8787), fixture: true, seedOnly: values['seed-only'], reseed: values.reseed, trustedProduct: OFFLINE_PRODUCT });
+  const persistTo = resolve(values['persist-to'] ?? '.wrangler/fixture-state');
+  await previewBuild({ manifestPath, persistTo, port: Number(values.port ?? 8787), fixture: true, seedOnly: values['seed-only'], reseed: values.reseed, trustedProduct: OFFLINE_PRODUCT });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

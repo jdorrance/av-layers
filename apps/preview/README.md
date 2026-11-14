@@ -9,11 +9,12 @@ repository root:
 pnpm dev
 ```
 
-To run, test, or build `@av/preview` against an existing API:
+To run, test, smoke-check, or build `@av/preview`:
 
 ```sh
 AV_API_BASE=http://127.0.0.1:8787 pnpm --filter @av/preview dev
 pnpm test apps/preview
+pnpm smoke:wind --fixture
 pnpm --filter @av/preview build
 ```
 
@@ -22,18 +23,23 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
-Choose **Auto** to use the finest available forecast that covers the map center
-and selected time. The URL preserves Auto and the requested time as you pan.
+Auto selects the finest available forecast covering the map center and time.
+Builds with numeric wind support trails and WMO/ICAO knot-feathered barbs with
+`km/h` or `mph` speed labels at the selected height.
+Set `VITE_GOOGLE_MAPS_API_KEY` for Google Terrain; the default basemap is
+OpenStreetMap. Because Vite inlines `VITE_GOOGLE_MAPS_API_KEY` into the public
+browser bundle by design, **always configure Google Cloud key restrictions**
+before deploying: restrict **Application restrictions** to exact allowed HTTP
+referrers (origins) and **API restrictions** to the **Map Tiles API** only so
+the key cannot be used for unauthorized quota consumption.
 
 The timeline shows the selected time, displayed time and image quality separately.
 Prepared viewport overviews respond during scrubbing; fine tiles replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup and lazy JavaScript transfer and
-reject server modules in the browser output.
-On Node 22.23.4, the production build measured 348.2 kB gzip for the entry
-and 29.2 kB for the Windgram. The separate MapLibre worker measured 150.6 kB.
+[Build checks](vite.config.ts) bound startup (`388,000 B` gzip) and lazy
+(`32,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. Open forecast settings to change
@@ -46,7 +52,9 @@ publish no native profiles. Builds without a map prefix offer a 24-hour point vi
 
 ## Source layout
 
-- [src/main.ts](src/main.ts): OpenStreetMap basemap, model and AGL/MSL controls, forecast clock, and point card.
+- [src/main.ts](src/main.ts): map, forecast and point-card lifecycle.
+- [src/basemap.ts](src/basemap.ts): Google Terrain sessions and OpenStreetMap fallback.
+- [src/wind-overlay.ts](src/wind-overlay.ts): numeric wind loading, trails and barbs.
 - [src/url-state.ts](src/url-state.ts) reads and writes shared map URLs.
 - [src/raster-overlay.ts](src/raster-overlay.ts): raster replacement and prefetch.
 - [src/raster-overview.ts](src/raster-overview.ts): bounded decoded viewport images across forecast times.

@@ -49,9 +49,9 @@ latest and retained-run lists use short edge caching within the
 Build-specific responses cache through their expiry bound. Health and error
 responses use `no-store`.
 
-Workers Cache serves successful tile responses before the Worker executes.
-Tile misses validate the build and read its archive directly. Only tiles opt
-into this front cache; metadata and point routes keep their request checks.
+Workers Cache serves successful tile and numeric-wind chunk responses before
+the Worker executes. Misses validate the retained build and read bounded archive
+ranges. Metadata and point routes keep their request checks.
 
 Version-5 manifests bind each layer to its native or fine surface. The scalar
 reader supports both v5 shard layouts. Profiles are available on builds that

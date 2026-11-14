@@ -12,7 +12,8 @@ import { decodeWebp } from './webp.js';
 import { describeCoverage, describeSparseCoverage, loadCoverage, readSparseCoverage } from './coverage.js';
 import { localPath, readLocalFile, type createLocalFileReader } from './local-file.js';
 import { readLocalProvenance, readFrameProvenance } from './frame-provenance.js';
-import { forecastObjects, provenanceObjects } from './publication-objects.js';
+import { buildObjects, provenanceObjects } from './publication-objects.js';
+import { localWindData } from './wind-data.js';
 export { localPath } from './local-file.js';
 import { loadBundledFineCoverage, nativeSparseMask, wholeDomainPlan } from './whole-domain/coverage.js';
 import { validateSparsePreparedTerrain } from './terrain/sparse.js';
@@ -187,8 +188,12 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     if (!view || await fileSha256(localPath(root, artifact.tilesKey), BUILD_BUDGETS.samplePackBytes) !== artifact.tilesSha256) throw new Error(`Invalid archive hash ${artifact.tilesKey}`);
     await validateArchive(localPath(root, artifact.tilesKey), view);
   }
+  if (!remote && manifest.mapData) {
+    const wind = await localWindData(root, manifest);
+    if (!wind || wind.reference.sha256 !== manifest.mapData.sha256 || wind.reference.bytes !== manifest.mapData.bytes) throw new Error('Invalid numeric wind root digest');
+  }
   if (remote) {
-    const expected = [...provenanceObjects(provenance.value), ...forecastObjects(manifest)];
+    const expected = [...provenanceObjects(provenance.value), ...(await buildObjects(root, manifest, remote))];
     const byKey = new Map(remote.objects.map(object => [object.key, object]));
     if (byKey.size !== remote.objects.length || byKey.size !== expected.length || expected.some(item => {
       const object = byKey.get(item.key);

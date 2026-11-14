@@ -70,14 +70,15 @@ export async function putImmutableReceipt(store: Pick<ObjectStorage, 'get' | 'he
 }
 
 /** Reservations include the file and an SDK/transport copy; stop admission and drain on failure. */
-export async function uploadBounded<T extends { size: number }>(items: readonly T[], limitBytes: number, run: (item: T) => Promise<void>): Promise<void> {
+export async function uploadBounded<T extends { size: number }>(items: readonly T[], limitBytes: number, run: (item: T) => Promise<void>, concurrency = MAX_STORAGE_OPERATIONS): Promise<void> {
   if (!Number.isSafeInteger(limitBytes) || limitBytes < 1) throw new Error('Invalid upload byte budget');
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > MAX_STORAGE_OPERATIONS) throw new Error('Invalid upload concurrency');
   if (items.some(item => !Number.isSafeInteger(item.size * 2) || item.size <= 0 || item.size * 2 > limitBytes)) throw new Error('Upload reservation exceeds byte budget');
   const jobs = new Set<Promise<void>>();
   let reserved = 0, failed = false, failure: unknown;
   for (const item of items) {
     const charge = item.size * 2;
-    while (!failed && (jobs.size >= MAX_STORAGE_OPERATIONS || reserved + charge > limitBytes)) await Promise.race(jobs);
+    while (!failed && (jobs.size >= concurrency || reserved + charge > limitBytes)) await Promise.race(jobs);
     if (failed) break;
     reserved += charge;
     const job = Promise.resolve().then(() => run(item)).catch(error => { if (!failed) { failed = true; failure = error; } }).finally(() => { reserved -= charge; jobs.delete(job); });

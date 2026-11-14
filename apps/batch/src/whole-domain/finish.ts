@@ -24,6 +24,7 @@ export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   assemblyStartedAt?: number;
   sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
   profileGroups?: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'];
+  mapData?: ManifestV5['mapData'];
   remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
   onValidated?: (result: ValidatedBuild, path: string) => Promise<void>;
 }
@@ -80,7 +81,8 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
       version: 5 as const, descriptors, recipe: options.identity.recipe, model: product.modelId, buildId, cycle: result.cycle, createdAt,
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),
       method: { id: [...new Set(product.layers.map(layer => descriptors.layers[layer].methodId))].join('+'), hash: options.identity.scienceHash },
-      frames: result.frames, ...(product.mapEndHour === undefined ? {} : { mapFrameCount: mapFrames }), layers: [...product.layers], artifacts: result.artifacts, surfaces,
+      frames: result.frames, ...(product.mapEndHour === undefined ? {} : { mapFrameCount: mapFrames }),
+      ...(options.mapData ? { mapData: options.mapData } : {}), layers: [...product.layers], artifacts: result.artifacts, surfaces,
       source: { provider: provider.provider, model: product.modelId, temporalApproximation: 'interval flux with endpoint profile',
         frameCount: result.frames.length, provenanceKey, provenanceSha256: sha256(provenanceBytes),
         terrain: { dataId: surfaces.find(surface => surface.terrain)?.terrain?.dataId ?? '', key: prepared.terrain.key, sha256: prepared.terrain.sha256, arrayBytes: prepared.terrain.arrayBytes } },

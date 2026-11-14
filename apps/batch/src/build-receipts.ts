@@ -1,4 +1,6 @@
-import { getProvenanceReference, mapFrameCount, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS,
+import { createHash } from 'node:crypto';
+import z from 'zod';
+import { encodeBoundedJson, getProvenanceReference, mapFrameCount, MAX_MANIFEST_BYTES, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS,
   parseBoundedJson, parseProvenance, sameJsonValue, sourceIntervalHours, type ManifestV5, type ProductDefinition } from '@av/contracts';
 import { runConcurrent } from './concurrent.js';
 import { forecastFrame } from './frame-build.js';
@@ -9,6 +11,11 @@ import { servingSampleShards, type HourSamplePart } from './serving-groups.js';
 import type { ObjectStorage } from './storage.js';
 import { localPath, sha256 } from './validate.js';
 import type { WholeDomainPrepared } from './whole-domain/prepare.js';
+import { MAX_FORECAST_RECEIPT_ENTRIES, MAX_V5_SHARD_BYTES } from './capacity.js';
+
+const servingReceiptSchema = z.strictObject({ version: z.literal(1), planHash: z.string().regex(/^[a-f0-9]{64}$/), objects: z.array(z.strictObject({
+  key: z.string().min(1), bytes: z.number().int().positive().max(MAX_V5_SHARD_BYTES), sha256: z.string().regex(/^[a-f0-9]{64}$/), etag: z.string().min(1)
+})) });
 
 export function hourSampleParts(receipts: readonly WholeDomainReceipt[], plan: BuildPlan, product: ProductDefinition, id: 'native' | 'fine'): HourSamplePart[] {
   const parts: HourSamplePart[] = [];
@@ -77,12 +84,35 @@ export async function verifyPublicationReceipts(options: {
   })) throw new Error('Forecast object receipt set mismatch');
   const hourSampleKeys = new Set(hourSamples.map(item => item.key));
   const serving = manifest.surfaces.flatMap(surface => surface.samples.shards);
+  const record = await readLocalFile(localPath(root, `builds/${plan.model}/${plan.buildId}/serving-receipts.json`), MAX_PROVENANCE_BYTES)
+    .catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
+  const saved = record ? servingReceiptSchema.parse(parseBoundedJson(record, MAX_PROVENANCE_JSON_TOKENS, MAX_FORECAST_RECEIPT_ENTRIES)) : undefined;
+  if (saved && saved.planHash !== sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES))) throw new Error('Serving receipt plan mismatch');
+  const savedByKey = new Map(saved?.objects.map(object => [object.key, object]));
+  if (saved && savedByKey.size !== saved.objects.length) throw new Error('Duplicate serving object receipt');
   const published = new Array<ObjectReceipt>(serving.length);
   await runConcurrent(serving.map((shard, index) => ({ shard, index })), 4, async ({ shard, index }) => {
     signal?.throwIfAborted();
     const head = await store.head(shard.key, signal);
     signal?.throwIfAborted();
     if (!head || head.size !== shard.bytes || !head.etag || head.metadata?.sha256 !== shard.sha256) throw new Error(`Remote object receipt mismatch: ${shard.key}`);
+    const receipt = savedByKey.get(shard.key);
+    if (receipt && receipt.bytes === shard.bytes && receipt.sha256 === shard.sha256) {
+      if (receipt.etag !== head.etag) throw new Error(`Remote object receipt mismatch: ${shard.key}`);
+      published[index] = receipt;
+      return;
+    }
+    if (shard.bytes > MAX_V5_SHARD_BYTES) throw new Error(`Remote object exceeds byte budget: ${shard.key}`);
+    const hash = createHash('sha256');
+    for (let offset = 0; offset < shard.bytes; offset += 4 * 1024 * 1024) {
+      signal?.throwIfAborted();
+      const length = Math.min(4 * 1024 * 1024, shard.bytes - offset);
+      const part = await store.get(shard.key, { offset, length }, length, signal, undefined, { etag: head.etag, bytes: head.size });
+      signal?.throwIfAborted();
+      if (!part || part.bytes.length !== length || part.etag !== head.etag) throw new Error(`Remote object range mismatch: ${shard.key}`);
+      hash.update(part.bytes);
+    }
+    if (hash.digest('hex') !== shard.sha256) throw new Error(`Remote object hash mismatch: ${shard.key}`);
     published[index] = { key: shard.key, bytes: shard.bytes, sha256: shard.sha256, etag: head.etag };
   });
   const workerObjects: ObjectReceipt[] = [];

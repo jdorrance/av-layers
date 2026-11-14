@@ -18,7 +18,10 @@ class Element extends EventTarget {
   className = '';
   href = '';
   hidden = false;
+  removed = false;
+  remove(): void { this.removed = true; }
   ariaBusy = '';
+  ariaPressed = '';
   open = false;
   disabled = false;
   tabIndex = -1;
@@ -30,6 +33,8 @@ class Element extends EventTarget {
   get value(): string { return this.selected || this.children[0]?.value || ''; }
   set value(value: string) { this.selected = value; }
   append(...children: Element[]): void { this.children.push(...children); }
+  prepend(...children: Element[]): void { this.children.unshift(...children); }
+  setAttribute(): void {}
   focus(): void { doc.activeElement = this; }
   contains(node: Element): boolean { return visit(this).includes(node); }
   add(child: Element): void { this.append(child); }
@@ -57,7 +62,9 @@ class Window extends EventTarget {
   clearInterval = globalThis.clearInterval;
   requestAnimationFrame = (callback: FrameRequestCallback): number => globalThis.setTimeout(() => callback(Date.now()), 16) as unknown as number;
   cancelAnimationFrame = (handle: number): void => globalThis.clearTimeout(handle);
-  href = 'http://localhost:5173/';
+  private storage = new Map<string, string>();
+  localStorage = { getItem: (key: string) => this.storage.get(key) ?? null, setItem: (key: string, value: string) => { this.storage.set(key, value); } };
+  href = 'http://localhost:5173/?model=gfs';
   get location(): { pathname: string; search: string; href: string } {
     const url = new URL(this.href);
     return { pathname: url.pathname, search: url.search, href: this.href };
@@ -86,6 +93,7 @@ class MapMock {
   options: { style?: { sources?: Record<string, { tiles?: string[] }> }; center?: [number, number]; zoom?: number; maxTileCacheSize?: number } = {};
   center = { lng: 0, lat: 0 };
   zoom = 0;
+  bounds = { west: -118, east: -117, south: 32, north: 33 };
   constructor(options?: MapMock['options']) {
     if (initializationError) throw initializationError;
     this.options = options ?? {};
@@ -97,13 +105,19 @@ class MapMock {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(listener); this.handlers.set(name, handlers);
   }
+  once(name: string, listener: (event: Record<string, unknown>) => void): void {
+    const once = (event: Record<string, unknown>) => { this.off(name, once); listener(event); };
+    this.on(name, once);
+  }
   off(name: string, listener: (event: Record<string, unknown>) => void): void { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(value => value !== listener)); }
   isSourceLoaded(): boolean { return true; }
-  getBounds() { return { getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 }; }
+  getBounds() { return { getWest: () => this.bounds.west, getEast: () => this.bounds.east, getSouth: () => this.bounds.south, getNorth: () => this.bounds.north }; }
   emit(name: string, event: Record<string, unknown> = {}): void { for (const handler of this.handlers.get(name) ?? []) handler(event); }
   addControl(): void {}
   getCenter(): { lng: number; lat: number } { return this.center; }
   getZoom(): number { return this.zoom; }
+  project(): { x: number; y: number } { return { x: 320, y: 240 }; }
+  coveringTiles(): object[] { return Array.from({ length: 64 }, () => ({})); }
   getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
   fitBounds(bounds: [[number, number], [number, number]]): void {
     const [[west, south], [east, north]] = bounds;
@@ -141,6 +155,89 @@ const protocols = new Map<string, RasterTileProtocol['load']>();
 vi.mock('maplibre-gl', () => ({ Map: MapMock, NavigationControl: class {}, GPUInitializationError, setWorkerUrl, addProtocol: (name: string, load: RasterTileProtocol['load']) => protocols.set(name, load), removeProtocol: (name: string) => protocols.delete(name) }));
 vi.mock('maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url', () => ({ default: '/assets/map-worker.js' }));
 
+const windLoads: { frame: string; signal?: AbortSignal; bounds?: readonly [number, number, number, number] }[] = [];
+const windFields: unknown[] = [];
+const schedulerFetches: typeof fetch[] = [];
+const rasterFetches: (typeof fetch | undefined)[] = [];
+const windFetches: (typeof fetch | undefined)[] = [];
+const disposalOrder: string[] = [];
+let windChange: (state: { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; height: 'surface' | number | 'lift' }) => void;
+let windState: { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; height: 'surface' | number | 'lift' };
+let windResolve: ((status: 'ready' | 'unavailable') => void) | null = null;
+let deferWind = false;
+let deferWindCancellation = false;
+let windCancel: (() => void) | null = null;
+let rejectWind = false;
+let markBuildUnavailable = false;
+let failOnceBudget = false;
+const windStatuses: string[] = [];
+let windSample = { status: 'valid', u: 3, v: 4 };
+vi.mock('@av/client/wind', async importOriginal => ({ ...await importOriginal<typeof import('@av/client/wind')>(), WindDataSource: class {
+  private readonly cache?: { markBuildUnavailable(buildId: string): void };
+  constructor(_base: string, options?: { fetchImpl?: typeof fetch; cache?: { markBuildUnavailable(buildId: string): void } }) {
+    windFetches.push(options?.fetchImpl);
+    this.cache = options?.cache;
+  }
+  load(request: { build: PinnedBuild; frame: string; signal?: AbortSignal; bounds?: readonly [number, number, number, number] }) {
+    windLoads.push(request);
+    if (markBuildUnavailable) { this.cache?.markBuildUnavailable(request.build.manifest.buildId); return Promise.resolve('unavailable'); }
+    if (failOnceBudget) { failOnceBudget = false; return Promise.reject(new RangeError('Wind cache exceeds byte budget')); }
+    return rejectWind ? Promise.reject(new Error('network')) : deferWind ? new Promise((resolve, reject) => {
+      windResolve = resolve;
+      request.signal?.addEventListener('abort', () => {
+        const cancel = () => reject(request.signal!.reason);
+        if (deferWindCancellation) windCancel = cancel;
+        else cancel();
+      }, { once: true });
+    }) : Promise.resolve('unavailable');
+  }
+  sample() { return windSample; }
+  dispose() { disposalOrder.push('wind'); }
+} }));
+vi.mock('@av/client', async importOriginal => {
+  const original = await importOriginal<typeof import('@av/client')>();
+  return {
+    ...original,
+    createForecastRequestScheduler(...args: Parameters<typeof original.createForecastRequestScheduler>) {
+      const scheduler = original.createForecastRequestScheduler(...args);
+      schedulerFetches.push(scheduler.fetch);
+      return { ...scheduler, dispose() { disposalOrder.push('scheduler'); scheduler.dispose(); } };
+    },
+    createSourceRasterTileProtocol(...args: Parameters<typeof original.createSourceRasterTileProtocol>) {
+      rasterFetches.push(args[1]?.fetchImpl);
+      const protocol = original.createSourceRasterTileProtocol(...args);
+      return { ...protocol, dispose() { disposalOrder.push('raster'); protocol.dispose(); } };
+    }
+  };
+});
+vi.mock('./wind-overlay', () => ({ WindOverlay: class {
+  setField(field: unknown) { windFields.push(field); }
+  clear() { windFields.push(null); }
+  setOptions() {}
+  destroy() {}
+} }));
+let preferredWindVisible = true;
+vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options: { initial?: Partial<typeof windState>; onChange: typeof windChange }) => {
+  windState = { style: options.initial?.style ?? 'trails', visible: options.initial?.visible ?? preferredWindVisible, paused: false, height: options.initial?.height ?? 'surface' };
+  windChange = state => { windState = state; preferredWindVisible = state.visible; options.onChange(state); };
+  return {
+    get state() { return windState; },
+    preferredVisible: () => preferredWindVisible,
+    setState(next: Partial<typeof windState>) { windState = { ...windState, ...next }; },
+    setStatus(status: string) { windStatuses.push(status); },
+    setUnits() {},
+    destroy() {}
+  };
+} }));
+let timelineSelect: (index: number) => void;
+let timelineToggleTz: (() => void) | undefined;
+vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect; onToggleTimeZone?: () => void }) => {
+  timelineSelect = options.onSelect;
+  timelineToggleTz = options.onToggleTimeZone;
+  return { update() {}, setTimeZone() {}, destroy() {} };
+} }));
+
+const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
 let doc: Document;
 let win: Window;
 let manifest: ManifestV5;
@@ -178,17 +275,24 @@ function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
   win.dispatchEvent(event);
 }
 async function start(): Promise<void> {
+  if (win.href === 'http://localhost:5173/?model=gfs') win.href = `http://localhost:5173/?model=${manifest.model}`;
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(modelButton(manifest.model).disabled).toBe(false));
 }
 beforeEach(() => {
   vi.resetModules();
   maps.length = 0; protocols.clear(); initializationError = null; autoLoadRaster = true; setWorkerUrl.mockClear();
+  windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
+  markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true; timelineToggleTz = undefined;
+  deferWindCancellation = false; windCancel = null;
+  windSample = { status: 'valid', u: 3, v: 4 };
+  schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
   vi.stubEnv('AV_API_BASE', 'https://api.test');
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', '');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = fixtureManifestV5();
+  manifest = fixtureManifestV5({ mapData: MAP_DATA });
   vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
@@ -208,9 +312,417 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   expect(fetchMock).toHaveBeenCalled();
   expect(map().sources.size).toBe(0);
   expect(map().options.maxTileCacheSize).toBe(16);
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
   expect(sourceId()).toBeDefined();
+});
+
+it('starts wind and raster at style readiness before basemap tiles finish', async () => {
+  deferWind = true;
+  win.href = 'http://localhost:5173/?model=gfs&lat=32.5&lon=-117.5&z=9';
+  await import('./main');
+  await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
+  expect(windLoads).toHaveLength(0);
+  map().emit('style.load');
+  expect(windLoads).toHaveLength(1);
+  expect(map().sources.size).toBeGreaterThan(0);
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  map().emit('style.load');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(windLoads).toHaveLength(1);
+});
+
+it.each(['pagehide', 'gpu failure'])('shares the forecast scheduler and disposes it last on %s', async teardown => {
+  await start();
+  expect(schedulerFetches).toHaveLength(1);
+  expect(windFetches[0]).toBe(schedulerFetches[0]);
+  expect(rasterFetches[0]).toBe(schedulerFetches[0]);
+  page('pagehide', true);
+  expect(disposalOrder).not.toContain('scheduler');
+  page('pageshow', true);
+  expect(rasterFetches.at(-1)).toBe(schedulerFetches[0]);
+  if (teardown === 'pagehide') page('pagehide', false);
+  else map().emit('error', { error: new GPUInitializationError() });
+  expect(disposalOrder.at(-1)).toBe('scheduler');
+  expect(disposalOrder.lastIndexOf('wind')).toBeLessThan(disposalOrder.lastIndexOf('scheduler'));
+  expect(disposalOrder.lastIndexOf('raster')).toBeLessThan(disposalOrder.lastIndexOf('scheduler'));
+});
+
+it('loads configured Google terrain while forecast discovery runs and disposes it on pagehide', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let viewportSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url.includes('createSession')) {
+      await gate;
+      return new Response(JSON.stringify({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400, tileWidth: 256 }));
+    }
+    if (url.includes('/viewport')) {
+      viewportSignal = init?.signal;
+      return new Promise(() => {});
+    }
+    return latest();
+  });
+  await import('./main');
+  expect(maps).toHaveLength(0);
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/latest?'))).toBe(true);
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('createSession'))).toBe(true);
+  release();
+  await vi.waitFor(() => expect(maps).toHaveLength(1));
+  expect(map().options.style?.sources?.['google-terrain']?.tiles?.[0]).toContain('/v1/2dtiles/');
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/latest?'))).toHaveLength(1);
+  expect(viewportSignal?.aborted).toBe(false);
+  page('pagehide', false);
+  expect(viewportSignal?.aborted).toBe(true);
+});
+
+it('falls back with a visible warning when configured Google terrain fails', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  fetchMock.mockImplementation(async input => String(input).includes('createSession') ? new Response('', { status: 403 }) : latest());
+  await import('./main');
+  await vi.waitFor(() => expect(maps).toHaveLength(1));
+  expect(map().options.style?.sources?.basemap?.tiles?.[0]).toContain('openstreetmap.org');
+  expect(ui('app').children.find(child => child.className === 'toast basemap-warning')?.textContent).toBe('Google terrain unavailable. Using OpenStreetMap.');
+});
+
+it('bounds Google session startup and falls back after timeout', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  fetchMock.mockImplementation(async (input, init) => {
+    if (!String(input).includes('createSession')) return latest();
+    return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+  });
+  await import('./main');
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(map().options.style?.sources?.basemap?.tiles?.[0]).toContain('openstreetmap.org');
+  expect(ui('app').children.find(child => child.className === 'toast basemap-warning')).toBeDefined();
+});
+
+it('starts Auto discovery while Google terrain initializes and reuses the lookup', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  win.href = 'http://localhost:5173/?model=auto';
+  const build = autoBuild('gfs', [-180, -55, 180, 65], [1, 18, 36]);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  fetchMock.mockImplementation(async input => {
+    const url = String(input);
+    if (url.includes('createSession')) {
+      await gate;
+      return Response.json({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400 });
+    }
+    if (url.includes('/viewport')) return Response.json({});
+    if (url.includes('/catalog')) return Response.json({ models: [autoCatalogRow(build.manifest, 27800)] });
+    return url.includes('/latest') ? Response.json(fixtureLatest(build.manifest)) : sample(input, build.manifest);
+  });
+  await import('./main');
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/catalog'))).toBe(true);
+  expect(maps).toHaveLength(0);
+  release();
+  await vi.waitFor(() => expect(maps).toHaveLength(1));
+  map().emit('style.load');
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('gfs'));
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/catalog'))).toHaveLength(1);
+});
+
+it('keeps the neutral offline basemap even with a configured Google key', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  vi.stubEnv('VITE_OFFLINE_FIXTURE', 'true');
+  await start();
+  expect(map().options.style?.sources).toEqual({});
+  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('createSession'))).toBe(false);
+});
+
+it('does not construct a map after pagehide during Google session startup', async () => {
+  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let sessionSignal: AbortSignal | null | undefined;
+  fetchMock.mockImplementation(async (input, init) => {
+    if (!String(input).includes('createSession')) return latest();
+    sessionSignal = init?.signal;
+    await gate;
+    return new Response(JSON.stringify({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400 }));
+  });
+  await import('./main');
+  page('pagehide', false);
+  expect(sessionSignal?.aborted).toBe(true);
+  release();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(maps).toHaveLength(0);
+  expect(ui('app').children).toHaveLength(0);
+});
+
+it('clears stale wind immediately and ignores an overtaken frame request', async () => {
+  deferWind = true;
+  await start();
+  const oldRequest = windLoads.at(-1)!;
+  const resolveOld = windResolve!;
+  await selectFrame(1);
+  expect(oldRequest.signal?.aborted).toBe(true);
+  expect(windFields.at(-1)).toBeNull();
+  resolveOld('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  const count = windLoads.length;
+  windChange({ style: 'barbs', visible: true, paused: false, height: 2400 });
+  ui('units-imperial').dispatchEvent(new Event('click'));
+  expect(windLoads).toHaveLength(count);
+  map().emit('movestart');
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it('keeps resident wind while hidden and loads once when the frame changes', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const count = windLoads.length;
+  windChange({ ...windState, visible: false });
+  map().emit('movestart'); map().emit('moveend');
+  windChange({ ...windState, visible: true });
+  expect(windLoads).toHaveLength(count);
+  windChange({ ...windState, visible: false });
+  await selectFrame(1);
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count);
+  windChange({ ...windState, visible: true });
+  expect(windLoads).toHaveLength(count + 1);
+});
+
+it('aborts hidden wind loads and skips model changes until re-enabled', async () => {
+  deferWind = true;
+  await start();
+  const pending = windLoads.at(-1)!;
+  const count = windLoads.length;
+  windChange({ ...windState, visible: false });
+  expect(pending.signal?.aborted).toBe(true);
+  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
+  await selectFrame(1);
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count);
+  windChange({ ...windState, visible: true });
+  expect(windLoads).toHaveLength(count + 1);
+});
+
+it('allocates only the latest wind viewport after retired load cancellation settles', async () => {
+  deferWind = true;
+  deferWindCancellation = true;
+  await start();
+  const first = windLoads.at(-1)!;
+  for (let i = 1; i <= 5; i++) {
+    map().bounds = { west: -118 + i, east: -117 + i, south: 32, north: 33 };
+    map().emit('moveend');
+  }
+  expect(first.signal!.aborted).toBe(true);
+  windChange({ ...windState, visible: false });
+  map().bounds = { west: -110, east: -109, south: 32, north: 33 };
+  map().emit('moveend');
+  windChange({ ...windState, visible: true });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(windLoads).toHaveLength(1);
+  windCancel!();
+  await vi.waitFor(() => expect(windLoads).toHaveLength(2));
+  expect(windLoads[1].bounds).toEqual([-110, 32, -109, 33]);
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it.each([false, true])('retries unavailable or rejected wind on a later move without a hot loop (rejected: %s)', async rejected => {
+  rejectWind = rejected;
+  await start();
+  await Promise.resolve();
+  expect(windStatuses.at(-1)).toBe('unavailable');
+  const count = windLoads.length;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(windLoads).toHaveLength(count);
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+});
+
+it('retains wind during a pan and while loading uncovered bounds', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const field = windFields.at(-1);
+  const count = windLoads.length;
+  map().emit('movestart');
+  map().bounds = { west: -117.9, east: -117.1, south: 32.1, north: 32.9 };
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count);
+  expect(windFields.at(-1)).toBe(field);
+  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+  expect(windFields.at(-1)).toBe(field);
+});
+
+it('reloads wind detail after zooming into an already covered viewport', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const count = windLoads.length;
+  map().bounds = { west: -117.9, east: -117.1, south: 32.1, north: 32.9 };
+  map().zoom += 1;
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+  windResolve!('ready');
+  await Promise.resolve();
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count + 1);
+});
+
+it('preserves unavailability after an uncovered pan and restores resident wind on return', async () => {
+  const status = 'unavailable';
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const original = { ...map().bounds };
+  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().emit('moveend');
+  expect(windStatuses.at(-1)).toBe('loading');
+  map().emit('render');
+  expect(windStatuses.at(-1)).toBe('loading');
+  windResolve!(status);
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  map().emit('render'); map().emit('sourcedata', { sourceId: sourceId(), tile: {} });
+  expect(windStatuses.at(-1)).toBe(status);
+  expect(windFields.at(-1)).toBeNull();
+  const count = windLoads.length;
+  map().bounds = original;
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(count);
+  expect(windStatuses.at(-1)).toBe('ready');
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it('shows initial wind before raster loads and keeps later frames aligned with displayed raster', async () => {
+  deferWind = true;
+  autoLoadRaster = false;
+  win.href = `http://localhost:5173/?model=gfs&t=${encodeURIComponent(manifest.frames[0].validTime)}`;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  const first = sourceId();
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+
+  await selectFrame(1);
+  expect(windFields.at(-1)).toBeNull();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  const failed = [...map().layers.keys()].find(id => id !== first)!;
+  map().emit('error', { sourceId: failed });
+  expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
+  expect(ui('frame-status').textContent).toContain('Showing');
+  expect(ui('frame-status').textContent).toContain('Selected time unavailable');
+  expect(windFields.at(-1)).toBeNull();
+
+  await selectFrame(2);
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  const replacement = [...map().layers.keys()].find(id => id !== first)!;
+  map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it('does not pair wind from a new build with the previous build raster at the same frame', async () => {
+  deferWind = true;
+  autoLoadRaster = false;
+  win.href = `http://localhost:5173/?model=gfs&t=${encodeURIComponent(manifest.frames[0].validTime)}`;
+  await start();
+  const first = sourceId();
+  map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+
+  const count = windLoads.length;
+  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(windLoads.length).toBeGreaterThan(count));
+  expect(windLoads.at(-1)?.frame).toBe(windLoads[0].frame);
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  const replacement = [...map().layers.keys()].find(id => id !== first)!;
+  map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it('uses URL opacity before saved opacity and shares display units', async () => {
+  win.localStorage.setItem('preview-lift-opacity', '0.35');
+  win.localStorage.setItem('preview-units', 'imperial');
+  win.href = 'http://localhost:5173/?model=gfs&opacity=0.65';
+  await start();
+  expect(ui('opacity').value).toBe('0.65');
+  expect(ui('units-imperial').ariaPressed).toBe('true');
+  expect(ui('point-units').value).toBe('imperial');
+  expect(ui('lift-units').textContent).toBe('Lift ft');
+  expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (ft AGL)')).toBe(true);
+  ui('units-metric').dispatchEvent(new Event('click'));
+  expect(win.localStorage.getItem('preview-units')).toBe('metric');
+  expect(ui('point-units').value).toBe('metric');
+  expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (m AGL)')).toBe(true);
+});
+
+it('reports an unavailable forecast when the viewport exceeds raster memory admission', async () => {
+  await start();
+  Object.assign(map(), { coveringTiles: () => Array.from({ length: 256 }) });
+  map().emit('resize');
+  expect(map().sources.size).toBe(0);
+  expect(ui('frame-status').textContent).toBe('Forecast unavailable · No forecast shown');
+  expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
+  Object.assign(map(), { coveringTiles: () => Array.from({ length: 64 }) });
+  map().emit('resize');
+  await vi.waitFor(() => expect(ui('tile-error').hidden).toBe(true));
+  expect(map().sources.size).toBeGreaterThan(0);
+});
+
+it('briefly marks the located position without a success message', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  vi.useFakeTimers();
+  ui('locate').dispatchEvent(new Event('click'));
+  locate({ coords: { latitude: 40.45, longitude: 44.3 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 40.45, lng: 44.3 });
+  expect(ui('location-status').textContent).toBe('');
+  const dot = ui('map').children.at(-1)!;
+  expect(dot.className).toBe('location-pulse');
+  expect(dot.style).toMatchObject({ left: '320px', top: '240px' });
+  expect(dot.removed).toBe(false);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(dot.removed).toBe(true);
+  vi.useRealTimers();
+});
+
+it('leaves the map unchanged when location is denied', async () => {
+  let fail!: PositionErrorCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback) => { fail = error; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('locate').disabled).toBe(true);
+  fail({ code: 1, message: 'denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('location-status').textContent).toBe('Location permission denied');
+  expect(map().getCenter()).toEqual(before);
+  expect(ui('locate').disabled).toBe(false);
 });
 
 it.each([LIFT_STEP_RENDER_STYLE, LIFT_RENDER_STYLE, 'transparent-no-lift-v2', undefined])('explains the displayed MSL render style %s and cutoff', async style => {
@@ -279,24 +791,17 @@ it('updates each cold slider selection synchronously and writes history on commi
   expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[2].validTime);
 });
 
-it('retains day buttons and the scale while scrubbing and rebuilds day clicks for a new longitude', async () => {
+it('wires compact timeline selections to history and retains the scale while scrubbing', async () => {
   await start();
-  const days = [...ui('days').children], scale = ui('legend-body').children[0];
+  const scale = ui('legend-body').children[0];
   await selectFrame(0);
   await selectFrame(1);
-  expect(ui('days').children).toEqual(days);
   expect(ui('legend-body').children[0]).toBe(scale);
   const push = vi.spyOn(win.history, 'pushState');
-  days.at(-1)!.dispatchEvent(new Event('click'));
+  timelineSelect(0);
   expect(push).toHaveBeenCalledOnce();
-  expect(ui('days').children).toEqual(days);
-  map().jumpTo({ center: [179, 20], zoom: 2 });
-  expect(ui('days').children[0]).not.toBe(days[0]);
-  const lastDay = ui('days').children.at(-1)!;
-  const index = manifest.frames.findIndex(frame => new Date(Date.parse(frame.validTime) + 12 * 3600_000).toISOString().slice(0, 10) === lastDay.value);
-  lastDay.dispatchEvent(new Event('click'));
-  expect(ui('time').value).toBe(String(index));
-  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[index].validTime);
+  expect(ui('time').value).toBe('0');
+  expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[0].validTime);
   ui('ref-msl').dispatchEvent(new Event('click'));
   await Promise.resolve();
   expect(ui('legend-body').children[0]).not.toBe(scale);
@@ -305,6 +810,7 @@ it('retains day buttons and the scale while scrubbing and rebuilds day clicks fo
 it.each([true, false])('publishes the initial regional camera without adding history (discovery first: %s)', async discoveryFirst => {
   manifest = fixtureManifestV5({ model: 'icon-eu' });
   vi.stubEnv('VITE_MODEL', manifest.model);
+  win.href = 'http://localhost:5173/?model=icon-eu';
   let release!: () => void;
   const discovery = new Promise<void>(resolve => { release = resolve; });
   fetchMock.mockImplementationOnce(async () => { await discovery; return latest(); });
@@ -316,7 +822,7 @@ it.each([true, false])('publishes the initial regional camera without adding his
     await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
     expect(replace).not.toHaveBeenCalled();
   }
-  map().emit('load');
+  map().emit('style.load');
   if (!discoveryFirst) release();
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
   expect(sourceId()).toBeDefined();
@@ -404,7 +910,7 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
     oldSignal = init?.signal;
     return new Promise(resolve => { finishOld = resolve; });
   });
-  await import('./main'); map().emit('load');
+  await import('./main'); map().emit('style.load');
   expect(modelButton(manifest.model).disabled).toBe(true);
   page('pagehide', true);
   expect(oldSignal?.aborted).toBe(true);
@@ -446,7 +952,6 @@ it('stops the previous freshness interval when a replacement load fails', async 
   await vi.waitFor(() => expect(ui('error').textContent).toContain('HTTP 400'));
   expect(vi.getTimerCount()).toBeGreaterThan(0); // The committed overlay keeps its expiry deadline.
   expect(modelButton(manifest.model).disabled).toBe(false);
-  expect(ui('days').children).toHaveLength(0);
   expect(ui('time').disabled).toBe(true);
 });
 
@@ -586,7 +1091,7 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
 });
 
 it('labels the map clock as longitude time alongside UTC', async () => {
-  win.href = 'http://localhost:5173/?lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
+  win.href = 'http://localhost:5173/?model=gfs&lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
   await start();
   expect(ui('timestamp').textContent).toBe('Selected · 05:00 longitude time (UTC−01:00) · 06:00 UTC');
 });
@@ -625,7 +1130,6 @@ it('lets a user switch back to GFS when ICON has no publication yet', async () =
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('error').textContent).toContain('No publication available'));
   expect(modelButton('gfs').disabled).toBe(false);
-  expect(ui('days').children).toHaveLength(0);
   modelButton('gfs').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('time').disabled).toBe(false));
   expect(ui('error').hidden).toBe(true);
@@ -647,7 +1151,7 @@ it('selects the v5 surface max zoom for each layer and renders scalar builds wit
   const source = () => map().getSource(sourceId()) as { maxzoom: number; tiles: string[] };
   expect(source().maxzoom).toBe(9);
   expect(source().tiles[0]).toContain('/usable-lift-agl/');
-  expect(map().layers.get(sourceId())?.paint?.['raster-opacity']).toBe(0.7);
+  expect(map().layers.get(sourceId())?.paint?.['raster-opacity']).toBe(0.5);
   ui('ref-msl').dispatchEvent(new Event('click'));
   await Promise.resolve();
   expect(source().maxzoom).toBe(9);
@@ -696,7 +1200,7 @@ it('starts Auto from a neutral world view when the URL supplies no camera', asyn
   });
   win.href = 'http://localhost:5173/?model=auto';
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/gfs/'));
   expect(map().getCenter()).toEqual({ lng: 0, lat: 20 });
   expect(map().getZoom()).toBe(2);
@@ -711,7 +1215,7 @@ it('uses the attributed OpenStreetMap basemap and restores the view from the bac
   });
   expect(win.location.search).toContain('model=gfs');
   expect(win.location.search).toContain('ref=agl');
-  expect(win.location.search).toContain('opacity=0.7');
+  expect(win.location.search).toContain('opacity=0.5');
   ui('opacity').value = '0.4';
   ui('opacity').dispatchEvent(new Event('input'));
   expect(win.location.search).toContain('opacity=0.4');
@@ -776,7 +1280,7 @@ it('preserves Auto and its requested time when a map move overtakes an earlier r
   const expectedTile = `/tiles/${regionB.manifest.model}/${regionB.manifest.buildId}/usable-lift-agl/f018/`;
   win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(t)}`;
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   try {
     await vi.waitFor(() => expect(regionASignal?.aborted).toBe(false));
     map().jumpTo({ center: [REGION_B_POINT.lon, REGION_B_POINT.lat], zoom: 9 });
@@ -807,7 +1311,7 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
   win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(autoTime(18))}`;
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(tile()).toContain('/f018/'));
 
   let finishLookup!: (result: typeof models) => void;
@@ -855,7 +1359,7 @@ it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   win.href = autoUrl(REGION_A_POINT, 18);
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(tile()).toContain('/f018/'));
 
   win.href = autoUrl(REGION_B_POINT, 36);
@@ -970,6 +1474,7 @@ it('shows the map lift pair while the selected native profile is pending', async
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
   const pointBuild = retainedProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
+  published.mapData = MAP_DATA;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let loadingLaterHours = false;
@@ -985,11 +1490,15 @@ it('pages the full native point forecast while later point times keep the raster
     }
     return new Response(JSON.stringify(fixturePointFetch(pointBuild, String(input))));
   });
+  deferWind = true;
   await start();
+  windResolve!('ready');
+  await Promise.resolve();
   expect(ui('point-horizon-label').hidden).toBe(false);
   expect(ui('horizon-notice').textContent).toContain(`Map forecast ended at ${mapEnd}`);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  expect(ui('point-wind').textContent).toContain(`Map wind · ${mapEnd.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
   const chart = ui('point-body').children[0];
   const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   const mapUrl = raster(), mapTime = ui('time').value;
@@ -1007,6 +1516,7 @@ it('pages the full native point forecast while later point times keep the raster
   expect(dayTabs.children.length).toBeGreaterThan(1);
   dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
   await vi.advanceTimersByTimeAsync(16);
+  expect(ui('point-wind').textContent).toBe('');
   expect(raster()).toBe(mapUrl); expect(ui('time').value).toBe(mapTime);
   const time = nodes.find(child => child.className === 'av-point-time')!.textContent;
   expect(time).toContain('Point: ');
@@ -1018,10 +1528,13 @@ it('pages the full native point forecast while later point times keep the raster
   cameraOnly.searchParams.set('z', '5');
   win.href = cameraOnly.href;
   win.dispatchEvent(new Event('popstate'));
+  windResolve!('ready');
+  await Promise.resolve();
   expect(nodes.find(child => child.className === 'av-point-time')!.textContent).toBe(time);
   const requests = fetchMock.mock.calls.length;
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
+  expect(ui('point-wind').textContent).toContain(`Map wind · ${mapEnd.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
 
@@ -1140,4 +1653,119 @@ it('labels the displayed raster through pending, failed and successful point-tim
   const restored = [...map().layers.keys()].find(id => id !== replacement)!;
   map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render'); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
+});
+
+it('hides precip-rate in preview while keeping future non-lift layers and km/mi unit switching', async () => {
+  manifest = fixtureManifestV5({ layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'], mapData: MAP_DATA });
+  win.href = 'http://localhost:5173/?model=gfs&layer=precip-rate&units=knots';
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(ui('layer-picker').hidden).toBe(true);
+  expect(ui('reference').hidden).toBe(false);
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+  expect(new URL(win.href).searchParams.get('layer')).toBeNull();
+  expect(new URL(win.href).searchParams.get('units')).toBeNull();
+
+  ui('units-imperial').dispatchEvent(new Event('click'));
+  expect(ui('units-imperial').ariaPressed).toBe('true');
+  expect(ui('point-units').value).toBe('imperial');
+  expect(new URL(win.href).searchParams.get('units')).toBe('imperial');
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await Promise.resolve();
+  expect(ui('point-wind').textContent).toContain('11 mph');
+
+  win.href = 'http://localhost:5173/?model=gfs&lat=32.5&lon=-117.5&z=9';
+  win.dispatchEvent(new Event('popstate'));
+  await Promise.resolve();
+  expect(ui('reference').hidden).toBe(false);
+  expect(ui('units-metric').ariaPressed).toBe('true');
+  expect(ui('units-imperial').ariaPressed).toBe('false');
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+});
+
+it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries uncovered pans on cache pressure', async () => {
+  manifest = fixtureManifestV5();
+  await start();
+  expect(ui('wind-controls').hidden).toBe(true);
+  expect(windLoads).toHaveLength(0);
+
+  manifest = fixtureManifestV5({ model: 'gfs', buildId: '20261030T060000Z-22222222-2222-4222-8222-222222222222', mapData: MAP_DATA });
+  markBuildUnavailable = true;
+  modelButton('gfs').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(windLoads).toHaveLength(1));
+  expect(ui('wind-controls').hidden).toBe(false);
+  expect(windStatuses.at(-1)).toBe('unavailable');
+  map().bounds = { west: -116, east: -115, south: 32, north: 33 };
+  map().emit('moveend');
+  await selectFrame(1);
+  expect(windLoads).toHaveLength(1);
+
+  markBuildUnavailable = false;
+  manifest = fixtureManifestV5({ model: 'icon-eu', buildId: '20261030T060000Z-11111111-1111-4111-8111-111111111111', mapData: MAP_DATA });
+  deferWind = true;
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(windLoads).toHaveLength(2));
+  windResolve!('ready');
+  await Promise.resolve();
+  const initialField = windFields.at(-1);
+  expect(initialField).toMatchObject({ sample: expect.any(Function) });
+
+  map().bounds = { west: map().bounds.west + 0.1, east: map().bounds.east - 0.1, south: map().bounds.south + 0.1, north: map().bounds.north - 0.1 };
+  map().zoom += 2;
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(3);
+  windResolve!('unavailable');
+  await Promise.resolve();
+  expect(windStatuses.at(-1)).toBe('ready');
+  expect(windFields.at(-1)).toBe(initialField);
+
+  failOnceBudget = true;
+  map().bounds = { west: map().bounds.west + 2, east: map().bounds.east + 2, south: map().bounds.south, north: map().bounds.north };
+  map().emit('moveend');
+  await vi.waitFor(() => expect(windLoads).toHaveLength(5));
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windStatuses.at(-1)).toBe('ready');
+});
+
+it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point-wind in Local timezone', async () => {
+  const OriginalDTF = Intl.DateTimeFormat;
+  vi.stubGlobal('Intl', {
+    ...Intl,
+    DateTimeFormat: Object.assign(function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+      const inst = new OriginalDTF(...args);
+      return args.length ? inst : { ...inst, resolvedOptions: () => ({ ...inst.resolvedOptions(), timeZone: 'Asia/Yerevan' }) };
+    }, OriginalDTF)
+  });
+  deferWind = true;
+  win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(new URL(win.href).searchParams.get('wind')).toBeNull();
+
+  fetchMock.mockImplementation(async input => sample(input));
+  map().emit('click', { lngLat: { lat: 40.18, lng: 44.51 } });
+  await vi.waitFor(() => expect(ui('point-wind').textContent).toContain('UTC'));
+  const frameIso = manifest.frames.find(f => f.id === windLoads[0]!.frame)!.validTime;
+  expect(ui('point-wind').textContent).toBe(`Map wind · ${frameIso.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
+
+  timelineToggleTz?.();
+  const yerevanParts = Object.fromEntries(new OriginalDTF('en-CA', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Yerevan'
+  }).formatToParts(Date.parse(frameIso)).map(p => [p.type, p.value]));
+  expect(ui('point-wind').textContent).toBe(`Map wind · ${yerevanParts.year}-${yerevanParts.month}-${yerevanParts.day} ${yerevanParts.hour}:${yerevanParts.minute} Local · 18 km/h`);
+
+  windChange({ ...windState, visible: false });
+  expect(new URL(win.href).searchParams.get('wind')).toBe('0');
+  windChange({ ...windState, visible: true });
+  expect(new URL(win.href).searchParams.get('wind')).toBe('1');
+
+  preferredWindVisible = false;
+  win.href = 'http://localhost:5173/?model=gfs&lat=40.2&lon=44.6&z=9';
+  win.dispatchEvent(new Event('popstate'));
+  await Promise.resolve();
+  expect(windState.visible).toBe(false);
 });

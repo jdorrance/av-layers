@@ -1,11 +1,11 @@
 import { WINDGRAM_STABILITY } from './windgram-stability.ts';
 
-export const chartStyles = `
-.windgram { display: block; width: 100%; height: auto; font-family: Arial, Helvetica, sans-serif; }
 /* White/yellow chart text sits on stability fills from #ffeeee (1.1:1 on its own)
    to #7777dd (3.8:1). A dark halo keeps every label legible without recolouring
    the data fills: white on #1a142e is 17.7:1, and #1a142e against the worst fill
    (#7777dd) is 4.6:1. */
+export const chartStyles = `
+.windgram { display: block; width: 100%; height: auto; font-family: Arial, Helvetica, sans-serif; }
 .windgram text { fill: #fff; font-size: 12px; paint-order: stroke; stroke: #1a142e; stroke-width: 3px; stroke-linejoin: round; }
 .windgram .wg-axis { fill: #f5f3ff; font-size: 12px; }
 .windgram .wg-axis-feet { font-size: 12px; font-weight: 650; }

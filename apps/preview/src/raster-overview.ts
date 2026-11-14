@@ -164,9 +164,9 @@ export class RasterOverview {
         this.unavailable.add(frame); changed = true;
       }
     }
-    const all = renderedFrames(context.build.manifest), selected = all.findIndex(frame => frame.id === this.selected);
-    const frame = context.frames.filter(frame => !this.images.has(frame) && !this.unavailable.has(frame))
-      .sort((a, b) => Math.abs(all.findIndex(frame => frame.id === a) - selected) - Math.abs(all.findIndex(frame => frame.id === b) - selected))[0];
+    const all = renderedFrames(context.build.manifest), idx = new globalThis.Map(all.map((f, i) => [f.id, i])), selected = idx.get(this.selected ?? '') ?? -1;
+    const frame = context.frames.filter(f => !this.images.has(f) && !this.unavailable.has(f))
+      .sort((a, b) => Math.abs((idx.get(a) ?? 0) - selected) - Math.abs((idx.get(b) ?? 0) - selected))[0];
     if (changed) this.onReady();
     if (!frame || this.context !== context || this.disposed || this.job) return;
     const job: Job = { context, frame, controller: new AbortController() }; this.job = job;

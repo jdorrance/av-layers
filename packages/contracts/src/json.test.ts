@@ -26,7 +26,10 @@ it('rejects shallow wide containers and deeply nested graphs even below the byte
 });
 
 it('admits a bounded producer inventory without changing serving container limits', () => {
-  const bytes = new TextEncoder().encode(JSON.stringify(Array(1046).fill(['field/c/0', 'a'.repeat(64)])));
+  const value = Array(1046).fill(['field/c/0', 'a'.repeat(64)]);
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  expect(encodeBoundedJson(value, 128 * 1024, 16_384, 1046)).toEqual(bytes);
+  expect(() => encodeBoundedJson(value, 128 * 1024, 16_384, 1045)).toThrow('property budget');
   expect(() => parseBoundedJson(bytes)).toThrow('property budget');
   expect(parseBoundedJson(bytes, 16_384, 1046)).toHaveLength(1046);
   expect(() => parseBoundedJson(bytes, 16_384, 1045)).toThrow('property budget');

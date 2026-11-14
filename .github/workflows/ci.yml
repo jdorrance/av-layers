@@ -21,6 +21,10 @@ jobs:
       - run: pnpm tools:pmtiles
       - name: Verify foundation
         run: pnpm verify
+      - name: Install Chromium for wind smoke
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Smoke numeric wind preview
+        run: pnpm smoke:wind --fixture
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.8.17'
