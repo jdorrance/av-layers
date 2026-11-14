@@ -39,7 +39,7 @@ on:
       wind-data:
         description: Generate numeric wind map data
         type: boolean
-        default: true
+        default: false
       terrain-catalog-ref:
         description: Override the terrain catalog JSON; defaults to TERRAIN_CATALOG_REF or the production pin
         type: string
@@ -92,6 +92,6 @@ jobs:
       allow-same-cycle: ${{ inputs['allow-same-cycle'] || false }}
       resume-run-id: ${{ inputs['resume-run-id'] || '' }}
       retain-full-artifacts: ${{ inputs['retain-full-artifacts'] || false }}
-      wind-data: ${{ github.event_name != 'workflow_dispatch' || inputs['wind-data'] }}
+      wind-data: ${{ inputs['wind-data'] || false }}
       terrain-catalog-ref: ${{ inputs['terrain-catalog-ref'] || '' }}
     secrets: inherit

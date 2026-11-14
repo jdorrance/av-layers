@@ -217,13 +217,13 @@ export class WindOverlay {
       if (!wind) { const s = this.field.sample(lat, lon); wind = { status: s.status, u: s.u, v: s.v }; }
       samples.set(key, wind);
       if (!valid(wind)) continue;
-      const dist = Math.hypot(wind.u, wind.v), speed = displayedWindSpeed(dist, this.options.units);
-      if (speed === null) continue;
-      if (!speed) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); this.haloStroke(ctx); continue; }
+      const dist = Math.hypot(wind.u, wind.v), knots = displayedWindSpeed(dist, 'knots'), speed = displayedWindSpeed(dist, this.options.units);
+      if (knots === null || speed === null) continue;
+      if (!knots) { ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2); this.haloStroke(ctx); continue; }
       const ahead = this.map.project([lon + wind.u / dist * 0.001 / Math.cos(lat * DEG), lat + wind.v / dist * 0.001]), hemi = lat < 0 ? 1 : -1;
       ctx.save(); ctx.translate(pt.x, pt.y); ctx.rotate(Math.atan2(ahead.y - pt.y, ahead.x - pt.x));
       ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-21, 0); this.haloStroke(ctx);
-      const q = quantizedBarbSpeed(speed), flags = Math.min(16, Math.floor(q / 50)), feathers = Math.floor((q % 50) / 10), half = q % 10 >= 5;
+      const q = quantizedBarbSpeed(knots), flags = Math.min(16, Math.floor(q / 50)), feathers = Math.floor((q % 50) / 10), half = q % 10 >= 5;
       const spacing = Math.min(4, 20 / Math.max(1, flags * 2 + feathers + Number(half)));
       let d = -21;
       for (let i = 0; i < flags; i++) {

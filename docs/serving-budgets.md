@@ -24,8 +24,9 @@ combined work across all grids selected by a request.
 - **Client forecast transport:** preview routes numeric wind and raster fetches
   through one [scheduler](../packages/client/src/client-request-scheduler.ts),
   with six active requests including body consumption and cancellation, plus
-  64 queued requests. Selected work takes priority over queued speculation.
-  Preview and Windy share the
+  64 queued requests. Selected foreground work takes priority over queued
+  speculation and evicts a queued low-priority prefetch if all 64 queue slots
+  are occupied. Preview and Windy share the
   [raster scheduler](../packages/client/src/client-raster.ts).
   It keeps 16 requests active and queues 64. Background work starts while fewer
   than 2 background reads are active; admitted reads finish after demotion. The
@@ -33,6 +34,9 @@ combined work across all grids selected by a request.
   four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
   with 16 offscreen tiles per source. Preview's 96 MiB forecast envelope reserves
   8 MiB for numeric wind, 8 MiB for wind canvases and 80 MiB for rasters.
+  Numeric wind skips outside tiles via `windMask`/`fineMask` before admission,
+  aligns multi-tile span requests to canonical 8-tile stripes (`<= 1 MiB`), and
+  falls back to overview data if a detail chunk is unavailable.
   Raster admission charges visible
   and cached tiles at twice RGBA storage; large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
@@ -55,10 +59,12 @@ combined work across all grids selected by a request.
   Build expiry drops
   that build's cache. Palette responses stay revalidatable. Build-specific tile,
   manifest, provenance, and TileJSON responses stay immutable until `expiresAt`.
-- **Numeric wind metadata:** verified root/frame descriptors and digest indexes
+- **Numeric wind metadata & rate limits:** verified root/frame descriptors and digest indexes
   share a 128-entry, 4 MiB cache in
   [wind-data.ts](../apps/api/src/wind-data.ts). Cold metadata and chunk reads use
-  the existing binary-read queue and allocation pools. The
+  the existing binary-read queue and allocation pools, bounded per IP by
+  `NUMERIC_RATE_LIMITER` at 200,000 requests / 10 s (`SAMPLE_RATE_LIMITER` bounds
+  point queries at 100,000 requests / 10 s). The
   [wind contract](../packages/contracts/src/wind-data.ts) bounds descriptors,
   pages and chunks; serving hashes the selected range against its verified index.
 - **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4

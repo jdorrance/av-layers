@@ -525,3 +525,63 @@ it('coalesces contiguous tile spans, slices per-tile cache entries, and serves q
   expect(fallbackSource.sample(75, 20, 'surface')).toEqual({ status: 'valid', u: 5, v: -3 });
   fallbackSource.dispose(); legacyCache.clear();
 });
+
+it('skips outside sparse wind/fine tiles during admission, aligns 8-tile spans, and falls back to overview on a missing detail chunk', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  pinned.manifest.descriptors.bounds = [0, 0, 128, 16];
+  pinned.manifest.surfaces[0]!.grid = { kind: 'regular-latlon', width: 128, height: 16, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+  pinned.manifest.surfaces[1]!.grid = { kind: 'regular-latlon', width: 512, height: 64, lon0: 0, lat0: 0, dx: 0.25, dy: 0.25, earthRadiusM: 6371000, wrapLongitude: false };
+  // Logical tiles: 8 wind tiles (0..7) and 8 fine tiles (0..7). Only logical tile 7 (easternmost island x=112..127) is covered!
+  const maskBits = Uint8Array.of(0x80);
+  const b64 = btoa(String.fromCharCode(...maskBits));
+  const islandWind = encodeWindColumns(Array.from({ length: 256 }, () => column));
+  const islandFine = new Uint8Array(64 * 64 * WIND_FINE_CELL_BYTES), fv = new DataView(islandFine.buffer);
+  for (let i = 0; i < 64 * 64; i++) { fv.setFloat32(i * WIND_FINE_CELL_BYTES, 100, true); fv.setFloat32(i * WIND_FINE_CELL_BYTES + 4, 550, true); fv.setUint8(i * WIND_FINE_CELL_BYTES + 8, 16); }
+  const ovLayout = windOverviewLayout(pinned.manifest.surfaces[0]!.grid, 2);
+  const ovBytes = new Uint8Array(ovLayout.chunkBytes), ovView = new DataView(ovBytes.buffer);
+  for (let cell = 0; cell < 32 * 32; cell++) for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+    const off = cell * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+    ovView.setFloat32(off, 7, true); ovView.setFloat32(off + 4, 9, true);
+  }
+  const sparseDesc = JSON.stringify({
+    version: 3, frame, levels: 2, tileSize: 16, fineTileSize: 64, windMask: b64, fineMask: b64,
+    wind: [{ sha256: 'a'.repeat(64), bytes: islandWind.length, indexSha256: 'b'.repeat(64), count: 1 }],
+    fine: [{ sha256: 'c'.repeat(64), bytes: islandFine.length, indexSha256: 'd'.repeat(64), count: 1 }],
+    overview: [{ stride: 2, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: ovLayout.count, bytes: ovLayout.count * ovLayout.chunkBytes }] }]
+  });
+  let failDetail = false;
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.endsWith(`/data/${frame}`)) return new Response(sparseDesc, { headers: { 'content-type': 'application/json' } });
+    if (failDetail && (path.includes('/wind/') || path.includes('/fine/'))) return new Response(null, { status: 404 });
+    if (path.includes('/overview-2/')) {
+      const range = path.split('/').at(-1)!.split('-').map(Number);
+      const count = range.length === 2 ? range[1]! - range[0]! + 1 : 1;
+      const out = new Uint8Array(count * ovBytes.length);
+      for (let i = 0; i < count; i++) out.set(ovBytes, i * ovBytes.length);
+      return reply(out);
+    }
+    return reply(path.includes('/wind/') ? islandWind : islandFine);
+  });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, coalesceSpans: true });
+  // Pure-ocean viewport [0..20, 0..10] skips all outside tiles -> zero chunk HTTP requests!
+  expect(await source.load({ build: pinned, frame, bounds: [0, 0, 20, 10] })).toBe('ready');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(source.sample(5, 10, 'surface')).toEqual({ status: 'outside', u: null, v: null });
+
+  // Mixed ocean + island viewport [80..126, 0..12] fetches only slot 0 for wind and slot 0 for fine!
+  fetcher.mockClear();
+  expect(await source.load({ build: pinned, frame, bounds: [80, 0, 126, 12] })).toBe('ready');
+  expect(source.isOverview).toBe(false);
+  expect(fetcher.mock.calls.map(([u]) => String(u).split('/data/')[1])).toEqual([`${frame}/fine/0`, `${frame}/wind/0`]);
+  expect(source.sample(5, 90, 'surface')).toEqual({ status: 'outside', u: null, v: null });
+  expect(source.sample(5, 120, 450)).toEqual({ status: 'valid', u: 3, v: 6 });
+
+  // Missing detail chunk falls back cleanly to overview instead of rejecting the viewport.
+  failDetail = true;
+  const resilient = new WindDataSource('https://api.test', { fetchImpl: fetcher, coalesceSpans: true });
+  expect(await resilient.load({ build: pinned, frame, bounds: [80, 0, 126, 12] })).toBe('ready');
+  expect(resilient.isOverview).toBe(true);
+  expect(resilient.sample(5, 120, 'surface')).toEqual({ status: 'valid', u: 7, v: 9 });
+  source.dispose(); resilient.dispose();
+});

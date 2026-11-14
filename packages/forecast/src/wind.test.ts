@@ -131,6 +131,25 @@ describe('wind columns', () => {
     const chunk = decodePackedWindChunk(encodeWindColumns([null, column, column, column]));
     expect(samplePackedWindColumns(reversed, [chunk, chunk, chunk, chunk], [3, 2, 1, 0], 'surface')).toEqual({ u: null, v: null, status: STATUS_OUTSIDE, interpolated: false });
   });
+  it('renormalizes above-ground donors across sloped terrain without bridging missing near-surface data', () => {
+    const valley: WindColumn = { surface: { u: 2, v: 4 }, levels: [{ height: 1010, wind: { u: 2, v: 4 } }, { height: 1100, wind: { u: 11, v: 22 } }, { height: 1300, wind: { u: 20, v: 40 } }] };
+    const midSlope: WindColumn = { surface: { u: 4, v: 8 }, levels: [{ height: 1030, wind: { u: 4, v: 8 } }, { height: 1120, wind: { u: 13, v: 26 } }, { height: 1300, wind: { u: 20, v: 40 } }] };
+    const ridge: WindColumn = { surface: { u: 6, v: 12 }, levels: [{ height: 1200, wind: { u: 6, v: 12 } }, { height: 1300, wind: { u: 20, v: 40 } }, { height: 1500, wind: { u: 25, v: 50 } }] };
+    const missingNearSurface: WindColumn = { surface: { u: 6, v: 12 }, levels: [null, null, { height: 1200, wind: { u: 18, v: 36 } }] };
+    const sloped = decodePackedWindChunk(encodeWindColumns([valley, midSlope, ridge, ridge]));
+    const uphill = planSample({ kind: 'regular-latlon', width: 2, height: 2, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false }, 0.8, 0.5)!;
+    // Nearest contributors (row 1, weight 0.8) are underground at 1055 m MSL, so valid row-0 donors (0.1 + 0.1) renormalize cleanly.
+    const blended = samplePackedWindColumns(uphill, [sloped, sloped, sloped, sloped], [0, 1, 2, 3], 1055);
+    expect(blended.status).toBe(STATUS_VALID);
+    expect(blended.interpolated).toBe(true);
+    expect(blended.u).toBeCloseTo((6.5 + (4 + 25 / 90 * 9)) / 2, 5);
+    expect(blended.v).toBeCloseTo((13 + (8 + 25 / 90 * 18)) / 2, 5);
+    // Below all 4 columns remains unavailable instead of extrapolating underground.
+    expect(samplePackedWindColumns(uphill, [sloped, sloped, sloped, sloped], [0, 1, 2, 3], 1005)).toEqual({ u: null, v: null, status: STATUS_UNAVAILABLE, interpolated: false });
+    // A column with genuinely missing near-surface wind is not treated as underground.
+    const gapped = decodePackedWindChunk(encodeWindColumns([valley, midSlope, missingNearSurface, missingNearSurface]));
+    expect(samplePackedWindColumns(uphill, [gapped, gapped, gapped, gapped], [0, 1, 2, 3], 1055)).toEqual({ u: null, v: null, status: STATUS_UNAVAILABLE, interpolated: false });
+  });
   it('derives native and fine layout including partial pages', () => {
     const wind = windLayout(16 * 1025, 16, 16, 21), fine = windLayout(64, 64, 64);
     expect([wind.count, wind.chunkBytes, wind.pages, wind.pageCount(0), wind.pageCount(1)]).toEqual([1025, 12 + 256 * (9 + 13 * 21), 3, 512, 512]);

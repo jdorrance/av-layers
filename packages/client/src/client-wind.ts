@@ -1,8 +1,8 @@
 import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, parseWindFrame, windLayout, windOverviewLayout } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
-import { decodePackedWindChunk, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
+import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
 
 type WindStatus = 'valid' | 'unavailable' | 'outside' | 'no-lift';
@@ -10,8 +10,9 @@ export interface WindSample { status: WindStatus; u: number | null; v: number | 
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
-const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, MAX_SPAN_BYTES = 1024 * 1024;
+const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
+const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
@@ -115,11 +116,11 @@ function targetHeight(plan: SamplePlan, height: number | 'lift', useStoredMslNoL
   return { value: height === 'lift' ? value : value + height, status: STATUS_VALID };
 }
 
-function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padding = 2): number[] | null {
+function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padding = 2, mask?: TileMask): number[] | null {
   const geometry = prepareGridGeometry(grid), [west, south, east, north] = bounds;
   const span = west <= east ? east - west : east + 360 - west;
   if (span > 180) {
-    const count = Math.ceil(grid.width / size) * Math.ceil(grid.height / size);
+    const count = mask ? mask.count : Math.ceil(grid.width / size) * Math.ceil(grid.height / size);
     return count <= MAX_CHUNKS ? Array.from({ length: count }, (_, i) => i) : null;
   }
   const points: Array<{ x: number; y: number }> = [];
@@ -145,7 +146,10 @@ function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padd
   const result = new Set<number>();
   for (const [s, e] of intervals) {
     const x0 = Math.max(0, Math.floor(s / size)), x1 = Math.min(w - 1, Math.floor(e / size));
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (result.add(y * w + x).size > MAX_CHUNKS) return null;
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+      const logical = y * w + x, slot = mask ? mask.slot(logical) : logical;
+      if (slot >= 0 && result.add(slot).size > MAX_CHUNKS) return null;
+    }
   }
   return [...result];
 }
@@ -185,7 +189,7 @@ function validateChunk(kind: string, bytes: Uint8Array, tileSize: number, levels
 
 export class WindDataSource {
   private controller?: AbortController;
-  private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; overview?: Overview };
+  private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; windMask?: TileMask; fineMask?: TileMask; overview?: Overview };
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
   private readonly cache: WindDataCache;
@@ -274,14 +278,14 @@ export class WindDataSource {
     if (!bounds.every(Number.isFinite) || bounds[1] < -90 || bounds[3] > 90 || bounds[1] > bounds[3] || bounds[0] < -180 || bounds[0] > 180 || bounds[2] < -180 || bounds[2] > 180) throw new RangeError('Invalid wind bounds');
     const native = build.manifest.surfaces.find(s => s.kind === 'native'), fine = build.manifest.surfaces.find(s => s.kind === 'fine');
     if (!native || !fine) return 'unavailable';
-    let combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-    combined.throwIfAborted();
+    const baseSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    baseSignal.throwIfAborted();
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
-    const readStream = async (url: string, type: string, targets: CachedBytes[]): Promise<number | null | 'unsupported-span'> => {
-      combined.throwIfAborted();
+    const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'unsupported-span'> => {
+      attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
-      const reqSig = AbortSignal.any([combined, reqCtrl.signal]);
+      const reqSig = AbortSignal.any([attemptSignal, reqCtrl.signal]);
       try {
         reqSig.throwIfAborted();
         const res = await (this.options.fetchImpl ?? fetch)(url, { signal: reqSig, redirect: 'error' });
@@ -319,76 +323,99 @@ export class WindDataSource {
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
     descEntry.used = descUsed;
 
-    const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize), fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize);
-    const windBytes = windLayout(native.grid.width, native.grid.height, descriptor.tileSize, descriptor.levels).chunkBytes, fineBytes = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize).chunkBytes;
+    const windTotal = windLayout(native.grid.width, native.grid.height, descriptor.tileSize, descriptor.levels);
+    const fineTotal = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize);
+    const windMask = decodeTileMask(descriptor.windMask, windTotal.count) ?? undefined;
+    const fineMask = decodeTileMask(descriptor.fineMask, fineTotal.count) ?? undefined;
+    const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize, 2, windMask);
+    const fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize, 2, fineMask);
+    const windBytes = windTotal.chunkBytes, fineBytes = fineTotal.chunkBytes;
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
-    let overview: Overview | undefined, rawTasks: Array<{ kind: string; tile: number; bytes: number }> | undefined;
-    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= MAX_BYTES) {
-      rawTasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
-    } else {
+
+    const selectOverview = () => {
       for (const level of descriptor.overview ?? []) {
         const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, bounds, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
         if (!tiles || tiles.length * layout.chunkBytes > MAX_BYTES) continue;
-        overview = { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map() };
-        rawTasks = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
-        break;
+        return {
+          overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
+          tasks: tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }))
+        };
       }
-      if (!rawTasks) return 'unavailable';
-    }
-
-    const coalesce = (this.options.coalesceSpans ?? !this.options.fetchImpl) && !this.cache.spansUnsupported;
-    const batches: Array<{ kind: string; tiles: number[]; bytes: number }> = [];
-    for (const item of coalesce ? [...rawTasks].sort((a, b) => a.kind.localeCompare(b.kind) || a.tile - b.tile) : rawTasks) {
-      const cached = coalesce && this.cache.hasReady(`${root}/${item.kind}/${item.tile}`, item.bytes);
-      const prev = !cached && coalesce ? batches.at(-1) : undefined, lastTile = prev?.tiles.at(-1);
-      if (prev && prev.kind === item.kind && lastTile !== undefined && item.tile === lastTile + 1
-        && Math.floor(item.tile / WIND_INDEX_ENTRIES) === Math.floor(prev.tiles[0]! / WIND_INDEX_ENTRIES)
-        && (prev.tiles.length + 1) * item.bytes <= MAX_SPAN_BYTES
-        && !this.cache.hasReady(`${root}/${prev.kind}/${prev.tiles[0]}`, item.bytes)) {
-        prev.tiles.push(item.tile);
-      } else batches.push({ kind: item.kind, tiles: [item.tile], bytes: item.bytes });
-    }
-
-    combined = AbortSignal.any([combined, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(batches.length / 4) * REQUEST_TIMEOUT_MS)))]);
-    const commit = (kind: string, tile: number, entry: CachedBytes) => {
-      entry.decoded ??= validateChunk(kind, entry.bytes, descriptor.tileSize, descriptor.levels, !!overview);
-      entry.used = entry.bytes.length;
-      if (kind === 'wind') wind.set(tile, entry.decoded as PackedWindChunk);
-      else (overview ? overview.data : fineData).set(tile, entry.decoded as DataView);
+      return undefined;
     };
-    let next = 0;
-    const settled = await Promise.allSettled(Array.from({ length: Math.min(4, batches.length) }, async () => {
-      try {
-        while (next < batches.length) {
-          const batch = batches[next++]!;
-          const entries = batch.tiles.map(tile => this.hold(this.cache.take(`${root}/${batch.kind}/${tile}`, batch.bytes, build.expiresAtMs)));
-          if (entries.length === 1 && entries[0]!.used !== null) { commit(batch.kind, batch.tiles[0]!, entries[0]!); continue; }
-          if (entries.length > 1 && !this.cache.spansUnsupported) {
-            const used = await readStream(`${root}/${batch.kind}/${batch.tiles[0]}-${batch.tiles.at(-1)}`, 'application/octet-stream', entries);
-            if (used !== 'unsupported-span') {
-              if (used === null) throw new Error('Numeric chunk missing');
-              if (used !== batch.tiles.length * batch.bytes) throw new Error('Numeric chunk length mismatch');
-              for (let i = 0; i < entries.length; i++) commit(batch.kind, batch.tiles[i]!, entries[i]!);
-              continue;
+
+    const fetchTasks = async (rawTasks: Array<{ kind: string; tile: number; bytes: number }>, targetOverview?: Overview) => {
+      const coalesce = (this.options.coalesceSpans ?? !this.options.fetchImpl) && !this.cache.spansUnsupported;
+      const batches: Array<{ kind: string; tiles: number[]; bytes: number }> = [];
+      for (const item of coalesce ? [...rawTasks].sort((a, b) => a.kind.localeCompare(b.kind) || a.tile - b.tile) : rawTasks) {
+        const cached = coalesce && this.cache.hasReady(`${root}/${item.kind}/${item.tile}`, item.bytes);
+        const prev = !cached && coalesce ? batches.at(-1) : undefined, lastTile = prev?.tiles.at(-1);
+        if (prev && prev.kind === item.kind && lastTile !== undefined && item.tile === lastTile + 1
+          && Math.floor(item.tile / SPAN_STRIPE) === Math.floor(prev.tiles[0]! / SPAN_STRIPE)
+          && Math.floor(item.tile / WIND_INDEX_ENTRIES) === Math.floor(prev.tiles[0]! / WIND_INDEX_ENTRIES)
+          && (prev.tiles.length + 1) * item.bytes <= MAX_SPAN_BYTES
+          && !this.cache.hasReady(`${root}/${prev.kind}/${prev.tiles[0]}`, item.bytes)) {
+          prev.tiles.push(item.tile);
+        } else batches.push({ kind: item.kind, tiles: [item.tile], bytes: item.bytes });
+      }
+      const attemptCtrl = new AbortController();
+      const attemptSig = AbortSignal.any([baseSignal, attemptCtrl.signal, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(batches.length / 4) * REQUEST_TIMEOUT_MS)))]);
+      const commit = (kind: string, tile: number, entry: CachedBytes) => {
+        entry.decoded ??= validateChunk(kind, entry.bytes, descriptor.tileSize, descriptor.levels, !!targetOverview);
+        entry.used = entry.bytes.length;
+        if (kind === 'wind') wind.set(tile, entry.decoded as PackedWindChunk);
+        else (targetOverview ? targetOverview.data : fineData).set(tile, entry.decoded as DataView);
+      };
+      const check = (used: number | null | 'unsupported-span', expected: number) => {
+        if (used === null || used === 'unsupported-span') throw new Error('Numeric chunk missing');
+        if (used !== expected) throw new Error('Numeric chunk length mismatch');
+      };
+      let next = 0;
+      const settled = await Promise.allSettled(Array.from({ length: Math.min(4, batches.length) }, async () => {
+        try {
+          while (next < batches.length) {
+            const b = batches[next++]!, entries = b.tiles.map(t => this.hold(this.cache.take(`${root}/${b.kind}/${t}`, b.bytes, build.expiresAtMs)));
+            if (entries.length > 1 && !this.cache.spansUnsupported) {
+              const used = await readStream(`${root}/${b.kind}/${b.tiles[0]}-${b.tiles.at(-1)}`, 'application/octet-stream', entries, attemptSig);
+              if (used !== 'unsupported-span') { check(used, entries.length * b.bytes); entries.forEach((e, i) => commit(b.kind, b.tiles[i]!, e)); continue; }
+              this.cache.spansUnsupported = true;
             }
-            this.cache.spansUnsupported = true;
+            for (let i = 0; i < entries.length; i++) {
+              const e = entries[i]!, t = b.tiles[i]!;
+              if (e.used === null) check(await readStream(`${root}/${b.kind}/${t}`, 'application/octet-stream', [e], attemptSig), b.bytes);
+              commit(b.kind, t, e);
+            }
           }
-          for (let i = 0; i < entries.length; i++) {
-            const e = entries[i]!, tile = batch.tiles[i]!;
-            if (e.used !== null) { commit(batch.kind, tile, e); continue; }
-            const used = await readStream(`${root}/${batch.kind}/${tile}`, 'application/octet-stream', [e]);
-            if (used === null || used === 'unsupported-span') throw new Error('Numeric chunk missing');
-            if (used !== batch.bytes) throw new Error('Numeric chunk length mismatch');
-            commit(batch.kind, tile, e);
-          }
-        }
-      } catch (error) { controller.abort(); throw error; }
-    }));
-    const failed = settled.find(r => r.status === 'rejected');
-    if (failed?.status === 'rejected') throw failed.reason;
-    combined.throwIfAborted();
+        } catch (error) { attemptCtrl.abort(); throw error; }
+      }));
+      const failed = settled.find(r => r.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+      attemptSig.throwIfAborted();
+    };
+
+    let overview: Overview | undefined;
+    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= MAX_BYTES) {
+      const detailTasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
+      try {
+        await fetchTasks(detailTasks);
+      } catch (error) {
+        const fallback = !baseSignal.aborted && error instanceof Error && error.message === 'Numeric chunk missing' ? selectOverview() : undefined;
+        if (!fallback) { controller.abort(); throw error; }
+        for (const entry of [...this.held]) if (entry !== descEntry) { this.held.delete(entry); this.cache.release(entry); }
+        wind.clear(); fineData.clear();
+        overview = fallback.overview;
+        try { await fetchTasks(fallback.tasks, overview); } catch (fallbackError) { controller.abort(); throw fallbackError; }
+      }
+    } else {
+      const selected = selectOverview();
+      if (!selected) return 'unavailable';
+      overview = selected.overview;
+      try { await fetchTasks(selected.tasks, overview); } catch (error) { controller.abort(); throw error; }
+    }
+
+    baseSignal.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
-    this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, overview };
+    this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, windMask, fineMask, overview };
     return 'ready';
   }
 
@@ -402,11 +429,18 @@ export class WindDataSource {
     let nearest = 0, nearestOutput = 0;
     for (let i = 0; i < finePlan.contributors.length; i++) {
       const item = finePlan.contributors[i], best = finePlan.contributors[nearest], size = current.fineTileSize;
-      const view = current.fine.get(Math.floor(item.row / size) * Math.ceil(current.fineGrid.width / size) + Math.floor(item.column / size));
-      if (!view) return empty('unavailable');
-      const pos = ((item.row % size) * size + item.column % size) * WIND_FINE_CELL_BYTES, packed = view.getUint8(pos + 8);
-      values[i] = view.getFloat32(pos + (height === 'lift' ? 4 : 0), true);
-      flags[i] = height === 'lift' ? ((packed >> 2) & STATUS_MASK) | view.getUint8(pos + 9) : packed & STATUS_MASK;
+      const logical = Math.floor(item.row / size) * Math.ceil(current.fineGrid.width / size) + Math.floor(item.column / size);
+      const slot = current.fineMask ? current.fineMask.slot(logical) : logical;
+      let packed = STATUS_OUTSIDE | (STATUS_OUTSIDE << 2), support = 0, val = 0;
+      if (slot >= 0) {
+        const view = current.fine.get(slot);
+        if (!view) return empty('unavailable');
+        const pos = ((item.row % size) * size + item.column % size) * WIND_FINE_CELL_BYTES;
+        packed = view.getUint8(pos + 8); support = view.getUint8(pos + 9);
+        val = view.getFloat32(pos + (height === 'lift' ? 4 : 0), true);
+      }
+      values[i] = val;
+      flags[i] = height === 'lift' ? ((packed >> 2) & STATUS_MASK) | support : packed & STATUS_MASK;
       if (i === 0 || nearerContributor(item.weight, item.row, item.column, best.weight, best.row, best.column)) { nearest = i; nearestOutput = (packed >> 4) & 1; }
     }
     if (!nearestOutput) return empty('outside');
@@ -419,7 +453,10 @@ export class WindDataSource {
     chunks.length = windPlan.contributors.length;
     for (let i = 0; i < windPlan.contributors.length; i++) {
       const item = windPlan.contributors[i], size = current.tileSize;
-      chunks[i] = current.wind.get(Math.floor(item.row / size) * Math.ceil(current.native.width / size) + Math.floor(item.column / size));
+      const logical = Math.floor(item.row / size) * Math.ceil(current.native.width / size) + Math.floor(item.column / size);
+      const slot = current.windMask ? current.windMask.slot(logical) : logical;
+      if (slot < 0) { chunks[i] = OUTSIDE_WIND; offsets[i] = 0; continue; }
+      chunks[i] = current.wind.get(slot);
       offsets[i] = (item.row % size) * size + item.column % size;
       if (!chunks[i]) { chunks.length = 0; return empty('unavailable'); }
     }

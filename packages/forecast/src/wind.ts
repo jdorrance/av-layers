@@ -95,43 +95,55 @@ export function decodePackedWindChunk(bytes: Uint8Array): PackedWindChunk {
 
 export function samplePackedWindColumns(plan: SamplePlan, chunks: readonly (PackedWindChunk | undefined)[], offsets: ArrayLike<number>, height: number | 'surface') {
   if (!plan.contributors.length || chunks.length !== plan.contributors.length || offsets.length !== chunks.length) throw new RangeError('Column count does not match plan');
-  let u = 0, v = 0, missing = false, nearest = 0, nearestStatus = STATUS_OUTSIDE, nearestU = 0, nearestV = 0;
+  let u = 0, v = 0, validWeight = 0, validCount = 0, missing = false, nearest = 0, nearestStatus = STATUS_OUTSIDE, nearestU = 0, nearestV = 0;
   for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i], contributor = plan.contributors[i], best = plan.contributors[nearest];
+    const chunk = chunks[i], c = plan.contributors[i], best = plan.contributors[nearest];
     if (!chunk || offsets[i] < 0 || offsets[i] >= chunk.count) throw new RangeError('Column outside wind chunk');
     const view = chunk.view, start = HEADER + offsets[i] * (9 + 13 * chunk.levels), surfaceStatus = view.getUint8(start + 8);
-    let status = surfaceStatus === STATUS_OUTSIDE ? STATUS_OUTSIDE : STATUS_UNAVAILABLE, cu = 0, cv = 0;
+    let status = surfaceStatus === STATUS_OUTSIDE ? STATUS_OUTSIDE : STATUS_UNAVAILABLE, cu = 0, cv = 0, underground = false;
     if (height === 'surface') {
-      status = surfaceStatus;
-      if (status === STATUS_VALID) { cu = view.getFloat32(start, true); cv = view.getFloat32(start + 4, true); }
+      if ((status = surfaceStatus) === STATUS_VALID) { cu = view.getFloat32(start, true); cv = view.getFloat32(start + 4, true); }
     } else if (surfaceStatus !== STATUS_OUTSIDE && Number.isFinite(height)) {
-      for (let j = 0; j < chunk.levels; j++) {
-        const pos = start + 9 + j * 13, levelStatus = view.getUint8(pos + 12);
-        if (levelStatus !== STATUS_VALID) continue;
-        const levelHeight = view.getFloat32(pos, true);
-        if (height === levelHeight) { status = STATUS_VALID; cu = view.getFloat32(pos + 4, true); cv = view.getFloat32(pos + 8, true); break; }
-        if (j + 1 < chunk.levels && view.getUint8(pos + 25) === STATUS_VALID) {
-          const nextHeight = view.getFloat32(pos + 13, true);
-          if (levelHeight < height && height < nextHeight) {
-            const t = (height - levelHeight) / (nextHeight - levelHeight), a = view.getFloat32(pos + 4, true), b = view.getFloat32(pos + 8, true);
+      for (let j = 0, first = true; j < chunk.levels; j++) {
+        const pos = start + 9 + j * 13;
+        if (view.getUint8(pos + 12) !== STATUS_VALID) continue;
+        const h0 = view.getFloat32(pos, true), a = view.getFloat32(pos + 4, true), b = view.getFloat32(pos + 8, true);
+        const nextValid = j + 1 < chunk.levels && view.getUint8(pos + 25) === STATUS_VALID;
+        if (first) {
+          first = false;
+          if (height < h0) {
+            underground = surfaceStatus === STATUS_VALID && (j <= 1 || (nextValid && a === view.getFloat32(start, true) && b === view.getFloat32(start + 4, true)));
+            break;
+          }
+        }
+        if (height === h0) { status = STATUS_VALID; cu = a; cv = b; break; }
+        if (nextValid) {
+          const h1 = view.getFloat32(pos + 13, true);
+          if (h0 < height && height < h1) {
+            const t = (height - h0) / (h1 - h0);
             status = STATUS_VALID; cu = a + t * (view.getFloat32(pos + 17, true) - a); cv = b + t * (view.getFloat32(pos + 21, true) - b); break;
           }
         }
       }
     }
-    missing ||= status !== STATUS_VALID;
-    u += cu * contributor.weight; v += cv * contributor.weight;
-    if (i === 0 || nearerContributor(contributor.weight, contributor.row, contributor.column, best.weight, best.row, best.column)) {
+    if (status === STATUS_VALID) { if (c.weight > 0) { u += cu * c.weight; v += cv * c.weight; validWeight += c.weight; validCount++; } }
+    else if (!underground) missing = true;
+    if (i === 0 || nearerContributor(c.weight, c.row, c.column, best.weight, best.row, best.column)) {
       nearest = i; nearestStatus = status; nearestU = cu; nearestV = cv;
     }
   }
-  if (missing) return { u: nearestStatus === STATUS_VALID ? nearestU : null, v: nearestStatus === STATUS_VALID ? nearestV : null, status: nearestStatus, interpolated: false };
-  return { u, v, status: STATUS_VALID, interpolated: chunks.length !== 1 };
+  if (missing || !validCount || validWeight <= 0) return { u: nearestStatus === STATUS_VALID ? nearestU : null, v: nearestStatus === STATUS_VALID ? nearestV : null, status: nearestStatus, interpolated: false };
+  const s = validCount === chunks.length ? 1 : 1 / validWeight;
+  return { u: u * s, v: v * s, status: STATUS_VALID, interpolated: validCount > 1 };
 }
+
+const TERRAIN_SAMPLE_SPEC = {
+  supportsNoLift: false, noLiftSampleValue: null, supportsLiftFlags: false, zeroOnNoLiftInterpolation: false
+} as const;
 
 export function windTargetHeight(plan: SamplePlan, cells: readonly Cell[], mode: { agl: number } | { lift: true }, useStoredMslNoLift: boolean) {
   if ('lift' in mode) return sampleCells(plan, cells, 'usable-lift-msl', useStoredMslNoLift);
   if (!Number.isFinite(mode.agl) || mode.agl < 0) throw new RangeError('Invalid AGL height');
-  const terrain = sampleCells(plan, cells, 'wind-10m-u', false);
+  const terrain = sampleCells(plan, cells, TERRAIN_SAMPLE_SPEC, false);
   return { ...terrain, value: terrain.value === null ? null : terrain.value + mode.agl };
 }

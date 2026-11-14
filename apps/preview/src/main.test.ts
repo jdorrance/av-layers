@@ -219,6 +219,7 @@ vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, o
   return { update() {}, destroy() {} };
 } }));
 
+const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
 let doc: Document;
 let win: Window;
 let manifest: ManifestV5;
@@ -272,7 +273,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', '');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
-  manifest = fixtureManifestV5();
+  manifest = fixtureManifestV5({ mapData: MAP_DATA });
   vi.stubEnv('VITE_MODEL', manifest.model);
   doc = new Document(); win = new Window();
   fetchMock = vi.fn<typeof fetch>(async () => latest());
@@ -482,7 +483,7 @@ it('aborts hidden wind loads and skips model changes until re-enabled', async ()
   const count = windLoads.length;
   windChange({ ...windState, visible: false });
   expect(pending.signal?.aborted).toBe(true);
-  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
   await selectFrame(1);
@@ -633,7 +634,7 @@ it('does not pair wind from a new build with the previous build raster at the sa
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
 
   const count = windLoads.length;
-  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(windLoads.length).toBeGreaterThan(count));
   expect(windLoads.at(-1)?.frame).toBe(windLoads[0].frame);
@@ -1454,6 +1455,7 @@ it('shows the map lift pair while the selected native profile is pending', async
 it('pages the full native point forecast while later point times keep the raster prefix unchanged', async () => {
   const pointBuild = retainedProfileBuild(), published = pointBuild.manifest;
   if (published.version !== 5) throw new Error('Expected v5');
+  published.mapData = MAP_DATA;
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let loadingLaterHours = false;
@@ -1635,7 +1637,7 @@ it('labels the displayed raster through pending, failed and successful point-tim
 });
 
 it('hides precip-rate in preview while keeping future non-lift layers and km/mi unit switching', async () => {
-  manifest = fixtureManifestV5({ layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] });
+  manifest = fixtureManifestV5({ layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'], mapData: MAP_DATA });
   win.href = 'http://localhost:5173/?model=gfs&layer=precip-rate&units=knots';
   deferWind = true;
   await start();
@@ -1662,4 +1664,29 @@ it('hides precip-rate in preview while keeping future non-lift layers and km/mi 
   expect(ui('units-metric').ariaPressed).toBe('true');
   expect(ui('units-imperial').ariaPressed).toBe('false');
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+});
+
+it('skips numeric wind descriptor requests when manifest omits mapData and retains covering overview on failed detail zoom', async () => {
+  manifest = fixtureManifestV5();
+  await start();
+  expect(windLoads).toHaveLength(0);
+  expect(windStatuses.at(-1)).toBe('unavailable');
+
+  manifest = fixtureManifestV5({ model: 'icon-eu', mapData: MAP_DATA });
+  deferWind = true;
+  modelButton('icon-eu').dispatchEvent(new Event('click'));
+  await vi.waitFor(() => expect(windLoads).toHaveLength(1));
+  windResolve!('ready');
+  await Promise.resolve();
+  const initialField = windFields.at(-1);
+  expect(initialField).toMatchObject({ sample: expect.any(Function) });
+
+  map().bounds = { west: map().bounds.west + 0.1, east: map().bounds.east - 0.1, south: map().bounds.south + 0.1, north: map().bounds.north - 0.1 };
+  map().zoom += 2;
+  map().emit('moveend');
+  expect(windLoads).toHaveLength(2);
+  windResolve!('unavailable');
+  await Promise.resolve();
+  expect(windStatuses.at(-1)).toBe('ready');
+  expect(windFields.at(-1)).toBe(initialField);
 });

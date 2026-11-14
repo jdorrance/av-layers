@@ -31,7 +31,7 @@ it('binds full and partial shard pages to both grids before a reader admits rang
 
 it('admits legacy frames and validates every overview page against its stride', () => {
   const grids = { native: { width: 64 * 513, height: 64 }, fine: { width: 65, height: 65 } };
-  const shards = (layout: ReturnType<typeof windLayout>) => Array.from({ length: layout.pages }, (_, page) => ({ ...shard,
+  const shards = (layout: { pages: number; chunkBytes: number; pageCount(page: number): number }) => Array.from({ length: layout.pages }, (_, page) => ({ ...shard,
     count: layout.pageCount(page), bytes: layout.pageCount(page) * layout.chunkBytes }));
   const descriptor: WindFrame = { version: 3, frame: 'f001', levels: 1, tileSize: 16, fineTileSize: 64,
     wind: shards(windLayout(grids.native.width, grids.native.height, 16, 1)), fine: shards(windLayout(65, 65, 64)) };
@@ -47,4 +47,24 @@ it('admits legacy frames and validates every overview page against its stride', 
   expect(() => assertWindFrameLayout({ ...descriptor, overview: [overview[0], overview[0]] }, grids)).toThrow('stride mismatch');
   expect(() => assertWindFrameLayout({ ...descriptor, overview: [{ ...overview[0], shards: overview[0].shards.slice(0, 1) }] }, grids)).toThrow('layout mismatch');
   expect(() => assertWindFrameLayout({ ...descriptor, overview: [{ ...overview[0], shards: [overview[0].shards[0], { ...overview[0].shards[1], bytes: 1 }] }] }, grids)).toThrow('shard layout mismatch');
+});
+
+it('encodes, decodes, and binds sparse windMask and fineMask bitsets', () => {
+  const grids = { native: { width: 16 * 10, height: 16 }, fine: { width: 64 * 10, height: 64 } };
+  const present = Uint8Array.of(0b0000_0101, 0b0000_0010); // tiles 0, 2, 9 out of 10
+  const mask = btoa(String.fromCharCode(...present));
+  const sparse: WindFrame = {
+    version: 3, frame: 'f001', levels: 2, tileSize: 16, fineTileSize: 64,
+    windMask: mask, fineMask: mask,
+    wind: [{ ...shard, count: 3, bytes: 3 * (12 + 256 * (9 + 26)) }],
+    fine: [{ ...shard, count: 3, bytes: 3 * 40960 }]
+  };
+  expect(() => assertWindFrameLayout(parseWindFrame(bytes(sparse)), grids)).not.toThrow();
+  expect(() => assertWindFrameLayout({ ...sparse, fine: [{ ...shard, count: 2, bytes: 2 * 40960 }] }, grids)).toThrow('shard layout mismatch');
+  // Trailing bits outside totalTiles (bit 10 set when totalTiles = 10) must fail.
+  const badTrailing = btoa(String.fromCharCode(0b0000_0101, 0b0000_0110));
+  expect(() => assertWindFrameLayout({ ...sparse, fineMask: badTrailing }, grids)).toThrow('tile mask');
+  // All-ones mask must be omitted rather than sent redundantly.
+  const allOnes = btoa(String.fromCharCode(0xff, 0b0000_0011));
+  expect(() => assertWindFrameLayout({ ...sparse, fineMask: allOnes, fine: [{ ...shard, count: 10, bytes: 10 * 40960 }] }, grids)).toThrow('tile mask');
 });

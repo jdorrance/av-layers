@@ -180,6 +180,27 @@ it.each(['abort', 'cancel'] as const)('retains a streaming slot until asynchrono
   scheduler.dispose();
 });
 
+it('evicts a queued speculative request to admit foreground work when the queue is full', async () => {
+  const first = streamResponse(), fetchImpl = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(first.response).mockImplementation(async () => new Response('ok'));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 1, maxQueued: 2 });
+  const response = await scheduler.fetch('https://example.test/active');
+  const p1 = scheduler.fetch('https://example.test/prefetch-1', { priority: 'low' } as RequestInit);
+  const p2 = scheduler.fetch('https://example.test/prefetch-2', { priority: 'low' } as RequestInit);
+  const p1Rejected = expect(p1).rejects.toMatchObject({ name: 'AbortError' });
+  await expect(scheduler.fetch('https://example.test/prefetch-3', { priority: 'low' } as RequestInit)).rejects.toThrow('queue is full');
+  const foreground = scheduler.fetch('https://example.test/foreground');
+  await p1Rejected;
+  expect(scheduler.stats()).toEqual({ active: 1, queued: 2 });
+  await response.body!.cancel();
+  expect(await (await foreground).text()).toBe('ok');
+  expect(await (await p2).text()).toBe('ok');
+  expect(fetchImpl.mock.calls.map(call => call[0])).toEqual([
+    'https://example.test/active', 'https://example.test/foreground', 'https://example.test/prefetch-2'
+  ]);
+  scheduler.dispose();
+});
+
 it.each([{ maxActive: 0 }, { maxActive: 7 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }])('rejects invalid limits: %j', options => {
   expect(() => createForecastRequestScheduler(options)).toThrow('Invalid forecast request limits');
 });

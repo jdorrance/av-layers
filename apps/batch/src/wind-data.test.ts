@@ -30,10 +30,17 @@ it('admits the complete encoded, index and descriptor estimate before creating a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-it('admits the GFS wind estimate alongside existing numeric products', () => {
+it('admits the GFS sparse wind estimate with multi-level headroom alongside existing numeric products', async () => {
   const product = getProduct('gfs')!, plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor!);
+  const { loadCoverage } = await import('./coverage.js');
+  const { acquisitionSupport, loadBundledFineCoverage } = await import('./whole-domain/coverage.js');
+  const mask = await loadCoverage(product), fine = await loadBundledFineCoverage(product, plan);
+  const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+  const sparsity = { activeIndices: active, fineCoverage: fine.mask.coverage };
   const existing = 11_696_592_960;
-  expect(() => createWindDataWriter('.', 'gfs', 'build', product.capabilities.maxVerticalLevels, plan, { mapFrames: 40, numericBytes: existing, estimatedPeakBytes: 0 })).not.toThrow();
+  // Admits +15 extra vertical levels within the 64 MiB shard cap while leaving >35 GiB of numericBytes free.
+  expect(() => createWindDataWriter('.', 'gfs', 'build', product.capabilities.maxVerticalLevels + 15, plan,
+    { mapFrames: 40, numericBytes: existing + 35 * 1024 ** 3, estimatedPeakBytes: 0 }, undefined, sparsity)).not.toThrow();
 });
 
 it.each(PRODUCTS)('admits actual full and partial shard pages for $modelId', product => {
@@ -142,5 +149,47 @@ it('keeps useful overview coverage around a no-lift island and preserves wholly 
     expect(view.getUint8(offset(0, WIND_OVERVIEW_VALUES - 2) + 8)).toBe(STATUS_UNAVAILABLE);
     expect(view.getFloat32(offset(0, WIND_OVERVIEW_VALUES - 2), true)).toBe(0);
     expect(view.getFloat32(2 * 32 * 32 * WIND_OVERVIEW_CELL_BYTES, true)).toBe(257);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('omits all-outside wind and fine tiles with sparse masks and preserves coastal outside status', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-wind-sparse-'));
+  try {
+    const native = { kind: 'regular-latlon' as const, width: 272, height: 16, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+    const fine = { ...native, width: 1088, height: 64, dx: 0.25, dy: 0.25 }, plan = { native, fine };
+    const fineCells = fine.width * fine.height, output = new Uint8Array(Math.ceil(fineCells / 8)), halo = new Uint8Array(output.length);
+    // Activate only logical tile 1 out of 17 (fine x=64..71, native x=16..17), leaving 16 tiles outside.
+    for (let y = 0; y < 8; y++) for (let x = 64; x < 72; x++) { const idx = y * fine.width + x; output[idx >> 3] |= 1 << (idx & 7); }
+    const coverage = sparseCoverageFromDense({ width: fine.width, height: fine.height, wrapLongitude: false, gridHash: 'b'.repeat(64), output, halo });
+    const activeIndices = Uint32Array.from({ length: 16 * 16 }, (_, i) => Math.floor(i / 16) * native.width + 16 + (i % 16));
+    const n = activeIndices.length, values = (v: number) => new Float32Array(n).fill(v), zeros = () => new Uint8Array(n);
+    const aux = (v: number) => ({ values: values(v), missing: zeros() });
+    const frame = { activeIndices, terrainM: values(0), surfacePressurePa: values(100000), pressureLevelsHpa: [900], hgtM: [values(1000)],
+      missing: { terrain: zeros(), surfacePressure: zeros(), hgt: [zeros()] },
+      auxSurface: { u10mMps: aux(3), v10mMps: aux(4) }, auxLevels: { uWindMps: [aux(6)], vWindMps: [aux(8)] }
+    } as unknown as NormalizedFrame;
+    const storedCount = coverage.blockIds.length * 256;
+    const lift = { values: new Float32Array(storedCount), flags: new Uint8Array(storedCount).fill(STATUS_NO_LIFT) };
+    const prepared = { plan, fine: { mask: { coverage } } } as unknown as WholeDomainPrepared;
+    const writer = createWindDataWriter(root, 'gfs', 'build', 1, plan, { mapFrames: 1, numericBytes: 0, estimatedPeakBytes: 0 }, undefined, { activeIndices, fineCoverage: coverage });
+    await writer.writeFrame(frame, 'f1', lift, prepared, { elevationM: new Float32Array(fineCells), valid: new Uint8Array(fineCells).fill(1) });
+    const descriptor = JSON.parse(await readFile(join(root, 'builds/gfs/build/map-data/f1.json'), 'utf8'));
+    expect(descriptor.wind).toHaveLength(1);
+    expect(descriptor.wind[0].count).toBe(1);
+    expect(descriptor.fine).toHaveLength(1);
+    expect(descriptor.fine[0].count).toBe(1);
+    const expectedMask = Buffer.from([0b10, 0, 0]).toString('base64');
+    expect(descriptor.windMask).toBe(expectedMask);
+    expect(descriptor.fineMask).toBe(expectedMask);
+    // Stride-4 coastal cell ox=4 (native x=16..19, y=0..3) has only 4/16 no-lift cells and 12/16 outside ocean cells -> stays STATUS_OUTSIDE.
+    const overview = await readFile(join(root, 'builds/gfs/build/map-data/f1/overview-4-0.bin'));
+    const ov = new DataView(overview.buffer, overview.byteOffset, overview.byteLength);
+    expect(ov.getUint8(3 * WIND_OVERVIEW_CELL_BYTES + (WIND_OVERVIEW_VALUES - 1) * 9 + 8)).toBe(STATUS_OUTSIDE);
+    expect(ov.getUint8(4 * WIND_OVERVIEW_CELL_BYTES + (WIND_OVERVIEW_VALUES - 1) * 9 + 8)).toBe(STATUS_OUTSIDE);
+    const manifest = { model: 'gfs', buildId: 'build', frames: [{ id: 'f1' }],
+      surfaces: [{ kind: 'native', grid: native }, { kind: 'fine', grid: fine }] } as ManifestV5;
+    writer.finishShard();
+    const ref = await writer.finish();
+    expect((await localWindData(root, manifest))!.reference).toEqual(ref);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

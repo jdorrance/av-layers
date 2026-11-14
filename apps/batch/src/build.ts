@@ -42,7 +42,8 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
   const preparation = { elapsedMs: Date.now() - Date.parse(stamp.createdAt), peakRssBytes: process.resourceUsage().maxRSS * 1024 };
   const prefix = `builds/${options.product.modelId}/${stamp.buildId}`;
   const capacity = options.numericWind ? planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, prepared, [options.product.frameHours])).capacity : undefined;
-  const writer = capacity ? createWindDataWriter(options.out, options.product.modelId, stamp.buildId, options.provider.maxLevels, prepared.plan, capacity, options.signal) : undefined;
+  const writer = capacity?.mapFrames ? createWindDataWriter(options.out, options.product.modelId, stamp.buildId, options.provider.maxLevels, prepared.plan, capacity, options.signal,
+    { activeIndices: prepared.acquisitionActive, fineCoverage: prepared.fine.mask.coverage }) : undefined;
   const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix,
     onNumericFrame: writer ? async (...args) => { await writer.writeFrame(...args); await options.onNumericFrame?.(...args); } : options.onNumericFrame });
   const mapData = writer ? await writer.finish(result.capacity.mapFrames) : undefined;

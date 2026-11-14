@@ -30,6 +30,7 @@ import { readTile } from './pmtiles';
 import { paletteSvg } from './palette-svg';
 import { resolveSparseTiles, sha256 } from './coverage';
 import { type RequestMetrics, boundResponse, r2WaitDuration, ResourceLimitError, waitFor, type WaitContext } from './resources';
+import { windFrameSchema } from '@av/contracts/wind-data';
 import { windChunk, windFrame } from './wind-data';
 import { pointer, pointerCacheState, admit, manifest, provenanceReference, servedSource, artifact, readProvenance, readProvenanceFrame } from './publication';
 import { Problem, fail, query, response, json, finish, cached, validIp, canceledRequest, handleError } from './http';
@@ -329,6 +330,28 @@ async function pinnedBuild(c: Context<Env>) {
 }
 const pinnedManifest = async (c: Context<Env>) => (await pinnedBuild(c)).manifest;
 
+app.openAPIRegistry.registerPath(
+  createRoute({
+    method: 'get',
+    path: '/v1/models/{model}/runs/{buildId}/data/{frame}',
+    request: { params: z.object({ model: param, buildId: param, frame: param }), query: z.object({}) },
+    responses: {
+      200: { description: 'Numeric wind frame descriptor', content: { 'application/json': { schema: windFrameSchema.meta({ id: 'WindFrameDescriptor' }) } } },
+      ...problemResponses
+    }
+  })
+);
+app.openAPIRegistry.registerPath(
+  createRoute({
+    method: 'get',
+    path: '/v1/models/{model}/runs/{buildId}/data/{frame}/{kind}/{tile}',
+    request: { params: z.object({ model: param, buildId: param, frame: param, kind: param, tile: param }), query: z.object({}) },
+    responses: {
+      200: { description: 'Verified numeric wind, fine companion, or overview chunk (single tile or start-end span)', content: { 'application/octet-stream': { schema: z.string().openapi({ type: 'string', format: 'binary' }) } } },
+      ...problemResponses
+    }
+  })
+);
 app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
   query(new URL(c.req.url), []);
   const { entry, manifest: m } = await pinnedBuild(c), frame = requiredParam(c, 'frame');

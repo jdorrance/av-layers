@@ -201,17 +201,21 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     pointWind.textContent = `Map wind · ${validTime.slice(0, 16).replace('T', ' ')} UTC · ${value}`;
   }
 
+  function coversBounds(outer: readonly [number, number, number, number], inner: readonly [number, number, number, number]): boolean {
+    const span = (w: number, e: number) => (e - w + 360) % 360 || (e === w ? 0 : 360);
+    return inner[1] >= outer[1] && inner[3] <= outer[3] && span(outer[0], inner[0]) + span(inner[0], inner[2]) <= span(outer[0], outer[2]);
+  }
+
   function updateWind(): void {
     if (!windControls.state.visible) { cancelWindRequest(); return; }
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
-    if (build.manifest.mapData === undefined && 'mapData' in build.manifest) { clearWind(); return; }
+    if (!build.manifest.mapData) { clearWind(); return; }
     const bounds = map.getBounds(), west = bounds.getWest(), east = bounds.getEast();
     const view: [number, number, number, number] = [east - west >= 360 ? -180 : normalizeLon(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : normalizeLon(east), Math.min(90, bounds.getNorth())];
-    const identity = windView, span = (w: number, e: number) => (e - w + 360) % 360 || (e === w ? 0 : 360);
+    const identity = windView;
     if (identity && identity.build === build && identity.frame === selectedFrame
       && (identity.source.isOverview === false || map.getZoom() <= identity.zoom)
-      && view[1] >= identity.bounds[1] && view[3] <= identity.bounds[3]
-      && span(identity.bounds[0], view[0]) + span(view[0], view[2]) <= span(identity.bounds[0], identity.bounds[2])) {
+      && coversBounds(identity.bounds, view)) {
       cancelWindRequest(); setWindStatus('ready'); reconcileWind(); return;
     }
     const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view, map.getZoom()]);
@@ -230,13 +234,15 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   async function loadWind(request: WindRequest): Promise<void> {
     windLoading = true;
+    const retainFallback = () => Boolean(windView && windView.build === request.build && windView.frame === request.frame && coversBounds(windView.bounds, request.bounds));
     try {
       const status = await request.source.load({ ...request, signal: request.controller.signal });
       if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
-      if (status === 'ready') { windView?.source.dispose(); windView = request; if (windDisplayed) setWindField(); }
-      setWindStatus(status); reconcileWind();
+      if (status === 'ready') { windView?.source.dispose(); windView = request; if (windDisplayed) setWindField(); setWindStatus('ready'); }
+      else setWindStatus(retainFallback() ? 'ready' : status);
+      reconcileWind();
     } catch {
-      if (windRequest === request && !request.controller.signal.aborted) { setWindStatus('unavailable'); reconcileWind(); }
+      if (windRequest === request && !request.controller.signal.aborted) { setWindStatus(retainFallback() ? 'ready' : 'unavailable'); reconcileWind(); }
     } finally {
       if (windRequest === request) windRequest = null;
       if (windView !== request) request.source.dispose();

@@ -23,7 +23,7 @@ export function isForecastPlanDeadline(createdAt: string, deadline: number): boo
   return elapsed === BUILD_BUDGETS.elapsedMs || elapsed === LEGACY_FORECAST_ELAPSED_MS;
 }
 export const MAX_V5_SHARD_BYTES = 64 * 1024 * 1024;
-// A single GFS group can contain 40 frames × 119 numeric objects.
+// Worst-case 40-frame GFS group receipt fits within 8,192 object entries (<= 127 numeric objects/frame dense, ~35/frame sparse).
 export const MAX_FORECAST_RECEIPT_ENTRIES = 8192;
 
 interface FrameResources { maxLevels: number; auxiliarySurfaceFields?: number; auxiliaryLevelFields?: number }

@@ -31,6 +31,8 @@ import { hourSampleParts, verifyPublicationReceipts } from './build-receipts.js'
 import { createWindDataWriter, localWindData } from './wind-data.js';
 import { WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameParts, windDataSchema, parseWindFrame } from '@av/contracts/wind-data';
 
+const windSparsity = (whole: WholeDomainPrepared) => ({ activeIndices: whole.acquisitionActive, fineCoverage: whole.fine.mask.coverage });
+
 export { MAX_FORECAST_SHARDS } from '@av/contracts';
 const digestSchema = artifactSchema.shape.tilesSha256;
 const objectReceiptSchema = z.strictObject({ key: z.string().min(1), bytes: z.number().int().positive().max(BUILD_BUDGETS.samplePackBytes), sha256: digestSchema, etag: z.string().min(1) });
@@ -108,7 +110,9 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
   const prefix = `builds/${plan.model}/${plan.buildId}`;
   const mapped = mapFrameCount({ ...product, frameHours: plan.groups[shard]! });
   const numericFrames = frames.slice(0, mapped).map(frame => frame.id);
-  if (!!receipt.numeric !== !!plan.numericWind || (receipt.numeric && !same(receipt.numeric.frames.map(frame => frame.id), numericFrames))) throw new Error('Forecast shard numeric frame mismatch');
+  if (plan.numericWind ? (mapped > 0 && !receipt.numeric) || !same(receipt.numeric?.frames.map(frame => frame.id) ?? [], numericFrames) : Boolean(receipt.numeric)) {
+    throw new Error('Forecast shard numeric frame mismatch');
+  }
   if (receipt.numeric) {
     const keys = new Set<string>(), base = `${prefix}/map-data/`;
     for (const object of receipt.numeric.objects) {
@@ -223,7 +227,8 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   const prepared = await prepareWholeDomain({ product, mask, out: root, maxLevels: provider.maxLevels, wholeDomain: options.wholeDomain, signal: options.signal });
   const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
-  if (options.numericWind) createWindDataWriter(root, product.modelId, stamp.buildId, provider.maxLevels, prepared.plan, capacity);
+  const numericWind = Boolean(options.numericWind && capacity.mapFrames);
+  if (numericWind) createWindDataWriter(root, product.modelId, stamp.buildId, provider.maxLevels, prepared.plan, capacity, options.signal, windSparsity(prepared));
   const source = !options.sourcePin && provider.resolveRun ? await provider.resolveRun({ cycle: options.cycle,
     cacheDir: localPath(root, '.cache/source'), store: options.store, signal: options.signal }) : undefined;
   if (source && Date.parse(source.cycle) !== Date.parse(options.cycle)) throw new Error('Pinned upstream cycle differs from the planned cycle');
@@ -251,7 +256,7 @@ export async function createBuildPlan(options: PlanOptions & ForecastInputs): Pr
   }
   const plan = planSchema.parse({ version: 2, model: product.modelId, ...stamp, deadlineAt, cycle: new Date(options.cycle).toISOString(),
     coverageHash: prepared.native.hash, providerId: provider.id, recipe: identity.recipe, execution, groups, wholeDomain: frozen, preparation,
-    ...(sourcePin ? { sourcePin } : {}), ...(dependencies.length ? { dependencies } : {}), ...(options.numericWind ? { numericWind: true } : {}) });
+    ...(sourcePin ? { sourcePin } : {}), ...(dependencies.length ? { dependencies } : {}), ...(numericWind ? { numericWind: true } : {}) });
   options.signal?.throwIfAborted();
   await writeFile(localPath(root, 'plan.json'), encodeBoundedJson(plan, MAX_MANIFEST_BYTES), { flag: 'wx' });
   return plan;
@@ -287,7 +292,7 @@ async function admitPlan(plan: BuildPlan, inputs: ForecastInputs & Pick<BuildOpt
   // Receipt-only resume can cross unrelated commits; producer content and dirty state stay pinned.
   const recipe = resume ? { ...identity.recipe, sourceRevision: plan.recipe.sourceRevision } : identity.recipe;
   if (!same(plan.recipe, recipe)) throw new Error('Forecast plan recipe or source revision changed; start a fresh forecast');
-  if (plan.numericWind) createWindDataWriter(resolve(inputs.out), plan.model, plan.buildId, provider.maxLevels, prepared.plan, admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, plan.groups)));
+  if (plan.numericWind) createWindDataWriter(resolve(inputs.out), plan.model, plan.buildId, provider.maxLevels, prepared.plan, admitWholeDomain(wholeDomainCapacityInput(product, provider, prepared, plan.groups)), inputs.signal, windSparsity(prepared));
   return { plan, prepared, identity, product };
 }
 
@@ -319,7 +324,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
     const whole = prepared;
     if (options.store) await stagePlanTerrain(root, plan, whole, options.store, options.signal);
     const capacity = admitWholeDomain(wholeDomainCapacityInput(options.product, options.provider, whole, [plan.groups[shard]]));
-    const numericWriter = plan.numericWind && capacity.mapFrames ? createWindDataWriter(root, plan.model, plan.buildId, options.provider.maxLevels, whole.plan, capacity, options.signal) : undefined;
+    const numericWriter = plan.numericWind && capacity.mapFrames ? createWindDataWriter(root, plan.model, plan.buildId, options.provider.maxLevels, whole.plan, capacity, options.signal, windSparsity(whole)) : undefined;
     const result = await buildWholeDomainFrames({ ...options, prepared: whole, buildId: plan.buildId, createdAt: plan.createdAt, cycle: plan.cycle,
       sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], deadlineAt: deadline, journalPrefix: prefix, sampleGroup: shard,
       ...(numericWriter ? { onNumericFrame: numericWriter.writeFrame } : {}) });
@@ -374,10 +379,10 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
 
 async function assembleWindData(root: string, plan: BuildPlan, whole: WholeDomainPrepared, receipts: WholeDomainReceipt[], store?: ObjectStorage, signal?: AbortSignal, checkOnly = false) {
   if (!plan.numericWind) return;
-  const prefix = `builds/${plan.model}/${plan.buildId}`, frames = receipts.flatMap(receipt => receipt.numeric!.frames);
+  const prefix = `builds/${plan.model}/${plan.buildId}`, frames = receipts.flatMap(receipt => receipt.numeric?.frames ?? []);
   const rootBytes = encodeBoundedJson(windDataSchema.parse({ version: 1, model: plan.model, buildId: plan.buildId, frames }), WIND_ROOT_LIMIT);
   for (const receipt of receipts) {
-    const numeric = receipt.numeric!, objects = new Map(numeric.objects.map(object => [object.key, object]));
+    const numeric = receipt.numeric ?? { frames: [], objects: [] }, objects = new Map(numeric.objects.map(object => [object.key, object]));
     if (objects.size !== numeric.objects.length) throw new Error('Duplicate numeric wind receipt');
     const expected = new Map<string, { bytes: number; sha256: string }>();
     for (const frame of numeric.frames) {
@@ -538,7 +543,7 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
   }
   const mapData = await assembleWindData(root, plan, whole, receipts, store, signal, true);
   if (manifest.mapData && (!mapData || manifest.mapData.sha256 !== mapData.sha256 || manifest.mapData.bytes !== mapData.bytes)) throw new Error('Manifest numeric wind identity mismatch');
-  if (plan.numericWind) onNumericReceipts?.(receipts.flatMap(receipt => receipt.numeric!.objects.map(object => ({ ...object, etag: object.etag! }))));
+  if (plan.numericWind) onNumericReceipts?.(receipts.flatMap(receipt => (receipt.numeric?.objects ?? []).map(object => ({ ...object, etag: object.etag! }))));
   return verifyPublicationReceipts({ root, manifest, store, plan, receipts, product: admitted.product, whole, signal });
 }
 

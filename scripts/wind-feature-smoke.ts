@@ -1,5 +1,10 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer, type AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
 
 export interface WindFeatureSmokeOptions {
@@ -481,12 +486,82 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
   return results();
 }
 
+async function freePort(): Promise<number> {
+  return new Promise((resolvePort, rejectPort) => {
+    const server = createServer();
+    server.once('error', rejectPort);
+    server.listen(0, '127.0.0.1', () => {
+      const port = (server.address() as AddressInfo).port;
+      server.close(err => err ? rejectPort(err) : resolvePort(port));
+    });
+  });
+}
+
+async function waitForHttp(url: string, deadlineMs: number): Promise<void> {
+  while (Date.now() < deadlineMs) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(500) });
+      await response.body?.cancel();
+      if (response.ok) return;
+    } catch { /* Server still booting. */ }
+    await new Promise(resolveWait => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`Timed out waiting for ${url}`);
+}
+
+async function runWithOfflineFixture(options: Omit<WindFeatureSmokeOptions, 'baseUrl'>): Promise<WindFeatureSmokeResult> {
+  const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const tempRoot = await mkdtemp(join(tmpdir(), 'av-wind-smoke-'));
+  const children: ChildProcess[] = [];
+  const terminate = (signal: NodeJS.Signals) => {
+    for (const child of children) {
+      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); }
+      catch { child.kill(signal); }
+    }
+  };
+  try {
+    const [{ OFFLINE_PRODUCT }, { generateOfflineFixture }, { seedLocalBuild }] = await Promise.all([
+      import('@av/contracts/fixture-product'),
+      import('./dev-fixture.js'),
+      import('./sample-preview.js')
+    ]);
+    const manifestPath = await generateOfflineFixture(join(tempRoot, 'output'));
+    const seeded = await seedLocalBuild({ manifestPath, persistTo: join(tempRoot, 'state'), fixture: true, trustedProduct: OFFLINE_PRODUCT });
+    const [apiPort, webPort] = await Promise.all([freePort(), freePort()]);
+    const apiDir = join(repoRoot, 'apps', 'api'), previewDir = join(repoRoot, 'apps', 'preview');
+    const wranglerJs = join(repoRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
+    const api = spawn(process.execPath, [
+      wranglerJs, 'dev', join(apiDir, 'test', 'fixture-worker.ts'), '--local', '--var', 'AV_LOCAL_DEVELOPMENT:true',
+      '--ip', '127.0.0.1', '--port', String(apiPort), '--persist-to', seeded.persistTo, '--log-level', 'error', '--show-interactive-dev-session=false'
+    ], { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
+    children.push(api);
+    await waitForHttp(`http://127.0.0.1:${apiPort}/healthz`, Date.now() + 20_000);
+    const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'], {
+      cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
+      env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${apiPort}`, VITE_MODEL: seeded.manifest.model, VITE_OFFLINE_FIXTURE: 'true', VITE_BUILD_REVISION: 'smoke' }
+    });
+    children.push(web);
+    await waitForHttp(`http://127.0.0.1:${webPort}/`, Date.now() + 20_000);
+    return await runWindFeatureSmoke({ ...options, baseUrl: `http://127.0.0.1:${webPort}` });
+  } finally {
+    terminate('SIGTERM');
+    const force = setTimeout(() => terminate('SIGKILL'), 3_000).unref();
+    await Promise.allSettled(children.map(child => new Promise<void>(done => {
+      if (child.exitCode !== null || child.signalCode !== null) { done(); return; }
+      child.once('close', () => done());
+    })));
+    clearTimeout(force);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 async function main(): Promise<void> {
   const { values } = parseArgs({
     strict: true,
     allowPositionals: false,
     options: {
-      url: { type: 'string', default: 'http://127.0.0.1:5173' },
+      url: { type: 'string' },
+      fixture: { type: 'boolean' },
       channel: { type: 'string' },
       headed: { type: 'boolean' },
       timeout: { type: 'string' },
@@ -494,14 +569,20 @@ async function main(): Promise<void> {
     }
   });
   if (values.help) {
-    console.log('Usage: node --import tsx scripts/wind-feature-smoke.ts --url http://127.0.0.1:5173 [--channel chrome] [--headed] [--timeout 45000]');
+    console.log('Usage: node --import tsx scripts/wind-feature-smoke.ts [--fixture | --url http://127.0.0.1:5173] [--channel chrome] [--headed] [--timeout 45000]');
     return;
   }
-  const raw = values.url ?? 'http://127.0.0.1:5173';
-  const baseUrl = /^[a-z]+:\/\//i.test(raw) ? raw : `http://${raw}`;
+  if (values.fixture && values.url) throw new Error('--fixture and --url are mutually exclusive');
   const timeout = values.timeout === undefined ? 45_000 : Number(values.timeout);
   if (!Number.isInteger(timeout) || timeout < 5_000) throw new Error('--timeout must be an integer of at least 5000 ms');
-  const result = await runWindFeatureSmoke({ baseUrl, channel: values.channel, headed: values.headed, timeoutMs: timeout });
+  const result = values.fixture
+    ? await runWithOfflineFixture({ channel: values.channel, headed: values.headed, timeoutMs: timeout })
+    : await runWindFeatureSmoke({
+      baseUrl: /^[a-z]+:\/\//i.test(values.url ?? 'http://127.0.0.1:5173') ? (values.url ?? 'http://127.0.0.1:5173') : `http://${values.url}`,
+      channel: values.channel,
+      headed: values.headed,
+      timeoutMs: timeout
+    });
   console.log(JSON.stringify(result, null, 2));
   process.exitCode = result.ok ? 0 : 1;
 }

@@ -117,3 +117,34 @@ it('publishes opted-in sharded numeric data and serves its retained HTTP chunk',
     expect(overviewBytes).toBeLessThanOrEqual(256 * 1024);
   } finally { overrides.product = undefined; overrides.provider = undefined; overrides.mask = undefined; overrides.fine = undefined; await rm(root, { recursive: true, force: true }); }
 }, 120_000);
+
+it('finalizes opted-in numeric wind when a trailing shard lies past mapEndHour', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'av-numeric-short-map-')), store = new PublicationStore();
+  try {
+    const configured = { ...product, modelId: 'gfs', frameHours: [12, 24], mapEndHour: 12 }, source = fixtureProvider().provider;
+    const provider: ForecastProvider = { ...source, async open(options) {
+      const session = await source.open(options);
+      return { ...session, async acquire(hour, target) {
+        const frame = await session.acquire(hour, target), field = (value: number) => ({ values: new Float32Array(frame.activeIndices.length).fill(value), missing: new Uint8Array(frame.activeIndices.length) });
+        frame.auxSurface = { u10mMps: field(4), v10mMps: field(2) };
+        frame.auxLevels = { uWindMps: [field(6), field(8), field(10)], vWindMps: [field(3), field(4), field(5)] };
+        return frame;
+      } };
+    } };
+    overrides.product = configured; overrides.provider = provider; overrides.mask = mask;
+    const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000 - 3600000).toISOString();
+    const wholeDomain = await syntheticWholeDomain(root, configured); overrides.fine = wholeDomain.fine;
+    const plan = await createBuildPlan({ out: root, cycle, product: configured, mask, provider, shards: 2, store, numericWind: true, wholeDomain });
+    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ out: root, plan, shard, product: configured, mask, provider, store });
+    const tailReceiptPath = join(root, 'shards/1/receipt.json'), tailReceipt = JSON.parse(await readFile(tailReceiptPath, 'utf8'));
+    expect(tailReceipt.numeric).toEqual({ frames: [], objects: [] });
+    delete tailReceipt.numeric;
+    await writeFile(tailReceiptPath, JSON.stringify(tailReceipt));
+    const manifestPath = await finalizeBuild({ out: root, plan, product: configured, mask, provider, store });
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    expect(manifest.mapFrameCount).toBe(1);
+    expect(manifest.mapData).toBeDefined();
+    const mapData = JSON.parse(Buffer.from(store.objects.get(`builds/gfs/${plan.buildId}/map-data.json`)!.bytes).toString());
+    expect(mapData.frames).toHaveLength(1);
+  } finally { overrides.product = undefined; overrides.provider = undefined; overrides.mask = undefined; overrides.fine = undefined; await rm(root, { recursive: true, force: true }); }
+}, 120_000);

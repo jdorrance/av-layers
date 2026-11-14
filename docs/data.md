@@ -88,6 +88,39 @@ The full point forecast uses the complete frame axis. Historical frames remain
 viewable until the build's `expiresAt` deadline. See [operations](operations.md)
 for publication and expiry rules.
 
+## Numeric wind map data
+
+Builds opted in via `AV_NUMERIC_WIND=true` publish verified binary wind fields
+alongside map rasters (`mapData` on the manifest and retained pointer; non-numeric
+builds omit `mapData` and return HTTP `409 product-unavailable` on `/data/...`).
+[wind-data.ts](../packages/contracts/src/wind-data.ts) owns the wire contract:
+
+- `GET /v1/models/{model}/runs/{buildId}/data/{frame}` returns a JSON
+  `WindFrameDescriptor` (`version: 3`, `tileSize: 16`, `fineTileSize: 64`,
+  `levels`, `wind`, `fine`, optional `overview`, and optional canonical base64
+  bitsets `windMask` / `fineMask`). When a mask is present, bit `i` (`bytes[i >> 3] & (1 << (i & 7))`)
+  marks whether logical row-major tile `i` intersects active coverage; all-outside
+  tiles are omitted and compact slot `s` maps to the `s`-th set bit.
+- `GET /v1/models/{model}/runs/{buildId}/data/{frame}/{kind}/{tile}` returns raw
+  `application/octet-stream` bytes for `kind` in `wind`, `fine`, or
+  `overview-{stride}` (`2`, `4`, `8`, `16`). `{tile}` is either a single compact
+  slot (`0`) or a contiguous single-page inclusive span (`start-end`, up to `1 MiB`).
+  Each page stores up to `512` equal-sized chunks in `{kind}-{page}.bin` paired
+  with `512 × 32`-byte SHA-256 digests in `{kind}-{page}.idx`.
+
+Little-endian binary chunk layouts:
+
+- `wind` (`WND2`): 12-byte header (`u32 magic = 0x32444e57`, `u16 version = 1`,
+  `u16 levels`, `u32 columns = tileSize²`), followed for each column by a 9-byte
+  10 m surface vector (`f32 u`, `f32 v`, `u8 status`) and `levels` ascending
+  13-byte upper-air records (`f32 heightMsl`, `f32 u`, `f32 v`, `u8 status`).
+- `fine`: `fineTileSize²` 10-byte cells (`f32 terrainM`, `f32 liftMslM`,
+  `u8 packedFlags = terrainStatus | (liftStatus << 2) | (outputBit << 4)`,
+  `u8 support`).
+- `overview-{stride}`: `32 × 32` coarse cells × `12` vertical modes (`surface`,
+  fixed AGL heights `20, 100, 300, 600, 1000, 1500, 2000, 3000, 4000, 5000 m`,
+  and `lift`) × 9-byte vector (`f32 u`, `f32 v`, `u8 status`, `108` bytes/cell).
+
 ## Colour and interpolation
 
 [layers.ts](../packages/contracts/src/layers.ts) defines palette thresholds,
@@ -100,5 +133,7 @@ Retained builds with older render styles leave no-lift MSL cells clear too.
 
 When all four surrounding grid cells are valid (or `no-usable-lift` on lift
 layers), the sampler interpolates bilinearly; if any contributor is missing, it
-returns the nearest cell's value and status. See
+returns the nearest cell's value and status. Above-ground wind interpolation
+renormalizes across valid above-ground native donors when adjacent steep terrain
+places a neighbouring donor's lowest level above the target MSL height. See
 [science and sampling](science.md) for exact rules.

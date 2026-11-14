@@ -84,11 +84,11 @@ it('uses valid paired samples for barb labels and never renders missing wind as 
   f.overlay.destroy();
 });
 
-it.each(['metric', 'imperial'] as const)('uses shared calm thresholds for %s map barbs', units => {
+it.each(['metric', 'imperial'] as const)('uses shared 1-knot calm thresholds for %s map barbs', units => {
   const f = fixture();
   f.overlay.setOptions({ style: 'barbs', units });
   const ctx = f.canvases[1].context;
-  for (const [speed, label] of [[0.05, null], [0.1, null], [0.49, '1'], [0.5, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
+  for (const [speed, label] of [[0.05, null], [0.5, null], [0.52, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
     ctx.fillText.mockClear(); ctx.arc.mockClear();
     f.overlay.setField({ sample: () => ({ status: 0, u: speed, v: 0 }) });
     if (label === null) {
@@ -100,23 +100,24 @@ it.each(['metric', 'imperial'] as const)('uses shared calm thresholds for %s map
   f.overlay.destroy();
 });
 
-it.each(['metric', 'imperial'] as const)('draws distinct pennants, full and half feathers at %s thresholds', units => {
+it.each(['metric', 'imperial'] as const)('draws WMO/ICAO knot pennants and feathers while formatting %s labels', units => {
   const f = fixture();
   f.overlay.setOptions({ style: 'barbs', units });
   const ctx = f.canvases[1].context;
-  const conversion = units === 'metric' ? 3.6 : 2.2369362921;
-  for (const [speed, flags, full, half] of [
+  const knotsPerMps = 1.9438444924, displayFactor = units === 'metric' ? 3.6 : 2.2369362921;
+  for (const [kt, flags, full, half] of [
     [1, 0, 0, 1], [2, 0, 0, 1], [3, 0, 0, 1], [7, 0, 0, 1], [8, 0, 1, 0],
     [47, 0, 4, 1], [48, 1, 0, 0], [52, 1, 0, 0], [53, 1, 0, 1],
     [57, 1, 0, 1], [58, 1, 1, 0], [98, 2, 0, 0], [100, 2, 0, 0], [145, 2, 4, 1]
   ]) {
     let sampled = false;
+    const mps = (kt + 0.001) / knotsPerMps;
     ctx.fill.mockClear(); ctx.lineTo.mockClear(); ctx.fillText.mockClear();
     f.overlay.setField({ sample: () => {
       if (sampled) return { status: 2, u: null, v: null };
-      sampled = true; return { status: 0, u: (speed + 0.001) / conversion, v: 0 };
+      sampled = true; return { status: 0, u: mps, v: 0 };
     } });
-    expect(ctx.fillText).toHaveBeenCalledWith(String(speed), expect.any(Number), expect.any(Number));
+    expect(ctx.fillText).toHaveBeenCalledWith(String(Math.trunc(mps * displayFactor)), expect.any(Number), expect.any(Number));
     expect(ctx.fill).toHaveBeenCalledTimes(flags);
     expect(ctx.lineTo).toHaveBeenCalledTimes(1 + 2 * flags + full + half);
     if (half) {

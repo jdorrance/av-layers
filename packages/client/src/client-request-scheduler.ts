@@ -25,10 +25,15 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     const signal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
     if (disposed) { reject(abortError()); return; }
     if (signal?.aborted) { reject(signal.reason); return; }
-    if (active.size >= maxActive && queued.length >= maxQueued) { reject(new Error('Forecast request queue is full')); return; }
+    const low = (init as RequestInit & { priority?: string } | undefined)?.priority === 'low';
+    if (active.size >= maxActive && queued.length >= maxQueued) {
+      const evict = !low ? queued.findIndex(item => item.low) : -1;
+      if (evict < 0) { reject(new Error('Forecast request queue is full')); return; }
+      queued[evict]!.controller.abort(abortError());
+    }
 
     const controller = new AbortController();
-    const task = { start, controller, low: (init as RequestInit & { priority?: string } | undefined)?.priority === 'low' };
+    const task = { start, controller, low };
     let started = false, finished = false, delivered = false;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let cancellation: Promise<void> | undefined;
