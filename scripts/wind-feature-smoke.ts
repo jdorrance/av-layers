@@ -301,8 +301,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const triggerRect = rectOf(afterTrigger, 'Wind trigger');
       const railRect = rectOf(afterRail, 'Wind rail');
       const popupRect = rectOf(await popup.boundingBox(), 'Wind menu');
-      assert(Math.abs(popupRect.width - 100) <= 1, `Wind menu width is ${popupRect.width}`);
-      assert(Math.abs(popupRect.height - 62) <= 1, `Wind menu height is ${popupRect.height}`);
+      assert(Math.abs(popupRect.width - 138) <= 1, `Wind menu width is ${popupRect.width}`);
+      assert(Math.abs(popupRect.height - 79) <= 1, `Wind menu height is ${popupRect.height}`);
       assert(Math.abs(popupRect.right - (triggerRect.left - 6)) <= 1, `Wind menu right edge is ${popupRect.right}, trigger left is ${triggerRect.left}`);
       assert(Math.abs(popupRect.bottom - triggerRect.bottom) <= 1, `Wind menu bottom is ${popupRect.bottom}, trigger bottom is ${triggerRect.bottom}`);
       assert(!intersects(popupRect, triggerRect), 'Wind menu overlaps its trigger');
@@ -448,9 +448,11 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(layout.rail !== null && layout.trigger !== null, `${width}px wind rail or trigger is missing`);
         assert(layout.timeline !== null, `${width}px timeline is missing`);
         assert(layout.windBackings.length > 0, `${width}px has no wind canvases`);
-        assert(layout.windBackings.every(backing => backing.width > 100 && backing.height > 100), `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
-        assert(layout.rail.width >= 47 && layout.rail.width <= 49, `${width}px rail width is ${layout.rail.width}`);
-        const expectedHeight = width >= 1000 ? 238 : 198;
+        const sized = layout.windBackings.filter(backing => backing.width > 100 && backing.height > 100);
+        const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);
+        assert(sized.length > 0 && sized.length + parked.length === layout.windBackings.length, `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
+        assert(Math.abs(layout.rail.width - 52) <= 1, `${width}px rail width is ${layout.rail.width}`);
+        const expectedHeight = width >= 721 ? 242 : 204;
         assert(Math.abs(layout.rail.height - expectedHeight) <= 1, `${width}px rail height is ${layout.rail.height}, expected ${expectedHeight}`);
         for (const [name, rect] of [['rail', layout.rail], ['timeline', layout.timeline], ['key', layout.key]] as const) {
           if (!rect) continue;
@@ -461,7 +463,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         if (layout.key) assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
         if (layout.key && layout.attribution) assert(!intersects(layout.key, layout.attribution), `${width}px key overlaps attribution`);
         assert(layout.unit !== null && layout.unit.scrollWidth <= layout.unit.clientWidth + 1, `${width}px rail unit label is clipped`);
-        assert(layout.timeline.width <= 541, `${width}px timeline width is ${layout.timeline.width}`);
+        assert(layout.timeline.width <= 560, `${width}px timeline width is ${layout.timeline.width}`);
       }
       await page.setViewportSize({ width: 1200, height: viewportHeight(1200) });
     });

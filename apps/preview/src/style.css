@@ -119,6 +119,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #timeline-status { font-size: 11px; }
 
 .toast { position: absolute; z-index: 3; top: 64px; left: 12px; max-width: min(420px, calc(100% - 24px)); margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 13px; }
+.fixture-warning { top: 96px; pointer-events: none; }
 .toast.status { background: #f4f7f8; color: #243140; }
 .toast.error { background: #fff1f1; color: #8d1d1d; }
 .basemap-warning { top: 104px; font-size: 11px; }
@@ -129,7 +130,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   --av-chart-max-height: min(510px, max(120px, calc(100dvh - 232px)));
   position: absolute;
   z-index: 4;
-  top: 64px;
+  top: 108px;
   left: 12px;
   width: min(650px, calc(100% - 76px));
   max-height: calc(100dvh - 150px);

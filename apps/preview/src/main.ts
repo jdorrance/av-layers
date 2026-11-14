@@ -67,7 +67,7 @@ const savedOpacity = stored('preview-lift-opacity'), savedOpacityNum = savedOpac
 const initialOpacity = startup.opacity ?? (savedOpacityNum >= 0 && savedOpacityNum <= 1 ? savedOpacityNum : 0.5);
 
 if (offlineFixture) {
-  const warning = Object.assign(document.createElement('p'), { className: 'toast', textContent: 'SYNTHETIC FIXTURE — development data, not a forecast' });
+  const warning = Object.assign(document.createElement('p'), { className: 'toast fixture-warning', textContent: 'SYNTHETIC FIXTURE — development data, not a forecast' });
   document.getElementById('app')?.prepend(warning);
 }
 
