@@ -25,7 +25,7 @@ on:
         default: false
       wind-data:
         type: boolean
-        default: false
+        default: true
       terrain-catalog-ref:
         type: string
         default: ''
