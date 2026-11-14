@@ -203,13 +203,12 @@ importers:
       '@av/contracts':
         specifier: workspace:*
         version: link:../contracts
-      '@av/soaring':
-        specifier: workspace:*
-        version: link:../soaring
-    devDependencies:
       '@av/forecast':
         specifier: workspace:*
         version: link:../forecast
+      '@av/soaring':
+        specifier: workspace:*
+        version: link:../soaring
 
   packages/contracts:
     dependencies:
