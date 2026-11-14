@@ -208,8 +208,8 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     updatePointWind();
   }
 
-  const setWindStatus = (status: WindStatus): void => { windLoadStatus = status; windControls.setStatus(status); };
-  const cancelWindRequest = (): void => { windRequest?.controller.abort(); windRequest?.source.dispose(); windRequest = null; queuedWindLoad = null; };
+  function setWindStatus(status: WindStatus): void { windLoadStatus = status; windControls.setStatus(status); }
+  function cancelWindRequest(): void { windRequest?.controller.abort(); windRequest?.source.dispose(); windRequest = null; queuedWindLoad = null; }
 
   function clearWind(): void {
     cancelWindRequest(); windView?.source.dispose(); windView = null; windDisplayed = false;

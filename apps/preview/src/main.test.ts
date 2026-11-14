@@ -1731,37 +1731,41 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
 });
 
 it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point-wind in Local timezone', async () => {
-  const dtf = Intl.DateTimeFormat;
-  const resolvedSpy = vi.spyOn(dtf.prototype, 'resolvedOptions').mockReturnValue({ timeZone: 'Asia/Yerevan' } as Intl.ResolvedDateTimeFormatOptions);
-  try {
-    deferWind = true;
-    win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';
-    await start();
-    windResolve!('ready');
-    await Promise.resolve();
-    expect(new URL(win.href).searchParams.get('wind')).toBeNull();
+  const OriginalDTF = Intl.DateTimeFormat;
+  vi.stubGlobal('Intl', {
+    ...Intl,
+    DateTimeFormat: Object.assign(function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+      const inst = new OriginalDTF(...args);
+      return args.length ? inst : { ...inst, resolvedOptions: () => ({ ...inst.resolvedOptions(), timeZone: 'Asia/Yerevan' }) };
+    }, OriginalDTF)
+  });
+  deferWind = true;
+  win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(new URL(win.href).searchParams.get('wind')).toBeNull();
 
-    fetchMock.mockImplementation(async input => sample(input));
-    map().emit('click', { lngLat: { lat: 40.18, lng: 44.51 } });
-    await vi.waitFor(() => expect(ui('point-wind').textContent).toContain('UTC'));
-    const frameIso = manifest.frames.find(f => f.id === windLoads[0]!.frame)!.validTime;
-    expect(ui('point-wind').textContent).toBe(`Map wind · ${frameIso.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
+  fetchMock.mockImplementation(async input => sample(input));
+  map().emit('click', { lngLat: { lat: 40.18, lng: 44.51 } });
+  await vi.waitFor(() => expect(ui('point-wind').textContent).toContain('UTC'));
+  const frameIso = manifest.frames.find(f => f.id === windLoads[0]!.frame)!.validTime;
+  expect(ui('point-wind').textContent).toBe(`Map wind · ${frameIso.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
 
-    timelineToggleTz?.();
-    const yerevanParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-      year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Yerevan'
-    }).formatToParts(Date.parse(frameIso)).map(p => [p.type, p.value]));
-    expect(ui('point-wind').textContent).toBe(`Map wind · ${yerevanParts.year}-${yerevanParts.month}-${yerevanParts.day} ${yerevanParts.hour}:${yerevanParts.minute} Local · 18 km/h`);
+  timelineToggleTz?.();
+  const yerevanParts = Object.fromEntries(new OriginalDTF('en-CA', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Yerevan'
+  }).formatToParts(Date.parse(frameIso)).map(p => [p.type, p.value]));
+  expect(ui('point-wind').textContent).toBe(`Map wind · ${yerevanParts.year}-${yerevanParts.month}-${yerevanParts.day} ${yerevanParts.hour}:${yerevanParts.minute} Local · 18 km/h`);
 
-    windChange({ ...windState, visible: false });
-    expect(new URL(win.href).searchParams.get('wind')).toBe('0');
-    windChange({ ...windState, visible: true });
-    expect(new URL(win.href).searchParams.get('wind')).toBe('1');
+  windChange({ ...windState, visible: false });
+  expect(new URL(win.href).searchParams.get('wind')).toBe('0');
+  windChange({ ...windState, visible: true });
+  expect(new URL(win.href).searchParams.get('wind')).toBe('1');
 
-    preferredWindVisible = false;
-    win.href = 'http://localhost:5173/?model=gfs&lat=40.2&lon=44.6&z=9';
-    win.dispatchEvent(new Event('popstate'));
-    await Promise.resolve();
-    expect(windState.visible).toBe(false);
-  } finally { resolvedSpy.mockRestore(); }
+  preferredWindVisible = false;
+  win.href = 'http://localhost:5173/?model=gfs&lat=40.2&lon=44.6&z=9';
+  win.dispatchEvent(new Event('popstate'));
+  await Promise.resolve();
+  expect(windState.visible).toBe(false);
 });
