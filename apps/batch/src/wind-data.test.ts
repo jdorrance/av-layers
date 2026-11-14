@@ -126,6 +126,7 @@ it('keeps useful overview coverage around a no-lift island and preserves wholly 
     const lift = { values: values(500), flags: missing() };
     lift.flags[0] = STATUS_NO_LIFT;
     for (let y = 0; y < grid.height; y++) for (let x = 8; x < 16; x++) lift.flags[sparseCoverageLookup(coverage, x, y)!.offset] = STATUS_NO_LIFT;
+    for (let y = 0; y < grid.height; y++) for (let x = 20; x < 23; x++) lift.flags[sparseCoverageLookup(coverage, x, y)!.offset] = STATUS_NO_LIFT;
     const writer = createWindDataWriter(root, 'gfs', 'build', 1, plan, { mapFrames: 1, numericBytes: 0, estimatedPeakBytes: 0 });
     await writer.writeFrame(frame, 'f1', lift, prepared, { elevationM: values(0), valid: new Uint8Array(cells).fill(1) });
     const bytes = await readFile(join(root, 'builds/gfs/build/map-data/f1/overview-4-0.bin')), view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -133,6 +134,8 @@ it('keeps useful overview coverage around a no-lift island and preserves wholly 
     expect(view.getUint8(offset(0, WIND_OVERVIEW_VALUES - 1) + 8)).toBe(0);
     expect(view.getFloat32(offset(0, WIND_OVERVIEW_VALUES - 1), true)).toBeGreaterThan(1);
     expect(view.getUint8(offset(2, WIND_OVERVIEW_VALUES - 1) + 8)).toBe(STATUS_NO_LIFT);
+    expect(view.getUint8(offset(5, WIND_OVERVIEW_VALUES - 1) + 8)).toBe(STATUS_NO_LIFT);
+    expect(view.getFloat32(offset(5, WIND_OVERVIEW_VALUES - 1), true)).toBe(0);
     expect(view.getUint8(offset(2, 0) + 8)).toBe(0);
     expect(view.getFloat32(offset(2, 0), true)).toBe(1);
     expect(view.getUint8(offset(0, 1) + 8)).toBe(0);

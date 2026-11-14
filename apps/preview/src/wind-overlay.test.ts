@@ -336,29 +336,36 @@ it.each(['map', 'trails', 'barbs'] as const)('clears both canvases and redraws o
 });
 
 
-it('gives barb labels a sharper backing store, pixel alignment and contrast halo', () => {
+it('gives barb labels a full 2x Retina backing store, pixel alignment and contrast halo', () => {
   const f = fixture(1200, 800);
   f.overlay.setOptions({ style: 'barbs' });
   f.overlay.setField({ sample: () => ({ status: 0, u: 4, v: 0 }) });
   const [trails, barbs] = f.canvases;
+  expect([barbs.width, barbs.height]).toEqual([2400, 1600]);
   expect(barbs.width).toBeGreaterThan(trails.width);
   expect(barbs.context.strokeText.mock.calls).toEqual(barbs.context.fillText.mock.calls);
   expect(barbs.context.fillText).toHaveBeenCalledWith('14', expect.any(Number), expect.any(Number));
-  expect(trails.width * trails.height + barbs.width * barbs.height).toBeLessThanOrEqual(2_097_152);
   f.overlay.destroy();
 });
 
-it('keeps desktop barbs at native resolution and releases hidden backing stores', () => {
+it('keeps desktop barbs at 2x Retina resolution, throttles 120 Hz fade quantization, and boosts light-wind visibility', () => {
   const f = fixture(2027, 815);
   const [trails, barbs] = f.canvases;
-  const budget = 2_097_152;
   for (const style of ['barbs', 'hybrid', 'trails', 'barbs'] as const) {
     f.overlay.setOptions({ style });
-    expect(trails.width * trails.height + barbs.width * barbs.height).toBeLessThanOrEqual(budget);
-    if (style !== 'trails') expect([barbs.width, barbs.height]).toEqual([2027, 815]);
+    if (style !== 'trails') expect([barbs.width, barbs.height]).toEqual([4054, 1630]);
     else expect([barbs.width, barbs.height]).toEqual([1, 1]);
     if (style === 'barbs') expect([trails.width, trails.height]).toEqual([1, 1]);
   }
+  f.overlay.setOptions({ style: 'trails' });
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  f.overlay.setField({ sample: () => ({ status: 0, u: 0, v: -1.2 }) });
+  trails.context.stroke.mockClear();
+  f.tick(1000);
+  f.tick(1008.3);
+  expect(trails.context.stroke).not.toHaveBeenCalled();
+  f.tick(1016.7);
+  expect(trails.context.stroke).toHaveBeenCalledOnce();
   f.overlay.setOptions({ visible: false });
   expect(f.canvases.every(canvas => canvas.width === 1 && canvas.height === 1)).toBe(true);
   f.overlay.destroy();
@@ -376,5 +383,27 @@ it('coalesces barb drawing during map motion into one display frame', () => {
   expect(ctx.clearRect).toHaveBeenCalledTimes(1);
   expect(sample).not.toHaveBeenCalled();
   expect(f.frames.size).toBe(0);
+  f.overlay.destroy();
+});
+
+it('flips barb feathers in the Southern Hemisphere, formats knots, and accumulates sub-pixel pans', () => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'barbs', units: 'knots' });
+  const barbCtx = f.canvases[1].context;
+  f.overlay.setField({ sample: lat => lat < 0 ? { status: 0, u: 10, v: 0 } : { status: 2, u: null, v: null } });
+  expect(barbCtx.fillText).toHaveBeenCalledWith('19', expect.any(Number), expect.any(Number));
+  const featherEnds = barbCtx.lineTo.mock.calls.filter(([, y]) => y !== 0) as unknown as number[][];
+  expect(featherEnds.length).toBeGreaterThan(0);
+  expect(featherEnds.every(([, y]) => y > 0)).toBe(true);
+
+  let offset = 0;
+  f.map.project = ([lon, lat]: number[]) => ({ x: lon + offset, y: -lat });
+  f.overlay.setOptions({ style: 'trails' });
+  const trailCtx = f.canvases[0].context;
+  trailCtx.drawImage.mockClear();
+  offset = 0.4; f.emit('move');
+  expect(trailCtx.drawImage).not.toHaveBeenCalled();
+  offset = 1.1; f.emit('move');
+  expect(trailCtx.drawImage).toHaveBeenCalledWith(f.canvases[0], 1, 0);
   f.overlay.destroy();
 });

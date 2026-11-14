@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { sparseCoverageLookup } from '@av/contracts/sparse-coverage';
-import { STATUS_MASK, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
+import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
 import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, windOverviewLayout, windFrameParts, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
 import { encodeBoundedJson, parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
 import { encodeWindColumns, normalizedWindColumn } from '@av/forecast/wind';
@@ -104,34 +104,47 @@ async function encodeOverview(directory: string, id: string, stride: number, x0:
   }
   const factor = native.kind === 'regular-latlon' && fine.kind === 'regular-latlon' ? native.dx / fine.dx
     : native.kind === 'lambert-conformal' && fine.kind === 'lambert-conformal' ? native.dxM / fine.dxM : 1;
-  const sumU = new Float64Array(WIND_OVERVIEW_VALUES), sumV = new Float64Array(WIND_OVERVIEW_VALUES), counts = new Uint8Array(WIND_OVERVIEW_VALUES);
+  const sumU = new Float64Array(WIND_OVERVIEW_VALUES), sumV = new Float64Array(WIND_OVERVIEW_VALUES);
+  const counts = new Uint16Array(WIND_OVERVIEW_VALUES), noLift = new Uint16Array(WIND_OVERVIEW_VALUES);
   for (let i = 0; i < size * size; i++) {
     signal?.throwIfAborted();
     const x = x0 + i % size, y = y0 + Math.floor(i / size), pos = i * WIND_OVERVIEW_CELL_BYTES;
     for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) view.setUint8(pos + mode * 9 + 8, STATUS_OUTSIDE);
     if (x >= grid.width || y >= grid.height) continue;
     if (previous) {
+      let exactNoLift = 0, exactValidLift = 0;
+      for (let dy = 0; dy < stride; dy++) for (let dx = 0; dx < stride; dx++) {
+        const nx = x * stride + dx, ny = y * stride + dy;
+        if (nx >= native.width || ny >= native.height || slotFor(ny * native.width + nx) < 0) continue;
+        const target = sparseCoverageLookup(prepared.fine.mask.coverage, Math.round(nx * factor), Math.round(ny * factor));
+        if (!target?.output || !Number.isFinite(lift.values[target.offset])) continue;
+        const st = lift.flags[target.offset] & STATUS_MASK;
+        if (st === STATUS_NO_LIFT) exactNoLift++;
+        else if (st === STATUS_VALID) exactValidLift++;
+      }
       for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
-        let status = STATUS_OUTSIDE, u = 0, v = 0, count = 0;
+        let status = STATUS_OUTSIDE, u = 0, v = 0, validWeight = 0, noLiftWeight = 0;
         for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
           const cx = x * 2 + dx, cy = y * 2 + dy;
           if (cx >= previous.width || cy >= previous.height) continue;
           const tile = Math.floor(cy / size) * Math.ceil(previous.width / size) + Math.floor(cx / size);
           const child = children.get(tile)!, offset = ((cy % size) * size + cx % size) * WIND_OVERVIEW_CELL_BYTES + mode * 9;
           const childStatus = child.getUint8(offset + 8);
+          const weight = Math.min(stride / 2, native.width - cx * stride / 2) * Math.min(stride / 2, native.height - cy * stride / 2);
           status = Math.min(status, childStatus);
-          if (childStatus === STATUS_VALID) {
-            const weight = Math.min(stride / 2, native.width - cx * stride / 2) * Math.min(stride / 2, native.height - cy * stride / 2);
-            u += child.getFloat32(offset, true) * weight; v += child.getFloat32(offset + 4, true) * weight; count += weight;
+          if (childStatus === STATUS_NO_LIFT) noLiftWeight += weight;
+          else if (childStatus === STATUS_VALID) {
+            u += child.getFloat32(offset, true) * weight; v += child.getFloat32(offset + 4, true) * weight; validWeight += weight;
           }
         }
-        const offset = pos + mode * 9;
-        view.setUint8(offset + 8, status);
-        if (status === STATUS_VALID && count) { view.setFloat32(offset, u / count, true); view.setFloat32(offset + 4, v / count, true); }
+        const majorityNoLift = mode === WIND_OVERVIEW_VALUES - 1 ? exactNoLift > exactValidLift : noLiftWeight > validWeight;
+        const offset = pos + mode * 9, finalStatus = majorityNoLift ? STATUS_NO_LIFT : validWeight ? STATUS_VALID : status;
+        view.setUint8(offset + 8, finalStatus);
+        if (finalStatus === STATUS_VALID && validWeight) { view.setFloat32(offset, u / validWeight, true); view.setFloat32(offset + 4, v / validWeight, true); }
       }
       continue;
     }
-    sumU.fill(0); sumV.fill(0); counts.fill(0);
+    sumU.fill(0); sumV.fill(0); counts.fill(0); noLift.fill(0);
     for (let dy = 0; dy < stride; dy++) for (let dx = 0; dx < stride; dx++) {
       const nx = x * stride + dx, ny = y * stride + dy;
       if (nx >= native.width || ny >= native.height) continue;
@@ -149,12 +162,18 @@ async function encodeOverview(directory: string, id: string, stride: number, x0:
         if (status === STATUS_VALID && !wind) status = STATUS_UNAVAILABLE;
         const offset = pos + mode * 9;
         view.setUint8(offset + 8, Math.min(view.getUint8(offset + 8), status));
-        if (wind) { sumU[mode] += wind.u; sumV[mode] += wind.v; counts[mode]++; }
+        if (status === STATUS_NO_LIFT) noLift[mode]++;
+        else if (wind) { sumU[mode] += wind.u; sumV[mode] += wind.v; counts[mode]++; }
       }
     }
-    for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) if (counts[mode]) {
-      view.setFloat32(pos + mode * 9, sumU[mode] / counts[mode], true);
-      view.setFloat32(pos + mode * 9 + 4, sumV[mode] / counts[mode], true);
+    for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+      const offset = pos + mode * 9;
+      if (noLift[mode] > counts[mode]) view.setUint8(offset + 8, STATUS_NO_LIFT);
+      else if (counts[mode]) {
+        view.setUint8(offset + 8, STATUS_VALID);
+        view.setFloat32(offset, sumU[mode] / counts[mode], true);
+        view.setFloat32(offset + 4, sumV[mode] / counts[mode], true);
+      }
     }
   }
   return bytes;

@@ -40,7 +40,7 @@ function numericFrameRoot(raw: string): boolean {
 function numericChunk(raw: string): boolean {
   let url: URL;
   try { url = new URL(raw); } catch { return false; }
-  return /\/v1\/models\/[^/]+\/runs\/[^/]+\/data\/[^/]+\/(?:wind|fine|overview-[1-9][0-9]*)\/\d+$/.test(url.pathname);
+  return /\/v1\/models\/[^/]+\/runs\/[^/]+\/data\/[^/]+\/(?:wind|fine|overview-[1-9][0-9]*)\/\d+(?:-\d+)?$/.test(url.pathname);
 }
 
 function numericRequest(raw: string): boolean {

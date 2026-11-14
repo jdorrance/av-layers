@@ -11,10 +11,13 @@
     <div id="app">
       <div id="map"></div>
       <header id="topbar">
-        <details id="model-picker">
-          <summary id="model-selected" data-model="auto"><svg class="model-emblem" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 24 11 8l5 8 5-12 9 20M8 24l5-8 6 8M2 29h28"/></svg><span id="model-name">Auto</span></summary>
-          <div id="models" role="toolbar" aria-label="Forecast model"></div>
-        </details>
+        <div class="topbar-row">
+          <details id="model-picker">
+            <summary id="model-selected" data-model="auto"><svg class="model-emblem" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 24 11 8l5 8 5-12 9 20M8 24l5-8 6 8M2 29h28"/></svg><span id="model-name">Auto</span></summary>
+            <div id="models" role="toolbar" aria-label="Forecast model"></div>
+          </details>
+          <div id="layer-picker" role="group" aria-label="Forecast layer" hidden></div>
+        </div>
         <div id="display-units" role="group" aria-label="Display units">
           <button id="units-metric" type="button" aria-pressed="true">km</button>
           <button id="units-imperial" type="button" aria-pressed="false">mi</button>
@@ -33,12 +36,12 @@
             <button id="ref-agl" type="button" class="ref">AGL</button>
             <button id="ref-msl" type="button" class="ref">MSL</button>
           </div>
-          <label id="opacity-label" aria-label="Lift opacity">
-            <input id="opacity" aria-label="Lift opacity" type="range" min="0" max="1" step="0.05" value="0.5" />
+          <label id="opacity-label" aria-label="Layer opacity">
+            <input id="opacity" aria-label="Layer opacity" type="range" min="0" max="1" step="0.05" value="0.5" />
             <span id="opacity-readout">50%</span>
           </label>
           <details id="legend-key" class="ribbon-key">
-            <summary id="legend-key-toggle" aria-label="Lift map key" title="Lift map key">ⓘ</summary>
+            <summary id="legend-key-toggle" aria-label="Map layer key" title="Map layer key">ⓘ</summary>
             <div class="ribbon-key-body">
               <p id="legend-reference"></p>
               <p id="legend-no-lift"></p>

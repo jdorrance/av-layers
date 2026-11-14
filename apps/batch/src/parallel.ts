@@ -439,7 +439,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     assertWholeDomainReceipt(receipt, plan, shard, options.product, whole, options.provider.maxLevels);
     receipts.push(receipt);
   }
-  await assembleWindData(root, plan, prepared, receipts, options.store, options.signal);
+  const mapData = await assembleWindData(root, plan, prepared, receipts, options.store, options.signal);
   const { capacity, layouts, profileLayout } = planWholeDomainCapacity(wholeDomainCapacityInput(options.product, options.provider, whole, plan.groups));
   if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
   const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
@@ -497,7 +497,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const objects = hourObjects ? [...hourObjects.filter(object => !hourSampleKeys.has(object.key)), ...servingObjects] : undefined;
   options.signal?.throwIfAborted();
   if (objects) await writeReceipt(localPath(root, `builds/${plan.model}/${plan.buildId}/serving-receipts.json`), { version: 1, planHash: planHash(plan), objects: servingObjects });
-  return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups, profileGroups,
+  return finishWholeDomain({ ...options, prepared: whole, result, identity, buildId: plan.buildId, createdAt: plan.createdAt, preparation: plan.preparation, assemblyStartedAt, sampleGroups, profileGroups, mapData,
     ...(objects ? { remote: { store: options.store!, objects, signal: options.signal } } : {}) });
 }
 
@@ -536,7 +536,8 @@ export async function verifyBuildReceipts(root: string, manifest: ManifestV5, st
     if (!receipt.objects) throw new Error('Forecast shard lacks remote object receipts');
     receipts.push(receipt);
   }
-  await assembleWindData(root, plan, whole, receipts, store, signal, true);
+  const mapData = await assembleWindData(root, plan, whole, receipts, store, signal, true);
+  if (manifest.mapData && (!mapData || manifest.mapData.sha256 !== mapData.sha256 || manifest.mapData.bytes !== mapData.bytes)) throw new Error('Manifest numeric wind identity mismatch');
   if (plan.numericWind) onNumericReceipts?.(receipts.flatMap(receipt => receipt.numeric!.objects.map(object => ({ ...object, etag: object.etag! }))));
   return verifyPublicationReceipts({ root, manifest, store, plan, receipts, product: admitted.product, whole, signal });
 }

@@ -318,31 +318,38 @@ registerJsonRoute(
   }
 );
 
-async function pinnedManifest(c: Context<Env>) {
-  const model = modelId(c), buildId = requiredParam(c, 'buildId');
-  const signal = c.req.raw.signal;
-  const metrics = (c.executionCtx as WaitContext).metrics;
-  const started = performance.now();
+async function pinnedBuild(c: Context<Env>) {
+  const model = modelId(c), buildId = requiredParam(c, 'buildId'), signal = c.req.raw.signal;
+  const metrics = (c.executionCtx as WaitContext).metrics, started = performance.now();
   try {
     const entry = await admit(c.env.BUCKET, model, buildId, c.executionCtx, undefined, signal);
     if (metrics) metrics.buildId = buildId;
-    return await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal);
+    return { entry, manifest: await manifest(c.env.BUCKET, model, buildId, entry, c.executionCtx, products[model], signal) };
   } finally { if (metrics) metrics.admitMs = performance.now() - started; }
 }
+const pinnedManifest = async (c: Context<Env>) => (await pinnedBuild(c)).manifest;
 
 app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
   query(new URL(c.req.url), []);
-  const m = await pinnedManifest(c), entry = await admit(c.env.BUCKET, m.model, m.buildId, c.executionCtx, undefined, c.req.raw.signal);
-  const result = await windFrame(c.env.BUCKET, m, entry, requiredParam(c, 'frame'), c.executionCtx, c.req.raw.signal);
-  return response(result.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt);
+  const { entry, manifest: m } = await pinnedBuild(c), frame = requiredParam(c, 'frame');
+  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
+    const loaded = await windFrame(c.env.BUCKET, m, entry, frame, c.executionCtx, c.req.raw.signal);
+    return response(loaded.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, loaded.sha256);
+  });
+  result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
+  return result;
 });
 
 app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
   query(new URL(c.req.url), []);
-  const m = await pinnedManifest(c), entry = await admit(c.env.BUCKET, m.model, m.buildId, c.executionCtx, undefined, c.req.raw.signal);
-  const frame = requiredParam(c, 'frame'), kind = requiredParam(c, 'kind'), raw = requiredParam(c, 'tile');
-  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || !/^(0|[1-9][0-9]{0,9})$/.test(raw) || !Number.isSafeInteger(Number(raw))) fail(400, 'invalid-parameter', 'Invalid wind chunk');
-  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => response(await windChunk(c.env.BUCKET, m, entry, frame, kind, Number(raw), c.executionCtx, c.req.raw.signal) as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt));
+  const { entry, manifest: m } = await pinnedBuild(c);
+  const frame = requiredParam(c, 'frame'), kind = requiredParam(c, 'kind'), span = /^(0|[1-9][0-9]{0,9})(?:-(0|[1-9][0-9]{0,9}))?$/.exec(requiredParam(c, 'tile'));
+  const start = span ? Number(span[1]) : -1, end = span ? Number(span[2] ?? span[1]) : -1;
+  if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || start < 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start >= 64) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
+    const chunk = await windChunk(c.env.BUCKET, m, entry, frame, kind, start, c.executionCtx, c.req.raw.signal, end - start + 1);
+    return response(chunk as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt, chunk.etag);
+  });
   result.headers.set('cloudflare-cdn-cache-control', result.headers.get('cache-control')!.replace(', immutable', ', must-revalidate'));
   return result;
 });

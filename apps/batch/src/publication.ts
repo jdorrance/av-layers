@@ -72,6 +72,9 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
   const provenance = getProvenanceReference(manifest), key = manifestKey(manifest.model, manifest.buildId), content = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS);
   const captured = await readPointer(store, manifest.model, options.signal);
   const existing = captured.pointer?.retained.find(item => item.buildId === manifest.buildId);
+  if ((!existing && Boolean(manifest.mapData) !== Boolean(options.publishNumericWind)) || (options.publishNumericWind === false && (manifest.mapData || existing?.mapData))) {
+    throw new Error('Manifest numeric wind declaration mismatch');
+  }
   let numeric = options.publishNumericWind && !options.receiptsOnly ? await localWindData(root, manifest, options.signal) : null;
   let numericReceipts: ObjectReceipt[] = [];
   if (options.publishNumericWind && options.receiptsOnly) {
@@ -82,6 +85,7 @@ export async function publish(store: ObjectStorage, root: string, raw: unknown, 
     numeric = { reference: { bytes: bytes.length, sha256: sha256(bytes) }, objects: [] };
   }
   if (options.publishNumericWind && !numeric) throw new Error('Numeric wind publication requires verified artifacts');
+  if (manifest.mapData && numeric && (manifest.mapData.sha256 !== numeric.reference.sha256 || manifest.mapData.bytes !== numeric.reference.bytes)) throw new Error('Manifest numeric wind identity mismatch');
   if (existing && numeric && (existing.mapData?.sha256 !== numeric.reference.sha256 || existing.mapData.bytes !== numeric.reference.bytes)) throw new Error('Retained numeric wind identity mismatch');
   if (options.committedOnly && (!existing || captured.pointer?.latestBuildId !== manifest.buildId)) throw new Error('Recovery requires the committed latest build');
   const alreadyRetained = !!existing;
@@ -263,7 +267,9 @@ export async function rollback(store: ObjectStorage, model: ModelId, target: str
     if (value.hour !== reference.hour) throw new Error('Rollback provenance hour mismatch');
   }
   await verifyV5Dependencies(store, manifest, options.signal);
-  if (retained.mapData) await verifyRemoteWind(store, manifest, retained.mapData, options.signal);
+  if (retained.mapData && manifest.mapData && (retained.mapData.sha256 !== manifest.mapData.sha256 || retained.mapData.bytes !== manifest.mapData.bytes)) throw new Error('Rollback wind identity mismatch');
+  const windRef = retained.mapData ?? manifest.mapData;
+  if (windRef) await verifyRemoteWind(store, manifest, windRef, options.signal);
   if (Date.parse(retained.expiresAt) <= now + (Date.now() - started)) throw new Error('Rollback target expired during verification');
   check();
   options.onPointerOutcome?.('unconfirmed'); // Persist intent before a request whose response may be lost.
@@ -291,16 +297,14 @@ async function verifyRemoteWind(store: ObjectStorage, manifest: ManifestV5, refe
     const descriptor = parseWindFrame(object.bytes);
     if (descriptor.frame !== frame.id) throw new Error('Remote wind frame identity mismatch');
     assertWindFrameLayout(descriptor, { native: native.grid, fine: fine.grid });
-    for (const { kind, shards } of windFrameParts(descriptor)) {
-      for (const [page, shard] of shards.entries()) {
-        const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
-        for (const [key, sha256, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
-          const receipt = byKey.get(key);
-          if (receipt) {
-            if (receipt.bytes !== bytes || receipt.sha256 !== sha256) throw new Error(`Remote wind receipt mismatch: ${key}`);
-            await verifyObjectReceipts(store, [receipt], signal);
-          } else await verifyRemoteHash(store, key, sha256, limit, bytes, signal, metadata);
-        }
+    for (const { kind, shards } of windFrameParts(descriptor)) for (const [page, shard] of shards.entries()) {
+      const base = `${prefix}/map-data/${frame.id}/${kind}-${page}`;
+      for (const [key, expectedHash, bytes, limit, metadata] of [[`${base}.idx`, shard.indexSha256, shard.count * 32, WIND_INDEX_ENTRIES * 32, false], [`${base}.bin`, shard.sha256, shard.bytes, MAX_UPLOAD_ARTIFACT_BYTES, true]] as const) {
+        const receipt = byKey.get(key);
+        if (receipt) {
+          if (receipt.bytes !== bytes || receipt.sha256 !== expectedHash) throw new Error(`Remote wind receipt mismatch: ${key}`);
+          await verifyObjectReceipts(store, [receipt], signal);
+        } else await verifyRemoteHash(store, key, expectedHash, limit, bytes, signal, metadata);
       }
     }
   }

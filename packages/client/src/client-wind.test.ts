@@ -472,3 +472,56 @@ it('reserves descriptor memory while replacing a viewport near the numeric byte 
     expect(fetcher.mock.calls.some(([url]) => /\/(wind|fine)\//.test(String(url)))).toBe(false);
   } finally { current.dispose(); replacement.dispose(); cache.clear(); }
 });
+
+it('coalesces contiguous tile spans, slices per-tile cache entries, and serves quantized field samples', async () => {
+  const pinned = globalBuild(true), frame = pinned.manifest.frames[0].id, cache = new WindDataCache();
+  pinned.manifest.descriptors.bounds = [-180, -90, 180, 90];
+  for (const surface of pinned.manifest.surfaces) Object.assign(surface.grid, { height: 721, lat0: -90, dy: 0.25 });
+  const metadata = JSON.parse(descriptor(frame)), layout = windOverviewLayout(pinned.manifest.surfaces[0].grid, 8);
+  metadata.overview = [{ stride: 8, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] }];
+  const tileBytes = new Uint8Array(layout.chunkBytes), view = new DataView(tileBytes.buffer);
+  for (let cell = 0; cell < 32 * 32; cell++) for (let mode = 0; mode < WIND_OVERVIEW_VALUES; mode++) {
+    const offset = cell * WIND_OVERVIEW_CELL_BYTES + mode * 9;
+    view.setFloat32(offset, 5, true); view.setFloat32(offset + 4, -3, true);
+  }
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.endsWith(`/data/${frame}`)) return new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } });
+    const range = path.split('/').at(-1)!.split('-').map(Number);
+    const count = range.length === 2 ? range[1]! - range[0]! + 1 : 1;
+    const combined = new Uint8Array(count * tileBytes.length);
+    for (let i = 0; i < count; i++) combined.set(tileBytes, i * tileBytes.length);
+    return reply(combined);
+  });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, coalesceSpans: true });
+  expect(await source.load({ build: pinned, frame, bounds: [-180, -85, 180, 85] })).toBe('ready');
+  expect(source.isOverview).toBe(true);
+  const chunkCalls = fetcher.mock.calls.slice(1).map(([url]) => String(url));
+  expect(chunkCalls.length).toBeLessThan(6);
+  expect(chunkCalls.some(url => /\/overview-8\/\d+-\d+$/.test(url))).toBe(true);
+  const field = source.field('surface');
+  expect(field.sample(75, 20)).toEqual({ status: 0, u: 5, v: -3 });
+  expect(field.sample(75.0004, 20.0004)).toEqual({ status: 0, u: 5, v: -3 });
+  fetcher.mockClear();
+  const replacement = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, coalesceSpans: true });
+  expect(await replacement.load({ build: pinned, frame, bounds: [-20, -20, 20, 20] })).toBe('ready');
+  expect(fetcher).not.toHaveBeenCalled();
+  pinned.expiresAtMs = Date.now() - 1;
+  expect(field.sample(75, 20).status).toBe(2);
+  source.dispose(); replacement.dispose(); cache.clear();
+
+  pinned.expiresAtMs = Date.now() + 600_000;
+  pinned.manifest.expiresAt = new Date(pinned.expiresAtMs).toISOString();
+  const legacyCache = new WindDataCache();
+  const legacyFetcher = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.endsWith(`/data/${frame}`)) return new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } });
+    if (/\/\d+-\d+$/.test(path)) return new Response('Invalid wind chunk', { status: 400 });
+    return reply(tileBytes);
+  });
+  const fallbackSource = new WindDataSource('https://api.test', { fetchImpl: legacyFetcher, cache: legacyCache, coalesceSpans: true });
+  expect(await fallbackSource.load({ build: pinned, frame, bounds: [-180, -85, 180, 85] })).toBe('ready');
+  expect(legacyCache.spansUnsupported).toBe(true);
+  expect(fallbackSource.sample(75, 20, 'surface')).toEqual({ status: 'valid', u: 5, v: -3 });
+  fallbackSource.dispose(); legacyCache.clear();
+});

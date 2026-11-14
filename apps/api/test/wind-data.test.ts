@@ -308,3 +308,25 @@ it('fails numeric requests closed when the limiter or client IP is unavailable',
   expect(limit).not.toHaveBeenCalled();
   expect((await call({ 'cf-connecting-ip': '192.0.2.1' }, { ...env, NUMERIC_RATE_LIMITER: { limit: vi.fn(async () => { throw new Error('private'); }) } })).status).toBe(503);
 });
+
+it('sets edge cache revalidation on frame descriptors and validates multi-tile chunk spans', async () => {
+  const store = bucket(), model = local.manifest.model, frame = local.manifest.frames[0].id;
+  const pointerKey = `catalog/${model}/latest.json`, manifestKey = entry().manifestKey;
+  const pointer = { version: 1, model, latestBuildId: local.manifest.buildId, retained: [entry()] };
+  const get = async (key: string, options?: { range?: { offset: number; length: number } }) => {
+    if (key !== pointerKey && key !== manifestKey) return store.get(key, options);
+    const bytes = new TextEncoder().encode(JSON.stringify(key === pointerKey ? pointer : local.manifest));
+    return { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } }) };
+  };
+  const app = createApp({ products: { [model]: OFFLINE_PRODUCT } });
+  const env = { BUCKET: { get } as unknown as R2Bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, NUMERIC_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' };
+  const base = `https://api.test/v1/models/${model}/runs/${local.manifest.buildId}/data/${frame}`;
+  const frameRes = await app.fetch(new Request(base, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
+  expect(frameRes.status).toBe(200);
+  expect(frameRes.headers.get('cloudflare-cdn-cache-control')).toContain('must-revalidate');
+  expect(frameRes.headers.get('etag')).toBeTruthy();
+  const spanRes = await app.fetch(new Request(`${base}/wind/0-0`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
+  expect(spanRes.status).toBe(200);
+  const badSpan = await app.fetch(new Request(`${base}/wind/2-1`, { headers: { 'cf-connecting-ip': '192.0.2.10' } }), env, ctx);
+  expect(badSpan.status).toBe(400);
+});

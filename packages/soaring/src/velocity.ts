@@ -24,7 +24,7 @@ export const SINK_RATE_MPS = DEFAULT_SOARING_PARAMETERS.sinkRateMps;
 export const MINIMUM_THERMAL_VELOCITY_MPS = DEFAULT_SOARING_PARAMETERS.minimumThermalVelocityMps;
 
 /** Named aircraft sink-rate presets in meters per second (m/s). */
-export const SINK_RATE_PRESETS_MPS = Object.freeze({
+export const SINK_RATE_PRESETS_MPS = /* @__PURE__ */ Object.freeze({
   sailplane: 1.0,
   wxtofly: WXTOFLY_SINK_MPS,
   paraglider: DEFAULT_SOARING_PARAMETERS.sinkRateMps
@@ -35,7 +35,7 @@ export type SinkRatePresetId = keyof typeof SINK_RATE_PRESETS_MPS;
 export const LENSCHOW_PEAK_ZETA = DEFAULT_SOARING_PARAMETERS.lenschowPeakZeta;
 
 export const LENSCHOW_F_MAX =
-  LENSCHOW_SCALE * Math.cbrt(LENSCHOW_PEAK_ZETA) * (1 - LENSCHOW_SHAPE * LENSCHOW_PEAK_ZETA);
+  LENSCHOW_SCALE * /* @__PURE__ */ Math.cbrt(LENSCHOW_PEAK_ZETA) * (1 - LENSCHOW_SHAPE * LENSCHOW_PEAK_ZETA);
 
 /**
  * Minimum Deardorff convective velocity scale w* (m/s) required for the peak of the

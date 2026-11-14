@@ -1,6 +1,6 @@
-import { prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
+import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, parseWindFrame, windLayout, WIND_HEIGHTS, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_VALUES, windOverviewLayout } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, parseWindFrame, windLayout, windOverviewLayout } from '@av/contracts/wind-data';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
@@ -10,47 +10,55 @@ export interface WindSample { status: WindStatus; u: number | null; v: number | 
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
-const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT;
-const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000;
+const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, MAX_SPAN_BYTES = 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
 
-interface CachedBytes { url: string; bytes: Uint8Array; used: number | null; references: number; expiresAt: number }
+interface CachedBytes {
+  url: string;
+  bytes: Uint8Array;
+  used: number | null;
+  references: number;
+  expiresAt: number;
+  decoded?: PackedWindChunk | DataView;
+}
 
-/** Share immutable buffers across views; referenced and in-flight buffers share the byte limit. */
+/** Share immutable buffers and decoded views across viewports within a strict byte limit. */
 export class WindDataCache {
   private readonly entries = new Set<CachedBytes>();
   private bytes = 0;
+  spansUnsupported = false;
+
+  hasReady(url: string, limit: number, now = Date.now()): boolean {
+    for (const e of this.entries) if (e.url === url && e.used !== null && e.expiresAt > now && e.bytes.length === limit) return true;
+    return false;
+  }
 
   take(url: string, limit: number, expiresAt: number): CachedBytes {
-    for (const entry of this.entries) {
-      if (entry.url !== url || entry.used === null || entry.expiresAt <= Date.now() || entry.bytes.length !== limit) continue;
-      entry.references++;
-      entry.expiresAt = Math.min(entry.expiresAt, expiresAt);
-      this.entries.delete(entry); this.entries.add(entry);
-      return entry;
+    for (const e of this.entries) {
+      if (e.url !== url || e.used === null || e.expiresAt <= Date.now() || e.bytes.length !== limit) continue;
+      e.references++; e.expiresAt = Math.min(e.expiresAt, expiresAt);
+      this.entries.delete(e); this.entries.add(e);
+      return e;
     }
-    for (const entry of this.entries) {
+    for (const e of this.entries) {
       if (this.bytes + limit <= WIND_NUMERIC_BYTES && this.entries.size < 256) break;
-      if (!entry.references) this.remove(entry);
+      if (!e.references) this.remove(e);
     }
     if (this.bytes + limit > WIND_NUMERIC_BYTES || this.entries.size >= 256) throw new RangeError('Wind cache exceeds byte budget');
-    const entry = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
+    const entry: CachedBytes = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
     this.entries.add(entry); this.bytes += limit;
     return entry;
   }
 
   release(entry: CachedBytes): void {
-    entry.references--;
-    if (!entry.references && (entry.used === null || entry.expiresAt <= Date.now())) this.remove(entry);
+    if (!--entry.references && (entry.used === null || entry.expiresAt <= Date.now())) this.remove(entry);
   }
 
   clear(): void {
-    for (const entry of this.entries) {
-      entry.expiresAt = 0;
-      if (!entry.references) this.remove(entry);
-    }
+    for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
   }
 
   private remove(entry: CachedBytes): void {
@@ -62,7 +70,7 @@ function samplingPlan(grid: Grid, geometry: GridGeometry, lat: number, lon: numb
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
   let x: number, y: number;
   if (grid.kind === 'regular-latlon') {
-    if (!Number.isFinite(grid.lon0) || !Number.isFinite(grid.lat0) || !Number.isFinite(grid.dx) || !Number.isFinite(grid.dy) || grid.dx === 0 || grid.dy === 0 || lat < -90 || lat > 90) return null;
+    if (!Number.isFinite(grid.lon0) || !Number.isFinite(grid.lat0) || !Number.isFinite(grid.dx) || !Number.isFinite(grid.dy) || !grid.dx || !grid.dy || lat < -90 || lat > 90) return null;
     x = snapGridCoordinate((lon - grid.lon0) / grid.dx); y = snapGridCoordinate((lat - grid.lat0) / grid.dy);
     if (grid.wrapLongitude) x = snapGridCoordinate(((x % grid.width) + grid.width) % grid.width);
   } else {
@@ -77,7 +85,7 @@ function samplingPlan(grid: Grid, geometry: GridGeometry, lat: number, lon: numb
     if ((dx && fx === 0) || (dy && fy === 0)) continue;
     const item = planContributors[slot][count++];
     item.row = y0 + dy; item.column = (x0 + dx) % grid.width; item.index = item.row * grid.width + item.column;
-    item.weight = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
+    item.weight = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
     plan.contributors[count - 1] = item;
   }
   plan.contributors.length = count;
@@ -88,19 +96,15 @@ function targetHeight(plan: SamplePlan, height: number | 'lift', useStoredMslNoL
   if (height !== 'lift' && (!Number.isFinite(height) || height < 0)) throw new RangeError('Invalid AGL height');
   let missing = false, allNoLift = true, noLiftWeight = 0, nearest = 0;
   for (let i = 0; i < plan.contributors.length; i++) {
-    const status = flags[i] & STATUS_MASK, item = plan.contributors[i], best = plan.contributors[nearest];
+    const status = flags[i] & STATUS_MASK, item = planContributors[1][i], best = plan.contributors[nearest];
     if (height !== 'lift' && (status === STATUS_NO_LIFT || (flags[i] & SUPPORT_MASK) !== 0)) throw new RangeError('Terrain cell has lift status or support');
     missing ||= status >= STATUS_UNAVAILABLE; allNoLift &&= status === STATUS_NO_LIFT;
     if (status === STATUS_NO_LIFT) noLiftWeight += item.weight;
     if (nearerContributor(item.weight, item.row, item.column, best.weight, best.row, best.column)) nearest = i;
   }
-  if (missing) {
-    const status = flags[nearest] & STATUS_MASK;
-    return { value: status === STATUS_VALID ? height === 'lift' ? values[nearest] : values[nearest] + height : null, status };
-  }
-  if (plan.contributors.length === 1) {
-    const status = flags[0] & STATUS_MASK;
-    return { value: status === STATUS_VALID ? height === 'lift' ? values[0] : values[0] + height : null, status };
+  if (missing || plan.contributors.length === 1) {
+    const idx = missing ? nearest : 0, status = flags[idx] & STATUS_MASK;
+    return { value: status === STATUS_VALID ? height === 'lift' ? values[idx] : values[idx] + height : null, status };
   }
   if (height === 'lift' && (allNoLift || noLiftWeight > 0.5)) return { value: null, status: STATUS_NO_LIFT };
   const renormalize = height === 'lift' && !useStoredMslNoLift && plan.contributors.length === 4 && noLiftWeight > 0;
@@ -120,8 +124,7 @@ function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padd
   }
   const points: Array<{ x: number; y: number }> = [];
   for (let y = 0; y <= 32; y++) for (let x = 0; x <= 32; x++) {
-    const lon = ((west + span * x / 32 + 180) % 360 + 360) % 360 - 180;
-    const point = geometry.geographicToGrid(south + (north - south) * y / 32, lon);
+    const point = geometry.geographicToGrid(south + (north - south) * y / 32, normalizeLon(west + span * x / 32));
     if (point) points.push(point);
   }
   for (const x of [0, (grid.width - 1) / 2, grid.width - 1]) for (const y of [0, (grid.height - 1) / 2, grid.height - 1]) {
@@ -130,25 +133,19 @@ function tilesForBounds(grid: Grid, bounds: GeographicBounds, size: number, padd
   }
   if (!points.length) return [];
   const w = Math.ceil(grid.width / size), h = Math.ceil(grid.height / size);
-  const y0 = Math.max(0, Math.floor((Math.min(...points.map(p => p.y)) - padding) / size));
-  const y1 = Math.min(h - 1, Math.floor((Math.max(...points.map(p => p.y)) + padding) / size));
-  const xs = points.map(point => point.x), minX = Math.min(...xs), maxX = Math.max(...xs);
+  const xs = points.map(p => p.x), ys = points.map(p => p.y), minX = Math.min(...xs), maxX = Math.max(...xs);
+  const y0 = Math.max(0, Math.floor((Math.min(...ys) - padding) / size)), y1 = Math.min(h - 1, Math.floor((Math.max(...ys) + padding) / size));
   const intervals = grid.wrapLongitude && maxX - minX > grid.width / 2
     ? [[0, Math.max(...xs.filter(x => x < grid.width / 2)) + padding], [Math.min(...xs.filter(x => x >= grid.width / 2)) - padding, grid.width - 1]]
     : [[minX - padding, maxX + padding]];
-  if (grid.wrapLongitude) {
-    for (const [start, end] of [...intervals]) {
-      if (start < 0) intervals.push([grid.width + start, grid.width - 1]);
-      if (end >= grid.width) intervals.push([0, end - grid.width]);
-    }
+  if (grid.wrapLongitude) for (const [s, e] of [...intervals]) {
+    if (s < 0) intervals.push([grid.width + s, grid.width - 1]);
+    if (e >= grid.width) intervals.push([0, e - grid.width]);
   }
   const result = new Set<number>();
-  for (const [start, end] of intervals) {
-    const x0 = Math.max(0, Math.floor(start / size)), x1 = Math.min(w - 1, Math.floor(end / size));
-    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-      result.add(y * w + x);
-      if (result.size > MAX_CHUNKS) return null;
-    }
+  for (const [s, e] of intervals) {
+    const x0 = Math.max(0, Math.floor(s / size)), x1 = Math.min(w - 1, Math.floor(e / size));
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (result.add(y * w + x).size > MAX_CHUNKS) return null;
   }
   return [...result];
 }
@@ -163,6 +160,29 @@ function overviewCoordinate(point: number, length: number, stride: number, wrap 
   return (point - center) / stride;
 }
 
+function validateChunk(kind: string, bytes: Uint8Array, tileSize: number, levels: number, isOverview: boolean): PackedWindChunk | DataView {
+  if (kind === 'wind') {
+    const columns = decodePackedWindChunk(bytes);
+    if (columns.count !== tileSize ** 2 || columns.levels !== levels) throw new Error('Numeric chunk dimensions mismatch');
+    return columns;
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (isOverview) {
+    for (let i = 0; i < bytes.length; i += 9) {
+      const u = view.getFloat32(i, true), v = view.getFloat32(i + 4, true), status = view.getUint8(i + 8);
+      if (status > STATUS_OUTSIDE || !Number.isFinite(u) || !Number.isFinite(v) || (status !== STATUS_VALID && (u !== 0 || v !== 0))) throw new Error('Invalid numeric overview');
+    }
+    return view;
+  }
+  for (let i = 0; i < bytes.length; i += WIND_FINE_CELL_BYTES) {
+    const packed = view.getUint8(i + 8), support = view.getUint8(i + 9), terrain = packed & STATUS_MASK, lift = (packed >> 2) & STATUS_MASK;
+    if ((packed & 0xe0) !== 0 || (support & ~SUPPORT_MASK) !== 0 || terrain === STATUS_NO_LIFT
+      || (terrain === STATUS_VALID && !Number.isFinite(view.getFloat32(i, true)))
+      || (lift <= STATUS_NO_LIFT && !Number.isFinite(view.getFloat32(i + 4, true)))) throw new Error('Invalid numeric companion');
+  }
+  return view;
+}
+
 export class WindDataSource {
   private controller?: AbortController;
   private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; overview?: Overview };
@@ -171,13 +191,51 @@ export class WindDataSource {
   private readonly cache: WindDataCache;
   private readonly held = new Set<CachedBytes>();
   private active?: AbortController;
-  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache } = {}) {
+  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean } = {}) {
     this.cache = options.cache ?? new WindDataCache();
+  }
+
+  get isOverview(): boolean | undefined {
+    return this.current ? !!this.current.overview : undefined;
+  }
+
+  /** Fast direct-mapped quantized field sampler (~220 m cells, zero heap allocation) for 60fps map rendering. */
+  field(height: 'surface' | number | 'lift'): { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } } {
+    const keys = new Float64Array(FIELD_SLOTS).fill(-1);
+    const uv = new Float32Array(FIELD_SLOTS * 2), statuses = new Uint8Array(FIELD_SLOTS);
+    const out = { u: null as number | null, v: null as number | null, status: STATUS_UNAVAILABLE };
+    return {
+      sample: (lat: number, lon: number) => {
+        if (!this.current || this.current.build.expiresAtMs <= Date.now()) {
+          this.current = undefined; out.status = STATUS_UNAVAILABLE; out.u = out.v = null; return out;
+        }
+        const wrapped = normalizeLon(lon);
+        const iy = Math.round((lat + 90) * 500), ix = Math.round((wrapped + 180) * 500);
+        const tag = iy * 180_002 + ix, slot = ((Math.imul(iy, 2654435761) ^ Math.imul(ix, 2246822519)) >>> 0) & (FIELD_SLOTS - 1);
+        if (keys[slot] === tag) {
+          const st = statuses[slot];
+          out.status = st; out.u = st === STATUS_VALID ? uv[slot * 2] : null; out.v = st === STATUS_VALID ? uv[slot * 2 + 1] : null;
+          return out;
+        }
+        const s = this.sample(lat, wrapped, height);
+        const st = s.status === 'valid' ? STATUS_VALID : s.status === 'no-lift' ? STATUS_NO_LIFT : s.status === 'outside' ? STATUS_OUTSIDE : STATUS_UNAVAILABLE;
+        keys[slot] = tag; statuses[slot] = st;
+        uv[slot * 2] = s.u ?? 0; uv[slot * 2 + 1] = s.v ?? 0;
+        out.status = st; out.u = s.u; out.v = s.v;
+        return out;
+      }
+    };
   }
 
   private release(): void {
     for (const entry of this.held) this.cache.release(entry);
     this.held.clear();
+  }
+
+  private hold(entry: CachedBytes): CachedBytes {
+    if (this.held.has(entry)) this.cache.release(entry);
+    else this.held.add(entry);
+    return entry;
   }
 
   async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
@@ -214,106 +272,119 @@ export class WindDataSource {
     if (build.expiresAtMs <= Date.now() || Date.parse(build.manifest.expiresAt) !== build.expiresAtMs) return 'unavailable';
     if (!build.manifest.frames.slice(0, build.manifest.mapFrameCount ?? build.manifest.frames.length).some(item => item.id === frame)) return 'unavailable';
     if (!bounds.every(Number.isFinite) || bounds[1] < -90 || bounds[3] > 90 || bounds[1] > bounds[3] || bounds[0] < -180 || bounds[0] > 180 || bounds[2] < -180 || bounds[2] > 180) throw new RangeError('Invalid wind bounds');
-    const native = build.manifest.surfaces.find(surface => surface.kind === 'native'), fine = build.manifest.surfaces.find(surface => surface.kind === 'fine');
+    const native = build.manifest.surfaces.find(s => s.kind === 'native'), fine = build.manifest.surfaces.find(s => s.kind === 'fine');
     if (!native || !fine) return 'unavailable';
     let combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     combined.throwIfAborted();
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
-    const fetched = new Map<Uint8Array, CachedBytes>();
-    const accept = (bytes: Uint8Array) => { const entry = fetched.get(bytes); if (entry) entry.used = bytes.length; };
-    const fetchBytes = async (url: string, type: string, limit: number): Promise<Uint8Array | null> => {
+    const readStream = async (url: string, type: string, targets: CachedBytes[]): Promise<number | null | 'unsupported-span'> => {
       combined.throwIfAborted();
-      const cached = this.cache.take(url, limit, build.expiresAtMs);
-      if (this.held.has(cached)) this.cache.release(cached);
-      else this.held.add(cached);
-      if (cached.used !== null) return cached.bytes.subarray(0, cached.used);
-      const requestController = new AbortController(), timer = setTimeout(() => requestController.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
-      const requestSignal = AbortSignal.any([combined, requestController.signal]);
+      const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
+      const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
+      const reqSig = AbortSignal.any([combined, reqCtrl.signal]);
       try {
-        requestSignal.throwIfAborted();
-        const result = await (this.options.fetchImpl ?? fetch)(url, { signal: requestSignal, redirect: 'error' });
-        if (result.status === 404 || result.status === 409) { await result.body?.cancel(); return null; }
-        if (!result.ok || result.headers.get('content-type')?.split(';')[0] !== type) { await result.body?.cancel(); throw new Error('Invalid numeric response'); }
-        const declared = result.headers.get('content-length');
-        if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await result.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
-        if (!result.body) throw new Error('Numeric response is empty');
-        const reader = result.body.getReader(), bytes = cached.bytes;
-        const abort = () => { void reader.cancel(requestSignal.reason).catch(() => {}); };
-        requestSignal.addEventListener('abort', abort, { once: true });
-        if (requestSignal.aborted) abort();
-        let used = 0;
+        reqSig.throwIfAborted();
+        const res = await (this.options.fetchImpl ?? fetch)(url, { signal: reqSig, redirect: 'error' });
+        if (targets.length > 1 && (res.status === 400 || res.status === 404)) { await res.body?.cancel(); return 'unsupported-span'; }
+        if (res.status === 404 || res.status === 409) { await res.body?.cancel(); return null; }
+        if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
+        const declared = res.headers.get('content-length');
+        if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
+        if (!res.body) throw new Error('Numeric response is empty');
+        const reader = res.body.getReader(), abort = () => { void reader.cancel(reqSig.reason).catch(() => {}); };
+        reqSig.addEventListener('abort', abort, { once: true });
+        if (reqSig.aborted) abort();
+        let used = 0, slot = 0, slotOffset = 0;
         try {
           for (;;) {
-            const next = await reader.read(); requestSignal.throwIfAborted();
+            const next = await reader.read(); reqSig.throwIfAborted();
             if (next.done) break;
             if (used + next.value.length > limit) throw new Error('Numeric response exceeds budget');
-            bytes.set(next.value, used); used += next.value.length;
+            for (let pos = 0; pos < next.value.length;) {
+              const dest = targets[slot]!.bytes, take = Math.min(dest.length - slotOffset, next.value.length - pos);
+              dest.set(next.value.subarray(pos, pos + take), slotOffset);
+              pos += take; used += take; slotOffset += take;
+              if (slotOffset === dest.length) { slot++; slotOffset = 0; }
+            }
           }
-        } finally { requestSignal.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        } finally { reqSig.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
-        const resultBytes = bytes.subarray(0, used);
-        fetched.set(resultBytes, cached);
-        return resultBytes;
+        return used;
       } finally { clearTimeout(timer); }
     };
-    const descriptorBytes = await fetchBytes(root, 'application/json', WIND_FRAME_LIMIT);
-    if (!descriptorBytes) return 'unavailable';
-    const descriptor = parseWindFrame(descriptorBytes);
+    const descEntry = this.hold(this.cache.take(root, WIND_FRAME_LIMIT, build.expiresAtMs));
+    const descUsed = descEntry.used ?? await readStream(root, 'application/json', [descEntry]);
+    if (descUsed === null || descUsed === 'unsupported-span') return 'unavailable';
+    const descriptor = parseWindFrame(descEntry.bytes.subarray(0, descUsed));
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
-    accept(descriptorBytes);
+    descEntry.used = descUsed;
+
     const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize), fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize);
     const windBytes = windLayout(native.grid.width, native.grid.height, descriptor.tileSize, descriptor.levels).chunkBytes, fineBytes = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize).chunkBytes;
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
-    let overview: Overview | undefined;
-    let tasks: Array<{ kind: string; tile: number; bytes: number }>;
+    let overview: Overview | undefined, rawTasks: Array<{ kind: string; tile: number; bytes: number }> | undefined;
     if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= MAX_BYTES) {
-      tasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
+      rawTasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
     } else {
-      let selected: typeof tasks | undefined;
       for (const level of descriptor.overview ?? []) {
         const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, bounds, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
         if (!tiles || tiles.length * layout.chunkBytes > MAX_BYTES) continue;
         overview = { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map() };
-        selected = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
+        rawTasks = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
         break;
       }
-      if (!selected) return 'unavailable';
-      tasks = selected;
+      if (!rawTasks) return 'unavailable';
     }
-    combined = AbortSignal.any([combined, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(tasks.length / 4) * REQUEST_TIMEOUT_MS)))]);
+
+    const coalesce = (this.options.coalesceSpans ?? !this.options.fetchImpl) && !this.cache.spansUnsupported;
+    const batches: Array<{ kind: string; tiles: number[]; bytes: number }> = [];
+    for (const item of coalesce ? [...rawTasks].sort((a, b) => a.kind.localeCompare(b.kind) || a.tile - b.tile) : rawTasks) {
+      const cached = coalesce && this.cache.hasReady(`${root}/${item.kind}/${item.tile}`, item.bytes);
+      const prev = !cached && coalesce ? batches.at(-1) : undefined, lastTile = prev?.tiles.at(-1);
+      if (prev && prev.kind === item.kind && lastTile !== undefined && item.tile === lastTile + 1
+        && Math.floor(item.tile / WIND_INDEX_ENTRIES) === Math.floor(prev.tiles[0]! / WIND_INDEX_ENTRIES)
+        && (prev.tiles.length + 1) * item.bytes <= MAX_SPAN_BYTES
+        && !this.cache.hasReady(`${root}/${prev.kind}/${prev.tiles[0]}`, item.bytes)) {
+        prev.tiles.push(item.tile);
+      } else batches.push({ kind: item.kind, tiles: [item.tile], bytes: item.bytes });
+    }
+
+    combined = AbortSignal.any([combined, AbortSignal.timeout(Math.min(MAX_LOAD_TIMEOUT_MS, Math.max(REQUEST_TIMEOUT_MS, Math.ceil(batches.length / 4) * REQUEST_TIMEOUT_MS)))]);
+    const commit = (kind: string, tile: number, entry: CachedBytes) => {
+      entry.decoded ??= validateChunk(kind, entry.bytes, descriptor.tileSize, descriptor.levels, !!overview);
+      entry.used = entry.bytes.length;
+      if (kind === 'wind') wind.set(tile, entry.decoded as PackedWindChunk);
+      else (overview ? overview.data : fineData).set(tile, entry.decoded as DataView);
+    };
     let next = 0;
-    const jobs = Array.from({ length: Math.min(4, tasks.length) }, async () => {
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(4, batches.length) }, async () => {
       try {
-        while (next < tasks.length) {
-          const task = tasks[next++], bytes = await fetchBytes(`${root}/${task.kind}/${task.tile}`, 'application/octet-stream', task.bytes);
-          if (!bytes) throw new Error('Numeric chunk missing');
-          if (bytes.length !== (task.bytes)) throw new Error('Numeric chunk length mismatch');
-          if (task.kind === 'wind') {
-            const columns = decodePackedWindChunk(bytes);
-            if (columns.count !== descriptor.tileSize ** 2 || columns.levels !== descriptor.levels) throw new Error('Numeric chunk dimensions mismatch');
-            wind.set(task.tile, columns);
-          } else if (overview) {
-            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-            for (let i = 0; i < bytes.length; i += 9) {
-              const u = view.getFloat32(i, true), v = view.getFloat32(i + 4, true), status = view.getUint8(i + 8);
-              if (status > STATUS_OUTSIDE || !Number.isFinite(u) || !Number.isFinite(v) || (status !== STATUS_VALID && (u !== 0 || v !== 0))) throw new Error('Invalid numeric overview');
+        while (next < batches.length) {
+          const batch = batches[next++]!;
+          const entries = batch.tiles.map(tile => this.hold(this.cache.take(`${root}/${batch.kind}/${tile}`, batch.bytes, build.expiresAtMs)));
+          if (entries.length === 1 && entries[0]!.used !== null) { commit(batch.kind, batch.tiles[0]!, entries[0]!); continue; }
+          if (entries.length > 1 && !this.cache.spansUnsupported) {
+            const used = await readStream(`${root}/${batch.kind}/${batch.tiles[0]}-${batch.tiles.at(-1)}`, 'application/octet-stream', entries);
+            if (used !== 'unsupported-span') {
+              if (used === null) throw new Error('Numeric chunk missing');
+              if (used !== batch.tiles.length * batch.bytes) throw new Error('Numeric chunk length mismatch');
+              for (let i = 0; i < entries.length; i++) commit(batch.kind, batch.tiles[i]!, entries[i]!);
+              continue;
             }
-            overview.data.set(task.tile, view);
-          } else {
-            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-            for (let i = 0; i < bytes.length; i += WIND_FINE_CELL_BYTES) {
-              const packed = view.getUint8(i + 8), support = view.getUint8(i + 9), terrain = packed & STATUS_MASK, lift = (packed >> 2) & STATUS_MASK;
-              if ((packed & 0xe0) !== 0 || (support & ~SUPPORT_MASK) !== 0 || terrain === STATUS_NO_LIFT
-                || (terrain === STATUS_VALID && !Number.isFinite(view.getFloat32(i, true)))
-                || (lift <= STATUS_NO_LIFT && !Number.isFinite(view.getFloat32(i + 4, true)))) throw new Error('Invalid numeric companion');
-            }
-            fineData.set(task.tile, view);
+            this.cache.spansUnsupported = true;
           }
-          accept(bytes);
+          for (let i = 0; i < entries.length; i++) {
+            const e = entries[i]!, tile = batch.tiles[i]!;
+            if (e.used !== null) { commit(batch.kind, tile, e); continue; }
+            const used = await readStream(`${root}/${batch.kind}/${tile}`, 'application/octet-stream', [e]);
+            if (used === null || used === 'unsupported-span') throw new Error('Numeric chunk missing');
+            if (used !== batch.bytes) throw new Error('Numeric chunk length mismatch');
+            commit(batch.kind, tile, e);
+          }
         }
       } catch (error) { controller.abort(); throw error; }
-    });
-    const settled = await Promise.allSettled(jobs), failed = settled.find(result => result.status === 'rejected');
+    }));
+    const failed = settled.find(r => r.status === 'rejected');
     if (failed?.status === 'rejected') throw failed.reason;
     combined.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
@@ -331,15 +402,12 @@ export class WindDataSource {
     let nearest = 0, nearestOutput = 0;
     for (let i = 0; i < finePlan.contributors.length; i++) {
       const item = finePlan.contributors[i], best = finePlan.contributors[nearest], size = current.fineTileSize;
-      const tile = Math.floor(item.row / size) * Math.ceil(current.fineGrid.width / size) + Math.floor(item.column / size);
-      const view = current.fine.get(tile);
+      const view = current.fine.get(Math.floor(item.row / size) * Math.ceil(current.fineGrid.width / size) + Math.floor(item.column / size));
       if (!view) return empty('unavailable');
       const pos = ((item.row % size) * size + item.column % size) * WIND_FINE_CELL_BYTES, packed = view.getUint8(pos + 8);
       values[i] = view.getFloat32(pos + (height === 'lift' ? 4 : 0), true);
       flags[i] = height === 'lift' ? ((packed >> 2) & STATUS_MASK) | view.getUint8(pos + 9) : packed & STATUS_MASK;
-      if (i === 0 || nearerContributor(item.weight, item.row, item.column, best.weight, best.row, best.column)) {
-        nearest = i; nearestOutput = (packed >> 4) & 1;
-      }
+      if (i === 0 || nearerContributor(item.weight, item.row, item.column, best.weight, best.row, best.column)) { nearest = i; nearestOutput = (packed >> 4) & 1; }
     }
     if (!nearestOutput) return empty('outside');
     let target: number | 'surface' = 'surface';
@@ -351,8 +419,8 @@ export class WindDataSource {
     chunks.length = windPlan.contributors.length;
     for (let i = 0; i < windPlan.contributors.length; i++) {
       const item = windPlan.contributors[i], size = current.tileSize;
-      const tile = Math.floor(item.row / size) * Math.ceil(current.native.width / size) + Math.floor(item.column / size);
-      chunks[i] = current.wind.get(tile); offsets[i] = (item.row % size) * size + item.column % size;
+      chunks[i] = current.wind.get(Math.floor(item.row / size) * Math.ceil(current.native.width / size) + Math.floor(item.column / size));
+      offsets[i] = (item.row % size) * size + item.column % size;
       if (!chunks[i]) { chunks.length = 0; return empty('unavailable'); }
     }
     offsets.length = chunks.length;
@@ -360,11 +428,12 @@ export class WindDataSource {
     chunks.length = 0;
     return { u: result.u, v: result.v, status: result.status === STATUS_VALID ? 'valid' : result.status === STATUS_OUTSIDE ? 'outside' : 'unavailable' };
   }
+
   private sampleOverview(current: NonNullable<WindDataSource['current']>, lat: number, lon: number, height: 'surface' | number | 'lift'): WindSample {
     const { stride, data, width, height: rows, tilesAcross } = current.overview!, point = current.nativeGeometry.geographicToGrid(lat, lon);
     if (!point || point.x < 0 || point.y < 0 || (!current.native.wrapLongitude && point.x > current.native.width - 1) || point.y > current.native.height - 1) return empty('outside');
     const mode = height === 'surface' ? 0 : height === 'lift' ? WIND_OVERVIEW_VALUES - 1 : WIND_HEIGHTS.indexOf(height as typeof WIND_HEIGHTS[number]) + 1;
-    if (typeof height === 'number' && mode === 0) return empty('unavailable');
+    if (typeof height === 'number' && !mode) return empty('unavailable');
     const size = WIND_OVERVIEW_TILE_SIZE, ox = current.native.wrapLongitude ? Math.floor((point.x + 0.5) / stride) % width : Math.min(width - 1, Math.floor((point.x + 0.5) / stride)), oy = Math.min(rows - 1, Math.floor((point.y + 0.5) / stride));
     const owner = data.get(Math.floor(oy / size) * tilesAcross + Math.floor(ox / size));
     if (!owner) return empty('unavailable');
@@ -383,6 +452,7 @@ export class WindDataSource {
     }
     return { status: 'valid', u, v };
   }
+
   dispose(): void {
     this.disposed = true; this.controller?.abort(); this.current = undefined;
     if (!this.active) this.release();

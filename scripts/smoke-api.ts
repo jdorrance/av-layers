@@ -1,5 +1,6 @@
 import { DEFAULT_PROBE_TIMEOUT_MS, MAX_PROVENANCE_BYTES, maxProfileFrames, parseFrameProvenance, parseProvenance,
   renderedFrames, renderedLayers, type LayerId, type ManifestV5 } from '@av/contracts';
+import { WIND_FRAME_LIMIT, parseWindFrame } from '@av/contracts/wind-data';
 import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
 import { PRODUCTS } from '@av/contracts/models';
 
@@ -205,6 +206,13 @@ export async function probeApi(options: {
   invariant(response.headers.get('access-control-allow-origin') === '*', 'tile omitted CORS');
   invariant(response.headers.get('cache-control')?.includes('max-age='), 'tile omitted bounded cache-control');
   invariant(isWebp(bytes), 'tile body is not WebP');
+  if (manifest.mapData) {
+    const dataBase = `/v1/models/${options.model}/runs/${manifest.buildId}/data/${frame}`;
+    const descriptor = parseWindFrame((await get(dataBase, 'application/json', WIND_FRAME_LIMIT)).bytes);
+    const coarse = descriptor.overview?.at(-1);
+    const chunk = await get(`${dataBase}/${coarse ? `overview-${coarse.stride}` : 'wind'}/0`, 'application/octet-stream');
+    invariant(chunk.bytes.byteLength > 0, 'wind chunk probe returned empty payload');
+  }
   return manifest;
 }
 

@@ -1633,3 +1633,33 @@ it('labels the displayed raster through pending, failed and successful point-tim
   map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render'); map().emit('render');
   expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
 });
+
+it('hides precip-rate in preview while keeping future non-lift layers and km/mi unit switching', async () => {
+  manifest = fixtureManifestV5({ layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] });
+  win.href = 'http://localhost:5173/?model=gfs&layer=precip-rate&units=knots';
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(ui('layer-picker').hidden).toBe(true);
+  expect(ui('reference').hidden).toBe(false);
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+  expect(new URL(win.href).searchParams.get('layer')).toBeNull();
+  expect(new URL(win.href).searchParams.get('units')).toBeNull();
+
+  ui('units-imperial').dispatchEvent(new Event('click'));
+  expect(ui('units-imperial').ariaPressed).toBe('true');
+  expect(ui('point-units').value).toBe('imperial');
+  expect(new URL(win.href).searchParams.get('units')).toBe('imperial');
+  map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
+  await Promise.resolve();
+  expect(ui('point-wind').textContent).toContain('11 mph');
+
+  win.href = 'http://localhost:5173/?model=gfs&lat=32.5&lon=-117.5&z=9';
+  win.dispatchEvent(new Event('popstate'));
+  await Promise.resolve();
+  expect(ui('reference').hidden).toBe(false);
+  expect(ui('units-metric').ariaPressed).toBe('true');
+  expect(ui('units-imperial').ariaPressed).toBe('false');
+  expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/usable-lift-agl/');
+});

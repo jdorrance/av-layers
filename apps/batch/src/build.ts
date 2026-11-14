@@ -45,6 +45,6 @@ export async function buildForecast(options: BuildOptions & ForecastInputs): Pro
   const writer = capacity ? createWindDataWriter(options.out, options.product.modelId, stamp.buildId, options.provider.maxLevels, prepared.plan, capacity, options.signal) : undefined;
   const result = await buildWholeDomainFrames({ ...options, ...stamp, prepared, journalPrefix: prefix,
     onNumericFrame: writer ? async (...args) => { await writer.writeFrame(...args); await options.onNumericFrame?.(...args); } : options.onNumericFrame });
-  if (writer) await writer.finish(result.capacity.mapFrames);
-  return finishWholeDomain({ ...options, ...stamp, prepared, result, identity, preparation });
+  const mapData = writer ? await writer.finish(result.capacity.mapFrames) : undefined;
+  return finishWholeDomain({ ...options, ...stamp, prepared, result, identity, preparation, mapData });
 }

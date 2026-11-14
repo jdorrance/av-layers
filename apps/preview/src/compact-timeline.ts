@@ -1,408 +1,200 @@
 import './compact-timeline.css';
 
-export interface TimelineFrame {
-  readonly id: string;
-  readonly validTime: string;
-}
+export interface TimelineFrame { readonly id: string; readonly validTime: string }
+export interface CompactTimelineOptions { onSelect(index: number): void; timeZone?: string; zoneLabel?: string; onToggleTimeZone?: () => void }
+export interface CompactTimeline { update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void; setTimeZone?(timeZone: string, zoneLabel?: string): void; destroy(): void }
 
-export interface CompactTimelineOptions {
-  onSelect(index: number): void;
-  timeZone?: string;
-}
+interface LocalTime { day: string; hour: number; minute: number }
+interface DayGroup { day: string; indices: number[] }
 
-export interface CompactTimeline {
-  update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void;
-  destroy(): void;
-}
-
-interface LocalTime {
-  day: string;
-  hour: number;
-  minute: number;
-}
-
-interface DayGroup {
-  day: string;
-  indices: number[];
-}
-
-const PLAYBACK_INTERVAL_MS = 700;
-const DEFAULT_TIME_ZONE = 'UTC';
-
+const PLAYBACK_INTERVAL_MS = 700, DEFAULT_TIME_ZONE = 'UTC';
 const partsFormatters = new Map<string, Intl.DateTimeFormat>();
-
-function partsFormatter(timeZone: string): Intl.DateTimeFormat {
-  let formatter = partsFormatters.get(timeZone);
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23'
-    });
-    partsFormatters.set(timeZone, formatter);
-  }
-  return formatter;
-}
 
 function localTimeFromMs(ms: number, timeZone: string): LocalTime | null {
   if (!Number.isFinite(ms)) return null;
-  const values: Record<string, string> = {};
-  for (const part of partsFormatter(timeZone).formatToParts(new Date(ms))) {
-    if (part.type !== 'literal') values[part.type] = part.value;
+  let fmt = partsFormatters.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    partsFormatters.set(timeZone, fmt);
   }
-  const hour = Number(values.hour) % 24;
-  const minute = Number(values.minute);
-  if (!values.year || !values.month || !values.day || !Number.isFinite(hour) || !Number.isFinite(minute)) return null;
-  return { day: `${values.year}-${values.month}-${values.day}`, hour, minute };
+  const v: Record<string, string> = {};
+  for (const p of fmt.formatToParts(new Date(ms))) if (p.type !== 'literal') v[p.type] = p.value;
+  const hour = Number(v.hour) % 24, minute = Number(v.minute);
+  return v.year && v.month && v.day && Number.isFinite(hour) && Number.isFinite(minute) ? { day: `${v.year}-${v.month}-${v.day}`, hour, minute } : null;
 }
 
-export function localDayKey(validTime: string, timeZone: string): string | null {
-  return localTimeFromMs(Date.parse(validTime), timeZone)?.day ?? null;
-}
+export const localDayKey = (validTime: string, timeZone: string): string | null => localTimeFromMs(Date.parse(validTime), timeZone)?.day ?? null;
+export const localTimeParts = (validTime: string, timeZone: string): LocalTime | null => localTimeFromMs(Date.parse(validTime), timeZone);
 
-export function localTimeParts(validTime: string, timeZone: string): LocalTime | null {
-  return localTimeFromMs(Date.parse(validTime), timeZone);
-}
-
-export function nearestFrameIndexForDay(
-  frames: readonly TimelineFrame[],
-  indices: readonly number[],
-  timeZone: string,
-  hour: number,
-  minute: number
-): number {
-  if (indices.length === 0) return -1;
+export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string, hour: number, minute: number): number {
+  if (!indices.length) return -1;
   const target = hour * 60 + minute;
-  let best = indices[0]!;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  let bestMs = Number.POSITIVE_INFINITY;
+  let best = indices[0]!, bestDist = Infinity, bestMs = Infinity;
   for (const index of indices) {
-    const frame = frames[index];
-    if (!frame) continue;
-    const ms = Date.parse(frame.validTime);
-    const local = localTimeFromMs(ms, timeZone);
+    const f = frames[index];
+    if (!f) continue;
+    const ms = Date.parse(f.validTime), local = localTimeFromMs(ms, timeZone);
     if (!local) continue;
-    const distance = Math.abs(local.hour * 60 + local.minute - target);
-    if (distance < bestDistance || (distance === bestDistance && ms < bestMs)) {
-      best = index;
-      bestDistance = distance;
-      bestMs = ms;
-    }
+    const dist = Math.abs(local.hour * 60 + local.minute - target);
+    if (dist < bestDist || (dist === bestDist && ms < bestMs)) { best = index; bestDist = dist; bestMs = ms; }
   }
   return best;
 }
 
 export function scrollLeftForCell(cellLeft: number, cellWidth: number, scrollLeft: number, viewportWidth: number): number {
   if (viewportWidth <= 0 || cellWidth <= 0) return scrollLeft;
-  if (cellLeft < scrollLeft) return cellLeft;
-  const right = cellLeft + cellWidth;
-  if (right > scrollLeft + viewportWidth) return right - viewportWidth;
-  return scrollLeft;
+  return cellLeft < scrollLeft ? cellLeft : cellLeft + cellWidth > scrollLeft + viewportWidth ? cellLeft + cellWidth - viewportWidth : scrollLeft;
 }
 
 function groupDays(frames: readonly TimelineFrame[], timeZone: string): DayGroup[] {
   const groups = new Map<string, number[]>();
-  frames.forEach((frame, index) => {
-    const day = localDayKey(frame.validTime, timeZone);
-    if (!day) return;
-    const indices = groups.get(day);
-    if (indices) indices.push(index);
-    else groups.set(day, [index]);
-  });
+  frames.forEach((f, i) => { const d = localDayKey(f.validTime, timeZone); if (d) groups.set(d, [...(groups.get(d) ?? []), i]); });
   return [...groups.entries()].map(([day, indices]) => ({ day, indices }));
-}
-
-function sameFrames(a: readonly TimelineFrame[], b: readonly TimelineFrame[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every((frame, index) => frame.id === b[index]!.id && frame.validTime === b[index]!.validTime);
 }
 
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
-  const timeZone = options.timeZone || DEFAULT_TIME_ZONE;
-  const dateFormatter = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric' });
-  const clockFormatter = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-  const cellLabelFormatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
+  let timeZone = options.timeZone || DEFAULT_TIME_ZONE, zoneText = options.zoneLabel ?? timeZone;
+  const makeFmt = (tz: string) => ({
+    date: new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }),
+    clock: new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }),
+    cell: new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
   });
+  let fmt = makeFmt(timeZone);
+  const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] => {
+    const n = doc.createElement(tag); n.className = cls; if (text !== undefined) n.textContent = text; return n;
+  };
+  const btn = (cls: string, label: string, text?: string) => { const b = el('button', cls, text); b.type = 'button'; b.setAttribute('aria-label', label); return b; };
 
-  const root = doc.createElement('div');
-  root.className = 'compact-timeline';
-  root.setAttribute('role', 'group');
-  root.setAttribute('aria-label', 'Forecast timeline');
-
-  const dateBlock = doc.createElement('div');
-  dateBlock.className = 'ct-date';
-
-  const previousDay = doc.createElement('button');
-  previousDay.type = 'button';
-  previousDay.className = 'ct-day ct-prev';
-  previousDay.setAttribute('aria-label', 'Previous available day');
-  previousDay.textContent = '‹';
-
-  const dateText = doc.createElement('div');
-  dateText.className = 'ct-date-text';
-  const dateLine = doc.createElement('span');
-  dateLine.className = 'ct-date-line';
-  dateLine.textContent = 'No forecast time';
-  const timeLine = doc.createElement('span');
-  timeLine.className = 'ct-time-line';
-  const timeLabel = doc.createElement('time');
-  timeLabel.className = 'ct-time';
-  timeLabel.textContent = '--:--';
-  const separator = doc.createElement('span');
-  separator.className = 'ct-sep';
-  separator.textContent = ' · ';
-  const zoneLabel = doc.createElement('span');
-  zoneLabel.className = 'ct-zone';
-  zoneLabel.textContent = timeZone;
-  timeLine.append(timeLabel, separator, zoneLabel);
-  dateText.append(dateLine, timeLine);
-
-  const nextDay = doc.createElement('button');
-  nextDay.type = 'button';
-  nextDay.className = 'ct-day ct-next';
-  nextDay.setAttribute('aria-label', 'Next available day');
-  nextDay.textContent = '›';
+  const root = el('div', 'compact-timeline'), dateBlock = el('div', 'ct-date');
+  root.setAttribute('role', 'group'); root.setAttribute('aria-label', 'Forecast timeline');
+  const previousDay = btn('ct-day ct-prev', 'Previous available day', '‹'), nextDay = btn('ct-day ct-next', 'Next available day', '›');
+  const dateText = el('div', 'ct-date-text'), dateLine = el('span', 'ct-date-line', 'No forecast time');
+  const timeLine = el('span', 'ct-time-line'), timeLabel = el('time', 'ct-time', '--:--');
+  const zoneLabel = options.onToggleTimeZone ? btn('ct-zone ct-zone-toggle', 'Toggle UTC and local time', zoneText) : el('span', 'ct-zone', zoneText);
+  if (options.onToggleTimeZone) zoneLabel.addEventListener('click', () => options.onToggleTimeZone!());
+  timeLine.append(timeLabel, el('span', 'ct-sep', ' · '), zoneLabel); dateText.append(dateLine, timeLine);
   dateBlock.append(previousDay, dateText, nextDay);
 
-  const play = doc.createElement('button');
-  play.type = 'button';
-  play.className = 'ct-play';
-  play.setAttribute('aria-label', 'Play forecast');
-  play.setAttribute('aria-pressed', 'false');
-  const playGlyph = doc.createElement('span');
-  playGlyph.className = 'ct-play-glyph';
-  playGlyph.setAttribute('aria-hidden', 'true');
-  play.append(playGlyph);
+  const play = btn('ct-play', 'Play forecast'), playGlyph = el('span', 'ct-play-glyph');
+  play.setAttribute('aria-pressed', 'false'); playGlyph.setAttribute('aria-hidden', 'true'); play.append(playGlyph);
 
-  const hours = doc.createElement('div');
-  hours.className = 'ct-hours';
-  hours.setAttribute('role', 'radiogroup');
-  hours.setAttribute('aria-label', 'Available forecast frames');
-  hours.setAttribute('aria-orientation', 'horizontal');
+  const hours = el('div', 'ct-hours');
+  for (const [k, v] of [['role', 'radiogroup'], ['aria-label', 'Available forecast frames'], ['aria-orientation', 'horizontal']] as const) hours.setAttribute(k, v);
+  root.append(dateBlock, play, hours); host.append(root);
 
-  root.append(dateBlock, play, hours);
-  host.append(root);
+  let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], cells: HTMLButtonElement[] = [];
+  let selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
 
-  let frames: readonly TimelineFrame[] = [];
-  let days: DayGroup[] = [];
-  let cells: HTMLButtonElement[] = [];
-  let selectedIndex = -1;
-  let disabled = false;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let destroyed = false;
-
-  function controlsDisabled(): boolean {
-    return disabled || frames.length === 0;
-  }
-
-  function resolveSelected(selectedFrame: string | null): number {
-    return frames.findIndex(frame => frame.id === selectedFrame);
-  }
-
-  function dayPosition(): number {
-    if (selectedIndex < 0) return -1;
-    const day = localDayKey(frames[selectedIndex]!.validTime, timeZone);
-    if (!day) return -1;
-    return days.findIndex(group => group.day === day);
-  }
-
-  function buildCell(frame: TimelineFrame, index: number): HTMLButtonElement {
-    const cell = doc.createElement('button');
-    cell.type = 'button';
-    cell.className = 'ct-hour';
-    cell.setAttribute('role', 'radio');
-    cell.dataset.index = String(index);
-    const ms = Date.parse(frame.validTime);
-    const local = localTimeFromMs(ms, timeZone);
-    const label = doc.createElement('span');
-    label.className = 'ct-hour-label';
-    label.textContent = local ? String(local.hour).padStart(2, '0') : '--';
-    cell.append(label);
-    const clock = Number.isFinite(ms) ? clockFormatter.format(new Date(ms)) : '--:--';
-    const date = Number.isFinite(ms) ? cellLabelFormatter.format(new Date(ms)) : 'Unknown date';
-    cell.setAttribute('aria-label', `${date} at ${clock} ${timeZone}`);
-    cell.addEventListener('click', () => select(index, true, false));
-    return cell;
-  }
+  const controlsDisabled = () => disabled || !frames.length;
+  const dayPosition = () => selectedIndex < 0 ? -1 : days.findIndex(g => g.day === localDayKey(frames[selectedIndex]!.validTime, timeZone));
 
   function rebuild(): void {
-    const hadFocus = cells.includes(doc.activeElement as HTMLButtonElement);
-    const previousScroll = hours.scrollLeft;
-    cells = frames.map(buildCell);
-    hours.replaceChildren(...cells);
-    hours.scrollLeft = previousScroll;
+    const hadFocus = cells.includes(doc.activeElement as HTMLButtonElement), prevScroll = hours.scrollLeft;
+    cells = frames.map((frame, index) => {
+      const ms = Date.parse(frame.validTime), local = localTimeFromMs(ms, timeZone), ok = Number.isFinite(ms);
+      const cell = btn('ct-hour', `${ok ? fmt.cell.format(new Date(ms)) : 'Unknown date'} at ${ok ? fmt.clock.format(new Date(ms)) : '--:--'} ${zoneText}`);
+      cell.setAttribute('role', 'radio'); cell.dataset.index = String(index);
+      cell.append(el('span', 'ct-hour-label', local ? String(local.hour).padStart(2, '0') : '--'));
+      cell.addEventListener('click', () => select(index, true, false));
+      return cell;
+    });
+    hours.replaceChildren(...cells); hours.scrollLeft = prevScroll;
     if (hadFocus) (cells[selectedIndex] ?? cells[0])?.focus({ preventScroll: true });
   }
 
-  function reveal(index: number): void {
-    const cell = cells[index];
-    if (!cell) return;
-    const left = cell.getBoundingClientRect().left - hours.getBoundingClientRect().left + hours.scrollLeft;
-    hours.scrollLeft = scrollLeftForCell(left, cell.offsetWidth, hours.scrollLeft, hours.clientWidth);
-  }
-
-  function renderCells(): void {
-    cells.forEach((cell, index) => {
-      const isSelected = index === selectedIndex;
-      cell.classList.toggle('is-selected', isSelected);
-      cell.setAttribute('aria-checked', String(isSelected));
-      cell.tabIndex = isSelected || (selectedIndex < 0 && index === 0) ? 0 : -1;
-    });
-    if (selectedIndex >= 0) reveal(selectedIndex);
-  }
-
-  function renderDate(): void {
-    if (selectedIndex < 0) {
-      dateLine.textContent = 'No forecast time';
-      timeLabel.textContent = '--:--';
-      timeLabel.removeAttribute('dateTime');
-      return;
-    }
-    const frame = frames[selectedIndex]!;
-    const ms = Date.parse(frame.validTime);
-    if (!Number.isFinite(ms)) {
-      dateLine.textContent = 'No forecast time';
-      timeLabel.textContent = '--:--';
-      timeLabel.removeAttribute('dateTime');
-      return;
-    }
-    dateLine.textContent = dateFormatter.format(new Date(ms));
-    timeLabel.textContent = clockFormatter.format(new Date(ms));
-    timeLabel.setAttribute('dateTime', frame.validTime);
-  }
-
-  function renderDays(): void {
-    const position = dayPosition();
-    previousDay.disabled = controlsDisabled() || position <= 0;
-    nextDay.disabled = controlsDisabled() || position < 0 || position >= days.length - 1;
-  }
-
-  function renderDisabled(): void {
-    const off = controlsDisabled();
-    play.disabled = off;
-    for (const cell of cells) cell.disabled = off;
-    hours.setAttribute('aria-disabled', String(off));
-    renderDays();
-  }
-
-  function renderPlay(): void {
-    const active = timer !== null;
-    play.classList.toggle('is-playing', active);
-    play.setAttribute('aria-pressed', String(active));
-    play.setAttribute('aria-label', active ? 'Pause forecast playback' : 'Play forecast');
-  }
-
   function render(): void {
-    renderCells();
-    renderDate();
-    renderDisabled();
-    renderPlay();
+    cells.forEach((cell, i) => {
+      const sel = i === selectedIndex;
+      cell.classList.toggle('is-selected', sel);
+      cell.setAttribute('aria-checked', String(sel));
+      cell.tabIndex = sel || (selectedIndex < 0 && i === 0) ? 0 : -1;
+    });
+    const activeCell = cells[selectedIndex];
+    if (activeCell) {
+      const left = activeCell.getBoundingClientRect().left - hours.getBoundingClientRect().left + hours.scrollLeft;
+      hours.scrollLeft = scrollLeftForCell(left, activeCell.offsetWidth, hours.scrollLeft, hours.clientWidth);
+    }
+    const frame = selectedIndex >= 0 ? frames[selectedIndex] : undefined, ms = frame ? Date.parse(frame.validTime) : NaN;
+    if (!frame || !Number.isFinite(ms)) {
+      dateLine.textContent = 'No forecast time'; timeLabel.textContent = '--:--'; timeLabel.removeAttribute('dateTime');
+    } else {
+      dateLine.textContent = fmt.date.format(new Date(ms)); timeLabel.textContent = fmt.clock.format(new Date(ms)); timeLabel.setAttribute('dateTime', frame.validTime);
+    }
+    zoneLabel.textContent = zoneText; zoneLabel.setAttribute('title', timeZone);
+    const off = controlsDisabled(), pos = dayPosition(), playing = timer !== null;
+    play.disabled = off; hours.setAttribute('aria-disabled', String(off));
+    for (const c of cells) c.disabled = off;
+    previousDay.disabled = off || pos <= 0; nextDay.disabled = off || pos < 0 || pos >= days.length - 1;
+    play.classList.toggle('is-playing', playing);
+    play.setAttribute('aria-pressed', String(playing));
+    play.setAttribute('aria-label', playing ? 'Pause forecast playback' : 'Play forecast');
   }
 
   function select(index: number, notify: boolean, moveFocus: boolean): void {
     if (destroyed || controlsDisabled() || index < 0 || index >= frames.length) return;
-    selectedIndex = index;
-    render();
+    selectedIndex = index; render();
     if (moveFocus) cells[index]?.focus({ preventScroll: true });
     if (notify) options.onSelect(index);
   }
 
-  function stopPlayback(): void {
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-    if (!destroyed) renderPlay();
-  }
-
-  function stepPlayback(): void {
-    if (selectedIndex >= frames.length - 1) {
-      stopPlayback();
-      return;
-    }
-    select(selectedIndex + 1, true, false);
-    if (selectedIndex >= frames.length - 1) stopPlayback();
-  }
-
-  function startPlayback(): void {
-    if (controlsDisabled()) return;
-    if (frames.length <= 1) {
-      if (selectedIndex < 0) select(0, true, false);
-      renderPlay();
-      return;
-    }
-    if (selectedIndex < 0 || selectedIndex >= frames.length - 1) select(0, true, false);
-    timer = setInterval(stepPlayback, PLAYBACK_INTERVAL_MS);
-    renderPlay();
-  }
-
-  function moveDay(direction: number): void {
-    const position = dayPosition();
-    if (position < 0) return;
-    const target = days[position + direction];
-    const current = frames[selectedIndex];
-    if (!target || !current) return;
-    const local = localTimeFromMs(Date.parse(current.validTime), timeZone);
-    if (!local) return;
-    select(nearestFrameIndexForDay(frames, target.indices, timeZone, local.hour, local.minute), true, false);
-  }
-
+  const stopPlayback = () => { if (timer !== null) { clearInterval(timer); timer = null; } if (!destroyed) render(); };
+  const moveDay = (dir: number) => {
+    const pos = dayPosition(), target = pos >= 0 ? days[pos + dir] : undefined, cur = frames[selectedIndex];
+    const local = cur ? localTimeFromMs(Date.parse(cur.validTime), timeZone) : null;
+    if (target && local) select(nearestFrameIndexForDay(frames, target.indices, timeZone, local.hour, local.minute), true, false);
+  };
   previousDay.addEventListener('click', () => moveDay(-1));
   nextDay.addEventListener('click', () => moveDay(1));
+
   play.addEventListener('click', () => {
-    if (timer !== null) stopPlayback();
-    else startPlayback();
+    if (timer !== null) { stopPlayback(); return; }
+    if (controlsDisabled()) return;
+    if (frames.length <= 1) { if (selectedIndex < 0) select(0, true, false); render(); return; }
+    if (selectedIndex < 0 || selectedIndex >= frames.length - 1) select(0, true, false);
+    timer = setInterval(() => {
+      if (selectedIndex >= frames.length - 1) { stopPlayback(); return; }
+      select(selectedIndex + 1, true, false);
+      if (selectedIndex >= frames.length - 1) stopPlayback();
+    }, PLAYBACK_INTERVAL_MS);
+    render();
   });
 
   hours.addEventListener('keydown', event => {
-    const key = (event as KeyboardEvent).key;
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
+    const k = (event as KeyboardEvent).key;
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(k)) return;
     event.preventDefault();
-    if (controlsDisabled() || frames.length === 0) return;
-    const start = selectedIndex < 0 ? 0 : selectedIndex;
-    const target = key === 'Home' ? 0
-      : key === 'End' ? frames.length - 1
-        : key === 'ArrowLeft' || key === 'ArrowUp' ? Math.max(0, start - 1)
-          : Math.min(frames.length - 1, start + 1);
-    select(target, true, true);
+    if (controlsDisabled()) return;
+    const s = selectedIndex < 0 ? 0 : selectedIndex;
+    select(k === 'Home' ? 0 : k === 'End' ? frames.length - 1 : k === 'ArrowLeft' || k === 'ArrowUp' ? Math.max(0, s - 1) : Math.min(frames.length - 1, s + 1), true, true);
   });
 
-  const onVisibility = (): void => {
-    if (doc.visibilityState === 'hidden') stopPlayback();
-  };
-  const onPageHide = (): void => stopPlayback();
+  const onVisibility = () => { if (doc.visibilityState === 'hidden') stopPlayback(); };
   doc.addEventListener('visibilitychange', onVisibility);
-  const view = doc.defaultView;
-  view?.addEventListener('pagehide', onPageHide);
+  doc.defaultView?.addEventListener('pagehide', stopPlayback);
 
   return {
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
-      const changed = !sameFrames(frames, nextFrames);
-      frames = nextFrames.slice();
-      days = groupDays(frames, timeZone);
-      selectedIndex = resolveSelected(selectedFrame);
-      disabled = nextDisabled;
+      const changed = frames.length !== nextFrames.length || frames.some((f, i) => f.id !== nextFrames[i]!.id || f.validTime !== nextFrames[i]!.validTime);
+      frames = nextFrames.slice(); days = groupDays(frames, timeZone);
+      selectedIndex = frames.findIndex(f => f.id === selectedFrame); disabled = nextDisabled;
       if (changed) rebuild();
       render();
       if (controlsDisabled()) stopPlayback();
     },
+    setTimeZone(nextZone: string, nextLabel?: string) {
+      if (destroyed) return;
+      const resolved = nextZone || DEFAULT_TIME_ZONE, label = nextLabel ?? resolved;
+      if (resolved === timeZone && label === zoneText) return;
+      timeZone = resolved; zoneText = label; fmt = makeFmt(timeZone); days = groupDays(frames, timeZone);
+      rebuild(); render();
+    },
     destroy() {
       if (destroyed) return;
-      destroyed = true;
-      stopPlayback();
+      destroyed = true; stopPlayback();
       doc.removeEventListener('visibilitychange', onVisibility);
-      view?.removeEventListener('pagehide', onPageHide);
+      doc.defaultView?.removeEventListener('pagehide', stopPlayback);
       root.remove();
     }
   };

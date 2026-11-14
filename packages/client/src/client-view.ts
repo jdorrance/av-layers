@@ -1,12 +1,12 @@
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
-import { KPH_PER_MPS, MPH_PER_MPS } from '@av/contracts/units';
+import { KNOTS_PER_MPS, KPH_PER_MPS, MPH_PER_MPS, windSpeedUnitLabel, type WindSpeedSystem } from '@av/contracts/units';
 import { normalizeLon, type Grid } from '@av/contracts/geometry';
 import { renderedLayers, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, SUPPORT_PBL_CLOSURE, SUPPORT_CUMULUS,
   SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED, type LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ManifestV5 } from '@av/contracts/publication';
 import type { PaletteSummary, PinnedBuild, FrameSample, FrameSampleLayer, GeoPoint } from './client-types.ts';
-import { deriveSoaringViews, FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
+import { FEET_PER_MINUTE_TO_MPS, windFromComponents } from '@av/soaring';
 import { AUTO_MODEL_ID } from './client-auto.js';
 
 export type UnitSystem = 'metric' | 'imperial';
@@ -64,11 +64,12 @@ export function formatPointMapLift(lift: ReturnType<typeof pointMapLift>, units:
   ].join(' · ');
 }
 
-export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: UnitSystem) {
+export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: UnitSystem, windUnits: WindSpeedSystem = units) {
   const read = (layer: LayerId) => frame.layers[layer]?.status === 'valid' ? frame.layers[layer].value : null;
   const lift = pointMapLift(frame, build), lclM = read('surface-lcl-msl'), thermalTopM = read('thermal-top-msl');
-  const wind = deriveSoaringViews({ wind10mU: read('wind-10m-u'), wind10mV: read('wind-10m-v'), blMeanWindU: read('bl-mean-wind-u'), blMeanWindV: read('bl-mean-wind-v') });
-  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(speed * (units === 'imperial' ? MPH_PER_MPS : KPH_PER_MPS)).toFixed(1)} ${units === 'imperial' ? 'mph' : 'km/h'}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
+  const w10 = windFromComponents(read('wind-10m-u'), read('wind-10m-v')), bl = windFromComponents(read('bl-mean-wind-u'), read('bl-mean-wind-v'));
+  const windFactor = windUnits === 'knots' ? KNOTS_PER_MPS : windUnits === 'imperial' ? MPH_PER_MPS : KPH_PER_MPS;
+  const windText = (speed: number | null, direction: number | null) => speed === null ? '—' : `${(speed * windFactor).toFixed(1)} ${windSpeedUnitLabel(windUnits)}${direction === null ? '' : ` ${Math.round(direction)}°`}`;
   const thermal = read('thermal-velocity'), cloud = read('cloud-cover-total');
   const nativeSupport = liftSupport(frame.layers['thermal-velocity']) | liftSupport(frame.layers['thermal-top-msl']);
   const regime = cloudRegime(nativeSupport);
@@ -77,7 +78,7 @@ export function pointFrameView(frame: FrameSample, build: PinnedBuild, units: Un
     formatPointMapLift(lift, units),
     `w* ${thermalText}`, `LCL ${formatAltitude(lclM, units)}`,
     `Native top ${formatAltitude(thermalTopM, units)}`, `Cloud ${cloud === null ? 'unknown' : `${Math.round(cloud)}%`}`,
-    `10 m ${windText(wind.wind10mSpeedMps, wind.wind10mDirDeg)}`, `BL ${windText(wind.blMeanWindSpeedMps, wind.blMeanWindDirDeg)}`,
+    `10 m ${windText(w10.speedMps, w10.directionDeg)}`, `BL ${windText(bl.speedMps, bl.directionDeg)}`,
     regime ? `Native ${regime}` : 'Native cloud regime unknown', ...(nativeSupport & SUPPORT_CLOUD_CAPPED ? ['Native cloud capped'] : [])
   ].join(' · ');
   return { id: frame.id, validTime: frame.validTime, terrainM: lift.terrainM, mslM: lift.mslM, aglM: lift.aglM, lclM, thermalTopM, summary };
@@ -305,14 +306,12 @@ export function planViewportPrefetch(options: {
   }
   const direction = options.direction ?? 1;
   for (const offset of [direction, -direction]) warm(activeLayer, frame(offset));
-  if (sibling) warm(sibling, activeFrame);
+  if (sibling && options.preferred) warm(sibling, activeFrame);
   warm(activeLayer, frame(2 * direction));
   const visible = new Set(viewport.map(tile => `${tile.z}/${tile.x}/${tile.y}`));
-  for (const tile of viewport) {
-    for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]) {
-      const neighbor = normalize({ z: tile.z, x: tile.x + dx, y: tile.y + dy }, activeLayer);
-      if (neighbor && !visible.has(`${neighbor.z}/${neighbor.x}/${neighbor.y}`)) add(activeLayer, activeFrame, neighbor);
-    }
+  for (const tile of viewport) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) {
+    const neighbor = normalize({ z: tile.z, x: tile.x + dx, y: tile.y + dy }, activeLayer);
+    if (neighbor && !visible.has(`${neighbor.z}/${neighbor.x}/${neighbor.y}`)) add(activeLayer, activeFrame, neighbor);
   }
   return [...urls];
 }

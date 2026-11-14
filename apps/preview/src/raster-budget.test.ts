@@ -19,5 +19,7 @@ it('reserves wind within the viewport envelope and bounds raster admission', () 
   expect(rasterSourceLimit(map(maximum + 1), 12)).toBe(0);
   expect(canRetainRasterOverview(map((raster - 24 * 1024 * 1024) / tile - 16), 12)).toBe(true);
   expect(canRetainRasterOverview(map((raster - 24 * 1024 * 1024) / tile - 15), 12)).toBe(false);
+  expect(rasterSourceLimit(map(maximum + 1), 12, false, false)).toBe(1);
+  expect(canRetainRasterOverview(map((raster - 24 * 1024 * 1024) / tile - 15), 12, false)).toBe(true);
   expect(rasterSourceLimit({} as Pick<Map, 'coveringTiles'>, 12)).toBe(0);
 });

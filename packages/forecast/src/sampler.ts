@@ -195,7 +195,7 @@ function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: num
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
-const lambertGeometries = new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
+const lambertGeometries = /* @__PURE__ */ new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
 function lambertGeometry(grid: Grid): GridGeometry | null {
   if (grid.kind !== 'lambert-conformal') return null;
   const cached = lambertGeometries.get(grid);

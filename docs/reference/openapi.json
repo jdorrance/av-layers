@@ -157,7 +157,8 @@
                     "palette": {
                       "enum": [
                         "lift",
-                        "rain"
+                        "rain",
+                        "cloud"
                       ],
                       "type": "string"
                     },
@@ -480,6 +481,26 @@
             "maxItems": 20,
             "minItems": 1,
             "type": "array"
+          },
+          "mapData": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "exclusiveMinimum": true,
+                "maximum": 1048576,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sha256": {
+                "pattern": "^[a-f0-9]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
           },
           "mapFrameCount": {
             "exclusiveMinimum": true,
