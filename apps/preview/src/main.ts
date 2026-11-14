@@ -36,7 +36,7 @@ import { clockLabel, frameIndexFor } from './timeline';
 import { WindOverlay } from './wind-overlay';
 import { createWindControls, type WindStatus } from './wind-controls';
 import { createCompactTimeline } from './compact-timeline';
-import { WindDataSource } from '@av/client/wind';
+import { WindDataCache, WindDataSource } from '@av/client/wind';
 import { displayedWindSpeed } from '@av/contracts/units';
 import { googleTerrainStyle, type TerrainBasemap } from './basemap';
 
@@ -193,6 +193,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   let selectingOverlay = false;
   let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
   const scheduler = createForecastRequestScheduler();
+  const windCache = new WindDataCache();
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => {
     overlayState = state;
     reconcileWind();
@@ -256,7 +257,8 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   function reconcileWind(): void {
     const displayed = overlayState.displayed;
     const matches = windView && windLoadStatus !== 'unavailable'
-      && displayed?.build === windView.build && displayed.frame === windView.frame;
+      && windView.build === build && windView.frame === selectedFrame
+      && (!displayed || displayed.build === windView.build && displayed.frame === windView.frame);
     if (matches && !windDisplayed) {
       setWindField();
       windDisplayed = true;
@@ -334,7 +336,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     else cancelWindRequest();
     setWindStatus('loading');
     const request: WindRequest = { zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, key,
-      controller: new AbortController(), source: new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch }) };
+      controller: new AbortController(), source: new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch, cache: windCache }) };
     windRequest = request;
     // A retired load releases its decoded maps before the latest viewport can allocate.
     if (windLoading) queuedWindLoad = () => { void loadWind(request); };
@@ -615,6 +617,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     }
     loadAbort?.abort();
     clearWind();
+    windCache.clear();
     closePoint();
     disposeExpiry();
     overlay.clear();
@@ -1052,7 +1055,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     autoAbort?.abort();
     loadAbort?.abort(); loadAbort = null; pendingModel = null; resumeModel = null;
     closePoint(); disposeExpiry();
-    clearWind(); locationRevision++; clearLocationMarker();
+    clearWind(); windCache.clear(); locationRevision++; clearLocationMarker();
     windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
     terrain?.dispose();
     if (expiryTimer !== null) window.clearInterval(expiryTimer);
@@ -1062,7 +1065,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
-    clearWind(); locationRevision++; clearLocationMarker();
+    clearWind(); windCache.clear(); locationRevision++; clearLocationMarker();
     locateButton.disabled = false;
     locateButton.ariaBusy = 'false';
     resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
@@ -1114,7 +1117,8 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   syncReference();
   syncModels();
 
-  map.on('load', () => {
+  map.once('style.load', () => {
+    if (lifecycle.signal.aborted || mapFailed) return;
     if (!startup.camera) focusRegion(currentModel);
     mapReady = true;
     updateOverlay();

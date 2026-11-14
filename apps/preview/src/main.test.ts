@@ -105,6 +105,10 @@ class MapMock {
     const handlers = this.handlers.get(name) ?? [];
     handlers.push(listener); this.handlers.set(name, handlers);
   }
+  once(name: string, listener: (event: Record<string, unknown>) => void): void {
+    const once = (event: Record<string, unknown>) => { this.off(name, once); listener(event); };
+    this.on(name, once);
+  }
   off(name: string, listener: (event: Record<string, unknown>) => void): void { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(value => value !== listener)); }
   isSourceLoaded(): boolean { return true; }
   getBounds() { return { getWest: () => this.bounds.west, getEast: () => this.bounds.east, getSouth: () => this.bounds.south, getNorth: () => this.bounds.north }; }
@@ -254,7 +258,7 @@ function page(name: 'pagehide' | 'pageshow', persisted: boolean): void {
 async function start(): Promise<void> {
   if (win.href === 'http://localhost:5173/?model=gfs') win.href = `http://localhost:5173/?model=${manifest.model}`;
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(modelButton(manifest.model).disabled).toBe(false));
 }
 beforeEach(() => {
@@ -288,9 +292,26 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   expect(fetchMock).toHaveBeenCalled();
   expect(map().sources.size).toBe(0);
   expect(map().options.maxTileCacheSize).toBe(16);
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
   expect(sourceId()).toBeDefined();
+});
+
+it('starts wind and raster at style readiness before basemap tiles finish', async () => {
+  deferWind = true;
+  win.href = 'http://localhost:5173/?model=gfs&lat=32.5&lon=-117.5&z=9';
+  await import('./main');
+  await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
+  expect(windLoads).toHaveLength(0);
+  map().emit('style.load');
+  expect(windLoads).toHaveLength(1);
+  expect(map().sources.size).toBeGreaterThan(0);
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  map().emit('style.load');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(windLoads).toHaveLength(1);
 });
 
 it.each(['pagehide', 'gpu failure'])('shares the forecast scheduler and disposes it last on %s', async teardown => {
@@ -381,7 +402,7 @@ it('starts Auto discovery while Google terrain initializes and reuses the lookup
   expect(maps).toHaveLength(0);
   release();
   await vi.waitFor(() => expect(maps).toHaveLength(1));
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain('gfs'));
   expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/catalog'))).toHaveLength(1);
 });
@@ -567,14 +588,14 @@ it('preserves unavailability after an uncovered pan and restores resident wind o
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
 });
 
-it('shows wind only after its raster frame is displayed and keeps it hidden after replacement failure', async () => {
+it('shows initial wind before raster loads and keeps later frames aligned with displayed raster', async () => {
   deferWind = true;
   autoLoadRaster = false;
   win.href = `http://localhost:5173/?model=gfs&t=${encodeURIComponent(manifest.frames[0].validTime)}`;
   await start();
   windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
   const first = sourceId();
   map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
@@ -781,7 +802,7 @@ it.each([true, false])('publishes the initial regional camera without adding his
     await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
     expect(replace).not.toHaveBeenCalled();
   }
-  map().emit('load');
+  map().emit('style.load');
   if (!discoveryFirst) release();
   await vi.waitFor(() => expect(ui('freshness').textContent).toContain(manifest.buildId));
   expect(sourceId()).toBeDefined();
@@ -869,7 +890,7 @@ it('restarts a BFCache-interrupted load and ignores the old request if it resolv
     oldSignal = init?.signal;
     return new Promise(resolve => { finishOld = resolve; });
   });
-  await import('./main'); map().emit('load');
+  await import('./main'); map().emit('style.load');
   expect(modelButton(manifest.model).disabled).toBe(true);
   page('pagehide', true);
   expect(oldSignal?.aborted).toBe(true);
@@ -1159,7 +1180,7 @@ it('starts Auto from a neutral world view when the URL supplies no camera', asyn
   });
   win.href = 'http://localhost:5173/?model=auto';
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain('/gfs/'));
   expect(map().getCenter()).toEqual({ lng: 0, lat: 20 });
   expect(map().getZoom()).toBe(2);
@@ -1239,7 +1260,7 @@ it('preserves Auto and its requested time when a map move overtakes an earlier r
   const expectedTile = `/tiles/${regionB.manifest.model}/${regionB.manifest.buildId}/usable-lift-agl/f018/`;
   win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(t)}`;
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   try {
     await vi.waitFor(() => expect(regionASignal?.aborted).toBe(false));
     map().jumpTo({ center: [REGION_B_POINT.lon, REGION_B_POINT.lat], zoom: 9 });
@@ -1270,7 +1291,7 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
   win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(autoTime(18))}`;
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(tile()).toContain('/f018/'));
 
   let finishLookup!: (result: typeof models) => void;
@@ -1318,7 +1339,7 @@ it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto
   const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   win.href = autoUrl(REGION_A_POINT, 18);
   await import('./main');
-  map().emit('load');
+  map().emit('style.load');
   await vi.waitFor(() => expect(tile()).toContain('/f018/'));
 
   win.href = autoUrl(REGION_B_POINT, 36);

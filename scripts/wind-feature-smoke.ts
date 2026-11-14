@@ -86,7 +86,7 @@ async function waitForMatchingRaster(page: Page, timeoutMs: number): Promise<voi
 
 async function readWindCanvas(page: Page): Promise<{
   canvasCount: number;
-  allBackingLarge: boolean;
+  visibleBackingReady: boolean;
   backing: { width: number; height: number };
   container: { width: number; height: number };
   regionAlphaPixels: number;
@@ -98,16 +98,17 @@ async function readWindCanvas(page: Page): Promise<{
       if (canvas.getContext('2d')) windCanvases.push(canvas);
     }
     let visible: HTMLCanvasElement | null = null;
-    let allBackingLarge = windCanvases.length > 0;
+    let visibleBackingReady = windCanvases.length > 0;
     for (const canvas of windCanvases) {
-      if (canvas.width <= 100 || canvas.height <= 100) allBackingLarge = false;
-      if (!visible && getComputedStyle(canvas).display !== 'none') visible = canvas;
+      if (getComputedStyle(canvas).display === 'none') continue;
+      if (canvas.width <= 100 || canvas.height <= 100) visibleBackingReady = false;
+      if (!visible) visible = canvas;
     }
     const map = document.querySelector('#map');
     const containerRect = map ? map.getBoundingClientRect() : null;
     if (!visible) return {
       canvasCount: windCanvases.length,
-      allBackingLarge,
+      visibleBackingReady: false,
       backing: { width: 0, height: 0 },
       container: { width: containerRect?.width ?? 0, height: containerRect?.height ?? 0 },
       regionAlphaPixels: 0
@@ -126,7 +127,7 @@ async function readWindCanvas(page: Page): Promise<{
     for (let index = 3; index < pixels.length; index += 4) if (pixels[index]! > 0) regionAlphaPixels++;
     return {
       canvasCount: windCanvases.length,
-      allBackingLarge,
+      visibleBackingReady,
       backing: { width: visible.width, height: visible.height },
       container: { width: containerRect?.width ?? 0, height: containerRect?.height ?? 0 },
       regionAlphaPixels
@@ -229,7 +230,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const canvas = await readWindCanvas(page);
       assert(canvas.canvasCount > 0, 'No 2D wind canvases were found');
       assert(canvas.container.width > 100 && canvas.container.height > 100, `Map container is ${canvas.container.width}x${canvas.container.height}`);
-      assert(canvas.allBackingLarge, `Wind canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
+      assert(canvas.visibleBackingReady, `Wind canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
       assert(canvas.backing.width > 100 && canvas.backing.height > 100, `Visible wind canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
       assert(canvas.regionAlphaPixels > 0, 'No barbs alpha pixels rendered around the admitted fixture location');
     });

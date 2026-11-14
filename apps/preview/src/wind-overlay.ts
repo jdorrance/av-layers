@@ -15,7 +15,7 @@ export interface WindOverlayOptions {
 }
 
 interface Particle { lat: number; lon: number; age: number; wind?: ReturnType<WindField['sample']> }
-const MAX_PIXELS = Math.floor(WIND_CANVAS_BYTES / 8);
+const MAX_PIXELS = Math.floor(WIND_CANVAS_BYTES / 4);
 const MAX_PARTICLES = 600;
 const EARTH_RADIUS = 6_371_000;
 const MAX_LAT = 85.05112878;
@@ -43,6 +43,7 @@ export class WindOverlay {
   private particles: Particle[] = [];
   private frame: number | null = null;
   private lastTime = 0;
+  private barbsDirty = false;
   private width = 0;
   private height = 0;
   private scale = 1;
@@ -67,26 +68,33 @@ export class WindOverlay {
       ctx.drawImage(this.trails, (view.x - previous.x) * this.scale, (view.y - previous.y) * this.scale);
       ctx.globalCompositeOperation = 'source-over';
     }
-    this.drawBarbs();
+    this.barbsDirty = this.options.style !== 'trails';
+    this.schedule();
   };
   private readonly resize = (): void => {
     const canvas = this.map.getCanvas();
     this.width = canvas.clientWidth;
     this.height = canvas.clientHeight;
     const width = Math.max(1, this.width), height = Math.max(1, this.height);
-    this.scale = Math.min(window.devicePixelRatio || 1, 1, Math.sqrt(MAX_PIXELS / 2 / (width * height)), 4096 / width, 4096 / height);
-    const barbScale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(MAX_PIXELS * 1.5 / (width * height)), 4096 / width, 4096 / height);
+    const showBarbs = this.options.visible && this.options.style !== 'trails';
+    const showTrails = this.options.visible && this.options.style !== 'barbs';
+    const barbPixels = showTrails ? MAX_PIXELS * 0.8 : MAX_PIXELS - 1;
+    const barbScale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(barbPixels / (width * height)), 4096 / width, 4096 / height);
     this.barbScale = barbScale >= 1 ? Math.floor(barbScale) : barbScale;
+    const remaining = MAX_PIXELS - (showBarbs ? Math.floor(width * this.barbScale) * Math.floor(height * this.barbScale) : 1);
+    this.scale = Math.min(window.devicePixelRatio || 1, 1, Math.sqrt(remaining / (width * height)), 4096 / width, 4096 / height);
     for (const canvas of [this.trails, this.barbs]) {
       canvas.width = 0;
       canvas.height = 0;
     }
     for (const canvas of [this.trails, this.barbs]) {
+      const visible = canvas === this.barbs ? showBarbs : showTrails;
       const scale = canvas === this.barbs ? this.barbScale : this.scale;
-      canvas.width = Math.max(1, Math.floor(width * scale));
-      canvas.height = Math.max(1, Math.floor(height * scale));
+      canvas.width = visible ? Math.max(1, Math.floor(width * scale)) : 1;
+      canvas.height = visible ? Math.max(1, Math.floor(height * scale)) : 1;
       canvas.style.width = `${this.width}px`;
       canvas.style.height = `${this.height}px`;
+      canvas.style.display = visible ? '' : 'none';
     }
     this.resetTrails();
     const point = this.map.project([0, 0]);
@@ -134,11 +142,13 @@ export class WindOverlay {
     if (this.destroyed) return;
     const previous = this.options;
     this.options = { ...previous, ...options };
-    if (previous.style !== this.options.style || previous.visible !== this.options.visible) this.resetTrails();
-    this.trails.style.display = this.options.visible && this.options.style !== 'barbs' ? '' : 'none';
-    this.barbs.style.display = this.options.visible && this.options.style !== 'trails' ? '' : 'none';
-    this.lastTime = 0;
-    this.drawBarbs(); this.schedule();
+    if (previous.style !== this.options.style || previous.visible !== this.options.visible) {
+      this.resize();
+      return;
+    }
+    if (previous.paused !== this.options.paused) this.lastTime = 0;
+    if (previous.units !== this.options.units) this.drawBarbs();
+    this.schedule();
   }
 
   clear(): void { this.setField(null); }
@@ -164,7 +174,7 @@ export class WindOverlay {
   }
 
   private schedule(): void {
-    const running = !this.destroyed && !document.hidden && !this.mapLost && !this.lostCanvases.size && this.field && this.options.visible && !this.options.paused && this.options.style !== 'barbs' && this.width > 0 && this.height > 0;
+    const running = !this.destroyed && !document.hidden && !this.mapLost && !this.lostCanvases.size && this.field && this.options.visible && (this.barbsDirty || !this.options.paused && this.options.style !== 'barbs') && this.width > 0 && this.height > 0;
     if (!running && this.frame !== null) { cancelAnimationFrame(this.frame); this.frame = null; }
     if (running && this.frame === null) this.frame = requestAnimationFrame(this.animate);
   }
@@ -172,6 +182,8 @@ export class WindOverlay {
   private readonly animate = (time: number): void => {
     this.frame = null;
     if (!this.field || this.destroyed) return;
+    if (this.barbsDirty) this.drawBarbs();
+    if (this.options.paused || this.options.style === 'barbs') { this.lastTime = 0; this.schedule(); return; }
     const elapsed = this.lastTime ? Math.min((time - this.lastTime) / 1000, 0.1) : 0;
     this.lastTime = time;
     if (elapsed > 0) this.advance(elapsed);
@@ -217,6 +229,7 @@ export class WindOverlay {
   }
 
   private drawBarbs(): void {
+    this.barbsDirty = false;
     const ctx = this.barbContext;
     ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, this.barbs.width, this.barbs.height);
     if (!this.field || !this.options.visible || this.options.style === 'trails' || this.mapLost || this.lostCanvases.size || !this.width || !this.height) return;
@@ -230,8 +243,8 @@ export class WindOverlay {
     const y0 = Math.max(0, Math.ceil((north - 16) / step)), y1 = Math.min(Math.floor(size / step), Math.floor((south - 16) / step));
     const stride = Math.max(1, Math.ceil(Math.sqrt(Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1) / 5000)));
     ctx.setTransform(this.barbScale, 0, 0, this.barbScale, 0, 0);
-    ctx.strokeStyle = '#000'; ctx.fillStyle = '#000'; ctx.lineWidth = 1; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
-    ctx.font = '600 10px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = '#111'; ctx.fillStyle = '#111'; ctx.lineWidth = 0.75; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
+    ctx.font = '9px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (let y = Math.ceil(y0 / stride) * stride; y <= y1; y += stride) for (let x = Math.ceil(x0 / stride) * stride; x <= x1; x += stride) {
       const lon = (x * step + 16) / size * 360 - 180, lat = latitude(y * step + 16, size);
       const point = this.map.project([lon, lat]);
@@ -242,7 +255,7 @@ export class WindOverlay {
       if (!valid(wind)) continue;
       const speed = displayedBarbSpeed(Math.hypot(wind.u, wind.v), this.options.units);
       if (speed === null) continue;
-      if (!speed) { this.label('O', point.x, point.y); continue; }
+      if (!speed) { ctx.beginPath(); ctx.arc(point.x, point.y, 2.5, 0, Math.PI * 2); ctx.stroke(); continue; }
       const distance = Math.hypot(wind.u, wind.v);
       const ahead = this.map.project([lon + wind.u / distance * 0.001 / Math.cos(lat * Math.PI / 180), lat + wind.v / distance * 0.001]);
       const angle = Math.atan2(ahead.y - point.y, ahead.x - point.x);
@@ -261,7 +274,7 @@ export class WindOverlay {
       for (let i = 0; i < feathers; i++) { ctx.moveTo(d, 0); ctx.lineTo(d - 3, -6); d += spacing; }
       if (half) { ctx.moveTo(d, 0); ctx.lineTo(d - 1.5, -3); }
       ctx.stroke(); ctx.restore();
-      this.label(String(speed), point.x, point.y + 8);
+      this.label(String(speed), point.x, point.y + 6);
     }
     this.barbSamples = samples;
   }
@@ -270,7 +283,7 @@ export class WindOverlay {
     const ctx = this.barbContext;
     x = Math.round(x * this.barbScale) / this.barbScale;
     y = Math.round(y * this.barbScale) / this.barbScale;
-    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
     ctx.strokeText(text, x, y); ctx.restore(); ctx.fillText(text, x, y);
   }
 }

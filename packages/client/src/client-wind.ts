@@ -10,11 +10,53 @@ export interface WindSample { status: WindStatus; u: number | null; v: number | 
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
-const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2;
+const MAX_CHUNKS = 64, MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000;
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
+
+interface CachedBytes { url: string; bytes: Uint8Array; used: number | null; references: number; expiresAt: number }
+
+/** Share immutable buffers across views; referenced and in-flight buffers share the byte limit. */
+export class WindDataCache {
+  private readonly entries = new Set<CachedBytes>();
+  private bytes = 0;
+
+  take(url: string, limit: number, expiresAt: number): CachedBytes {
+    for (const entry of this.entries) {
+      if (entry.url !== url || entry.used === null || entry.expiresAt <= Date.now() || entry.bytes.length !== limit) continue;
+      entry.references++;
+      entry.expiresAt = Math.min(entry.expiresAt, expiresAt);
+      this.entries.delete(entry); this.entries.add(entry);
+      return entry;
+    }
+    for (const entry of this.entries) {
+      if (this.bytes + limit <= WIND_NUMERIC_BYTES && this.entries.size < 256) break;
+      if (!entry.references) this.remove(entry);
+    }
+    if (this.bytes + limit > WIND_NUMERIC_BYTES || this.entries.size >= 256) throw new RangeError('Wind cache exceeds byte budget');
+    const entry = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
+    this.entries.add(entry); this.bytes += limit;
+    return entry;
+  }
+
+  release(entry: CachedBytes): void {
+    entry.references--;
+    if (!entry.references && (entry.used === null || entry.expiresAt <= Date.now())) this.remove(entry);
+  }
+
+  clear(): void {
+    for (const entry of this.entries) {
+      entry.expiresAt = 0;
+      if (!entry.references) this.remove(entry);
+    }
+  }
+
+  private remove(entry: CachedBytes): void {
+    this.entries.delete(entry); this.bytes -= entry.bytes.length;
+  }
+}
 
 function samplingPlan(grid: Grid, geometry: GridGeometry, lat: number, lon: number, slot: number): SamplePlan | null {
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
@@ -126,7 +168,17 @@ export class WindDataSource {
   private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; overview?: Overview };
   private disposed = false;
   private pending: Promise<unknown> = Promise.resolve();
-  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch } = {}) {}
+  private readonly cache: WindDataCache;
+  private readonly held = new Set<CachedBytes>();
+  private active?: AbortController;
+  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache } = {}) {
+    this.cache = options.cache ?? new WindDataCache();
+  }
+
+  private release(): void {
+    for (const entry of this.held) this.cache.release(entry);
+    this.held.clear();
+  }
 
   async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
     this.controller?.abort(); this.current = undefined;
@@ -146,8 +198,16 @@ export class WindDataSource {
         previous.then(() => { waiting.removeEventListener('abort', abort); resolve(); });
       });
       waiting.throwIfAborted();
+      this.release();
+      this.active = controller;
       return await this.loadView(build, frame, bounds, controller, signal);
-    } finally { release(); }
+    } finally {
+      if (this.active === controller) {
+        this.active = undefined;
+        if (this.disposed || controller.signal.aborted || !this.current) this.release();
+      }
+      release();
+    }
   }
 
   private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal): Promise<'ready' | 'unavailable'> {
@@ -159,7 +219,14 @@ export class WindDataSource {
     let combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
     combined.throwIfAborted();
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
+    const fetched = new Map<Uint8Array, CachedBytes>();
+    const accept = (bytes: Uint8Array) => { const entry = fetched.get(bytes); if (entry) entry.used = bytes.length; };
     const fetchBytes = async (url: string, type: string, limit: number): Promise<Uint8Array | null> => {
+      combined.throwIfAborted();
+      const cached = this.cache.take(url, limit, build.expiresAtMs);
+      if (this.held.has(cached)) this.cache.release(cached);
+      else this.held.add(cached);
+      if (cached.used !== null) return cached.bytes.subarray(0, cached.used);
       const requestController = new AbortController(), timer = setTimeout(() => requestController.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
       const requestSignal = AbortSignal.any([combined, requestController.signal]);
       try {
@@ -170,7 +237,7 @@ export class WindDataSource {
         const declared = result.headers.get('content-length');
         if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await result.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
         if (!result.body) throw new Error('Numeric response is empty');
-        const reader = result.body.getReader(), bytes = new Uint8Array(limit);
+        const reader = result.body.getReader(), bytes = cached.bytes;
         const abort = () => { void reader.cancel(requestSignal.reason).catch(() => {}); };
         requestSignal.addEventListener('abort', abort, { once: true });
         if (requestSignal.aborted) abort();
@@ -184,13 +251,16 @@ export class WindDataSource {
           }
         } finally { requestSignal.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
-        return bytes.subarray(0, used);
+        const resultBytes = bytes.subarray(0, used);
+        fetched.set(resultBytes, cached);
+        return resultBytes;
       } finally { clearTimeout(timer); }
     };
     const descriptorBytes = await fetchBytes(root, 'application/json', WIND_FRAME_LIMIT);
     if (!descriptorBytes) return 'unavailable';
     const descriptor = parseWindFrame(descriptorBytes);
     if (descriptor.frame !== frame) throw new Error('Numeric frame mismatch');
+    accept(descriptorBytes);
     const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize), fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize);
     const windBytes = windLayout(native.grid.width, native.grid.height, descriptor.tileSize, descriptor.levels).chunkBytes, fineBytes = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize).chunkBytes;
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
@@ -239,6 +309,7 @@ export class WindDataSource {
             }
             fineData.set(task.tile, view);
           }
+          accept(bytes);
         }
       } catch (error) { controller.abort(); throw error; }
     });
@@ -312,5 +383,8 @@ export class WindDataSource {
     }
     return { status: 'valid', u, v };
   }
-  dispose(): void { this.disposed = true; this.controller?.abort(); this.current = undefined; }
+  dispose(): void {
+    this.disposed = true; this.controller?.abort(); this.current = undefined;
+    if (!this.active) this.release();
+  }
 }

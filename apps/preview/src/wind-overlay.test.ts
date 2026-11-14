@@ -14,7 +14,7 @@ class Canvas extends EventTarget {
   removed = false;
   context = {
     setTransform: vi.fn(), clearRect: vi.fn(), fillRect: vi.fn(), drawImage: vi.fn(), beginPath: vi.fn(), stroke: vi.fn(),
-    moveTo: vi.fn(), lineTo: vi.fn(), closePath: vi.fn(), fill: vi.fn(), fillText: vi.fn(), strokeText: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn()
+    moveTo: vi.fn(), lineTo: vi.fn(), arc: vi.fn(), closePath: vi.fn(), fill: vi.fn(), fillText: vi.fn(), strokeText: vi.fn(), save: vi.fn(), restore: vi.fn(), translate: vi.fn(), rotate: vi.fn()
   };
   getContext(): typeof this.context { return this.context; }
   setAttribute(): void {}
@@ -72,7 +72,8 @@ it('uses valid paired samples for barb labels and never renders missing wind as 
   const context = f.canvases[1].context;
   expect(context.fillText).not.toHaveBeenCalled();
   f.overlay.setField({ sample: () => ({ status: 0, u: 0, v: 0 }) });
-  expect(context.fillText).toHaveBeenCalledWith('O', expect.any(Number), expect.any(Number));
+  expect(context.arc).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), 2.5, 0, Math.PI * 2);
+  expect(context.fillText).not.toHaveBeenCalled();
   context.fillText.mockClear();
   f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
   expect(context.fillText).toHaveBeenCalledWith('36', expect.any(Number), expect.any(Number));
@@ -87,10 +88,14 @@ it.each(['metric', 'imperial'] as const)('uses shared calm thresholds for %s map
   const f = fixture();
   f.overlay.setOptions({ style: 'barbs', units });
   const ctx = f.canvases[1].context;
-  for (const [speed, label] of [[0.05, 'O'], [0.1, 'O'], [0.49, '1'], [0.5, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
-    ctx.fillText.mockClear();
+  for (const [speed, label] of [[0.05, null], [0.1, null], [0.49, '1'], [0.5, '1'], [0.6, units === 'metric' ? '2' : '1']] as const) {
+    ctx.fillText.mockClear(); ctx.arc.mockClear();
     f.overlay.setField({ sample: () => ({ status: 0, u: speed, v: 0 }) });
-    expect(ctx.fillText).toHaveBeenCalledWith(label, expect.any(Number), expect.any(Number));
+    if (label === null) {
+      expect(ctx.arc).toHaveBeenCalled(); expect(ctx.fillText).not.toHaveBeenCalled();
+    } else {
+      expect(ctx.fillText).toHaveBeenCalledWith(label, expect.any(Number), expect.any(Number)); expect(ctx.arc).not.toHaveBeenCalled();
+    }
   }
   f.overlay.destroy();
 });
@@ -244,21 +249,21 @@ it.each([2.9, 3, 3.1])('keeps 32 px world-anchored barb spacing at zoom %s while
   for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeCloseTo(32, 5);
   for (let i = 1; i < ys.length; i++) expect(ys[i] - ys[i - 1]).toBeCloseTo(32, 5);
   const original = new Set(sample.mock.calls.map(call => JSON.stringify(call)));
-  sample.mockClear(); centerX += 7; f.emit('move');
+  sample.mockClear(); centerX += 7; f.emit('move'); f.tick(1000);
   const moved = sample.mock.calls.map(call => JSON.stringify(call));
   expect(moved.every(point => !original.has(point))).toBe(true);
   expect(moved.length).toBeLessThan(original.size / 2);
-  sample.mockClear(); f.emit('move'); expect(sample).not.toHaveBeenCalled();
+  sample.mockClear(); f.emit('move'); f.tick(1016); expect(sample).not.toHaveBeenCalled();
   if (zoom === 3) {
     centerX -= 7; f.overlay.setField({ sample });
     expect(sample).toHaveBeenCalledTimes(64);
-    sample.mockClear(); centerX += 32; f.emit('move');
+    sample.mockClear(); centerX += 32; f.emit('move'); f.tick(1032);
     expect(sample).toHaveBeenCalledTimes(8);
     sample.mockClear(); f.overlay.setField({ sample });
     expect(sample).toHaveBeenCalledTimes(64);
     sample.mockClear();
   }
-  f.map.getZoom = () => zoom + 0.1; f.emit('move'); expect(sample).toHaveBeenCalled();
+  f.map.getZoom = () => zoom + 0.1; f.emit('move'); f.tick(1048); expect(sample).toHaveBeenCalled();
   f.overlay.destroy();
 });
 
@@ -340,5 +345,36 @@ it('gives barb labels a sharper backing store, pixel alignment and contrast halo
   expect(barbs.context.strokeText.mock.calls).toEqual(barbs.context.fillText.mock.calls);
   expect(barbs.context.fillText).toHaveBeenCalledWith('14', expect.any(Number), expect.any(Number));
   expect(trails.width * trails.height + barbs.width * barbs.height).toBeLessThanOrEqual(2_097_152);
+  f.overlay.destroy();
+});
+
+it('keeps desktop barbs at native resolution and releases hidden backing stores', () => {
+  const f = fixture(2027, 815);
+  const [trails, barbs] = f.canvases;
+  const budget = 2_097_152;
+  for (const style of ['barbs', 'hybrid', 'trails', 'barbs'] as const) {
+    f.overlay.setOptions({ style });
+    expect(trails.width * trails.height + barbs.width * barbs.height).toBeLessThanOrEqual(budget);
+    if (style !== 'trails') expect([barbs.width, barbs.height]).toEqual([2027, 815]);
+    else expect([barbs.width, barbs.height]).toEqual([1, 1]);
+    if (style === 'barbs') expect([trails.width, trails.height]).toEqual([1, 1]);
+  }
+  f.overlay.setOptions({ visible: false });
+  expect(f.canvases.every(canvas => canvas.width === 1 && canvas.height === 1)).toBe(true);
+  f.overlay.destroy();
+});
+
+it('coalesces barb drawing during map motion into one display frame', () => {
+  const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 1, v: 0 }));
+  f.overlay.setOptions({ style: 'barbs' }); f.overlay.setField({ sample });
+  const ctx = f.canvases[1].context;
+  ctx.clearRect.mockClear(); sample.mockClear();
+  f.emit('move'); f.emit('move'); f.emit('move');
+  expect(ctx.clearRect).not.toHaveBeenCalled();
+  expect(f.frames.size).toBe(1);
+  f.tick(1000);
+  expect(ctx.clearRect).toHaveBeenCalledTimes(1);
+  expect(sample).not.toHaveBeenCalled();
+  expect(f.frames.size).toBe(0);
   f.overlay.destroy();
 });

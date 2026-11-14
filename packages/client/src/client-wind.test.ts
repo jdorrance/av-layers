@@ -4,7 +4,7 @@ import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/laye
 import { planSample } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.ts';
-import { WindDataSource } from './client-wind.ts';
+import { WIND_NUMERIC_BYTES, WindDataCache, WindDataSource } from './client-wind.ts';
 
 const bounds = [-1, -1, 2, 2] as const;
 function build() {
@@ -46,6 +46,81 @@ it('loads once per view and samples surface, AGL, and lift without requests', as
   expect(globalFetch).not.toHaveBeenCalled();
   pinned.expiresAtMs = Date.now() - 1;
   expect(source.sample(0.5, 0.5, 'surface').status).toBe('unavailable');
+  source.dispose();
+});
+
+it('reuses validated immutable chunks across panning, replacement views and timeline returns', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id, cache = new WindDataCache();
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/wind/') || String(url).includes('/fine/')
+    ? reply(String(url).includes('/wind/') ? wind : fine)
+    : new Response(descriptor(String(url).split('/').at(-1)!), { headers: { 'content-type': 'application/json' } }));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
+  source.dispose();
+  const replacement = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  expect(await replacement.load({ build: pinned, frame, bounds: [0.1, 0.1, 0.9, 0.9] })).toBe('ready');
+  expect(replacement.sample(0.5, 0.5, 450)).toEqual({ status: 'valid', u: 3, v: 6 });
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  const nextFrame = pinned.manifest.frames[1].id;
+  expect(await replacement.load({ build: pinned, frame: nextFrame, bounds })).toBe('ready');
+  expect(fetcher).toHaveBeenCalledTimes(6);
+  expect(await replacement.load({ build: pinned, frame, bounds })).toBe('ready');
+  expect(fetcher).toHaveBeenCalledTimes(6);
+  replacement.dispose(); cache.clear();
+  const reopened = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  expect(await reopened.load({ build: pinned, frame, bounds })).toBe('ready');
+  expect(fetcher).toHaveBeenCalledTimes(9);
+  reopened.dispose();
+});
+
+it('charges active and in-flight buffers to the shared numeric memory budget', () => {
+  const cache = new WindDataCache(), chunkBytes = 256 * 1024, expires = Date.now() + 60_000;
+  const pinned = Array.from({ length: WIND_NUMERIC_BYTES / chunkBytes }, (_, index) => cache.take(String(index), chunkBytes, expires));
+  expect(() => cache.take('over-budget', chunkBytes, expires)).toThrow('byte budget');
+  const reusable = pinned[0]; reusable.used = chunkBytes;
+  cache.release(reusable);
+  const fresh = cache.take('new', chunkBytes, expires);
+  expect(() => cache.take('0', chunkBytes, expires)).toThrow('byte budget');
+  cache.release(fresh);
+  for (const entry of pinned.slice(1)) cache.release(entry);
+  cache.clear();
+});
+
+it('keeps cancelled allocations charged until their requests settle', async () => {
+  const cache = new WindDataCache(), expires = Date.now() + 60_000;
+  const pinned = cache.take('resident', WIND_NUMERIC_BYTES - 32 * 1024, expires);
+  let settle!: () => void;
+  const fetcher = vi.fn<typeof fetch>((_url, init) => new Promise((_resolve, reject) => {
+    init!.signal!.addEventListener('abort', () => { settle = () => reject(init!.signal!.reason); }, { once: true });
+  }));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache }), current = build();
+  const load = source.load({ build: current, frame: current.manifest.frames[0].id, bounds });
+  const rejected = expect(load).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+  source.dispose();
+  expect(() => cache.take('replacement', 32 * 1024, expires)).toThrow('byte budget');
+  settle(); await rejected;
+  const replacement = cache.take('replacement', 32 * 1024, expires);
+  cache.release(replacement); cache.release(pinned);
+});
+
+it('refetches malformed chunks instead of retaining failed validation in the shared cache', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id, cache = new WindDataCache();
+  let corrupt = true;
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    if (String(url).endsWith(`/data/${frame}`)) return new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } });
+    if (!String(url).includes('/wind/')) return reply(fine);
+    const bytes = Uint8Array.from(wind);
+    if (corrupt) new DataView(bytes.buffer).setFloat32(12, NaN, true);
+    return reply(bytes);
+  });
+  const failed = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  await expect(failed.load({ build: pinned, frame, bounds })).rejects.toThrow('Invalid wind');
+  failed.dispose(); corrupt = false;
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
+  expect(source.sample(0.5, 0.5, 'surface')).toEqual({ status: 'valid', u: 1, v: 2 });
+  expect(fetcher.mock.calls.filter(([url]) => String(url).includes('/wind/'))).toHaveLength(2);
   source.dispose();
 });
 
@@ -264,6 +339,7 @@ it('matches the reference sampler for mixed fine statuses and contributor counts
   const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
   const patterns = [[0, 0, 0, 0], [0, 1, 1, 0], [1, 1, 1, 1], [0, 2, 0, 3], [2, 0, 3, 0], [1, 2, 0, 0], [4, 5, 0, 0]];
   for (const stored of [false, true]) for (const pattern of patterns) {
+    pinned.manifest.buildId = `fixture-${stored}-${pattern.join('-')}`;
     pinned.manifest.tool.useStoredMslNoLift = stored ? true : undefined;
     for (let i = 0; i < 4; i++) {
       const pos = (Math.floor(i / 2) * 64 + i % 2) * WIND_FINE_CELL_BYTES;
@@ -364,4 +440,35 @@ it('registers averaged overview centers and partial edge cells to the source gri
   expect(source.sample(0, -129, 'surface').u).toBe(0.5);
   expect(fetcher.mock.calls.slice(1).every(([url]) => String(url).includes('/overview-2/'))).toBe(true);
   source.dispose();
+});
+
+it('reserves descriptor memory while replacing a viewport near the numeric byte limit', async () => {
+  const pinned = build(), cache = new WindDataCache(), bounds = [-0.01, -0.01, 0.16, 4.48] as const;
+  const grid = { kind: 'regular-latlon' as const, width: 16, height: 448, lon0: 0, lat0: 0, dx: 0.01, dy: 0.01, earthRadiusM: 6371000, wrapLongitude: false };
+  pinned.manifest.descriptors.bounds = [...bounds];
+  for (const surface of pinned.manifest.surfaces) surface.grid = grid;
+  const columns = encodeWindColumns(Array.from({ length: 256 }, () => ({ surface: { u: 1, v: 2 },
+    levels: Array.from({ length: 41 }, (_, i) => ({ height: 100 + i * 50, wind: { u: 1, v: 2 } })) })));
+  const layout = windOverviewLayout(grid, 2), overview = new Uint8Array(layout.chunkBytes), view = new DataView(overview.buffer);
+  for (let offset = 0; offset < overview.length; offset += 9) { view.setFloat32(offset, 1, true); view.setFloat32(offset + 4, 2, true); }
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.includes('/wind/')) return reply(columns);
+    if (path.includes('/fine/')) return reply(fine);
+    if (path.includes('/overview-2/')) return reply(overview);
+    const metadata = JSON.parse(descriptor(path.split('/').at(-1)!));
+    metadata.levels = 41;
+    metadata.wind[0].count = 28; metadata.wind[0].bytes = 28 * columns.length;
+    metadata.fine[0].count = 7; metadata.fine[0].bytes = 7 * fine.length;
+    metadata.overview = [{ stride: 2, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] }];
+    return new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } });
+  });
+  const current = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  const replacement = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  try {
+    expect(await current.load({ build: pinned, frame: pinned.manifest.frames[0].id, bounds })).toBe('ready');
+    expect(await replacement.load({ build: pinned, frame: pinned.manifest.frames[1].id, bounds })).toBe('ready');
+    for (const source of [current, replacement]) expect(source.sample(1, 0.1, 'surface')).toEqual({ status: 'valid', u: 1, v: 2 });
+    expect(fetcher.mock.calls.some(([url]) => /\/(wind|fine)\//.test(String(url)))).toBe(false);
+  } finally { current.dispose(); replacement.dispose(); cache.clear(); }
 });
