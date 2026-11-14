@@ -1686,7 +1686,7 @@ it('caches 409 non-numeric builds per buildId, supports pre-mapData builds, and 
   expect(windLoads).toHaveLength(1);
 
   markBuildUnavailable = false;
-  manifest = fixtureManifestV5({ model: 'icon-eu' });
+  manifest = fixtureManifestV5({ model: 'icon-eu', buildId: '20261030T060000Z-11111111-1111-4111-8111-111111111111' });
   deferWind = true;
   modelButton('icon-eu').dispatchEvent(new Event('click'));
   await vi.waitFor(() => expect(windLoads).toHaveLength(2));

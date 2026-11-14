@@ -57,14 +57,14 @@ it('copies a retained wind reference onto manifests that omitted mapData', async
     return { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) };
   };
   const app = createApp({ products: { [model]: OFFLINE_PRODUCT } });
-  const env = { BUCKET: { get } as unknown as R2Bucket, AV_RESPONSE_CACHE: 'off' };
+  const env = { BUCKET: { get } as unknown as R2Bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: 'off' };
   const call = (path: string) => app.fetch(new Request(`https://api.test${path}`), env, ctx);
   const latest = await call(`/v1/models/${model}/latest?expand=manifest`);
   expect(latest.status, await latest.clone().text()).toBe(200);
-  expect((await latest.json()).manifest.mapData).toEqual(numeric.reference);
+  expect(((await latest.json()) as { manifest: ManifestV5 }).manifest.mapData).toEqual(numeric.reference);
   const run = await call(`/v1/models/${model}/runs/${stored.buildId}`);
   expect(run.status, await run.clone().text()).toBe(200);
-  const published = await run.json();
+  const published = await run.json() as ManifestV5;
   expect(published.mapData).toEqual(numeric.reference);
   expect(published.source.provenanceUrl).toContain(`/runs/${stored.buildId}/provenance`);
 });

@@ -355,7 +355,8 @@ app.openAPIRegistry.registerPath(
 );
 app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
   query(new URL(c.req.url), []);
-  const { entry, manifest: m } = await pinnedBuild(c), frame = validateId(requiredParam(c, 'frame'));
+  const frame = validateId(requiredParam(c, 'frame'));
+  const { entry, manifest: m } = await pinnedBuild(c);
   const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
     const loaded = await windFrame(c.env.BUCKET, m, entry, frame, c.executionCtx, c.req.raw.signal);
     return response(loaded.bytes as Uint8Array<ArrayBuffer>, 'application/json; charset=utf-8', m.expiresAt, loaded.sha256);
@@ -366,10 +367,10 @@ app.get('/v1/models/:model/runs/:buildId/data/:frame', async c => {
 
 app.get('/v1/models/:model/runs/:buildId/data/:frame/:kind/:tile', async c => {
   query(new URL(c.req.url), []);
-  const { entry, manifest: m } = await pinnedBuild(c);
   const frame = validateId(requiredParam(c, 'frame')), kind = requiredParam(c, 'kind'), span = /^(0|[1-9][0-9]{0,9})(?:-(0|[1-9][0-9]{0,9}))?$/.exec(requiredParam(c, 'tile'));
   const start = span ? Number(span[1]) : -1, end = span ? Number(span[2] ?? span[1]) : -1;
   if ((kind !== 'wind' && kind !== 'fine' && !/^overview-[1-9][0-9]{0,4}$/.test(kind)) || start < 0 || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start >= 64 || Math.floor(start / WIND_INDEX_ENTRIES) !== Math.floor(end / WIND_INDEX_ENTRIES)) fail(400, 'invalid-parameter', 'Invalid wind chunk');
+  const { entry, manifest: m } = await pinnedBuild(c);
   const result = await cached(c.req.raw, m.expiresAt, c.executionCtx, async () => {
     const chunk = await windChunk(c.env.BUCKET, m, entry, frame, kind, start, c.executionCtx, c.req.raw.signal, end - start + 1);
     return response(chunk as Uint8Array<ArrayBuffer>, 'application/octet-stream', m.expiresAt, chunk.etag);
